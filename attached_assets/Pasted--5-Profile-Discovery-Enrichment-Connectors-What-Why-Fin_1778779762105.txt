@@ -1,0 +1,42 @@
+#5 - Profile Discovery + Enrichment Connectors
+
+What & Why
+
+Find VC partners / venture-partners / government figures via public search engines and registries (no LinkedIn login scraping), then fill in their rich-schema fields by querying multiple paid/free providers in priority order with conflict resolution and per-provider budget caps. This is the data-acquisition layer.
+
+Done looks like
+
+POST /api/discover {firmDomain:'sequoiacap.com'} returns a job id; within ~60s discovery_candidates has rows referencing public pages mentioning Sequoia partners.
+A "Discover partners" tab in the Start Scrape panel shows pending candidates with "Approve → create lead" calling POST /api/discover/:id/resolve.
+POST /api/leads/:id/enrich for a seed lead populates emails, phones, socials, country, persona, and at least one financial signal field when ≥3 provider keys are configured.
+Each enrichment writes one lead_history row per changed field with the provider name in source.
+Hitting a daily budget cap blocks further calls and surfaces in /api/scrapers/health.
+GET /api/enrichment/providers returns which providers are configured (based on which secrets are present).
+Out of scope
+
+Forbes / Midas list scraping uses the scraper-engine pipeline; only the parser is owned here.
+The dashboard "Discover partners" tab adds to the existing Start Scrape panel — major UI restructuring is not in scope.
+Backlog data points (patents, donations, GDELT) — captured later.
+Steps
+
+Discovery service — src/discovery/searx.ts (Brave Search if BRAVE_SEARCH_KEY else Browser-Rendering site:google search), queries.ts (site-restricted query generators), discover.ts (discoverPartnersForFirm, discoverByPersona), register.ts (SEC EDGAR Form ADV, OpenCorporates, UK Companies House, BODACC, EU Transparency Register).
+Discovery wiring — Add kind='discover' job type. Pipeline: run query generators → enqueue child kind='url' jobs for each candidate → insert into discovery_candidates. Migration 030_discovery.sql.
+Discovery endpoints + UI — POST /api/discover, GET /api/discover/candidates, POST /api/discover/:id/resolve. Add tab in Start Scrape panel.
+Enrichment providers — src/enrichment/providers/ one file per provider: hunter, apollo, rocketreach, peopledatalabs, proxycurl, crunchbase, sec_edgar, opencorporates, uk_ch, forbes_signals, whoisxml, twitter_oss (Nitter, no login). Each reads its own secret; missing secret = provider disabled.
+Merger + orchestrator — merger.ts resolves field conflicts by configurable provider priority, unions multi-value arrays keeping every source attribution, never overwrites manually-edited fields. orchestrator.ts enrichLead(leadId, env, opts) caches per-provider responses in KV 14d.
+Endpoints + budgets — POST /api/leads/:id/enrich, POST /api/leads/enrich/bulk, GET /api/enrichment/providers. provider_usage table tracks daily spend; per-provider *_DAILY_USD caps in wrangler.toml [vars] block calls and log block_reason='budget'.
+Scheduled re-enrich — Cron re-enriches leads with last_enriched_at >30d, or priority p0/p1 >7d. Cap 500/run.
+Relevant files
+
+apps/worker/src/scraper/pipeline.ts (created in scraper-engine task)
+apps/worker/src/db/leads.repo.ts (created in rich-lead-schema task)
+apps/worker/wrangler.toml
+apps/site/dashboard/index.html
+apps/site/assets/js/dashboard.js
+Dependencies
+
+Scraper engine + queue consumer
+Open task
+
+Rich lead schema + history + dedupe
+Open task

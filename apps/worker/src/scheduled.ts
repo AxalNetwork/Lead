@@ -1,5 +1,6 @@
 import type { Env, JobMessage } from "./types";
 import { enrichLead } from "./enrichment/orchestrator";
+import { runNightlyAggregator } from "./services/analytics_v2.aggregator";
 
 interface SourceRow {
   id: string;
@@ -17,7 +18,15 @@ interface LeadRow {
  * last_scraped_at is null or older than 24h, then re-enrich stale leads
  * (>30d, or p0/p1 >7d, capped at 500/run). Called every 6h via wrangler.toml.
  */
-export async function scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+  // Cron 15 3 * * * → nightly analytics aggregator. The cron string itself
+  // is matched in wrangler.toml; here we route by the scheduled-event cron.
+  if (event && (event as ScheduledEvent).cron === "15 3 * * *") {
+    ctx.waitUntil(
+      runNightlyAggregator(env).catch((e) => console.error("nightly aggregator failed", (e as Error).message)),
+    );
+    return;
+  }
   const r = await env.DB.prepare(
     `SELECT id, domain FROM sources
        WHERE enabled = 1

@@ -66,4 +66,7 @@ pattern = "api.aidatasignal.com"
 custom_domain = true
 
 [triggers]
-crons = ["0 */6 * * *"]
+# Every 6 hours: re-scrape stale sources + re-enrich stale leads.
+# 03:15 UTC nightly: roll up lead_quality_snapshots, source_kpis_daily,
+# pipeline_kpis_daily, and dashboard_snapshots.
+crons = ["0 */6 * * *", "15 3 * * *"]
