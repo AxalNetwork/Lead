@@ -23,16 +23,23 @@ const RICH_COLUMNS = [
 leads.get("/", async (c) => {
   const limit = Math.min(Number(c.req.query("limit") ?? "50"), 200);
   const status = c.req.query("status");
+  const sector = c.req.query("sector");          // taxonomy slug
+  const geography = c.req.query("geography");    // geo slug or ISO2 country code
+  const dnc = c.req.query("dnc");                // "1" / "0" filter
   const includeMerged = c.req.query("include_merged") === "1";
   const wheres: string[] = [];
   const binds: unknown[] = [];
-  if (status) {
-    wheres.push("status = ?");
-    binds.push(status);
+  if (status) { wheres.push("status = ?"); binds.push(status); }
+  if (sector) { wheres.push("sector_slug = ?"); binds.push(sector); }
+  if (geography) {
+    // Match either the canonical geo_slug or the ISO2 country code (handy
+    // when the caller passes "us" / "FR" rather than a metro slug).
+    wheres.push("(geo_slug = ? OR country_iso2 = ?)");
+    binds.push(geography, geography.toUpperCase());
   }
-  if (!includeMerged) {
-    wheres.push("(merged_into IS NULL OR merged_into = '')");
-  }
+  if (dnc === "1") wheres.push("do_not_contact = 1");
+  else if (dnc === "0") wheres.push("do_not_contact = 0");
+  if (!includeMerged) wheres.push("(merged_into IS NULL OR merged_into = '')");
   const whereSql = wheres.length ? `WHERE ${wheres.join(" AND ")}` : "";
   const stmt = c.env.DB.prepare(
     `SELECT ${RICH_COLUMNS} FROM leads ${whereSql} ORDER BY created_at DESC LIMIT ?`,

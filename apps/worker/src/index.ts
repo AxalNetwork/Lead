@@ -14,7 +14,7 @@ import { discover } from "./routes/discover";
 import { enrichment, leadsEnrichActions } from "./routes/enrichment";
 import { taxonomies } from "./routes/taxonomies";
 import { icp } from "./routes/icp";
-import { compliance, gdpr, leadsDncActions } from "./routes/compliance";
+import { compliance, complianceDncAlias, complianceAuditAlias, gdpr, leadsDncActions } from "./routes/compliance";
 import { campaigns, campaignsWebhook, leadsCampaignActions } from "./routes/campaigns";
 import { piiAuditOnLeadGet } from "./middleware/pii_audit";
 import { accessGuard } from "./middleware/access";
@@ -62,6 +62,9 @@ api.route("/api/enrichment", enrichment);
 api.route("/api/taxonomies", taxonomies);
 api.route("/api/icp", icp);
 api.route("/api/compliance", compliance);
+// Backward-compatible aliases per task spec: /api/dnc/* and /api/audit/pii.
+api.route("/api/dnc", complianceDncAlias);
+api.route("/api/audit", complianceAuditAlias);
 api.route("/api/gdpr", gdpr);
 api.route("/api/campaigns", campaigns);
 // /api/leads/:id/enrich, /api/leads/enrich/bulk, /:id/dnc, /:id/campaigns

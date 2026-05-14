@@ -44,6 +44,44 @@ compliance.get("/audit/pii", async (c) => {
   return c.json({ items });
 });
 
+// Backward-compat aliases for task spec paths.
+// Mounted under /api/dnc → exposes the same handlers as /api/compliance/dnc.
+export const complianceDncAlias = new Hono<{ Bindings: Env; Variables: { email: string } }>();
+complianceDncAlias.get("/", async (c) => {
+  const items = await listDnc(c.env.DB, Math.min(Number(c.req.query("limit") ?? "200"), 1000));
+  return c.json({ items });
+});
+complianceDncAlias.post("/", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { kind?: string; value?: string; reason?: string } | null;
+  if (!body || !body.kind || !body.value || !VALID_KINDS.includes(body.kind as DncKind)) {
+    return c.json({ error: "bad_request", message: "kind+value required" }, 400);
+  }
+  const r = await addDnc(c.env.DB, body.kind as DncKind, body.value, body.reason ?? null, c.get("email"));
+  if (!r.ok) return c.json({ error: "bad_value" }, 400);
+  return c.json(r, r.alreadyExists ? 200 : 201);
+});
+complianceDncAlias.delete("/", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { kind?: string; value?: string } | null;
+  if (!body || !body.kind || !body.value || !VALID_KINDS.includes(body.kind as DncKind)) {
+    return c.json({ error: "bad_request" }, 400);
+  }
+  const ok = await removeDnc(c.env.DB, body.kind as DncKind, body.value);
+  return c.json({ ok });
+});
+
+// Mounted under /api/audit → exposes /api/audit/pii (alias of /api/compliance/audit/pii).
+export const complianceAuditAlias = new Hono<{ Bindings: Env; Variables: { email: string } }>();
+complianceAuditAlias.get("/pii", async (c) => {
+  const items = await listPiiAccess(c.env.DB, {
+    from: c.req.query("from") ?? null,
+    to: c.req.query("to") ?? null,
+    user: c.req.query("user") ?? null,
+    lead: c.req.query("lead") ?? null,
+    limit: c.req.query("limit") ? Number(c.req.query("limit")) : 200,
+  });
+  return c.json({ items });
+});
+
 // POST /api/gdpr/erase  body: { email?, phone?, linkedin_url? }
 export const gdpr = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 gdpr.post("/erase", async (c) => {
