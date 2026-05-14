@@ -1,0 +1,75 @@
+Task 20 — Spreadsheet & PDF import (upload files, extract tables, scrape all linked pages)
+In apps/worker/, build a file upload + table extraction pipeline that accepts .csv, .tsv, .xlsx, .xls, .ods, and .pdf files, parses any tables inside them, maps columns to the firms/leads schema, and then auto-enqueues scrape jobs for every URL found in the file.
+Add an R2 binding UPLOADS to wrangler.toml:
+[[r2_buckets]]
+binding = "UPLOADS"
+bucket_name = "aidatasignal-uploads"
+Add migration apps/worker/migrations/120_uploads.sql:
+CREATE TABLE file_imports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  filename TEXT NOT NULL,
+  mime_type TEXT NOT NULL,
+  size_bytes INTEGER,
+  r2_key TEXT NOT NULL,
+  status TEXT DEFAULT 'uploaded',   -- uploaded, parsing, mapped, importing, done, error
+  row_count INTEGER,
+  imported_firms INTEGER DEFAULT 0,
+  imported_leads INTEGER DEFAULT 0,
+  jobs_queued INTEGER DEFAULT 0,
+  error TEXT,
+  column_map_json TEXT,             -- user-confirmed {sourceCol -> schemaField} mapping
+  created_by TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  finished_at TEXT
+);
+Add endpoints in a new apps/worker/src/routes/uploads.ts:
+POST /api/uploads — accepts multipart/form-data with a file field. Validates mime type and size (max 50MB). Stores raw bytes to R2 at key uploads/{uuid}/{filename}. Inserts a file_imports row with status='uploaded'. Returns {importId, filename, size}. Immediately enqueues a kind='parse_file' job with {importId}.
+GET /api/uploads — list all imports with status.
+GET /api/uploads/:id — full detail including column_map_json and row preview (first 5 rows from the parsed result stored in KV at upload_preview:{importId}).
+POST /api/uploads/:id/confirm-map — body {columnMap: {sourceCol: schemaField|null}}. Saves the mapping and changes status='importing'. Enqueues kind='import_file' job.
+DELETE /api/uploads/:id — deletes the R2 object and the DB row.
+Add parsers in apps/worker/src/scraper/parsers/files/:
+csv.ts — handles .csv and .tsv. Stream the R2 object, detect delimiter (try comma, tab, semicolon, pipe in that order by counting occurrences in the first line), parse with a lightweight RFC 4180 parser (no npm dependency needed — implement it in ~60 lines). Return {headers: string[], rows: string[][]}.
+xlsx.ts — handles .xlsx, .xls, .ods. Use the xlsx npm package (already common in Cloudflare Workers with nodejs_compat). Extract the first sheet (or all sheets if config.all_sheets=true). Return the same {headers, rows} shape. For .xls (old binary format) xlsx handles it natively. For .ods same package covers it.
+pdf.ts — handles .pdf. This is the hard one. Use pdfjs-dist (works in Workers with nodejs_compat). Strategy:
+Load the PDF page by page.
+On each page, extract the raw text content via page.getTextContent(). Each item has {str, transform:[a,b,c,d,x,y]} — group items by their Y coordinate (round to nearest 4px) to reconstruct rows, then sort each row by X to reconstruct columns.
+Heuristically detect table regions: a block of ≥ 3 rows where at least 2 columns appear consistently. Score each candidate block; keep those scoring above threshold.
+For multi-page tables (table interrupted by page break), detect continuation: if page N ends mid-table and page N+1 starts with the same column count and no header row, merge.
+Return every detected table as {headers, rows, pageNumber, confidence}.
+Also extract every URL from the PDF's link annotations (page.getAnnotations()) and every bare URL-shaped string in the text (regex https?://[^\s>"]+).
+automap.ts — given the extracted headers[], map each to the closest schema field using a combination of:
+Exact alias lookup: a hardcoded COLUMN_ALIASES map covering the most common spreadsheet headers people use for VC databases (e.g. "Firm Name", "Fund Name", "Investor", "GP Name" all map to firms.name; "Check Size", "Ticket Size", "Investment Range" map to a check-size pair; "HQ", "City", "Location", "Headquarters" map to firms.hq_city; "Thesis", "Investment Thesis", "Focus" map to firms.thesis; "Email", "Contact" map to leads.email; "LinkedIn" maps to leads.socials_json[linkedin]; "Website", "URL", "Homepage" map to firms.website).
+Levenshtein distance fallback for near-matches (implement a simple distance function — no dependency needed).
+Any column that can't be mapped above threshold gets schemaField=null and is surfaced to the user for manual mapping.
+Return {suggested: {[sourceCol]: schemaField|null}, confidence: {[sourceCol]: number}}.
+urlExtract.ts — scans every cell in rows for URL-shaped strings (regex https?://[^\s"<>]+). Returns a deduplicated list of {url, sourceCol, sourceRow}. These get auto-enqueued as scrape jobs.
+Pipeline flow for kind='parse_file':
+Load file_imports row, pull bytes from R2.
+Route to the right parser by mime type / extension.
+Store parsed preview (first 5 rows + headers) in KV at upload_preview:{importId}.
+Run automap on the headers.
+Store the auto-suggested map in file_imports.column_map_json.
+Update file_imports.status='mapped', row_count=total rows.
+Extract all URLs via urlExtract, store in KV at upload_urls:{importId}.
+The user then calls GET /api/uploads/:id to review the mapping, POST /api/uploads/:id/confirm-map to confirm or adjust, which triggers kind='import_file'.
+Pipeline flow for kind='import_file':
+Load confirmed column map and all rows from R2.
+For each row, build a FirmCandidate and/or person lead object by applying the map. Parse check-size strings like "$500K–$2M" → {min:500000, max:2000000, typical:1250000}. Parse stage strings like "Seed, Series A, B" → ['seed','series_a','series_b']. Parse location strings like "New York, NY" → {hq_city:'New York', hq_region:'NY', hq_country_iso2:'US'}.
+Upsert each firm (Task 13's dedupe key: lower(name) + domain). Upsert each lead.
+For every URL found in the file (from upload_urls:{importId}), auto-detect its type (firmlist? profile? generic?) and enqueue the appropriate job kind (Task 14/16).
+Update file_imports with final counts and status='done'.
+Dashboard UI: add an "Import file" button in the Start Scrape panel (extends Task 2). Clicking it opens a modal with:
+Drag-and-drop or click-to-upload area. Accepts .csv .tsv .xlsx .xls .ods .pdf. Shows upload progress.
+Once uploaded, shows a "Column mapping" step: a table of sourceColumn → schemaField dropdowns (pre-populated from automap). Unmapped columns shown in orange. A "Skip" option per column.
+A "Preview" section showing the first 5 rows after mapping.
+A "URLs found" section listing extracted URLs with a toggle to "Scrape all" (checked by default).
+A "Start import" button that calls POST /api/uploads/:id/confirm-map.
+A progress bar polling GET /api/uploads/:id every 2s showing imported_firms / row_count.
+A separate uploads.html page lists all past imports with status, row counts, and a re-run button.
+Acceptance criteria:
+Uploading the user's existing Google Sheets export as .csv or .xlsx imports all rows and correctly maps Firm, Stage, Check Size, Location, Website columns.
+Uploading a PDF annual report with an embedded portfolio table extracts the table rows and creates firm_portfolio entries.
+Every URL found in any uploaded file gets auto-enqueued as a scrape job.
+A 10,000-row .xlsx file completes importing within the Worker's 30-second CPU limit (stream-process in batches of 200, writing each batch as a D1 transaction).
+Uploading the same file twice updates existing rows, does not duplicate them.
