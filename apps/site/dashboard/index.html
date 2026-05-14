@@ -15,6 +15,7 @@ permalink: /dashboard/
       <button type="button" class="ads-tab" data-tab="linktree" role="tab">Link tree / list</button>
       <button type="button" class="ads-tab" data-tab="bulk" role="tab">Bulk paste</button>
       <button type="button" class="ads-tab" data-tab="discover" role="tab">Discover partners</button>
+      <button type="button" class="ads-tab" data-tab="firmlist" role="tab">Import firms from list</button>
     </div>
   </div>
 
@@ -70,6 +71,41 @@ permalink: /dashboard/
       <span class="ads-form-msg" data-msg></span>
     </div>
     <div class="ads-discover-results" id="ads-discover-candidates" style="margin-top:16px"></div>
+  </form>
+
+  <form class="ads-tab-panel" data-tab="firmlist" id="ads-form-firmlist" autocomplete="off">
+    <label class="ads-field">
+      <span>Firm-list URL(s) — one per line, max 50</span>
+      <textarea name="urls" rows="5" placeholder="https://mercury.com/investor-database&#10;https://docs.google.com/spreadsheets/d/.../edit#gid=0&#10;https://airtable.com/appXXX/shrYYY/viwZZZ" required></textarea>
+    </label>
+    <label class="ads-field">
+      <span>Importer (optional, auto-detect by default)</span>
+      <select name="importer">
+        <option value="">auto-detect</option>
+        <option value="airtable_share">Airtable share</option>
+        <option value="google_sheets">Google Sheets</option>
+        <option value="mercury">Mercury investor DB</option>
+        <option value="openvc">OpenVC</option>
+        <option value="folk_app">Folk share</option>
+        <option value="nyc_founder_guide">NYC Founder Guide</option>
+        <option value="versatilevc">VersatileVC</option>
+        <option value="generic_csv_url">Generic CSV / TSV</option>
+        <option value="generic_jsonld">Generic (JSON-LD ItemList)</option>
+      </select>
+    </label>
+    <div class="ads-form-actions">
+      <button type="submit" class="ads-btn">Import firms</button>
+      <span class="ads-form-msg" data-msg></span>
+    </div>
+    <details class="ads-field" style="margin-top:12px">
+      <summary>Paste rows (NFX Signal manual entry)</summary>
+      <p class="ads-muted" style="font-size:12px;margin:8px 0">Signal.nfx.com is login-gated and cannot be auto-scraped. Paste rows as JSON: <code>[{"name":"Acme Capital","url":"https://signal.nfx.com/...","website":"https://acme.vc"}, ...]</code></p>
+      <textarea name="nfx_paste" rows="6" placeholder='[{"name":"Acme Capital","website":"https://acme.vc"}]'></textarea>
+      <div class="ads-form-actions" style="margin-top:8px">
+        <button type="button" class="ads-btn ads-btn--ghost" id="ads-nfx-submit">Submit pasted rows</button>
+        <span class="ads-form-msg" data-msg-nfx></span>
+      </div>
+    </details>
   </form>
 
   <form class="ads-tab-panel" data-tab="bulk" id="ads-form-bulk" autocomplete="off">
