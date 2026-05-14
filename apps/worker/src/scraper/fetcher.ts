@@ -470,8 +470,10 @@ export async function fetchPage(env: Env, url: string, opts: FetchOptions = {}):
     if (!shouldEscalate(r.blockReason)) break;
   }
 
-  // Final fallback: Wayback Machine. Tagged so callers can record provenance.
-  const wb = await fetchWaybackHtml(url);
+  // Final fallback: Wayback Machine. Logged whether or not a snapshot exists
+  // so /api/scrapers/health reflects the true attempt count.
+  const wbStart = Date.now();
+  const wb = await fetchWaybackHtml(url).catch(() => null);
   if (wb) {
     const wbResult: FetchResult = {
       ok: true,
@@ -479,7 +481,7 @@ export async function fetchPage(env: Env, url: string, opts: FetchOptions = {}):
       url: wb.url,
       html: wb.html,
       bytes: wb.html.length,
-      durationMs: 0,
+      durationMs: Date.now() - wbStart,
       tier: 4,
       blockReason: null,
       fetched_from: "wayback",
@@ -487,6 +489,63 @@ export async function fetchPage(env: Env, url: string, opts: FetchOptions = {}):
     await logAttempt(env, opts.jobId, host, url, wbResult);
     return wbResult;
   }
+  await logAttempt(env, opts.jobId, host, url, {
+    tier: 4,
+    status: 0,
+    bytes: 0,
+    blockReason: "wayback_not_found",
+    durationMs: Date.now() - wbStart,
+  });
 
   return last ?? blockResult(url, 0, "no_tiers_available");
+}
+
+/**
+ * Fetch a URL as raw bytes (no policy checks beyond ToS, no tier escalation).
+ * Used by the PDF code path which needs the binary body. Robots is still
+ * honored. Logged as tier 0 so health roll-ups stay accurate.
+ */
+export async function fetchBytes(
+  env: Env,
+  url: string,
+  opts: FetchOptions = {},
+): Promise<{ ok: boolean; bytes: ArrayBuffer; status: number; contentType: string; blockReason: string | null; durationMs: number }> {
+  const start = Date.now();
+  let host = "unknown";
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return { ok: false, bytes: new ArrayBuffer(0), status: 0, contentType: "", blockReason: "invalid_url", durationMs: 0 };
+  }
+  if (!opts.skipPolicy) {
+    const tos = tosBlockedReason(host);
+    if (tos) {
+      await logAttempt(env, opts.jobId, host, url, { tier: 0, status: 0, bytes: 0, blockReason: tos, durationMs: 0 });
+      return { ok: false, bytes: new ArrayBuffer(0), status: 0, contentType: "", blockReason: tos, durationMs: 0 };
+    }
+    const robots = await checkRobots(env, url);
+    if (!robots.allowed) {
+      await logAttempt(env, opts.jobId, host, url, { tier: 0, status: 0, bytes: 0, blockReason: robots.reason ?? "robots_disallow", durationMs: 0 });
+      return { ok: false, bytes: new ArrayBuffer(0), status: 0, contentType: "", blockReason: robots.reason ?? "robots_disallow", durationMs: 0 };
+    }
+    await waitForRateLimit(env, host, Math.max(opts.minIntervalMs ?? 4000, robots.crawlDelayMs));
+  }
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { ...buildHeaders(), Accept: "application/pdf,*/*" },
+      redirect: "follow",
+    });
+    const buf = await res.arrayBuffer();
+    const ct = res.headers.get("Content-Type") ?? "";
+    const blockReason = res.ok ? null : `status_${res.status}`;
+    const durationMs = Date.now() - start;
+    await logAttempt(env, opts.jobId, host, url, { tier: 0, status: res.status, bytes: buf.byteLength, blockReason, durationMs });
+    return { ok: res.ok, bytes: buf, status: res.status, contentType: ct, blockReason, durationMs };
+  } catch (e) {
+    const durationMs = Date.now() - start;
+    const reason = `fetch_error:${(e as Error).message}`;
+    await logAttempt(env, opts.jobId, host, url, { tier: 0, status: 0, bytes: 0, blockReason: reason, durationMs });
+    return { ok: false, bytes: new ArrayBuffer(0), status: 0, contentType: "", blockReason: reason, durationMs };
+  }
 }

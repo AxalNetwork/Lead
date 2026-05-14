@@ -1,6 +1,7 @@
 import type { Env, JobMessage, ParsedLead } from "../types";
-import { fetchPage } from "./fetcher";
+import { fetchPage, fetchBytes } from "./fetcher";
 import { selectParser } from "./parsers";
+import { parsePdf } from "./parsers/pdf";
 import { extractDomain } from "./normalize";
 import { discoverUrls } from "./fallbacks/sitemap";
 import { LeadsRepo } from "../db/leads.repo";
@@ -241,6 +242,27 @@ async function processSingleUrl(
   let costMs = 0;
 
   if (await isCancelled(env, jobId)) return { leadsFound, pagesFetched, pagesBlocked, captchaHits, costMs };
+
+  // PDF path: sniff by URL extension first (cheap), then by content-type. PDFs
+  // are fetched as bytes and parsed via pdfjs-dist instead of the HTML parsers.
+  const looksLikePdf = /\.pdf(\?|#|$)/i.test(url);
+  if (looksLikePdf) {
+    const blob = await fetchBytes(env, url, { jobId });
+    costMs += blob.durationMs;
+    if (!blob.ok) {
+      pagesBlocked += 1;
+      throw new Error(`fetch_failed:${blob.blockReason ?? "unknown"}:status=${blob.status}`);
+    }
+    pagesFetched += 1;
+    await touchSource(env, url);
+    const pdfLeads = await parsePdf(blob.bytes, url);
+    for (const lead of pdfLeads) {
+      if (await isCancelled(env, jobId)) break;
+      const id = await insertLead(env, lead, "pdf", jobId, "live");
+      if (id) leadsFound += 1;
+    }
+    return { leadsFound, pagesFetched, pagesBlocked, captchaHits, costMs };
+  }
 
   const fetched = await fetchPage(env, url, { jobId });
   costMs += fetched.durationMs;
