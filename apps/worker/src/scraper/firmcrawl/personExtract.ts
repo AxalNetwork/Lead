@@ -126,11 +126,13 @@ function extractJsonLdPersons(html: string, base?: string): ExtractedPerson[] {
 // ---------- Strategy 2: OpenGraph profile cards ----------
 function extractOgProfile(html: string): ExtractedPerson[] {
   const og: Record<string, string> = {};
-  const re = /<meta\s+[^>]*property\s*=\s*["'](og:profile:[^"']+|og:title)["'][^>]*content\s*=\s*["']([^"']+)["']/gi;
+  // Accept both the `og:profile:*` namespace and the bare `profile:*`
+  // OpenGraph profile namespace — many CMS templates emit one or the other.
+  const re = /<meta\s+[^>]*property\s*=\s*["']((?:og:)?profile:[^"']+|og:title)["'][^>]*content\s*=\s*["']([^"']+)["']/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(html)) !== null) og[m[1].toLowerCase()] = m[2];
-  const first = og["og:profile:first_name"];
-  const last = og["og:profile:last_name"];
+  const first = og["og:profile:first_name"] ?? og["profile:first_name"];
+  const last = og["og:profile:last_name"] ?? og["profile:last_name"];
   const name = safeName([first, last].filter(Boolean).join(" "));
   if (!name) return [];
   return [{

@@ -697,13 +697,15 @@ async function upsertCrawlLead(
     }
   }
 
-  // Build a synthetic primary email from the strongest pattern guess when
-  // the page didn't give us one. The first guess is stored on `email` and
-  // the remaining guesses ride along in alt_emails so dedupe can still
-  // union later confirmed addresses without losing the candidates.
+  // Pattern guesses are stored ONLY in the structured `emails_json` array
+  // (with verified=0, source='pattern_guess'). They must NOT populate
+  // `leads.email` or `alt_emails_json`, since outbound exporters
+  // (campaigns/exporters.ts) read those columns and would otherwise send
+  // mail to unverified guesses. Hunter verification (Task #6) flips a
+  // guess to verified=1 and is responsible for promoting it into
+  // leads.email at that point.
   const guesses = person.email ? [] : guessEmails(fullName, firm.domain);
-  const primaryEmail = person.email ?? guesses[0]?.email ?? null;
-  const altEmails = guesses.slice(person.email ? 0 : 1).map((g) => g.email);
+  const primaryEmail = person.email ?? null;
 
   const incoming: IncomingLead = {
     email: primaryEmail,
@@ -723,7 +725,7 @@ async function upsertCrawlLead(
     timezone: null,
     source_domain: extractDomain(sourceUrl) ?? firm.domain ?? null,
     source_url: sourceUrl,
-    alt_emails: altEmails,
+    alt_emails: [],
     tags: ["firm_team_crawl"],
     provider: "firm_team_crawl",
   };
@@ -773,7 +775,7 @@ async function upsertCrawlLead(
     firm_id: firm.id,
     source_strategy: person.source_strategy,
     avatar_url: person.avatar ?? null,
-    email_pattern_guess: !person.email && primaryEmail ? guesses[0]?.pattern ?? null : null,
+    email_pattern_guess: !person.email && guesses.length > 0 ? guesses[0]?.pattern ?? null : null,
   });
   const status = decision.action === "needs_review" ? "needs_review" : "new";
   const keys = buildCanonicalKeys({
@@ -804,7 +806,7 @@ async function upsertCrawlLead(
     twitter_url: incoming.twitter_url ?? null,
     github_url: null,
     personal_url: incoming.personal_url ?? null,
-    alt_emails_json: altEmails.length ? JSON.stringify(altEmails) : null,
+    alt_emails_json: null,
     bio: person.bio ?? null,
     country_iso2: null,
     region: null,
