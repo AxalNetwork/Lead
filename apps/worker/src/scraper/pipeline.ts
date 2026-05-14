@@ -7,6 +7,8 @@ import { discoverUrls } from "./fallbacks/sitemap";
 import { tosBlockedReason } from "./tos";
 import { discoverPartnersForFirm, discoverByPersona } from "../discovery/discover";
 import { saveCandidates } from "../discovery/store";
+import { selectImporter, FIRMLIST_IMPORTERS } from "./parsers/firmlists";
+import { upsertFirm } from "./firms_upsert";
 
 /**
  * Filter helper used by every enqueue site so ToS-blocked domains never even
@@ -442,6 +444,122 @@ async function processDiscover(
   return { leadsFound: 0, pagesFetched: candidates.length, pagesBlocked: 0, captchaHits: 0, costMs: Date.now() - start };
 }
 
+/**
+ * Firmlist job processor. Picks an importer (explicit hint or auto-detect),
+ * runs it, upserts each returned firm, then enqueues a `firm_team_crawl`
+ * child job per upserted firm so partner pages can be scraped downstream.
+ */
+async function processFirmlist(
+  env: Env,
+  jobId: string,
+  target: string,
+  config: Record<string, unknown> = {},
+): Promise<{ leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number }> {
+  const start = Date.now();
+  const hint = typeof config.importer === "string" ? config.importer : null;
+  const explicit = hint && Object.prototype.hasOwnProperty.call(FIRMLIST_IMPORTERS, hint)
+    ? { name: hint, importer: FIRMLIST_IMPORTERS[hint] }
+    : null;
+  const picked = explicit ?? selectImporter(target);
+
+  let result: { firms: import("./parsers/firmlists/types").FirmCandidate[]; totalSeen: number; errors?: string[] };
+  try {
+    result = await picked.importer(target, env);
+  } catch (e) {
+    result = { firms: [], totalSeen: 0, errors: [`importer_throw:${(e as Error).message}`] };
+  }
+
+  let created = 0;
+  let updated = 0;
+  let unchanged = 0;
+  const childJobIds: string[] = [];
+  const importedFrom = `firmlist:${picked.name}`;
+
+  for (const f of result.firms) {
+    if (await isCancelled(env, jobId)) break;
+    let upsertRes: { firmId: number; action: "created" | "updated" | "unchanged" };
+    try {
+      upsertRes = await upsertFirm(env, f, importedFrom);
+    } catch (e) {
+      // Skip individual upsert failures — a bad row shouldn't kill the import.
+      result.errors = result.errors ?? [];
+      result.errors.push(`upsert_fail:${f.name}:${(e as Error).message}`);
+      continue;
+    }
+    if (upsertRes.action === "created") created += 1;
+    else if (upsertRes.action === "updated") updated += 1;
+    else unchanged += 1;
+
+    // Enqueue child team-crawl job if we have a website to crawl.
+    const teamUrl = pickTeamUrl(f);
+    if (teamUrl && isEnqueueable(teamUrl)) {
+      const childId = crypto.randomUUID();
+      const now = new Date().toISOString();
+      let childSource = "";
+      try { childSource = new URL(teamUrl).hostname.toLowerCase(); } catch { /* leave blank */ }
+      const childName = `firm_team_crawl:${f.name}`;
+      await env.DB.prepare(
+        `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
+         VALUES (?, ?, ?, 'queued', 'firm_team_crawl', ?, ?, ?, ?)`,
+      ).bind(childId, childName, childSource, teamUrl, JSON.stringify({ firmId: upsertRes.firmId, parentJobId: jobId }), now, now).run();
+      await env.LEAD_QUEUE.send({
+        jobId: childId,
+        kind: "firm_team_crawl",
+        target: teamUrl,
+        config: { firmId: upsertRes.firmId, parentJobId: jobId },
+      });
+      childJobIds.push(childId);
+    }
+  }
+
+  // Persist a per-job summary using the same fetch_log audit pattern other
+  // processors use (one row scoped to this jobId).
+  await env.DB.prepare(
+    `INSERT INTO fetch_log (job_id, host, url, tier, status, bytes, block_reason, duration_ms, cost_usd, created_at)
+     VALUES (?, ?, ?, 0, 200, 0, ?, ?, 0, ?)`,
+  ).bind(
+    jobId,
+    safeHost(target),
+    target,
+    JSON.stringify({
+      importer: picked.name,
+      total_seen: result.totalSeen,
+      created,
+      updated,
+      unchanged,
+      child_jobs: childJobIds.length,
+      errors: (result.errors ?? []).slice(0, 20),
+    }),
+    Date.now() - start,
+    new Date().toISOString(),
+  ).run();
+
+  return {
+    // We treat each upserted firm as a "lead found" for the job-summary KPI.
+    leadsFound: created + updated,
+    pagesFetched: 1,
+    pagesBlocked: 0,
+    captchaHits: 0,
+    costMs: Date.now() - start,
+  };
+}
+
+function pickTeamUrl(f: import("./parsers/firmlists/types").FirmCandidate): string | null {
+  if (!f.website) return null;
+  // The team-crawl handler in Task #17 expects the firm homepage; it will
+  // discover /team /people /about itself. For now we just hand off the site.
+  try {
+    const u = new URL(f.website);
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+function safeHost(url: string): string {
+  try { return new URL(url).hostname.toLowerCase(); } catch { return ""; }
+}
+
 export async function runJob(msg: JobMessage, env: Env): Promise<void> {
   const { jobId } = msg;
   await markRunning(env, jobId);
@@ -455,6 +573,13 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
       totals = await processLinktree(env, jobId, msg.target, msg.config);
     } else if (msg.kind === "discover") {
       totals = await processDiscover(env, jobId, msg.target, msg.config);
+    } else if (msg.kind === "firmlist") {
+      totals = await processFirmlist(env, jobId, msg.target, msg.config);
+    } else if (msg.kind === "firm_team_crawl") {
+      // Task #17 will implement a smarter team-crawl handler. For now we
+      // route through the standard single-URL scraper so the firm's website
+      // (or /team page) is at least scraped end-to-end.
+      totals = await processSingleUrl(env, jobId, msg.target);
     } else {
       totals = await processSingleUrl(env, jobId, msg.target);
     }
