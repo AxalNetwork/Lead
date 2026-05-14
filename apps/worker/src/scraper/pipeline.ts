@@ -2,6 +2,10 @@ import type { Env, JobMessage, ParsedLead } from "../types";
 import { fetchPage } from "./fetcher";
 import { selectParser } from "./parsers";
 import { extractDomain } from "./normalize";
+import { LeadsRepo } from "../db/leads.repo";
+import type { Lead } from "../db/leads.types";
+import { buildCanonicalKeys, recordReview, resolveIncoming } from "../dedupe";
+import type { IncomingLead } from "../dedupe/merge";
 
 const RAW_HTML_PREFIX = "raw";
 
@@ -72,36 +76,123 @@ async function archiveRawHtml(env: Env, url: string, html: string): Promise<stri
   }
 }
 
-async function insertLead(env: Env, lead: ParsedLead, jobId: string): Promise<void> {
+function leadToIncoming(lead: ParsedLead, parserName: string): IncomingLead {
+  const meta = lead.meta ?? {};
+  const socials = (meta.socials as Array<{ platform: string; url: string }> | undefined) ?? [];
+  const linkedin = socials.find((s) => s.platform === "linkedin")?.url ?? null;
+  const twitter = socials.find((s) => s.platform === "twitter")?.url ?? null;
+  const github = socials.find((s) => s.platform === "github")?.url ?? null;
+  return {
+    email: lead.email ?? null,
+    phone: null,
+    linkedin_url: linkedin,
+    twitter_url: twitter,
+    github_url: github,
+    personal_url: null,
+    name: lead.name ?? null,
+    org: lead.org ?? null,
+    title: lead.title ?? null,
+    category: lead.category ?? null,
+    bio: null,
+    country_iso2: null,
+    region: null,
+    city: null,
+    timezone: null,
+    source_domain: lead.source_domain,
+    source_url: lead.source_url,
+    alt_emails: [],
+    tags: [],
+    provider: parserName,
+  };
+}
+
+/**
+ * Insert a fresh lead row using the dedupe-aware path. If the incoming lead
+ * matches an existing row above the auto-merge threshold, this becomes an
+ * UPDATE on the existing row (with audit history) and returns null. If the
+ * match is borderline, the row is inserted with status='needs_review' and a
+ * dedupe_review row is created. Otherwise a normal new row is inserted.
+ *
+ * Returns the id of the row that should be counted as "leads_found", or null
+ * if the incoming evidence merged into an existing row instead.
+ */
+async function insertLead(
+  env: Env,
+  parsed: ParsedLead,
+  parserName: string,
+  jobId: string,
+): Promise<string | null> {
+  const incoming = leadToIncoming(parsed, parserName);
+  const decision = await resolveIncoming(env.DB, incoming, { jobId, provider: parserName });
+
+  if (decision.action === "merged") {
+    return null;
+  }
+
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  const meta = JSON.stringify({ ...(lead.meta ?? {}), job_id: jobId });
-  await env.DB.prepare(
-    `INSERT INTO leads
-      (id, name, email, org, title, category, source_domain, source_url, status, verified, flagged, meta_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new', 0, 0, ?, ?, ?)`,
-  )
-    .bind(
-      id,
-      lead.name ?? null,
-      lead.email ?? null,
-      lead.org ?? null,
-      lead.title ?? null,
-      lead.category ?? null,
-      lead.source_domain,
-      lead.source_url,
-      meta,
-      now,
-      now,
-    )
-    .run();
+  const meta = JSON.stringify({ ...(parsed.meta ?? {}), job_id: jobId });
+  const status = decision.action === "needs_review" ? "needs_review" : "new";
+  const keys = buildCanonicalKeys({
+    email: incoming.email,
+    phone: incoming.phone,
+    linkedin_url: incoming.linkedin_url,
+    name: incoming.name,
+    org: incoming.org,
+    city: incoming.city,
+  });
+
+  const lead: Lead = {
+    id,
+    name: incoming.name ?? null,
+    email: incoming.email ?? null,
+    phone: incoming.phone ?? null,
+    org: incoming.org ?? null,
+    title: incoming.title ?? null,
+    category: incoming.category ?? null,
+    source_domain: parsed.source_domain,
+    source_url: parsed.source_url,
+    status,
+    verified: 0,
+    flagged: 0,
+    approved_at: null,
+    approved_by: null,
+    linkedin_url: incoming.linkedin_url ?? null,
+    twitter_url: incoming.twitter_url ?? null,
+    github_url: incoming.github_url ?? null,
+    personal_url: incoming.personal_url ?? null,
+    alt_emails_json: null,
+    bio: null,
+    country_iso2: null,
+    region: null,
+    city: null,
+    timezone: null,
+    tags_json: null,
+    provider: parserName,
+    canonical_email_key: keys.canonical_email_key ?? null,
+    canonical_phone_key: keys.canonical_phone_key ?? null,
+    canonical_linkedin_key: keys.canonical_linkedin_key ?? null,
+    canonical_name_firm_key: keys.canonical_name_firm_key ?? null,
+    canonical_name_city_key: keys.canonical_name_city_key ?? null,
+    merged_into: null,
+    meta_json: meta,
+    created_at: now,
+    updated_at: now,
+  };
+
+  const repo = new LeadsRepo(env.DB);
+  await repo.insert(lead);
+
+  if (decision.action === "needs_review") {
+    await recordReview(env.DB, decision.candidate.id, id, decision.score, decision.reasons);
+  }
+  return id;
 }
 
 async function touchSource(env: Env, url: string): Promise<void> {
   const domain = extractDomain(url);
   if (!domain) return;
   const now = new Date().toISOString();
-  // Upsert: insert if missing, otherwise just update last_scraped_at.
   await env.DB.prepare(
     `INSERT INTO sources (id, domain, kind, enabled, last_scraped_at, created_at)
      VALUES (?, ?, 'auto', 1, ?, ?)
@@ -142,8 +233,8 @@ async function processSingleUrl(
 
   for (const lead of parsed) {
     if (await isCancelled(env, jobId)) break;
-    await insertLead(env, { ...lead, meta: { ...(lead.meta ?? {}), parser: parserName } }, jobId);
-    leadsFound += 1;
+    const id = await insertLead(env, lead, parserName, jobId);
+    if (id) leadsFound += 1;
   }
 
   return { leadsFound, pagesFetched, pagesBlocked, captchaHits, costMs };
@@ -155,9 +246,6 @@ async function processLinktree(
   target: string,
   config: Record<string, unknown> | undefined,
 ): Promise<{ leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number }> {
-  // Fetch the link-tree style page and emit one lead row for the page itself,
-  // plus enqueue child kind='url' jobs for each outbound link. Child jobs go
-  // through this same pipeline on the next consumer batch.
   let leadsFound = 0;
   let pagesFetched = 0;
   let pagesBlocked = 0;
@@ -185,8 +273,8 @@ async function processLinktree(
 
   for (const lead of parsed) {
     if (await isCancelled(env, jobId)) break;
-    await insertLead(env, { ...lead, meta: { ...(lead.meta ?? {}), parser: parserName } }, jobId);
-    leadsFound += 1;
+    const id = await insertLead(env, lead, parserName, jobId);
+    if (id) leadsFound += 1;
 
     const outbound = Array.isArray(lead.meta?.outbound) ? (lead.meta!.outbound as string[]) : [];
     for (const childUrl of outbound.slice(0, 50)) {
@@ -205,7 +293,6 @@ async function processLinktree(
   return { leadsFound, pagesFetched, pagesBlocked, captchaHits, costMs };
 }
 
-/** Main entry point invoked by the queue consumer. */
 export async function runJob(msg: JobMessage, env: Env): Promise<void> {
   const { jobId } = msg;
   await markRunning(env, jobId);
@@ -216,7 +303,6 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
     if (msg.kind === "linktree") {
       totals = await processLinktree(env, jobId, msg.target, msg.config);
     } else if (msg.kind === "profile_list") {
-      // Same shape as linktree for now; the discovery task overrides this.
       totals = await processLinktree(env, jobId, msg.target, msg.config);
     } else {
       totals = await processSingleUrl(env, jobId, msg.target);

@@ -45,3 +45,9 @@ a{color:var(--ads-accent);text-decoration:none}
 .ads-card h3{margin:0 0 16px;font-size:14px;font-weight:600;color:#fff}
 .ads-empty{color:var(--ads-muted);text-align:center;padding:24px;font-size:13px}
 .ads-loading{color:var(--ads-muted);font-size:13px}
+.ads-muted{color:var(--ads-muted)}
+.ads-review{border:1px solid var(--ads-border);border-radius:var(--ads-radius);padding:16px;margin-bottom:16px;background:var(--ads-panel-2)}
+.ads-review__head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap}
+.ads-review__actions{display:flex;gap:8px}
+.ads-diff td{background:rgba(255,181,71,.08)}
+.ads-diff__label{color:var(--ads-muted);font-weight:500;width:120px}
