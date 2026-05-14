@@ -49,7 +49,13 @@ export interface Env {
   NITTER_BASE?: string;            // default https://nitter.net
 }
 
-export type JobKind = "url" | "linktree" | "profile_list" | "discover";
+export type JobKind =
+  | "url"
+  | "linktree"
+  | "profile_list"
+  | "discover"
+  | "firmlist"
+  | "firm_team_crawl";
 
 export interface JobMessage {
   jobId: string;

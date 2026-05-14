@@ -300,6 +300,72 @@
     pollCandidates();
   }
 
+  // ---------------- Firm-list import tab ----------------
+  function setupFirmlistForm() {
+    var f = document.getElementById("ads-form-firmlist");
+    if (!f) return;
+    f.addEventListener("submit", async function (e) {
+      e.preventDefault();
+      var btn = f.querySelector("button[type=submit]");
+      btn.disabled = true; showMsg(f, "Queuing…");
+      var fd = new FormData(f);
+      var raw = String(fd.get("urls") || "");
+      var importer = String(fd.get("importer") || "").trim();
+      var seen = {};
+      var urls = raw.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(function (s) {
+        if (!s) return false;
+        if (seen[s]) return false;
+        seen[s] = true;
+        return true;
+      }).slice(0, 50);
+      if (!urls.length) { showMsg(f, "Provide at least one URL.", "err"); btn.disabled = false; return; }
+      try {
+        var res = await apiFetch("/api/import/firmlists", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(importer ? { urls: urls, importer: importer } : { urls: urls }),
+        });
+        var enq = res && res.enqueued != null ? res.enqueued : urls.length;
+        var rejected = (res && res.results ? res.results.filter(function (r) { return r.error; }) : []);
+        var msg = "Queued " + enq + " import job(s)";
+        if (rejected.length) msg += " · " + rejected.length + " rejected (" + (rejected[0].error || "?") + ")";
+        showMsg(f, msg, rejected.length ? "warn" : "ok");
+        if (enq > 0) pollActiveJobs();
+      } catch (err) {
+        showMsg(f, "Failed: " + err.message, "err");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    var nfxBtn = document.getElementById("ads-nfx-submit");
+    if (nfxBtn) {
+      nfxBtn.addEventListener("click", async function () {
+        var ta = f.querySelector('textarea[name="nfx_paste"]');
+        var msgEl = f.querySelector('[data-msg-nfx]');
+        if (!ta || !ta.value.trim()) { if (msgEl) { msgEl.textContent = "Paste JSON rows first."; } return; }
+        var rows;
+        try { rows = JSON.parse(ta.value); }
+        catch (err) { if (msgEl) { msgEl.textContent = "Invalid JSON: " + err.message; } return; }
+        if (!Array.isArray(rows) || !rows.length) { if (msgEl) { msgEl.textContent = "Expected non-empty JSON array."; } return; }
+        nfxBtn.disabled = true;
+        if (msgEl) msgEl.textContent = "Submitting " + rows.length + " row(s)…";
+        try {
+          var r = await apiFetch("/api/import/nfx/paste", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ rows: rows, source_url: "https://signal.nfx.com/" }),
+          });
+          if (msgEl) msgEl.textContent = "Created " + (r.created || 0) + " · updated " + (r.updated || 0) + " · unchanged " + (r.unchanged || 0);
+          ta.value = "";
+        } catch (err) {
+          if (msgEl) msgEl.textContent = "Failed: " + err.message;
+        } finally {
+          nfxBtn.disabled = false;
+        }
+      });
+    }
+  }
+
   // Approve / reject candidate delegates.
   document.addEventListener("click", async function (e) {
     var ok = e.target.closest("button[data-resolve-cand]");
@@ -369,6 +435,7 @@
     setupLinktreeForm();
     setupBulkForm();
     setupDiscoverForm();
+    setupFirmlistForm();
     startActiveJobsPolling();
     var btn = document.getElementById("ads-export-btn");
     if (btn) btn.addEventListener("click", function () { window.location.href = API_BASE + "/api/exports/csv"; });

@@ -4,7 +4,7 @@ import { tosBlockedReason } from "../scraper/tos";
 
 export const jobs = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
-const ALLOWED_KINDS: JobKind[] = ["url", "linktree", "profile_list"];
+const ALLOWED_KINDS: JobKind[] = ["url", "linktree", "profile_list", "discover", "firmlist", "firm_team_crawl"];
 
 function isJobKind(k: unknown): k is JobKind {
   return typeof k === "string" && (ALLOWED_KINDS as string[]).includes(k);

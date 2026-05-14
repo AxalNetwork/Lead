@@ -1,0 +1,320 @@
+Task 21 — Investor profile pages + Companies entity (NFX Signal–style detail views & search)
+Build first-class Investor Profile and Company pages with the same depth as signal.nfx.com/investors/{slug} — rich enough that hovering on an investor or company tells the user everything they need to know in one screen, and a searchable browse UI over both.
+1. Companies as a first-class entity
+Today firm_portfolio only holds company names. Promote companies into their own table.
+Migration apps/worker/migrations/130_companies.sql:
+CREATE TABLE companies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  legal_name TEXT,
+  slug TEXT UNIQUE,
+  domain TEXT,
+  website TEXT,
+  logo_url TEXT,
+  description TEXT,
+  long_description TEXT,
+  tagline TEXT,
+  founded_year INTEGER,
+  status TEXT,                        -- 'active','acquired','ipo','shutdown','stealth'
+  status_event_date TEXT,
+  hq_country_iso2 TEXT,
+  hq_region TEXT,
+  hq_city TEXT,
+  remote_first INTEGER,
+  sectors_json TEXT,
+  sub_sectors_json TEXT,
+  business_model TEXT,                -- 'b2b','b2c','b2b2c','marketplace','saas','hardware','deeptech','biotech'
+  stage TEXT,                         -- latest funding stage
+  total_funding_usd INTEGER,
+  last_round_stage TEXT,
+  last_round_amount_usd INTEGER,
+  last_round_date TEXT,
+  last_round_post_money_usd INTEGER,
+  last_round_lead_firm_id INTEGER,
+  valuation_usd INTEGER,
+  valuation_date TEXT,
+  exit_type TEXT,                     -- 'acquisition','ipo','spac','secondary','none'
+  exit_value_usd INTEGER,
+  exit_date TEXT,
+  acquirer_company_id INTEGER,
+  employee_count INTEGER,
+  employee_count_range TEXT,          -- '1-10','11-50','51-200','201-500','501-1000','1001+'
+  employee_growth_6mo_pct REAL,
+  linkedin_url TEXT,
+  crunchbase_url TEXT,
+  twitter_handle TEXT,
+  github_org TEXT,
+  pitchbook_url TEXT,
+  product_hunt_url TEXT,
+  socials_json TEXT,
+  is_unicorn INTEGER DEFAULT 0,
+  is_deca_unicorn INTEGER DEFAULT 0,
+  yc_batch TEXT,                      -- e.g. 'W23' if applicable
+  accelerators_json TEXT,
+  tags_json TEXT,
+  source_urls_json TEXT,
+  notes TEXT,
+  quality_score REAL,
+  last_enriched_at TEXT,
+  last_modified TEXT DEFAULT (datetime('now')),
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_co_sector ON companies(sectors_json);
+CREATE INDEX idx_co_status ON companies(status);
+CREATE INDEX idx_co_country ON companies(hq_country_iso2);
+CREATE INDEX idx_co_funding ON companies(total_funding_usd DESC);
+CREATE INDEX idx_co_last_round ON companies(last_round_date DESC);
+CREATE TABLE company_founders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  company_id INTEGER NOT NULL,
+  lead_id INTEGER,                    -- nullable if we only have a name
+  founder_name TEXT NOT NULL,
+  role TEXT,                          -- 'ceo','cto','coo','president','founder'
+  is_current INTEGER DEFAULT 1,
+  started_at TEXT,
+  ended_at TEXT,
+  source_url TEXT,
+  UNIQUE(company_id, founder_name)
+);
+CREATE INDEX idx_cf_co ON company_founders(company_id);
+CREATE INDEX idx_cf_lead ON company_founders(lead_id);
+CREATE TABLE company_rounds (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  company_id INTEGER NOT NULL,
+  stage TEXT NOT NULL,
+  announced_date TEXT,
+  closed_date TEXT,
+  amount_usd INTEGER,
+  pre_money_usd INTEGER,
+  post_money_usd INTEGER,
+  lead_firm_id INTEGER,
+  participants_firm_ids_json TEXT,    -- array of firm_id
+  source_url TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_cr_co ON company_rounds(company_id);
+CREATE INDEX idx_cr_date ON company_rounds(announced_date DESC);
+CREATE TABLE company_news (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  company_id INTEGER NOT NULL,
+  headline TEXT NOT NULL,
+  url TEXT NOT NULL,
+  published_at TEXT,
+  source TEXT,
+  sentiment REAL,
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(company_id, url)
+);
+CREATE INDEX idx_cn_co_time ON company_news(company_id, published_at DESC);
+Then alter firm_portfolio (from Task 13) to reference the new table:
+ALTER TABLE firm_portfolio ADD COLUMN company_id INTEGER;
+CREATE INDEX idx_fpo_company_id ON firm_portfolio(company_id);
+Backfill: write apps/worker/src/scripts/backfill-companies.ts that groups existing firm_portfolio.company_name values, creates one companies row per unique (lower(name), domain) pair, then sets firm_portfolio.company_id. Mark backfilled companies with meta tags_json=['backfilled'].
+2. Investor profile depth — additional lead fields
+Task 3's leads schema covers most of what an NFX-style profile needs, but add these for completeness via apps/worker/migrations/140_investor_profile.sql:
+ALTER TABLE leads ADD COLUMN bio TEXT;
+ALTER TABLE leads ADD COLUMN long_bio TEXT;
+ALTER TABLE leads ADD COLUMN avatar_url TEXT;
+ALTER TABLE leads ADD COLUMN cover_url TEXT;
+ALTER TABLE leads ADD COLUMN sweet_spot TEXT;           -- "Seed checks $250k-$1M in B2B SaaS"
+ALTER TABLE leads ADD COLUMN investment_count INTEGER;
+ALTER TABLE leads ADD COLUMN investment_count_lead INTEGER;
+ALTER TABLE leads ADD COLUMN unicorn_count INTEGER;
+ALTER TABLE leads ADD COLUMN exit_count INTEGER;
+ALTER TABLE leads ADD COLUMN ipo_count INTEGER;
+ALTER TABLE leads ADD COLUMN first_investment_year INTEGER;
+ALTER TABLE leads ADD COLUMN last_investment_date TEXT;
+ALTER TABLE leads ADD COLUMN avg_check_usd INTEGER;
+ALTER TABLE leads ADD COLUMN median_check_usd INTEGER;
+ALTER TABLE leads ADD COLUMN response_rate REAL;        -- if we've messaged them
+ALTER TABLE leads ADD COLUMN response_time_hours REAL;
+ALTER TABLE leads ADD COLUMN education_json TEXT;       -- [{institution, degree, field, start_year, end_year}]
+ALTER TABLE leads ADD COLUMN employment_json TEXT;      -- [{firm, role, start, end, current}]
+ALTER TABLE leads ADD COLUMN board_seats_json TEXT;     -- [{company, role, start, end, source_url}]
+ALTER TABLE leads ADD COLUMN advisory_roles_json TEXT;
+ALTER TABLE leads ADD COLUMN podcasts_json TEXT;        -- [{title, url, date}]
+ALTER TABLE leads ADD COLUMN articles_json TEXT;
+ALTER TABLE leads ADD COLUMN speaking_json TEXT;
+ALTER TABLE leads ADD COLUMN languages_spoken_json TEXT;
+ALTER TABLE leads ADD COLUMN interests_json TEXT;
+ALTER TABLE leads ADD COLUMN office_location TEXT;
+ALTER TABLE leads ADD COLUMN office_hours TEXT;         -- "Office hours: Tuesdays 2-5pm PT"
+ALTER TABLE leads ADD COLUMN open_to_cold_pitch INTEGER;
+ALTER TABLE leads ADD COLUMN pitch_form_url TEXT;
+ALTER TABLE leads ADD COLUMN calendly_url TEXT;
+ALTER TABLE leads ADD COLUMN years_investing INTEGER;
+ALTER TABLE leads ADD COLUMN previously_founder INTEGER;
+ALTER TABLE leads ADD COLUMN previously_operator INTEGER;
+CREATE TABLE investor_investments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id INTEGER NOT NULL,
+  company_id INTEGER NOT NULL,
+  firm_id INTEGER,                    -- which fund the check came from (may be null for personal angel)
+  is_personal INTEGER DEFAULT 0,
+  is_lead INTEGER DEFAULT 0,
+  is_board_observer INTEGER DEFAULT 0,
+  is_board_member INTEGER DEFAULT 0,
+  round_id INTEGER,                   -- ref to company_rounds.id
+  stage TEXT,
+  amount_usd INTEGER,
+  announced_date TEXT,
+  source_url TEXT,
+  confidence REAL,
+  UNIQUE(lead_id, company_id, stage, announced_date)
+);
+CREATE INDEX idx_ii_lead ON investor_investments(lead_id);
+CREATE INDEX idx_ii_company ON investor_investments(company_id);
+CREATE TABLE investor_stats_daily (
+  lead_id INTEGER NOT NULL,
+  stat_date TEXT NOT NULL,
+  stage_breakdown_json TEXT,          -- {seed: 12, series_a: 8, ...}
+  sector_breakdown_json TEXT,
+  geo_breakdown_json TEXT,
+  co_investor_breakdown_json TEXT,    -- top 10 co-investor firms with counts
+  cumulative_count INTEGER,
+  PRIMARY KEY (lead_id, stat_date)
+);
+Aggregation: write a nightly cron job at apps/worker/src/scheduled/investor-stats.ts that recomputes investor_investments-derived aggregates and stores them as leads.investment_count, unicorn_count, exit_count, avg_check_usd, first_investment_year, last_investment_date, plus the breakdown JSONs in investor_stats_daily. Run via cron = ["30 3 * * *"].
+3. Enrichment routing for investor profiles
+Extend Task 6's enrichment orchestrator (apps/worker/src/enrichment/orchestrator.ts) so that running enrichment on a lead also:
+Calls providers/crunchbase.ts for person.investments[] → maps to investor_investments rows, creating companies rows on the fly.
+Calls providers/sec_edgar.ts for any Form D where this person is listed as related (use the person's known firms to scope the search).
+Hits Wikipedia + Wikidata public APIs (en.wikipedia.org/api/rest_v1/page/summary/{slug}) — many notable investors have entries with structured Person data (birth year, education, awards, exits).
+Scrapes the NFX Signal public profile page if a Brave Search query like site:signal.nfx.com/investors "{name}" returns a hit — fetches the public part via Task 5 fetcher, parses the structured blocks (sweet spot, sector focus, stage focus, notable investments).
+Scrapes the investor's listed personal site for office hours, pitch form, calendly link.
+Pulls podcast appearances via Listen Notes API (LISTEN_NOTES_KEY) and news mentions via NewsAPI (NEWS_API_KEY).
+Each provider writes evidence to lead_history (Task 3) with change_kind='enrich' and a source_url.
+4. Investor profile detail page
+New page apps/site/dashboard/investors/{id}.html (route via Jekyll permalink or a single dynamic JS router). Layout, top to bottom, matching the depth of NFX Signal:
+Header block:
+Avatar (left, 96px circle)
+Name (h1) + verified-badge if quality_score ≥ 70
+Current role + firm link (clickable to firm page)
+City, country
+Persona pill (Venture Partner, GP, Angel)
+Quick action buttons: Email, LinkedIn, Twitter, Calendly, Pitch (only render the buttons we have data for)
+"Last seen on the web" timestamp
+Sweet-spot strip (yellow callout): the sweet_spot sentence rendered prominently.
+At-a-glance stats (six tiles):
+Investments (total + lead-count)
+Unicorns
+Exits / IPOs
+Avg check
+First investment year
+Last investment date
+Tabs:
+About — Bio, long-bio, languages, interests, education table, employment timeline.
+Thesis & focus — sector_focus chips, geo_focus chips, stage_focus chips, check-size range, lead/co-invest preference, pitch-form / office-hours links, open-to-cold-pitch toggle.
+Portfolio — table of investor_investments joined with companies. Columns: logo, company, sector, stage at investment, year, amount (if known), lead?, status (active/acquired/IPO), exit value. Default sort by year desc. Filters: stage, sector, outcome. Click a company → company detail page.
+Stage breakdown — horizontal bar chart of investor_stats_daily.stage_breakdown_json. Bars colored by stage.
+Sector breakdown — donut chart of sector_breakdown_json.
+Geography — small world map highlighting countries from geo_breakdown_json.
+Co-investors — table of top 10 co-investor firms with overlap count + click-through to that firm's profile.
+Network — embedded relationship graph (Task 19) rooted at this person, depth=2. Filterable by edge kind.
+Boards & advisory — board_seats_json + advisory_roles_json tables.
+Media — podcast appearances, articles, speaking engagements, news mentions (joined from company_news where the person is mentioned).
+Contact — emails_json (with verified badge), phones_json, socials_json, personal_site, office_location. PII access on this tab writes a pii_access_log row (Task 10).
+History — lead_history audit trail.
+Sidebar (sticky, right side):
+"Find similar investors" — top 5 leads with same persona + overlapping sector_focus + similar check size.
+"Path to this investor" — uses Task 19's intros endpoint to show shortest chain from the current user.
+"Last enriched" + "Re-enrich" button.
+Endpoint: GET /api/investors/:id/profile returns the entire denormalized profile object (lead + firm joins + investments + companies + stats + co-investors + similar + path) in one request to keep page load fast. Cache in KV at profile:investor:{id} for 5 minutes; bust on any lead_history write for that lead.
+5. Company profile detail page
+New page apps/site/dashboard/companies/{id}.html. Layout:
+Header:
+Logo (left, 80px rounded square)
+Name (h1) + status pill (Active / Acquired / IPO / Shutdown)
+Tagline
+Website link, LinkedIn, Twitter, GitHub-org
+HQ city, country, founded year
+Sector tags
+At-a-glance stats:
+Total funding raised
+Last round (stage + amount + date)
+Valuation (with date)
+Employee count + 6-month growth %
+Investor count
+Founder count
+Tabs:
+Overview — long_description, business_model, sub_sectors, accelerators, YC batch.
+Funding history — company_rounds table sorted by date desc. Each row: stage, date, amount, post-money, lead firm (clickable), all participants (clickable chips). Bar chart of cumulative raised over time.
+Investors — joined view: every firm that participated in any round + every angel from investor_investments where company_id = this. Columns: investor (link), kind (firm/angel), stage joined, lead?, board seat?. Total investor count at top.
+Founders & team — company_founders table; link to each lead_id if we have one.
+Exit — if exit_type set, show acquirer (link to acquirer company), exit value, exit date, source.
+News — company_news rows sorted by date desc.
+Network — relationship graph rooted at this company, depth=2.
+Similar companies — same sector + overlapping investors + similar stage.
+Endpoint: GET /api/companies/:id/profile returns the denormalized blob with the same caching pattern.
+6. Searchable browse pages
+New page apps/site/dashboard/investors.html:
+Filters (querystring → GET /api/investors):
+Text search (name, bio, sweet_spot, current firm)
+Persona (multi)
+Country, city
+Sectors (multi from taxonomy)
+Stages (multi)
+Check size range (slider)
+Min investment_count
+Has unicorn (toggle)
+Has exit (toggle)
+Open to cold pitch (toggle)
+Has contact email (toggle)
+Last-investment range
+Min quality_score
+Results table columns (column-picker via Task 17): avatar, name, current role, firm, city, persona, sectors, stages, check size, investments, unicorns, exits, last investment, quality.
+Above the table: summary strip with filtered count + breakdowns (top sectors, top cities, distribution of check sizes).
+Row click → investor detail page.
+New page apps/site/dashboard/companies.html:
+Filters:
+Text search (name, description, tagline)
+Status (multi)
+HQ country, city
+Sectors (multi), sub-sectors
+Business model
+Stage (latest)
+Funding range (slider)
+Last-round-date range
+Founded-year range
+Has-exit toggle
+Unicorn toggle
+YC batch (multi)
+Min employee_count
+Results table columns: logo, name, sector, stage, total raised, last round, HQ, status, founded.
+Endpoints under /api/investors/ and /api/companies/:
+GET /api/investors?...filters — paged list.
+GET /api/investors/aggregate?...filters — count + breakdowns for the summary strip.
+GET /api/companies?...filters
+GET /api/companies/aggregate?...filters
+7. Discovery & enrichment plumbing
+When a new investor URL is scraped (Task 16's profile parser) or a new company URL hits the firm-portfolio crawler, automatically:
+Create the leads or companies row.
+Enqueue Task 6 enrichment for the lead.
+Enqueue a kind='company_enrich' job for the company that runs the same multi-provider orchestration but for company-shaped data (Crunchbase org endpoint, SEC EDGAR EDGAR Form D as participant, NewsAPI for headlines, GitHub org API for repo count, BuiltWith / Wappalyzer for tech stack if BUILTWITH_KEY set).
+Add POST /api/investors/:id/enrich, POST /api/companies/:id/enrich, and bulk variants.
+8. Export
+Hook both entities into Task 17's custom CSV builder:
+Add investors entity with all the new fields + virtual columns (investments_count, top_sectors, primary_email, primary_linkedin, firm_name).
+Add companies entity with virtual columns (investor_count, founders_count, last_round_lead_name).
+Ship two new built-in presets:
+investor_full — every field useful for outbound research.
+company_due_diligence — every field useful for evaluating a portfolio target.
+Acceptance criteria:
+GET /api/investors/:id/profile for a seeded lead with at least 5 investor_investments returns the full denormalized object in <300ms (cached).
+The investor detail page renders all 12 tabs with no broken sections; tabs with no data show empty-state messaging, not crashes.
+The company detail page renders rounds, investors, founders, and exit correctly for a fully populated company.
+Filtering investors by sector=ai_infrastructure, country=US, min_check=500000, has_unicorn=true returns a deterministic list with the summary strip showing correct aggregates.
+Searching companies by status=acquired, sector=fintech, min_funding=10000000 returns the right rows ordered by last-round-date.
+After enrichment, an investor's investment_count, unicorn_count, and avg_check_usd are computed and visible in the at-a-glance tiles.
+The investor profile's "Path to this investor" shows a working chain through the relationship graph (Task 19) when one exists.
+Implementation order suggestion (within this task):
+Schemas (companies, company_founders, company_rounds, company_news, investor extensions, investor_investments).
+Backfill scripts.
+Profile endpoints (/api/investors/:id/profile, /api/companies/:id/profile) — proves the joins work.
+Detail pages (investor first, then company).
+Browse pages with filters.
+Aggregate endpoints + summary strips.
+Enrichment wiring (Crunchbase org, NewsAPI, Wikipedia, NFX public scrape).
+Nightly stats cron.
+Export presets.
+Cross-cutting (same as prior tasks): every route through accessGuard, every D1 write prepared, every fetch through Task 5 with fetch_log, every page vanilla JS with no CDN deps, npm --prefix apps/worker run typecheck clean.
