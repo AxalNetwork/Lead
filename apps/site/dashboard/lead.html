@@ -1,0 +1,46 @@
+---
+layout: default
+title: Lead detail
+permalink: /dashboard/lead/
+---
+
+<a href="/dashboard/" class="ads-muted" style="font-size:12px">← Dashboard</a>
+<h1 class="ads-page-title" id="ads-lead-title">Lead</h1>
+<p class="ads-page-sub" id="ads-lead-sub">Loading…</p>
+
+<div class="ads-tabs" role="tablist" style="margin-bottom:14px">
+  <button type="button" class="ads-tab active" data-tab="details" role="tab">Details</button>
+  <button type="button" class="ads-tab" data-tab="history" role="tab">History</button>
+  <button type="button" class="ads-tab" data-tab="campaigns" role="tab">Campaigns</button>
+  <button type="button" class="ads-tab" data-tab="actions" role="tab">Actions</button>
+</div>
+
+<section class="ads-tab-panel active" data-tab="details">
+  <div class="ads-card"><pre class="ads-detail__pre" id="ads-lead-details">Loading…</pre></div>
+</section>
+
+<section class="ads-tab-panel" data-tab="history" hidden>
+  <div class="ads-card" id="ads-lead-history"><div class="ads-loading">Loading…</div></div>
+</section>
+
+<section class="ads-tab-panel" data-tab="campaigns" hidden>
+  <div class="ads-card" id="ads-lead-campaigns"><div class="ads-loading">Loading…</div></div>
+</section>
+
+<section class="ads-tab-panel" data-tab="actions" hidden>
+  <div class="ads-card">
+    <h3>Mark as Do-Not-Contact</h3>
+    <p class="ads-muted" style="font-size:12px">Adds the lead's email/phone/LinkedIn to the DNC list and sets the lead's <code>do_not_contact</code> flag.</p>
+    <form id="ads-lead-dnc-form" autocomplete="off">
+      <label>Reason
+        <input type="text" name="reason" placeholder="e.g. operator request" style="width:100%;background:var(--ads-bg);border:1px solid var(--ads-border);border-radius:8px;padding:10px 12px;color:var(--ads-text);font-size:14px">
+      </label>
+      <div class="ads-form-actions" style="margin-top:10px">
+        <button class="ads-btn ads-btn--danger" type="submit">Mark DNC</button>
+      </div>
+    </form>
+    <pre class="ads-detail__pre" id="ads-lead-dnc-out" style="margin-top:12px;display:none"></pre>
+  </div>
+</section>
+
+<script src="/assets/js/lead.js"></script>

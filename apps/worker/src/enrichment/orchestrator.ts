@@ -9,6 +9,7 @@ import { LeadsRepo } from "../db/leads.repo";
 import { ALL_PROVIDERS } from "./providers";
 import { checkBudget, recordBlock, recordCall } from "./budget";
 import { mergePatches, type ProviderPatch } from "./merger";
+import { tagLead } from "../tax/tag";
 import { envFloat, type EnrichResult, type Provider } from "./types";
 
 export interface EnrichOptions {
@@ -130,6 +131,10 @@ export async function enrichLead(env: Env, leadId: string, opts: EnrichOptions =
     .prepare("UPDATE leads SET last_enriched_at = ?, enrichment_log_json = ?, updated_at = ? WHERE id = ?")
     .bind(now, JSON.stringify(log), now, lead.id)
     .run();
+
+  // Re-tag taxonomy slugs in case enrichment populated location/sector fields.
+  // Best-effort: don't fail enrichment if tagging hits a transient error.
+  try { await tagLead(env, lead.id, { source: "enrichment:tagger" }); } catch { /* non-fatal */ }
 
   return {
     leadId: lead.id,
