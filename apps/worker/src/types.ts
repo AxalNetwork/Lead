@@ -14,6 +14,7 @@ export interface Env {
   PROXY_AUTH?: string;            // "user:pass" basic auth for the proxy
   SCRAPER_API_KEY?: string;
   SCRAPER_API_PROVIDER?: string;  // "scraperapi" | "scrapingbee" | "zenrows"
+  BRAVE_API_KEY?: string;         // Brave Search API key for the cache fallback
 }
 
 export type JobKind = "url" | "linktree" | "profile_list";

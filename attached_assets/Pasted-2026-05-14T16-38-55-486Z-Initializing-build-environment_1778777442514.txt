@@ -1,0 +1,52 @@
+2026-05-14T16:38:55.486Z	Initializing build environment...
+2026-05-14T16:39:00.694Z	Success: Finished initializing build environment
+2026-05-14T16:39:02.268Z	Cloning repository...
+2026-05-14T16:39:04.718Z	No build output detected to cache. Skipping.
+2026-05-14T16:39:04.718Z	No dependencies detected to cache. Skipping.
+2026-05-14T16:39:04.720Z	Detected the following tools from environment: ruby@3.4.7
+2026-05-14T16:39:04.722Z	Installing ruby 3.4.7
+2026-05-14T16:39:04.794Z	Installing project dependencies: BUNDLE_WITHOUT="development test" bundle install
+2026-05-14T16:39:05.373Z	The Gemfile specifies no dependencies
+2026-05-14T16:39:05.396Z	Resolving dependencies...
+2026-05-14T16:39:05.406Z	Bundle complete! 0 Gemfile dependencies, 1 gem now installed.
+2026-05-14T16:39:05.406Z	Gems in the groups 'development' and 'test' were not installed.
+2026-05-14T16:39:05.406Z	Use `bundle info [gemname]` to see where a bundled gem is installed.
+2026-05-14T16:39:05.808Z	Executing user deploy command: npx wrangler deploy
+2026-05-14T16:39:08.053Z	npm warn exec The following package was not found and will be installed: wrangler@4.91.0
+2026-05-14T16:39:24.941Z	
+2026-05-14T16:39:24.942Z	 ⛅️ wrangler 4.91.0
+2026-05-14T16:39:24.942Z	───────────────────
+2026-05-14T16:39:25.100Z	
+2026-05-14T16:39:25.100Z	Cloudflare collects anonymous telemetry about your usage of Wrangler. Learn more at https://github.com/cloudflare/workers-sdk/tree/main/packages/wrangler/telemetry.md
+2026-05-14T16:39:25.104Z	
+2026-05-14T16:39:25.206Z	✘ [ERROR] Could not detect a directory containing static files (e.g. html, css and js) for the project
+2026-05-14T16:39:25.206Z	
+2026-05-14T16:39:25.207Z	
+2026-05-14T16:39:25.261Z	🪵  Logs were written to "/opt/buildhome/.config/.wrangler/logs/wrangler-2026-05-14_16-39-24_571.log"
+2026-05-14T16:39:25.386Z	Failed: error occurred while running deploy command
+2026-05-14T16:38:55.486Z	Initializing build environment...
+2026-05-14T16:39:00.694Z	Success: Finished initializing build environment
+2026-05-14T16:39:02.268Z	Cloning repository...
+2026-05-14T16:39:04.718Z	No build output detected to cache. Skipping.
+2026-05-14T16:39:04.718Z	No dependencies detected to cache. Skipping.
+2026-05-14T16:39:04.720Z	Detected the following tools from environment: ruby@3.4.7
+2026-05-14T16:39:04.722Z	Installing ruby 3.4.7
+2026-05-14T16:39:04.794Z	Installing project dependencies: BUNDLE_WITHOUT="development test" bundle install
+2026-05-14T16:39:05.373Z	The Gemfile specifies no dependencies
+2026-05-14T16:39:05.396Z	Resolving dependencies...
+2026-05-14T16:39:05.406Z	Bundle complete! 0 Gemfile dependencies, 1 gem now installed.
+2026-05-14T16:39:05.406Z	Gems in the groups 'development' and 'test' were not installed.
+2026-05-14T16:39:05.406Z	Use `bundle info [gemname]` to see where a bundled gem is installed.
+2026-05-14T16:39:05.808Z	Executing user deploy command: npx wrangler deploy
+2026-05-14T16:39:08.053Z	npm warn exec The following package was not found and will be installed: wrangler@4.91.0
+2026-05-14T16:39:24.941Z	
+2026-05-14T16:39:24.942Z	 ⛅️ wrangler 4.91.0
+2026-05-14T16:39:24.942Z	───────────────────
+2026-05-14T16:39:25.100Z	
+2026-05-14T16:39:25.100Z	Cloudflare collects anonymous telemetry about your usage of Wrangler. Learn more at https://github.com/cloudflare/workers-sdk/tree/main/packages/wrangler/telemetry.md
+2026-05-14T16:39:25.104Z	
+2026-05-14T16:39:25.206Z	✘ [ERROR] Could not detect a directory containing static files (e.g. html, css and js) for the project
+2026-05-14T16:39:25.206Z	
+2026-05-14T16:39:25.207Z	
+2026-05-14T16:39:25.261Z	🪵  Logs were written to "/opt/buildhome/.config/.wrangler/logs/wrangler-2026-05-14_16-39-24_571.log"
+2026-05-14T16:39:25.386Z	Failed: error occurred while running deploy command

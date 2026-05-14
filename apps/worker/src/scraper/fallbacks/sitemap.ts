@@ -18,6 +18,8 @@ const TEAM_PATHS = [
   "/portfolio",
 ];
 
+const FEED_PATHS = ["/feed", "/feed/", "/rss", "/rss.xml", "/atom.xml", "/feed.xml"];
+
 const TEAM_RE = /\/(team|about|about-us|people|our-team|leadership|partners|portfolio)(?:\/|$)/i;
 
 export interface DiscoveredUrls {
@@ -25,6 +27,8 @@ export interface DiscoveredUrls {
   guessed: string[];
   /** URLs extracted from sitemap.xml that look like team/about pages. */
   fromSitemap: string[];
+  /** URLs surfaced by an RSS/Atom feed (item link / entry link). */
+  fromFeed: string[];
 }
 
 function originOf(url: string): string | null {
@@ -59,9 +63,21 @@ function extractLocs(xml: string): string[] {
   return out;
 }
 
+function extractFeedLinks(xml: string): string[] {
+  const out: string[] = [];
+  // RSS 2.0 <link>...</link> inside <item>
+  const rssRe = /<item\b[\s\S]*?<link>([^<]+)<\/link>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = rssRe.exec(xml))) out.push(m[1].trim());
+  // Atom <entry><link href="..."/>
+  const atomRe = /<entry\b[\s\S]*?<link[^>]*href=["']([^"']+)["']/gi;
+  while ((m = atomRe.exec(xml))) out.push(m[1].trim());
+  return out.slice(0, 200);
+}
+
 export async function discoverUrls(seedUrl: string): Promise<DiscoveredUrls> {
   const origin = originOf(seedUrl);
-  if (!origin) return { guessed: [], fromSitemap: [] };
+  if (!origin) return { guessed: [], fromSitemap: [], fromFeed: [] };
 
   const guessed = TEAM_PATHS.map((p) => `${origin}${p}`);
 
@@ -69,7 +85,6 @@ export async function discoverUrls(seedUrl: string): Promise<DiscoveredUrls> {
   const sitemapXml = (await fetchText(`${origin}/sitemap.xml`)) ?? (await fetchText(`${origin}/sitemap_index.xml`));
   if (sitemapXml) {
     const locs = extractLocs(sitemapXml);
-    // If this is a sitemap index, fan out one level.
     const childSitemaps = locs.filter((u) => /sitemap.*\.xml$/i.test(u)).slice(0, 5);
     const pageLocs = locs.filter((u) => !/sitemap.*\.xml$/i.test(u));
     for (const c of childSitemaps) {
@@ -82,5 +97,19 @@ export async function discoverUrls(seedUrl: string): Promise<DiscoveredUrls> {
     }
   }
 
-  return { guessed, fromSitemap };
+  const fromFeed: string[] = [];
+  for (const path of FEED_PATHS) {
+    const feed = await fetchText(`${origin}${path}`);
+    if (!feed) continue;
+    if (!/<rss|<feed|<rdf:RDF/i.test(feed)) continue;
+    for (const link of extractFeedLinks(feed)) {
+      if (TEAM_RE.test(link) || /\/(post|news|blog|press|announcement)/i.test(link)) {
+        fromFeed.push(link);
+      }
+      if (fromFeed.length >= 25) break;
+    }
+    if (fromFeed.length) break;
+  }
+
+  return { guessed, fromSitemap, fromFeed };
 }

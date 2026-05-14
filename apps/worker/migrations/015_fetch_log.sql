@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS fetch_log (
   job_id TEXT,
   host TEXT NOT NULL,
   url TEXT NOT NULL,
-  tier INTEGER NOT NULL,           -- 0=direct, 1=browser, 2=proxy, 3=scraping_api, 4=wayback
+  tier INTEGER NOT NULL,           -- 0=direct, 1=browser, 2=proxy, 3=scraping_api, 4=wayback, 5=brave_cache
   status INTEGER NOT NULL,         -- HTTP status, 0 on transport failure
   bytes INTEGER NOT NULL DEFAULT 0,
   block_reason TEXT,               -- null on success

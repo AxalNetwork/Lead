@@ -213,8 +213,8 @@ async function touchSource(env: Env, url: string): Promise<boolean> {
  * fan out beyond a handful of pages per new domain.
  */
 async function seedDomainDiscovery(env: Env, parentJobId: string, seedUrl: string): Promise<void> {
-  const { guessed, fromSitemap } = await discoverUrls(seedUrl);
-  const candidates = [...guessed, ...fromSitemap].slice(0, 12);
+  const { guessed, fromSitemap, fromFeed } = await discoverUrls(seedUrl);
+  const candidates = [...guessed, ...fromSitemap, ...fromFeed].slice(0, 16);
   if (!candidates.length) return;
   const now = new Date().toISOString();
   for (const childUrl of candidates) {

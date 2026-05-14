@@ -2,6 +2,7 @@ import type { Env } from "../types";
 import { checkRobots } from "./robots";
 import { tosBlockedReason } from "./tos";
 import { fetchWaybackHtml } from "./fallbacks/wayback";
+import { fetchBraveCache } from "./fallbacks/brave";
 
 const USER_AGENTS = [
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
@@ -26,9 +27,9 @@ const MIN_VISIBLE_TEXT_CHARS = 400;
 
 // Per-tier cost approximations in USD per request. Browser Rendering is billed
 // by request; proxy/scraping API are rough averages used for the health roll-up.
-const TIER_COST_USD = { 0: 0, 1: 0.0009, 2: 0.0015, 3: 0.005, 4: 0 } as const;
+const TIER_COST_USD = { 0: 0, 1: 0.0009, 2: 0.0015, 3: 0.005, 4: 0, 5: 0 } as const;
 
-export type FetchTier = 0 | 1 | 2 | 3 | 4;
+export type FetchTier = 0 | 1 | 2 | 3 | 4 | 5;
 
 export interface FetchOptions {
   forceBrowser?: boolean;
@@ -469,6 +470,33 @@ export async function fetchPage(env: Env, url: string, opts: FetchOptions = {}):
     last = r;
     if (!shouldEscalate(r.blockReason)) break;
   }
+
+  // Penultimate fallback: Brave Search cache (only when BRAVE_API_KEY is
+  // configured). Logged either way under tier 5.
+  const braveStart = Date.now();
+  const brave = await fetchBraveCache(env, url).catch(() => null);
+  if (brave) {
+    const braveResult: FetchResult = {
+      ok: true,
+      status: 200,
+      url: brave.url,
+      html: brave.html,
+      bytes: brave.html.length,
+      durationMs: Date.now() - braveStart,
+      tier: 5,
+      blockReason: null,
+      fetched_from: "live",
+    };
+    await logAttempt(env, opts.jobId, host, url, braveResult);
+    return braveResult;
+  }
+  await logAttempt(env, opts.jobId, host, url, {
+    tier: 5,
+    status: 0,
+    bytes: 0,
+    blockReason: env.BRAVE_API_KEY ? "brave_no_result" : "brave_not_configured",
+    durationMs: Date.now() - braveStart,
+  });
 
   // Final fallback: Wayback Machine. Logged whether or not a snapshot exists
   // so /api/scrapers/health reflects the true attempt count.
