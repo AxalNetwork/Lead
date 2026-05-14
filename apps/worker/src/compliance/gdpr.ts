@@ -108,6 +108,11 @@ export async function eraseByIdentifier(
     stageDnc("linkedin", lead.linkedin_url);
   }
 
+  // D1's batch() executes all statements as a single, atomic SQL
+  // transaction (auto-rollback on any failure) — see Cloudflare D1 docs:
+  // https://developers.cloudflare.com/d1/worker-api/d1-database/#batch
+  // This satisfies the GDPR "all-or-nothing" requirement for the erasure
+  // (PII null + DNC inserts + lead_history change_kind row).
   if (stmts.length) await env.DB.batch(stmts);
 
   return { matched: rows.results?.length ?? 0, erased_lead_ids: erased, dnc_added: [...dncSet] };

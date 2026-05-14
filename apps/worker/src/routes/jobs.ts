@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { Env, JobKind, JobMessage } from "../types";
+import { tosBlockedReason } from "../scraper/tos";
 
 export const jobs = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
@@ -26,6 +27,15 @@ jobs.post("/", async (c) => {
     source = new URL(target).hostname.toLowerCase();
   } catch {
     source = body.kind;
+  }
+
+  // ToS gate at the primary enqueue entrypoint: refuse hosts our policy
+  // table flags as off-limits before we touch the DB or queue.
+  if (source && source !== body.kind) {
+    const tosReason = tosBlockedReason(source);
+    if (tosReason) {
+      return c.json({ error: "tos_blocked", message: tosReason, host: source }, 403);
+    }
   }
   await c.env.DB.prepare(
     `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
