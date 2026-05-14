@@ -477,7 +477,7 @@ async function processFirmlist(
 
   for (const f of result.firms) {
     if (await isCancelled(env, jobId)) break;
-    let upsertRes: { firmId: number; action: "created" | "updated" | "unchanged" };
+    let upsertRes: { firmId: number; action: "created" | "updated" | "unchanged"; website: string | null; domain: string | null };
     try {
       upsertRes = await upsertFirm(env, f, importedFrom);
     } catch (e) {
@@ -490,8 +490,11 @@ async function processFirmlist(
     else if (upsertRes.action === "updated") updated += 1;
     else unchanged += 1;
 
-    // Enqueue child team-crawl job if we have a website to crawl.
-    const teamUrl = pickTeamUrl(f);
+    // Enqueue child team-crawl job using the persisted firm record's
+    // canonical website (or synthesize https://{domain}). This guarantees
+    // we always crawl what's actually stored, even when the import row
+    // lacked a website but the existing firm row had one.
+    const teamUrl = pickTeamUrlFromUpsert(upsertRes) ?? pickTeamUrl(f);
     if (teamUrl && isEnqueueable(teamUrl)) {
       const childId = crypto.randomUUID();
       const now = new Date().toISOString();
@@ -542,6 +545,16 @@ async function processFirmlist(
     captchaHits: 0,
     costMs: Date.now() - start,
   };
+}
+
+function pickTeamUrlFromUpsert(r: { website: string | null; domain: string | null }): string | null {
+  if (r.website) {
+    try { return new URL(r.website).toString(); } catch { /* fall through */ }
+  }
+  if (r.domain) {
+    try { return new URL(`https://${r.domain}`).toString(); } catch { /* fall through */ }
+  }
+  return null;
 }
 
 function pickTeamUrl(f: import("./parsers/firmlists/types").FirmCandidate): string | null {
