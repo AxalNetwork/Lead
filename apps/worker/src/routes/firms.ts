@@ -285,6 +285,50 @@ firms.post("/:id/portfolio", async (c) => {
   return c.json({ ok: true, id }, 201);
 });
 
+// --------- TRIGGER TEAM-PAGE CRAWL (Task #17) ---------
+firms.post("/:id/crawl-team", async (c) => {
+  const firmId = Number(c.req.param("id"));
+  if (!Number.isFinite(firmId)) return c.json({ error: "bad_request" }, 400);
+  const firm = await c.env.DB
+    .prepare("SELECT id, name, website, domain FROM firms WHERE id = ?")
+    .bind(firmId)
+    .first<{ id: number; name: string; website: string | null; domain: string | null }>();
+  if (!firm) return c.json({ error: "not_found" }, 404);
+  // Synthesize a homepage URL from website or https://{domain}. We refuse
+  // to enqueue when neither is present — there's nothing to crawl.
+  let target: string | null = null;
+  if (firm.website) {
+    try { target = new URL(firm.website).toString(); } catch { target = null; }
+  }
+  if (!target && firm.domain) {
+    try { target = new URL(`https://${firm.domain}`).toString(); } catch { target = null; }
+  }
+  if (!target) return c.json({ error: "bad_request", message: "firm has no website or domain" }, 400);
+
+  const jobId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const source = firm.domain ?? "";
+  await c.env.DB.prepare(
+    `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
+     VALUES (?, ?, ?, 'queued', 'firm_team_crawl', ?, ?, ?, ?)`,
+  ).bind(
+    jobId,
+    `firm_team_crawl:${firm.name}`,
+    source,
+    target,
+    JSON.stringify({ firmId: firm.id, requested_by: c.get("email") ?? null }),
+    now,
+    now,
+  ).run();
+  await c.env.LEAD_QUEUE.send({
+    jobId,
+    kind: "firm_team_crawl",
+    target,
+    config: { firmId: firm.id },
+  });
+  return c.json({ ok: true, job_id: jobId }, 202);
+});
+
 // --------- BACKFILL FROM LEADS (admin one-shot) ---------
 firms.post("/_backfill", async (c) => {
   const summary = await backfillFirmsFromLeads(c.env);

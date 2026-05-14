@@ -9,6 +9,10 @@ import { discoverPartnersForFirm, discoverByPersona } from "../discovery/discove
 import { saveCandidates } from "../discovery/store";
 import { selectImporter, FIRMLIST_IMPORTERS } from "./parsers/firmlists";
 import { upsertFirm } from "./firms_upsert";
+import { buildSeedUrls } from "./firmcrawl/pathProbes";
+import { extractPeopleFromPage, nameKeyOf, type ExtractedPerson } from "./firmcrawl/personExtract";
+import { guessEmails } from "./firmcrawl/emailGuess";
+import { enqueueLinkedinDiscovery, enqueueCrunchbaseUrl } from "./firmcrawl/profileFollow";
 
 /**
  * Filter helper used by every enqueue site so ToS-blocked domains never even
@@ -547,6 +551,400 @@ async function processFirmlist(
   };
 }
 
+// ----------------------------------------------------------------------------
+// Task #17: Firm team-page crawl. Loads a firm by id, builds a team-page seed
+// set (sitemap + homepage anchors + curated path probes), fetches up to 8
+// candidate pages, runs the 8-strategy person extractor, and writes each
+// resolved person as a leads row + firm_people join. Updates firms.team_size
+// and firms.last_enriched_at on completion. Persists a per-job summary
+// (pages_tried, pages_parsed, people_found, emails_found) onto the job row.
+// ----------------------------------------------------------------------------
+
+const TEAM_CRAWL_PAGE_CAP = 8;
+
+function inferPersona(role: string | null | undefined): { persona_role: string | null; seniority: string | null } {
+  const t = (role || "").toLowerCase();
+  if (/general partner|managing partner|founding partner/.test(t)) return { persona_role: "vc_partner", seniority: "partner" };
+  if (/operating partner/.test(t)) return { persona_role: "operating_partner", seniority: "partner" };
+  if (/venture partner/.test(t)) return { persona_role: "vc_partner", seniority: "partner" };
+  if (/\bpartner\b/.test(t)) return { persona_role: "vc_partner", seniority: "partner" };
+  if (/principal/.test(t)) return { persona_role: "vc_principal", seniority: "principal" };
+  if (/associate|analyst/.test(t)) return { persona_role: "vc_analyst", seniority: "associate" };
+  if (/advisor|board/.test(t)) return { persona_role: "advisor", seniority: "advisor" };
+  if (/founder|chief|\bceo\b|\bcto\b|\bcfo\b|\bcmo\b|\bcoo\b/.test(t)) return { persona_role: "founder", seniority: "executive" };
+  return { persona_role: null, seniority: null };
+}
+
+interface FirmRow {
+  id: number;
+  name: string;
+  website: string | null;
+  domain: string | null;
+}
+
+/**
+ * Insert (or merge into) a lead and return the surviving lead id. Mirrors
+ * the dedupe-aware `insertLead` path above but always returns the id of
+ * the row firm_people should join to. We pass through the same DNC scrub +
+ * resolveIncoming arbitration as the standard scraper insert.
+ */
+async function upsertCrawlLead(
+  env: Env,
+  jobId: string,
+  person: ExtractedPerson,
+  firm: FirmRow,
+  sourceUrl: string,
+): Promise<{ leadId: string; action: "merged" | "inserted" | "needs_review" } | null> {
+  const fullName = person.name?.trim();
+  if (!fullName) return null;
+
+  // Rerun-safety pre-check (Task #17 invariant): if this firm already has a
+  // person with the same canonical name+firm key joined via firm_people,
+  // bind to that lead unconditionally — independent of dedupe score. This
+  // closes the case where a guessed-only contact would otherwise score
+  // below AUTO_MERGE_THRESHOLD on rerun and create a fresh duplicate row.
+  const nameFirmKey = buildCanonicalKeys({
+    email: null,
+    phone: null,
+    linkedin_url: null,
+    name: fullName,
+    org: firm.name,
+    city: null,
+  }).canonical_name_firm_key;
+  if (nameFirmKey) {
+    const prior = await env.DB.prepare(
+      `SELECT l.id AS id FROM firm_people fp
+         JOIN leads l ON l.id = fp.lead_id
+        WHERE fp.firm_id = ? AND l.canonical_name_firm_key = ?
+        LIMIT 1`,
+    ).bind(firm.id, nameFirmKey).first<{ id: string }>();
+    if (prior?.id) return { leadId: prior.id, action: "merged" };
+  }
+
+  // Build a synthetic primary email from the strongest pattern guess when
+  // the page didn't give us one. The first guess is stored on `email` and
+  // the remaining guesses ride along in alt_emails so dedupe can still
+  // union later confirmed addresses without losing the candidates.
+  const guesses = person.email ? [] : guessEmails(fullName, firm.domain);
+  const primaryEmail = person.email ?? guesses[0]?.email ?? null;
+  const altEmails = guesses.slice(person.email ? 0 : 1).map((g) => g.email);
+
+  const incoming: IncomingLead = {
+    email: primaryEmail,
+    phone: null,
+    linkedin_url: person.linkedin ?? null,
+    twitter_url: person.twitter ?? null,
+    github_url: null,
+    personal_url: person.personal_site ?? null,
+    name: fullName,
+    org: firm.name,
+    title: person.role ?? null,
+    category: "investor",
+    bio: person.bio ?? null,
+    country_iso2: null,
+    region: null,
+    city: null,
+    timezone: null,
+    source_domain: extractDomain(sourceUrl) ?? firm.domain ?? null,
+    source_url: sourceUrl,
+    alt_emails: altEmails,
+    tags: ["firm_team_crawl"],
+    provider: "firm_team_crawl",
+  };
+
+  const dnc = await checkAndScrubDnc(env, {
+    email: incoming.email ?? null,
+    phone: incoming.phone ?? null,
+    linkedin_url: incoming.linkedin_url ?? null,
+    twitter_url: incoming.twitter_url ?? null,
+    github_url: incoming.github_url ?? null,
+    source_domain: incoming.source_domain ?? null,
+  });
+  if (dnc.hit) {
+    incoming.email = dnc.cleaned.email;
+    incoming.phone = dnc.cleaned.phone;
+    incoming.linkedin_url = dnc.cleaned.linkedin_url;
+    incoming.twitter_url = dnc.cleaned.twitter_url;
+    incoming.github_url = dnc.cleaned.github_url;
+  }
+
+  const decision = await resolveIncoming(env.DB, incoming, {
+    jobId,
+    provider: "firm_team_crawl",
+    dncHit: dnc.hit,
+  });
+
+  if (decision.action === "merged") {
+    return { leadId: decision.into, action: "merged" };
+  }
+
+  // Insert path (either fresh or borderline-needs-review).
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const persona = inferPersona(person.role ?? null);
+  const socials: Array<{ platform: string; url: string }> = [];
+  if (person.linkedin) socials.push({ platform: "linkedin", url: person.linkedin });
+  if (person.twitter) socials.push({ platform: "twitter", url: person.twitter });
+  if (person.crunchbase) socials.push({ platform: "crunchbase", url: person.crunchbase });
+  const meta = JSON.stringify({
+    job_id: jobId,
+    firm_id: firm.id,
+    source_strategy: person.source_strategy,
+    socials,
+    avatar_url: person.avatar ?? null,
+    email_pattern_guess: !person.email && primaryEmail ? guesses[0]?.pattern ?? null : null,
+  });
+  const status = decision.action === "needs_review" ? "needs_review" : "new";
+  const keys = buildCanonicalKeys({
+    email: incoming.email,
+    phone: incoming.phone,
+    linkedin_url: incoming.linkedin_url,
+    name: incoming.name,
+    org: incoming.org,
+    city: incoming.city,
+  });
+
+  const lead: Lead = {
+    id,
+    name: fullName,
+    email: incoming.email ?? null,
+    phone: null,
+    org: firm.name,
+    title: person.role ?? null,
+    category: "investor",
+    source_domain: incoming.source_domain ?? firm.domain ?? null,
+    source_url: sourceUrl,
+    status,
+    verified: 0,
+    flagged: 0,
+    approved_at: null,
+    approved_by: null,
+    linkedin_url: incoming.linkedin_url ?? null,
+    twitter_url: incoming.twitter_url ?? null,
+    github_url: null,
+    personal_url: incoming.personal_url ?? null,
+    alt_emails_json: altEmails.length ? JSON.stringify(altEmails) : null,
+    bio: person.bio ?? null,
+    country_iso2: null,
+    region: null,
+    city: null,
+    timezone: null,
+    tags_json: JSON.stringify(["firm_team_crawl"]),
+    provider: "firm_team_crawl",
+    canonical_email_key: keys.canonical_email_key ?? null,
+    canonical_phone_key: keys.canonical_phone_key ?? null,
+    canonical_linkedin_key: keys.canonical_linkedin_key ?? null,
+    canonical_name_firm_key: keys.canonical_name_firm_key ?? null,
+    canonical_name_city_key: keys.canonical_name_city_key ?? null,
+    merged_into: null,
+    meta_json: meta,
+    created_at: now,
+    updated_at: now,
+  };
+  if (persona.persona_role) (lead as unknown as Record<string, unknown>).persona_role = persona.persona_role;
+  if (persona.seniority) (lead as unknown as Record<string, unknown>).seniority = persona.seniority;
+  if (dnc.hit) (lead as unknown as Record<string, unknown>).do_not_contact = 1;
+
+  const repo = new LeadsRepo(env.DB);
+  await repo.insert(lead);
+
+  if (decision.action === "needs_review") {
+    await recordReview(env.DB, decision.candidate.id, id, decision.score, decision.reasons);
+  }
+  return { leadId: id, action: decision.action === "needs_review" ? "needs_review" : "inserted" };
+}
+
+async function attachToFirm(
+  env: Env,
+  firmId: number,
+  leadId: string,
+  role: string | null,
+  sourceUrl: string,
+): Promise<void> {
+  const persona = inferPersona(role);
+  const isDecisionMaker = persona.seniority === "partner" || persona.seniority === "executive" ? 1 : 0;
+  // ON CONFLICT IGNORE — UNIQUE(firm_id, lead_id) means rerunning a crawl
+  // does not duplicate the join row.
+  await env.DB.prepare(
+    `INSERT INTO firm_people (firm_id, lead_id, role, is_decision_maker, source_url)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(firm_id, lead_id) DO UPDATE SET
+       role = COALESCE(firm_people.role, excluded.role),
+       source_url = COALESCE(firm_people.source_url, excluded.source_url)`,
+  ).bind(firmId, leadId, role, isDecisionMaker, sourceUrl).run();
+}
+
+async function loadFirm(env: Env, firmId: number): Promise<FirmRow | null> {
+  return env.DB
+    .prepare("SELECT id, name, website, domain FROM firms WHERE id = ?")
+    .bind(firmId)
+    .first<FirmRow>();
+}
+
+async function processFirmTeamCrawl(
+  env: Env,
+  jobId: string,
+  target: string,
+  config: Record<string, unknown> | undefined,
+): Promise<{ leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number; result: Record<string, unknown> }> {
+  const start = Date.now();
+  let leadsFound = 0;
+  let pagesFetched = 0;
+  let pagesBlocked = 0;
+  let captchaHits = 0;
+
+  const firmIdRaw = config?.firmId;
+  const firmId = typeof firmIdRaw === "number" ? firmIdRaw : Number(firmIdRaw);
+  if (!Number.isFinite(firmId)) {
+    throw new Error("firm_team_crawl:missing_firm_id");
+  }
+  const firm = await loadFirm(env, firmId);
+  if (!firm) throw new Error(`firm_team_crawl:firm_not_found:${firmId}`);
+
+  const homepage = (() => {
+    if (firm.website) {
+      try { return new URL(firm.website).toString(); } catch { /* fall through */ }
+    }
+    if (firm.domain) {
+      try { return new URL(`https://${firm.domain}`).toString(); } catch { /* fall through */ }
+    }
+    try { return new URL(target).toString(); } catch { return target; }
+  })();
+
+  // Build the candidate seed set (sitemap + homepage anchors + curated paths).
+  const seeds = await buildSeedUrls(env, homepage, jobId);
+  const candidates = seeds.candidates.slice(0, TEAM_CRAWL_PAGE_CAP);
+
+  // Cross-page dedupe — we only count a person once across the full crawl.
+  const peopleByKey = new Map<string, ExtractedPerson & { source_url: string }>();
+  let pagesTried = 0;
+  let pagesParsed = 0;
+
+  for (const url of candidates) {
+    if (await isCancelled(env, jobId)) break;
+    pagesTried += 1;
+    const res = await fetchPage(env, url, { jobId, minIntervalMs: 2000 });
+    if (!res.ok) {
+      pagesBlocked += 1;
+      if (res.blockReason === "captcha") captchaHits += 1;
+      // 404s on a curated path are expected and silent. Other failures are
+      // logged via fetch_log already.
+      continue;
+    }
+    pagesFetched += 1;
+    pagesParsed += 1;
+    await archiveRawHtml(env, url, res.html);
+    const people = extractPeopleFromPage(res.html, res.url || url, firm.domain);
+    for (const p of people) {
+      const k = nameKeyOf(p.name);
+      if (!k) continue;
+      const cur = peopleByKey.get(k);
+      if (!cur) {
+        peopleByKey.set(k, { ...p, source_url: res.url || url });
+        continue;
+      }
+      cur.role ??= p.role;
+      cur.email ??= p.email;
+      cur.linkedin ??= p.linkedin;
+      cur.twitter ??= p.twitter;
+      cur.crunchbase ??= p.crunchbase;
+      cur.personal_site ??= p.personal_site;
+      cur.avatar ??= p.avatar;
+      cur.bio ??= p.bio;
+    }
+  }
+
+  let emailsFound = 0;
+  let followLinkedin = 0;
+  let followCrunchbase = 0;
+
+  let skippedNoChannel = 0;
+  for (const person of peopleByKey.values()) {
+    if (await isCancelled(env, jobId)) break;
+    // Acceptance criterion: every persisted person must have at least one
+    // contact channel — verified email, LinkedIn, Twitter, or (when the
+    // firm has a usable domain) a pattern-guessed email.
+    const hasGuessableEmail = !!firm.domain && /^[a-z0-9.\-]+\.[a-z]{2,}$/.test(firm.domain.toLowerCase().replace(/^www\./, ""));
+    if (!person.email && !person.linkedin && !person.twitter && !hasGuessableEmail) {
+      skippedNoChannel += 1;
+      continue;
+    }
+    const result = await upsertCrawlLead(env, jobId, person, firm, person.source_url);
+    if (!result) continue;
+    leadsFound += 1;
+    if (person.email) emailsFound += 1;
+    await attachToFirm(env, firm.id, result.leadId, person.role ?? null, person.source_url);
+
+    // Follow-ups — never fetch LinkedIn directly. Routes through Task #4
+    // discovery (search-engine cache + registry probes).
+    if (person.linkedin) {
+      try {
+        const id = await enqueueLinkedinDiscovery(env, jobId, person.name, firm.name, person.linkedin);
+        if (id) followLinkedin += 1;
+      } catch (e) {
+        console.warn("enqueueLinkedinDiscovery failed", (e as Error).message);
+      }
+    }
+    if (person.crunchbase) {
+      try {
+        const id = await enqueueCrunchbaseUrl(env, jobId, person.crunchbase);
+        if (id) followCrunchbase += 1;
+      } catch (e) {
+        console.warn("enqueueCrunchbaseUrl failed", (e as Error).message);
+      }
+    }
+  }
+
+  // Refresh firm.team_size and last_enriched_at from ground truth.
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `UPDATE firms
+       SET team_size = (SELECT COUNT(*) FROM firm_people WHERE firm_id = ?),
+           last_enriched_at = ?
+     WHERE id = ?`,
+  ).bind(firm.id, now, firm.id).run();
+
+  // Per-job summary on the job row's result_json (and a fetch_log audit row
+  // mirroring the firmlist processor's pattern).
+  const summary = {
+    kind: "firm_team_crawl",
+    firm_id: firm.id,
+    firm_name: firm.name,
+    pages_tried: pagesTried,
+    pages_parsed: pagesParsed,
+    people_found: leadsFound,
+    emails_found: emailsFound,
+    skipped_no_channel: skippedNoChannel,
+    follow_linkedin: followLinkedin,
+    follow_crunchbase: followCrunchbase,
+    seeds_probed: seeds.probesSpent,
+    seeds_total: seeds.candidates.length,
+  };
+  // fetch_log audit row mirrors the firmlist processor's pattern; the
+  // jobs.result_json write happens via runJob → markCompleted (which now
+  // honors `totals.result`).
+  await env.DB.prepare(
+    `INSERT INTO fetch_log (job_id, host, url, tier, status, bytes, block_reason, duration_ms, cost_usd, created_at)
+     VALUES (?, ?, ?, 0, 200, 0, ?, ?, 0, ?)`,
+  ).bind(
+    jobId,
+    safeHost(homepage),
+    homepage,
+    JSON.stringify(summary),
+    Date.now() - start,
+    now,
+  ).run();
+
+  return {
+    leadsFound,
+    pagesFetched,
+    pagesBlocked,
+    captchaHits,
+    costMs: Date.now() - start,
+    result: summary,
+  };
+}
+
 function pickTeamUrlFromUpsert(r: { website: string | null; domain: string | null }): string | null {
   if (r.website) {
     try { return new URL(r.website).toString(); } catch { /* fall through */ }
@@ -579,7 +977,7 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
 
   const start = Date.now();
   try {
-    let totals: { leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number };
+    let totals: { leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number; result?: Record<string, unknown> };
     if (msg.kind === "linktree") {
       totals = await processLinktree(env, jobId, msg.target, msg.config);
     } else if (msg.kind === "profile_list") {
@@ -589,10 +987,7 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
     } else if (msg.kind === "firmlist") {
       totals = await processFirmlist(env, jobId, msg.target, msg.config);
     } else if (msg.kind === "firm_team_crawl") {
-      // Task #17 will implement a smarter team-crawl handler. For now we
-      // route through the standard single-URL scraper so the firm's website
-      // (or /team page) is at least scraped end-to-end.
-      totals = await processSingleUrl(env, jobId, msg.target);
+      totals = await processFirmTeamCrawl(env, jobId, msg.target, msg.config);
     } else {
       totals = await processSingleUrl(env, jobId, msg.target);
     }
@@ -615,6 +1010,10 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
       return;
     }
 
+    // Allow per-job summaries (e.g. firm_team_crawl) to ride through to the
+    // jobs.result_json column instead of being clobbered by the default
+    // {kind,target} stub.
+    const customResult = (totals as { result?: Record<string, unknown> }).result;
     await markCompleted(
       env,
       jobId,
@@ -623,7 +1022,7 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
       totals.pagesBlocked,
       totals.captchaHits,
       Date.now() - start,
-      { kind: msg.kind, target: msg.target },
+      customResult ?? { kind: msg.kind, target: msg.target },
     );
   } catch (e) {
     await markFailed(env, jobId, (e as Error).message, Date.now() - start);
