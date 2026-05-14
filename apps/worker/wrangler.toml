@@ -21,6 +21,19 @@ database_id = "ecd7272e-533d-4e01-81ba-e1b98bce6e1c"
 binding = "SESSIONS"
 id = "302eb1a32ae64ce588dee452e14b3217"
 
+# Per-host rate limit + 24h scrape cache
+[[kv_namespaces]]
+binding = "SCRAPE_CACHE"
+id = "302eb1a32ae64ce588dee452e14b3217"
+
+# Raw HTML archive (one object per fetched URL/day)
+[[r2_buckets]]
+binding = "RAW_HTML"
+bucket_name = "aidatasignal-raw-html"
+
+# Browser Rendering binding for the fetcher tier-1 fallback
+browser = { binding = "BROWSER" }
+
 [[queues.producers]]
 binding = "LEAD_QUEUE"
 queue = "aidatasignal-lead-jobs"
@@ -33,3 +46,6 @@ max_batch_timeout = 5
 [[routes]]
 pattern = "api.aidatasignal.com"
 custom_domain = true
+
+[triggers]
+crons = ["0 */6 * * *"]

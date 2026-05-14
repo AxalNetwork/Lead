@@ -1,0 +1,90 @@
+import { Hono } from "hono";
+import type { Env, JobKind, JobMessage } from "../types";
+
+export const jobs = new Hono<{ Bindings: Env; Variables: { email: string } }>();
+
+const ALLOWED_KINDS: JobKind[] = ["url", "linktree", "profile_list"];
+
+function isJobKind(k: unknown): k is JobKind {
+  return typeof k === "string" && (ALLOWED_KINDS as string[]).includes(k);
+}
+
+jobs.post("/", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as
+    | { kind?: unknown; target?: unknown; config?: unknown; name?: unknown }
+    | null;
+  if (!body || !isJobKind(body.kind) || typeof body.target !== "string" || !body.target.trim()) {
+    return c.json({ error: "bad_request", message: "kind and target required" }, 400);
+  }
+  const target = body.target.trim();
+  const config = (body.config && typeof body.config === "object" ? body.config : {}) as Record<string, unknown>;
+  const name = typeof body.name === "string" ? body.name : `${body.kind}:${target}`;
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  let source = "";
+  try {
+    source = new URL(target).hostname.toLowerCase();
+  } catch {
+    source = body.kind;
+  }
+  await c.env.DB.prepare(
+    `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
+     VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
+  )
+    .bind(id, name, source, body.kind, target, JSON.stringify(config), now, now)
+    .run();
+
+  const msg: JobMessage = { jobId: id, kind: body.kind, target, config };
+  await c.env.LEAD_QUEUE.send(msg);
+  return c.json({ jobId: id, status: "queued" }, 201);
+});
+
+jobs.get("/", async (c) => {
+  const limit = Math.min(Number(c.req.query("limit") ?? "50"), 200);
+  const statusParam = c.req.query("status");
+  const kind = c.req.query("kind");
+  const source = c.req.query("source");
+
+  const wheres: string[] = [];
+  const binds: unknown[] = [];
+  if (statusParam) {
+    const list = statusParam.split(",").map((s) => s.trim()).filter(Boolean);
+    if (list.length) {
+      wheres.push(`status IN (${list.map(() => "?").join(",")})`);
+      binds.push(...list);
+    }
+  }
+  if (kind) {
+    wheres.push("kind = ?");
+    binds.push(kind);
+  }
+  if (source) {
+    wheres.push("source = ?");
+    binds.push(source);
+  }
+  const whereSql = wheres.length ? `WHERE ${wheres.join(" AND ")}` : "";
+  const stmt = c.env.DB.prepare(
+    `SELECT id, name, source, kind, target, status, leads_found, pages_fetched, pages_blocked, captcha_hits, cost_ms, started_at, finished_at, cancelled_at, created_at
+     FROM jobs ${whereSql} ORDER BY started_at DESC LIMIT ?`,
+  ).bind(...binds, limit);
+  const r = await stmt.all();
+  return c.json({ items: r.results ?? [] });
+});
+
+jobs.get("/:id", async (c) => {
+  const id = c.req.param("id");
+  const r = await c.env.DB.prepare("SELECT * FROM jobs WHERE id = ?").bind(id).first();
+  if (!r) return c.json({ error: "not_found" }, 404);
+  return c.json(r);
+});
+
+jobs.post("/:id/cancel", async (c) => {
+  const id = c.req.param("id");
+  const now = new Date().toISOString();
+  const r = await c.env.DB.prepare(
+    `UPDATE jobs SET status = 'cancelled', cancelled_at = ?, finished_at = COALESCE(finished_at, ?) WHERE id = ? AND status IN ('queued','running')`,
+  )
+    .bind(now, now, id)
+    .run();
+  return c.json({ ok: true, changed: r.meta.changes ?? 0 });
+});
