@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS firm_people (
   ended_at TEXT,
   source_url TEXT,
   created_at TEXT DEFAULT (datetime('now')),
-  UNIQUE(firm_id, lead_id, role)
+  UNIQUE(firm_id, lead_id)
 );
 CREATE INDEX IF NOT EXISTS idx_fp_firm ON firm_people(firm_id);
 CREATE INDEX IF NOT EXISTS idx_fp_lead ON firm_people(lead_id);
