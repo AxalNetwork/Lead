@@ -1,5 +1,10 @@
+# Root-level wrangler config so Cloudflare Workers Builds can run
+# `npx wrangler deploy` directly from the repo root. The actual worker source
+# lives in apps/worker/; this file just re-points `main` and re-declares the
+# bindings. Keep this in sync with apps/worker/wrangler.toml.
+
 name = "lead"
-main = "src/index.ts"
+main = "apps/worker/src/index.ts"
 compatibility_date = "2025-05-01"
 compatibility_flags = ["nodejs_compat"]
 account_id = "30c9362191318777b71647145decda48"
@@ -7,7 +12,8 @@ account_id = "30c9362191318777b71647145decda48"
 workers_dev = false
 
 # Browser Rendering binding for the fetcher tier-1 fallback. Declared at the
-# top of the file so TOML doesn't accidentally nest it under a later table.
+# top of the file so TOML doesn't accidentally nest it under the previous
+# table block.
 browser = { binding = "BROWSER" }
 
 [vars]
@@ -25,12 +31,10 @@ database_id = "ecd7272e-533d-4e01-81ba-e1b98bce6e1c"
 binding = "SESSIONS"
 id = "302eb1a32ae64ce588dee452e14b3217"
 
-# Per-host rate limit + 24h scrape cache
 [[kv_namespaces]]
 binding = "SCRAPE_CACHE"
 id = "302eb1a32ae64ce588dee452e14b3217"
 
-# Raw HTML archive (one object per fetched URL/day)
 [[r2_buckets]]
 binding = "RAW_HTML"
 bucket_name = "aidatasignal-raw-html"
