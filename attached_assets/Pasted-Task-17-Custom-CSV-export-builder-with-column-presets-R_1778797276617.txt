@@ -1,0 +1,35 @@
+Task 17 — Custom CSV export builder with column presets
+Replace the current single-format CSV exporter (apps/worker/src/routes/exports.ts) with a column-builder API that lets the user pick exactly which columns and which entity (leads, firms, or joined).
+New schema (apps/worker/migrations/100_export_templates.sql):
+CREATE TABLE export_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  entity TEXT NOT NULL,               -- 'leads','firms','firm_people','portfolio'
+  columns_json TEXT NOT NULL,         -- ordered array of {field, header, transform?}
+  filter_json TEXT,
+  created_by TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+Endpoints:
+GET /api/exports/templates — list saved templates.
+POST /api/exports/templates — save a new template.
+DELETE /api/exports/templates/:id
+POST /api/exports/csv body {entity, columns:[{field, header, transform?}], filter:{...}, format:'csv'|'tsv'|'xlsx'|'json'} — streams the export. The current GET /api/exports/csv stays as a backward-compatible "all-columns leads" shortcut.
+Allowed field values per entity (validate strictly):
+leads: every column in leads, plus virtual columns primary_email (first emails_json), primary_phone, primary_linkedin, firm_name (joined via firm_people), firm_domain, firm_aum_usd.
+firms: every column in firms, plus virtual partner_count, gp_count, portfolio_count_actual (computed from firm_portfolio), top_partner_name.
+firm_people: a row per person-firm pair with joined fields from both.
+portfolio: every column in firm_portfolio with joined firm name.
+Allowed transform: lower, upper, titlecase, e164 (phones), pipe_join (for JSON array fields), first (first array element), bool_yn.
+Built-in presets shipped at first run (call them out in the UI):
+minimal_contact — entity=leads, columns: first_name, last_name, primary_email.
+outbound_email — entity=leads, columns: first_name, last_name, firm_name, primary_email, primary_linkedin, headline.
+vc_research_full — entity=firms, columns: name, kind, hq_country_iso2, hq_city, stages_json (pipe_join), sectors_json (pipe_join), check_size_min_usd, check_size_max_usd, aum_usd, lead_or_co, thesis, website, crunchbase_url, last_modified.
+airtable_compatible — entity=firms, columns matching the user's existing Airtable headers: Firm, Stage (They finance), Areas of interest, Check size, Lead/co-invest, Notes, Location, Last modified.
+portfolio_dump — entity=portfolio, columns: firm_name, company_name, investment_year, stage, amount_usd, outcome.
+Dashboard: replace the current single "Export CSV" button with an "Export" dropdown listing presets + "Custom…" which opens a column-picker modal (entity selector → drag-to-reorder column list → filter form → format dropdown → Download).
+Format implementations: CSV uses RFC 4180 quoting. TSV swaps the delimiter. XLSX uses a tiny zero-dependency writer (xlsx is heavy; for the scope here a templated xl/worksheets/sheet1.xml + xl/sharedStrings.xml + a hardcoded xl/workbook.xml packaged as a ZIP via the Workers-compatible fflate package is enough). JSON returns a streaming array.
+Acceptance criteria:
+A user can save a template called "Outbound Email" and re-use it.
+Selecting the airtable_compatible preset and clicking Download produces a CSV whose headers exactly match the user's existing Airtable column names.
+Selecting entity=leads + columns=[first_name, primary_email] produces a 2-column CSV regardless of how many lead fields exist in the DB.
