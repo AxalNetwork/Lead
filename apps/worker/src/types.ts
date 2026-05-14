@@ -5,4 +5,5 @@ export interface Env {
   ALLOWED_EMAIL: string;
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
+  ACCESS_APP_AUD: string;
 }

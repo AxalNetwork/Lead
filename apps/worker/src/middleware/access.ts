@@ -32,7 +32,7 @@ function base64UrlDecode(input: string): Uint8Array {
   return out;
 }
 
-async function verifyJwt(token: string, jwks: JwksKey[], expectedAud: string, expectedIss: string): Promise<Record<string, unknown>> {
+async function verifyJwt(token: string, jwks: JwksKey[], allowedAuds: string[], expectedIss: string): Promise<Record<string, unknown>> {
   const parts = token.split(".");
   if (parts.length !== 3) throw new Error("malformed_jwt");
   const [headerB64, payloadB64, sigB64] = parts;
@@ -51,7 +51,8 @@ async function verifyJwt(token: string, jwks: JwksKey[], expectedAud: string, ex
   const ok = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", cryptoKey, base64UrlDecode(sigB64), data);
   if (!ok) throw new Error("bad_signature");
   const aud = payload.aud;
-  const audOk = Array.isArray(aud) ? aud.includes(expectedAud) : aud === expectedAud;
+  const audValues = Array.isArray(aud) ? aud : typeof aud === "string" ? [aud] : [];
+  const audOk = audValues.some((a) => allowedAuds.includes(String(a)));
   if (!audOk) throw new Error("bad_aud");
   if (typeof payload.iss !== "string" || payload.iss !== expectedIss) throw new Error("bad_iss");
   if (typeof payload.exp !== "number") throw new Error("missing_exp");
@@ -67,7 +68,8 @@ export const accessGuard: MiddlewareHandler<{ Bindings: Env; Variables: { email:
   try {
     const jwks = await getJwks(c.env.ACCESS_TEAM_DOMAIN);
     const iss = `https://${c.env.ACCESS_TEAM_DOMAIN}`;
-    const claims = await verifyJwt(token, jwks, c.env.ACCESS_AUD, iss);
+    const allowedAuds = [c.env.ACCESS_AUD, c.env.ACCESS_APP_AUD].filter(Boolean) as string[];
+    const claims = await verifyJwt(token, jwks, allowedAuds, iss);
     const email = typeof claims.email === "string" ? claims.email : "";
     if (!email) return c.json({ error: "no_email_claim" }, 401);
     if (email.toLowerCase() !== c.env.ALLOWED_EMAIL.toLowerCase()) {
