@@ -1,0 +1,66 @@
+---
+layout: default
+title: Jobs
+permalink: /dashboard/jobs/
+---
+
+<h1 class="ads-page-title">Jobs</h1>
+<p class="ads-page-sub">Full history of scrape jobs. Click a row for full detail.</p>
+
+<div class="ads-card">
+  <form class="ads-filters" id="ads-jobs-filters" autocomplete="off">
+    <label class="ads-field ads-field--inline">
+      <span>Status</span>
+      <select name="status">
+        <option value="">all</option>
+        <option value="queued">queued</option>
+        <option value="running">running</option>
+        <option value="completed">completed</option>
+        <option value="failed">failed</option>
+        <option value="cancelled">cancelled</option>
+      </select>
+    </label>
+    <label class="ads-field ads-field--inline">
+      <span>Kind</span>
+      <select name="kind">
+        <option value="">all</option>
+        <option value="url">url</option>
+        <option value="linktree">linktree</option>
+        <option value="profile_list">profile_list</option>
+      </select>
+    </label>
+    <label class="ads-field ads-field--inline">
+      <span>Source domain</span>
+      <input type="text" name="source" placeholder="example.com">
+    </label>
+    <label class="ads-field ads-field--inline">
+      <span>From</span>
+      <input type="date" name="from">
+    </label>
+    <label class="ads-field ads-field--inline">
+      <span>To</span>
+      <input type="date" name="to">
+    </label>
+    <div class="ads-form-actions">
+      <button type="submit" class="ads-btn">Apply</button>
+      <button type="button" class="ads-btn ads-btn--ghost" id="ads-jobs-reset">Reset</button>
+    </div>
+  </form>
+</div>
+
+<div class="ads-card" style="margin-top:18px">
+  <div id="ads-jobs-table"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<div class="ads-drawer" id="ads-job-drawer" hidden>
+  <div class="ads-drawer__backdrop" data-close></div>
+  <aside class="ads-drawer__panel" role="dialog" aria-label="Job detail">
+    <header class="ads-drawer__head">
+      <h3 id="ads-drawer-title">Job</h3>
+      <button type="button" class="ads-drawer__close" data-close aria-label="Close">×</button>
+    </header>
+    <div class="ads-drawer__body" id="ads-drawer-body"><div class="ads-loading">Loading…</div></div>
+  </aside>
+</div>
+
+<script src="/assets/js/jobs.js"></script>

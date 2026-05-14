@@ -7,8 +7,73 @@ permalink: /dashboard/
 <h1 class="ads-page-title">Admin Dashboard</h1>
 <p class="ads-page-sub">Live overview of your lead intelligence pipeline.</p>
 
-<div class="ads-actions" style="margin-bottom:24px">
+<div class="ads-card ads-scrape" id="ads-scrape-panel">
+  <div class="ads-scrape__head">
+    <h3>Start Scrape</h3>
+    <div class="ads-tabs" role="tablist">
+      <button type="button" class="ads-tab active" data-tab="single" role="tab">Single URL</button>
+      <button type="button" class="ads-tab" data-tab="linktree" role="tab">Link tree / list</button>
+      <button type="button" class="ads-tab" data-tab="bulk" role="tab">Bulk paste</button>
+    </div>
+  </div>
+
+  <form class="ads-tab-panel active" data-tab="single" id="ads-form-single" autocomplete="off">
+    <label class="ads-field">
+      <span>URL</span>
+      <input type="url" name="target" placeholder="https://example.com/team" required>
+    </label>
+    <label class="ads-field">
+      <span>Job name (optional)</span>
+      <input type="text" name="name" placeholder="example.com /team page">
+    </label>
+    <div class="ads-form-actions">
+      <button type="submit" class="ads-btn">Scrape</button>
+      <span class="ads-form-msg" data-msg></span>
+    </div>
+  </form>
+
+  <form class="ads-tab-panel" data-tab="linktree" id="ads-form-linktree" autocomplete="off">
+    <label class="ads-field">
+      <span>List / link-tree URL</span>
+      <input type="url" name="target" placeholder="https://linktr.ee/handle or https://example.com/people" required>
+    </label>
+    <label class="ads-field">
+      <span>Parser hint (optional)</span>
+      <select name="parser">
+        <option value="">auto-detect</option>
+        <option value="linktree">linktree</option>
+        <option value="generic_list">generic list page</option>
+      </select>
+    </label>
+    <div class="ads-form-actions">
+      <button type="submit" class="ads-btn">Scrape link tree</button>
+      <span class="ads-form-msg" data-msg></span>
+    </div>
+  </form>
+
+  <form class="ads-tab-panel" data-tab="bulk" id="ads-form-bulk" autocomplete="off">
+    <label class="ads-field">
+      <span>One URL per line (max 100)</span>
+      <textarea name="targets" rows="6" placeholder="https://a.com/team&#10;https://b.com/about&#10;https://c.com/staff" required></textarea>
+    </label>
+    <div class="ads-form-actions">
+      <button type="submit" class="ads-btn">Queue all</button>
+      <span class="ads-form-msg" data-msg></span>
+    </div>
+  </form>
+</div>
+
+<div class="ads-card ads-active" id="ads-active-jobs-card">
+  <div class="ads-active__head">
+    <h3>Active jobs</h3>
+    <span class="ads-muted" id="ads-active-meta">Polling every 3s</span>
+  </div>
+  <div id="ads-active-jobs"><div class="ads-empty">No active jobs.</div></div>
+</div>
+
+<div class="ads-actions" style="margin:24px 0">
   <button class="ads-btn ads-btn--ghost" id="ads-export-btn">Export CSV</button>
+  <a class="ads-btn ads-btn--ghost" href="/dashboard/jobs/">View all jobs &rarr;</a>
 </div>
 
 <div class="ads-grid" id="ads-kpi-grid">
