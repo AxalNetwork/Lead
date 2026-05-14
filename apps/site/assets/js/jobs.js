@@ -26,6 +26,21 @@
       : "idle";
   }
 
+  function normalizeSource(v) {
+    // The API stores `source` as a bare hostname (e.g. "www.openvc.app") and
+    // matches it exactly. Operators commonly paste a full URL, so coerce
+    // anything URL-shaped to its lowercase hostname before sending.
+    if (!v) return "";
+    var s = v.trim();
+    if (!s) return "";
+    if (/^https?:\/\//i.test(s)) {
+      try { return new URL(s).hostname.toLowerCase(); } catch (e) { return s.toLowerCase(); }
+    }
+    // Strip any leading "//" or path the user may have typed without a scheme.
+    s = s.replace(/^\/\//, "").replace(/\/.*$/, "");
+    return s.toLowerCase();
+  }
+
   function buildQuery(form) {
     // Build the `?status=&kind=&source=&from=&to=` query. Empty fields are
     // skipped so the API receives only the filters the operator chose.
@@ -33,6 +48,7 @@
     var p = new URLSearchParams();
     ["status", "kind", "source", "from", "to"].forEach(function (k) {
       var v = String(fd.get(k) || "").trim();
+      if (k === "source") v = normalizeSource(v);
       if (v) p.set(k, v);
     });
     p.set("limit", "200");
