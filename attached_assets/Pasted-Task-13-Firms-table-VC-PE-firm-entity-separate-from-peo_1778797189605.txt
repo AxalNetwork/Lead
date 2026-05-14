@@ -1,0 +1,100 @@
+Task 13 — Firms table (VC/PE firm entity separate from people leads)
+In apps/worker/migrations/, add 090_firms.sql to introduce a first-class firm entity. Today everything is a person row in leads; firms need to be their own table because the user reviews them by firm-level columns (stage, check size, thesis, geography) and people are children of firms.
+CREATE TABLE firms (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  legal_name TEXT,
+  slug TEXT UNIQUE,
+  kind TEXT,                          -- 'vc','pe','angel_group','family_office','corp_vc','accelerator','gov_fund','fund_of_funds'
+  website TEXT,
+  domain TEXT,
+  logo_url TEXT,
+  hq_country_iso2 TEXT,
+  hq_region TEXT,
+  hq_city TEXT,
+  geo_focus_json TEXT,                -- countries/regions they invest in
+  stages_json TEXT,                   -- ['pre_seed','seed','series_a','series_b','growth','buyout','late','public']
+  sectors_json TEXT,                  -- normalized via Task 9 taxonomy
+  thesis TEXT,
+  check_size_min_usd INTEGER,
+  check_size_max_usd INTEGER,
+  check_size_typical_usd INTEGER,
+  aum_usd INTEGER,
+  fund_count INTEGER,
+  current_fund_name TEXT,
+  current_fund_size_usd INTEGER,
+  lead_or_co TEXT,                    -- 'lead','co_invest','both'
+  portfolio_count INTEGER,
+  unicorns_count INTEGER,
+  exits_count INTEGER,
+  notable_investments_json TEXT,      -- [{company,year,stage,outcome}]
+  founded_year INTEGER,
+  team_size INTEGER,
+  linkedin_url TEXT,
+  crunchbase_url TEXT,
+  twitter_handle TEXT,
+  signal_nfx_url TEXT,
+  openvc_url TEXT,
+  pitchbook_url TEXT,
+  socials_json TEXT,
+  contact_email TEXT,
+  submission_url TEXT,                -- "pitch us" form
+  notes TEXT,
+  source_url TEXT,                    -- where we found this firm
+  imported_from TEXT,                 -- 'airtable_share','mercury','openvc','nfx','folk','google_sheet','manual'
+  status TEXT DEFAULT 'new',          -- new, enriched, verified, approved, archived
+  quality_score REAL,
+  last_enriched_at TEXT,
+  last_modified TEXT DEFAULT (datetime('now')),
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_firms_kind ON firms(kind);
+CREATE INDEX idx_firms_country ON firms(hq_country_iso2);
+CREATE INDEX idx_firms_domain ON firms(domain);
+CREATE INDEX idx_firms_check_size ON firms(check_size_typical_usd);
+CREATE UNIQUE INDEX idx_firms_slug ON firms(slug);
+CREATE TABLE firm_people (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  firm_id INTEGER NOT NULL,
+  lead_id INTEGER NOT NULL,
+  role TEXT,                          -- 'general_partner','managing_partner','principal','venture_partner','associate','analyst','operating_partner','advisor','founder','ceo'
+  is_decision_maker INTEGER DEFAULT 0,
+  started_at TEXT,
+  ended_at TEXT,
+  source_url TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(firm_id, lead_id, role)
+);
+CREATE INDEX idx_fp_firm ON firm_people(firm_id);
+CREATE INDEX idx_fp_lead ON firm_people(lead_id);
+CREATE TABLE firm_portfolio (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  firm_id INTEGER NOT NULL,
+  company_name TEXT NOT NULL,
+  company_domain TEXT,
+  company_url TEXT,
+  investment_year INTEGER,
+  stage TEXT,
+  amount_usd INTEGER,
+  is_lead INTEGER DEFAULT 0,
+  outcome TEXT,                       -- 'active','exited','acquired','ipo','shutdown'
+  exit_value_usd INTEGER,
+  source_url TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_fpo_firm ON firm_portfolio(firm_id);
+CREATE INDEX idx_fpo_company ON firm_portfolio(company_name);
+Add Worker routes in a new apps/worker/src/routes/firms.ts:
+GET /api/firms — list with filters: kind, country, stage, sector, check_min, check_max, aum_min, q (full-text on name/thesis), limit, cursor. Returns {items, nextCursor}.
+GET /api/firms/:id — full firm with embedded people[] (joined via firm_people + leads) and portfolio[].
+POST /api/firms — create.
+PATCH /api/firms/:id — update; bump last_modified; write lead_history-style audit (add a firm_history table with the same shape as lead_history from Task 3).
+POST /api/firms/:id/people — attach a lead to a firm with role.
+DELETE /api/firms/:id/people/:leadId
+POST /api/firms/:id/portfolio — add portfolio company.
+Backfill: write a one-shot migration helper apps/worker/src/scripts/backfill-firms-from-leads.ts that groups existing leads.org values, creates a firm per unique (org, source_domain), and inserts firm_people rows linking the lead.
+Update accessGuard to also protect these routes. Make sure every new D1 write uses prepared statements.
+Acceptance criteria:
+POST /api/firms {name:'Sequoia Capital', kind:'vc', domain:'sequoiacap.com'} creates a row.
+GET /api/firms?kind=vc&country=US&check_min=500000 filters correctly.
+GET /api/firms/:id returns the firm with its people[] and portfolio[] arrays populated.

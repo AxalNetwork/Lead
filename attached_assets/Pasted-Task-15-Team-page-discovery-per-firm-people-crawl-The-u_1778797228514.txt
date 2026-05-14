@@ -1,0 +1,47 @@
+Task 15 — Team page discovery & per-firm people crawl
+The user's biggest gap: turn each imported firm into a roster of people with emails and LinkedIn. Build a focused crawler that finds /team, /people, /partners, /investors, /about pages on firm websites and extracts every person on them with their contact channels.
+Add apps/worker/src/scraper/firmcrawl/ with:
+pathProbes.ts — exports the ordered probe list to try per firm domain:
+const TEAM_PATHS = [
+  '/team','/our-team','/the-team',
+  '/people','/our-people',
+  '/partners','/our-partners','/general-partners','/gp',
+  '/investors','/team/investors',
+  '/about','/about-us','/about/team','/about/people',
+  '/who-we-are','/leadership','/firm','/founders',
+  '/staff','/management','/principals','/advisors',
+  '/contact','/contact-us'
+];
+For each firm with a website/domain:
+Fetch https://{domain}/sitemap.xml first. If it returns 200 and contains any URL matching /team|/people|/partner|/about|/leadership|/staff|/principal/i, use those URLs as the seed set.
+Otherwise, probe each path in TEAM_PATHS against the firm's homepage origin. Use Task 5's tiered fetcher; if Tier 0 gets a 404, do not escalate — try the next path.
+Also fetch the homepage and extract any internal <a> whose visible text matches /team|people|partner|about|leadership|founder/i. Add those URLs to the seed set.
+personExtract.ts — given a fetched HTML page that's likely a team page, extract people. This is the part the current scraper does poorly. Implement multiple parallel strategies and union their results:
+Structured-data strategy: parse every <script type="application/ld+json"> for Person schema objects. Pull name, jobTitle, email, sameAs[] (often contains LinkedIn/Twitter).
+OpenGraph-card strategy: look for repeated card containers (heuristic: find the most common selector pattern under a section heading matching /team|people|partner/i). Per card extract: name (largest text), role (next-largest or .role|.title|.position class), photo URL (img[src]), bio (longest paragraph), and outbound links (any <a href> to linkedin.com / x.com / twitter.com / crunchbase.com / personal sites / mailto:).
+Microformat strategy: look for .h-card, [itemtype*=Person], [data-name], [data-role].
+Anchor-cluster strategy: find clusters of 3+ LinkedIn profile URLs in close DOM proximity; for each, walk up to the nearest container, extract the name and title from siblings.
+Image-alt strategy: many firm pages have headshot <img alt="Jane Doe, Partner"> patterns.
+Mailto strategy: scrape every href^=mailto: on the page; map back to the nearest preceding heading.
+Email-pattern strategy: regex [A-Z0-9._%+-]+@{firm_domain} (and @firm-domain-without-tld.com variants) over the raw text.
+JSON blob strategy: regex-scan the HTML for embedded {"name":"…","title":"…"} blocks (Next.js, Nuxt, etc.) — try __NEXT_DATA__, window.__INITIAL_STATE__, and any <script> containing the firm's known name.
+Merge strategy outputs per page by name-key (Task 8's nameKey). For each merged person:
+Insert/update a leads row with persona inferred from role text (partner/general partner → vc_partner, principal → vc_principal, etc.).
+Insert a firm_people row linking lead → firm.
+For every collected email, push into leads.emails_json with source='firm_team_page' and verified=0.
+For every LinkedIn/Twitter/Crunchbase URL, push into leads.socials_json.
+emailGuess.ts — when a team page lists names but no emails, attempt patterns based on the firm domain: first.last@domain, first@domain, flast@domain, firstlast@domain. Store with verified=0, source='pattern_guess'. The Task 6 Hunter.io verifier (if configured) flips verified=1 when it confirms. Never enqueue outbound with unverified guesses.
+profileFollow.ts — for each LinkedIn URL collected, do NOT fetch LinkedIn directly (ToS). Instead, enqueue a Task 4 discovery job with query="{name} {firm}" to grab the public snippet, and for each Crunchbase URL enqueue a kind='url' job using the Task 1 crunchbase.ts parser.
+Wire into pipeline: new job kind='firm_team_crawl' with target=firmId. The runner:
+Loads the firm.
+Builds the seed URL set via pathProbes.
+Fetches each (max 8 pages per firm).
+Runs all 8 extraction strategies per page.
+Writes leads + firm_people rows.
+Updates the firm's team_size = count(firm_people) and last_enriched_at.
+Add POST /api/firms/:id/crawl-team to trigger it manually. Add it to the firm detail UI (Task 18) as a "Find Team" button.
+Acceptance criteria:
+Running firm_team_crawl on a typical VC firm (sequoiacap.com, a16z.com, accel.com) produces ≥ 80% of the people listed on their public team page.
+Each person row has at least one of: email, LinkedIn URL, Twitter handle.
+Re-running the crawl does not duplicate people (uses Task 8 dedupe).
+The job summary shows pages-tried, pages-parsed, people-found, emails-found.
