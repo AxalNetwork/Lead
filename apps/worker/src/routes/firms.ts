@@ -212,6 +212,8 @@ firms.post("/:id/people", async (c) => {
   if (!body || typeof body.lead_id !== "string" || !body.lead_id.trim()) {
     return c.json({ error: "bad_request", message: "lead_id required" }, 400);
   }
+  const exists = await c.env.DB.prepare("SELECT id FROM firms WHERE id = ?").bind(firmId).first();
+  if (!exists) return c.json({ error: "not_found" }, 404);
   const role = typeof body.role === "string" ? body.role : null;
   try {
     await c.env.DB
@@ -257,6 +259,8 @@ firms.post("/:id/portfolio", async (c) => {
   if (!body || typeof body.company_name !== "string" || !body.company_name.trim()) {
     return c.json({ error: "bad_request", message: "company_name required" }, 400);
   }
+  const exists = await c.env.DB.prepare("SELECT id FROM firms WHERE id = ?").bind(firmId).first();
+  if (!exists) return c.json({ error: "not_found" }, 404);
   const r = await c.env.DB
     .prepare(
       `INSERT INTO firm_portfolio
