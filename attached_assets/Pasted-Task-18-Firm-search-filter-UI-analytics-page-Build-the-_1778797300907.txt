@@ -1,0 +1,57 @@
+Task 18 — Firm search/filter UI + analytics page
+Build the user-facing search and analytics page over firms and people. This is the daily-driver UI for axal.vc.
+Add three new pages under apps/site/dashboard/:
+firms.html — search & browse:
+Top bar with these filter controls (all multi-select where applicable, all stack into a single querystring against GET /api/firms):
+Text search (name, thesis).
+Kind (vc, pe, family_office, corp_vc, angel_group, accelerator, gov_fund).
+Geography: HQ country, HQ city, "invests in" geo (multi).
+Stages (multi).
+Sectors (multi, sourced from /api/taxonomies/sectors).
+Check size: dual-handle range slider on check_size_typical_usd.
+AUM: range slider.
+Lead/co-invest toggle.
+Min portfolio count.
+Has-unicorns toggle.
+Has-contact-email toggle.
+Last-modified range.
+Results table columns (configurable via a "Columns" button that uses the same column picker as Task 17): Firm, Kind, HQ, Stages, Sectors, Check size, AUM, Lead/co, Portfolio, Last modified. Each row click opens firms/{id}.html (the detail page).
+Above the table: a summary strip showing the filtered set's count, total AUM, median check size, top-3 sectors, top-3 cities. These come from a new GET /api/firms/aggregate?{same filters} returning the aggregates server-side so it scales past 10k rows.
+A "Save filter" button stores the current querystring as a saved view (new table saved_filters with {id, name, entity, querystring, created_by}). A "Saved views" sidebar lists them.
+A "Export results" button uses Task 17's export modal pre-populated with the current filter.
+firm-detail.html (/dashboard/firms/{id}):
+Sections:
+Header: name, logo, website, kind, HQ, founded, AUM, lead/co.
+Tabs:
+Overview — thesis, stages, sectors, check size range, geo focus.
+People — table of firm_people joined with leads, with role, decision-maker flag, contact channels, last enriched. Buttons: "Find Team" (re-runs Task 15's crawl), "Add person".
+Portfolio — firm_portfolio rows.
+Relationships — Task 19 graph view.
+History — firm_history audit table.
+Sources — every source_url we have for this firm, with last-fetched timestamp and tier used (joined from fetch_log).
+Action buttons (top right): Edit, Enrich (queues firm_team_crawl + enrichLead for each linked person), Archive, Export.
+analytics-firms.html — analytics dashboard for firms:
+Charts (all dependency-free SVG, follow Task 7's pattern):
+Firm-count funnel: imported → enriched → has-contact → approved. Drop-off rates.
+Check-size distribution histogram with adjustable bucket size.
+AUM distribution histogram.
+Stage × Sector heatmap: count of firms per (stage, sector). Click a cell to navigate to firms.html with that filter pre-applied.
+Geography world map (use a static topojson + plain SVG; no Leaflet/Mapbox) coloring countries by firm count.
+Top 20 most-connected firms: bar chart of firm_people.count + firm_portfolio.count.
+Success-rate panel: per firm, exits / portfolio_count. Filter by min-portfolio-count to avoid noise.
+Activity timeline: firms added per week over last 12 months.
+Coverage gap table: firms with website but no firm_people rows yet (these are the next-priority team crawls).
+Sector ROI: avg exit value / avg check size by sector.
+Each chart is backed by a new endpoint under /api/analytics/firms/:
+GET /api/analytics/firms/distribution?field=check_size_typical_usd&buckets=20
+GET /api/analytics/firms/heatmap?dim1=stages&dim2=sectors
+GET /api/analytics/firms/geo
+GET /api/analytics/firms/connected?limit=20
+GET /api/analytics/firms/success-rate?min_portfolio=5
+GET /api/analytics/firms/coverage-gaps?limit=50
+GET /api/analytics/firms/sector-roi
+Reuse Task 7's nightly cron to materialize the heavy aggregates into a new firm_analytics_daily table so the page loads in <500ms.
+Acceptance criteria:
+A user can filter firms to kind=vc, country=US, stages contains series_a, sector contains ai, check_size 500k-5m and get a result count, sortable table, and a one-click export.
+The detail page shows people and portfolio joins correctly.
+The analytics page renders all charts without external CDN dependencies and fully responds under 1s on a 1000-firm dataset.
