@@ -15,19 +15,54 @@ import { rowToCandidate } from "./_helpers";
  * the requested page (the route layer iterates externally if needed).
  */
 export async function importFirms(url: string, env: Env): Promise<FirmlistImportResult> {
-  const fetched = await fetchPage(env, url, { forceBrowser: true });
-  if (!fetched.ok) return { firms: [], totalSeen: 0, errors: [`fetch_failed:${fetched.blockReason ?? "unknown"}`] };
-
-  const data = extractNextData(fetched.html);
-  if (!data) return { firms: [], totalSeen: 0, errors: ["next_data_missing"] };
-
-  const records = harvestInvestors(data);
+  // OpenVC paginates investor list views via `?page=N` (or `&page=N` when
+  // filters are present). Iterate until a page returns no new investors or
+  // the safety cap is hit. Each page is browser-rendered to ensure
+  // __NEXT_DATA__ is present in the HTML.
+  const seen = new Set<string>();
   const firms: FirmCandidate[] = [];
-  for (const r of records) {
-    const cand = rowToCandidate(toRow(r), url);
-    if (cand) firms.push(cand.candidate);
+  const errors: string[] = [];
+  const MAX_PAGES = 25;
+  let totalSeen = 0;
+
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const pageUrl = appendPageParam(url, page);
+    const fetched = await fetchPage(env, pageUrl, { forceBrowser: true });
+    if (!fetched.ok) {
+      errors.push(`page_${page}_fetch_failed:${fetched.blockReason ?? "unknown"}`);
+      if (page === 1) return { firms: [], totalSeen: 0, errors };
+      break;
+    }
+    const data = extractNextData(fetched.html);
+    if (!data) {
+      if (page === 1) return { firms: [], totalSeen: 0, errors: [...errors, "next_data_missing"] };
+      break;
+    }
+    const records = harvestInvestors(data);
+    totalSeen += records.length;
+    let added = 0;
+    for (const r of records) {
+      const key = (r.name || "").toLowerCase().trim();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      const cand = rowToCandidate(toRow(r), pageUrl);
+      if (cand) { firms.push(cand.candidate); added += 1; }
+    }
+    if (added === 0) break; // No new investors → assume end of pagination.
   }
-  return { firms, totalSeen: records.length };
+
+  return { firms, totalSeen, errors };
+}
+
+function appendPageParam(url: string, page: number): string {
+  if (page <= 1) return url;
+  try {
+    const u = new URL(url);
+    u.searchParams.set("page", String(page));
+    return u.toString();
+  } catch {
+    return url + (url.includes("?") ? "&" : "?") + `page=${page}`;
+  }
 }
 
 function extractNextData(html: string): unknown | null {
