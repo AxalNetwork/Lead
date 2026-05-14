@@ -1,13 +1,21 @@
 import type { Env, JobMessage } from "./types";
+import { enrichLead } from "./enrichment/orchestrator";
 
 interface SourceRow {
   id: string;
   domain: string;
 }
 
+interface LeadRow {
+  id: string;
+  priority: string | null;
+  last_enriched_at: string | null;
+}
+
 /**
  * Cron handler: enqueue a re-scrape for every enabled source whose
- * last_scraped_at is null or older than 24h. Called every 6h via wrangler.toml.
+ * last_scraped_at is null or older than 24h, then re-enrich stale leads
+ * (>30d, or p0/p1 >7d, capped at 500/run). Called every 6h via wrangler.toml.
  */
 export async function scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
   const r = await env.DB.prepare(
@@ -17,7 +25,8 @@ export async function scheduled(_event: ScheduledEvent, env: Env, ctx: Execution
        LIMIT 200`,
   ).all<SourceRow>();
   const rows = r.results ?? [];
-  const enqueue = async () => {
+
+  const enqueueScrapes = async () => {
     for (const row of rows) {
       const target = `https://${row.domain}/`;
       const jobId = crypto.randomUUID();
@@ -36,5 +45,31 @@ export async function scheduled(_event: ScheduledEvent, env: Env, ctx: Execution
       }
     }
   };
-  ctx.waitUntil(enqueue());
+
+  const reEnrichStale = async () => {
+    // p0/p1: re-enrich after 7d. Everything else: 30d. Cap at 500.
+    const stale = await env.DB
+      .prepare(
+        `SELECT id, priority, last_enriched_at FROM leads
+           WHERE merged_into IS NULL
+             AND (
+               (priority IN ('p0','p1') AND (last_enriched_at IS NULL OR datetime(last_enriched_at) < datetime('now','-7 days')))
+               OR
+               (last_enriched_at IS NULL OR datetime(last_enriched_at) < datetime('now','-30 days'))
+             )
+           ORDER BY (last_enriched_at IS NULL) DESC, last_enriched_at ASC
+           LIMIT 500`,
+      )
+      .all<LeadRow>();
+    for (const lead of stale.results ?? []) {
+      try {
+        await enrichLead(env, lead.id);
+      } catch (e) {
+        console.warn("scheduled enrich failed", lead.id, (e as Error).message);
+      }
+    }
+  };
+
+  ctx.waitUntil(enqueueScrapes());
+  ctx.waitUntil(reEnrichStale());
 }

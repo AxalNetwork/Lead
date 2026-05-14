@@ -246,6 +246,75 @@
     });
   }
 
+  // ---------------- Discover tab ----------------
+  function renderCandidates(items) {
+    var c = document.getElementById("ads-discover-candidates");
+    if (!c) return;
+    if (!items || !items.length) { c.innerHTML = '<div class="ads-empty">No pending candidates.</div>'; return; }
+    var html = '<table class="ads-table"><thead><tr><th>Name / Title</th><th>Source</th><th>URL</th><th>Persona</th><th></th></tr></thead><tbody>';
+    items.forEach(function (r) {
+      html +=
+        '<tr data-cand-id="' + esc(r.id) + '">' +
+        '<td>' + esc(r.name || r.title || "—") + '</td>' +
+        '<td>' + esc(r.source) + '</td>' +
+        '<td><a href="' + esc(r.url) + '" target="_blank" rel="noopener">' + esc(r.url.slice(0, 60)) + '</a></td>' +
+        '<td>' + esc(r.persona_role || "—") + '</td>' +
+        '<td>' +
+          '<button class="ads-btn ads-btn--sm" data-resolve-cand="' + esc(r.id) + '">Approve</button> ' +
+          '<button class="ads-btn ads-btn--ghost ads-btn--sm" data-reject-cand="' + esc(r.id) + '">Reject</button>' +
+        '</td></tr>';
+    });
+    html += '</tbody></table>';
+    c.innerHTML = html;
+  }
+  async function pollCandidates(firm) {
+    var qs = firm ? ('?status=pending&firmDomain=' + encodeURIComponent(firm)) : '?status=pending';
+    var data = await api('/api/discover/candidates' + qs);
+    renderCandidates(data && data.items);
+  }
+  function setupDiscoverForm() {
+    var f = document.getElementById("ads-form-discover");
+    if (!f) return;
+    f.addEventListener("submit", async function (e) {
+      e.preventDefault();
+      var btn = f.querySelector("button[type=submit]");
+      btn.disabled = true; showMsg(f, "Queuing…");
+      var fd = new FormData(f);
+      var firmDomain = String(fd.get("firmDomain") || "").trim();
+      var persona = String(fd.get("persona") || "").trim();
+      var country = String(fd.get("country") || "").trim();
+      if (!firmDomain && !persona) { showMsg(f, "Provide a firm domain or persona.", "err"); btn.disabled = false; return; }
+      try {
+        var payload = firmDomain ? { firmDomain: firmDomain } : { persona: persona, country: country || undefined };
+        await apiFetch("/api/discover", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        showMsg(f, "Discovery queued. Candidates appear below in ~60s.", "ok");
+        pollActiveJobs();
+        setTimeout(function () { pollCandidates(firmDomain); }, 5000);
+        setTimeout(function () { pollCandidates(firmDomain); }, 30000);
+      } catch (err) {
+        showMsg(f, "Failed: " + err.message, "err");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    pollCandidates();
+  }
+
+  // Approve / reject candidate delegates.
+  document.addEventListener("click", async function (e) {
+    var ok = e.target.closest("button[data-resolve-cand]");
+    var no = e.target.closest("button[data-reject-cand]");
+    if (!ok && !no) return;
+    var id = (ok || no).getAttribute(ok ? "data-resolve-cand" : "data-reject-cand");
+    var path = "/api/discover/" + encodeURIComponent(id) + (ok ? "/resolve" : "/reject");
+    (ok || no).disabled = true;
+    try {
+      await apiFetch(path, { method: "POST" });
+      pollCandidates();
+      pollActiveJobs();
+    } catch (err) { (ok || no).disabled = false; console.warn("candidate action failed", err); }
+  });
+
   // Cancel button delegate (works for any active-jobs strip on the page).
   document.addEventListener("click", async function (e) {
     var btn = e.target.closest("button[data-cancel-job]");
@@ -299,6 +368,7 @@
     setupSingleForm();
     setupLinktreeForm();
     setupBulkForm();
+    setupDiscoverForm();
     startActiveJobsPolling();
     var btn = document.getElementById("ads-export-btn");
     if (btn) btn.addEventListener("click", function () { window.location.href = API_BASE + "/api/exports/csv"; });

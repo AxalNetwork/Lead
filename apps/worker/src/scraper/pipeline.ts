@@ -5,6 +5,8 @@ import { parsePdf } from "./parsers/pdf";
 import { extractDomain } from "./normalize";
 import { discoverUrls } from "./fallbacks/sitemap";
 import { tosBlockedReason } from "./tos";
+import { discoverPartnersForFirm, discoverByPersona } from "../discovery/discover";
+import { saveCandidates } from "../discovery/store";
 
 /**
  * Filter helper used by every enqueue site so ToS-blocked domains never even
@@ -386,6 +388,27 @@ async function processLinktree(
   return { leadsFound, pagesFetched, pagesBlocked, captchaHits, costMs };
 }
 
+async function processDiscover(
+  env: Env,
+  jobId: string,
+  target: string,
+  config: Record<string, unknown> | undefined,
+): Promise<{ leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number }> {
+  const start = Date.now();
+  const mode = (config?.mode as string | undefined) ?? "firm";
+  const candidates = mode === "persona"
+    ? await discoverByPersona(env, String(config?.persona ?? target), config?.country as string | undefined)
+    : await discoverPartnersForFirm(env, String(config?.firmDomain ?? target));
+  const inserted = await saveCandidates(env.DB, jobId, candidates);
+  // Candidates are review-gated: child url-jobs are only enqueued when an
+  // operator approves a row via POST /api/discover/:id/resolve.
+  await env.DB
+    .prepare("UPDATE jobs SET result_json = ? WHERE id = ?")
+    .bind(JSON.stringify({ candidates: candidates.length, inserted }), jobId)
+    .run();
+  return { leadsFound: 0, pagesFetched: candidates.length, pagesBlocked: 0, captchaHits: 0, costMs: Date.now() - start };
+}
+
 export async function runJob(msg: JobMessage, env: Env): Promise<void> {
   const { jobId } = msg;
   await markRunning(env, jobId);
@@ -397,6 +420,8 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
       totals = await processLinktree(env, jobId, msg.target, msg.config);
     } else if (msg.kind === "profile_list") {
       totals = await processLinktree(env, jobId, msg.target, msg.config);
+    } else if (msg.kind === "discover") {
+      totals = await processDiscover(env, jobId, msg.target, msg.config);
     } else {
       totals = await processSingleUrl(env, jobId, msg.target);
     }

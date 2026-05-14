@@ -16,6 +16,23 @@ ACCESS_TEAM_DOMAIN = "axalnetwork.cloudflareaccess.com"
 ACCESS_AUD = "f9cbce05165afb5af93e5929ff93dc4591aa18cd8234244327e78fd29fa849dd"
 ACCESS_APP_AUD = "3677234625cd7a8a9065c46ec41ab908bb7a24cfbc0c20169477305327cb3e79"
 
+# Per-provider daily budget caps (USD). 0 disables, blank uses the conservative default.
+HUNTER_DAILY_USD = "5"
+APOLLO_DAILY_USD = "5"
+ROCKETREACH_DAILY_USD = "5"
+PEOPLEDATALABS_DAILY_USD = "5"
+PROXYCURL_DAILY_USD = "5"
+CRUNCHBASE_DAILY_USD = "5"
+SEC_EDGAR_DAILY_USD = "0"
+OPENCORPORATES_DAILY_USD = "2"
+UK_CH_DAILY_USD = "0"
+FORBES_SIGNALS_DAILY_USD = "1"
+WHOISXML_DAILY_USD = "1"
+TWITTER_OSS_DAILY_USD = "0"
+ENRICHMENT_KV_TTL_DAYS = "14"
+NITTER_BASE = "https://nitter.net"
+SEC_EDGAR_UA = "AIDataSignal/1.0 contact@aidatasignal.com"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "aidatasignal-leads"

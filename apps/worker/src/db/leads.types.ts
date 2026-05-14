@@ -63,6 +63,10 @@ export interface Lead {
   provider?: string | null;
   provider_score?: number | null;
 
+  last_enriched_at?: string | null;
+  locked_fields_json?: string | null;
+  enrichment_log_json?: string | null;
+
   meta_json: string | null;
   created_at: string;
   updated_at: string;

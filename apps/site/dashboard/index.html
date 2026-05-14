@@ -14,6 +14,7 @@ permalink: /dashboard/
       <button type="button" class="ads-tab active" data-tab="single" role="tab">Single URL</button>
       <button type="button" class="ads-tab" data-tab="linktree" role="tab">Link tree / list</button>
       <button type="button" class="ads-tab" data-tab="bulk" role="tab">Bulk paste</button>
+      <button type="button" class="ads-tab" data-tab="discover" role="tab">Discover partners</button>
     </div>
   </div>
 
@@ -49,6 +50,26 @@ permalink: /dashboard/
       <button type="submit" class="ads-btn">Scrape link tree</button>
       <span class="ads-form-msg" data-msg></span>
     </div>
+  </form>
+
+  <form class="ads-tab-panel" data-tab="discover" id="ads-form-discover" autocomplete="off">
+    <label class="ads-field">
+      <span>Firm domain (e.g. sequoiacap.com)</span>
+      <input type="text" name="firmDomain" placeholder="sequoiacap.com">
+    </label>
+    <label class="ads-field">
+      <span>— or persona search</span>
+      <input type="text" name="persona" placeholder='e.g. "venture partner"'>
+    </label>
+    <label class="ads-field">
+      <span>Country (optional, persona only)</span>
+      <input type="text" name="country" placeholder="United States">
+    </label>
+    <div class="ads-form-actions">
+      <button type="submit" class="ads-btn">Discover</button>
+      <span class="ads-form-msg" data-msg></span>
+    </div>
+    <div class="ads-discover-results" id="ads-discover-candidates" style="margin-top:16px"></div>
   </form>
 
   <form class="ads-tab-panel" data-tab="bulk" id="ads-form-bulk" autocomplete="off">

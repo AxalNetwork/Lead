@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import type { Env } from "../types";
 import { listBlockedDomains } from "../scraper/tos";
+import { todayUsage } from "../enrichment/budget";
+import { ALL_PROVIDERS } from "../enrichment/providers";
 
 export const scrapers = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
@@ -80,10 +82,32 @@ scrapers.get("/health", async (c) => {
     })
     .sort((a, b) => b.total - a.total);
 
+  // Provider budget pressure: today's spend, blocked-call counters, and which
+  // providers are currently capped out.
+  const usage = await todayUsage(c.env.DB);
+  const usageByName = new Map(usage.map((u) => [u.provider, u]));
+  const providers = ALL_PROVIDERS.map((p) => {
+    const u = usageByName.get(p.name);
+    const cap = p.dailyCapUsd(c.env);
+    const spent = u?.cost_usd ?? 0;
+    return {
+      name: p.name,
+      configured: p.isConfigured(c.env),
+      daily_cap_usd: cap,
+      spent_today_usd: Number(spent.toFixed(4)),
+      calls_today: u?.calls ?? 0,
+      blocked_today: u?.blocked_calls ?? 0,
+      last_block_reason: u?.last_block_reason ?? null,
+      budget_exhausted: cap > 0 && spent >= cap,
+      disabled: cap === 0,
+    };
+  });
+
   return c.json({
     window_hours: 24,
     generated_at: new Date().toISOString(),
     hosts,
     blocked_domains: listBlockedDomains(),
+    providers,
   });
 });
