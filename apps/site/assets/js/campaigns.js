@@ -6,7 +6,7 @@
   async function loadList() {
     var c = document.getElementById("ads-camp-list");
     try {
-      var data = await api("/api/campaigns/");
+      var data = await api("/api/campaigns");
       var items = (data && data.items) || [];
       if (!items.length) { c.innerHTML = '<div class="ads-empty">No campaigns yet — create one from an ICP.</div>'; return; }
       var html = '<table class="ads-table ads-table--clickable"><thead><tr><th>Name</th><th>Channel</th><th>Status</th><th>ICP</th><th>Exported</th><th>Created</th></tr></thead><tbody>';
@@ -55,7 +55,7 @@
       if (!name) return;
       var icp = prompt("ICP id (optional):") || null;
       try {
-        var c = await api("/api/campaigns/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name, icp_id: icp }) });
+        var c = await api("/api/campaigns", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name, icp_id: icp }) });
         loadList();
         loadDetail(c.id);
       } catch (err) { alert("Failed: " + err.message); }
