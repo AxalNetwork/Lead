@@ -4,13 +4,13 @@ compatibility_date = "2025-05-01"
 compatibility_flags = ["nodejs_compat"]
 account_id = "30c9362191318777b71647145decda48"
 
-workers_dev = true
+workers_dev = false
 
 [vars]
 ALLOWED_EMAIL = "guillaumelauzier@gmail.com"
 ACCESS_TEAM_DOMAIN = "axalnetwork.cloudflareaccess.com"
 ACCESS_AUD = "f9cbce05165afb5af93e5929ff93dc4591aa18cd8234244327e78fd29fa849dd"
-ACCESS_APP_AUD = "4577af4bf087d9a9ed5eeeb62b451df7cd176e9919037045cfda340c4509b63b"
+ACCESS_APP_AUD = "3677234625cd7a8a9065c46ec41ab908bb7a24cfbc0c20169477305327cb3e79"
 
 [[d1_databases]]
 binding = "DB"
@@ -32,16 +32,4 @@ max_batch_timeout = 5
 
 [[routes]]
 pattern = "api.aidatasignal.com"
-custom_domain = true
-
-[[routes]]
-pattern = "aidatasignal.com"
-custom_domain = true
-
-[[routes]]
-pattern = "www.aidatasignal.com"
-custom_domain = true
-
-[[routes]]
-pattern = "app.aidatasignal.com"
 custom_domain = true

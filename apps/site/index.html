@@ -1,47 +1,30 @@
 ---
-layout: default
-title: Dashboard
+layout: landing
+title: Lead intelligence, on autopilot
+description: AI Data Signal turns the open web into a private, verified pipeline of qualified leads.
 permalink: /
 ---
 
-<h1 class="ads-page-title">Admin Dashboard</h1>
-<p class="ads-page-sub">Live overview of your lead intelligence pipeline.</p>
-
-<div class="ads-actions" style="margin-bottom:24px">
-  <a href="/jobs/new/" class="ads-btn">+ New Scrape Job</a>
-  <a href="/review/" class="ads-btn ads-btn--ghost">Review Queue</a>
-  <button class="ads-btn ads-btn--ghost" id="ads-export-btn">Export CSV</button>
-</div>
-
-<div class="ads-grid" id="ads-kpi-grid">
-  <div class="ads-card"><div class="ads-kpi__label">Total Leads</div><div class="ads-kpi__value" data-kpi="total_leads">—</div></div>
-  <div class="ads-card"><div class="ads-kpi__label">Verified Leads</div><div class="ads-kpi__value" data-kpi="verified_leads">—</div></div>
-  <div class="ads-card"><div class="ads-kpi__label">Approved Leads</div><div class="ads-kpi__value" data-kpi="approved_leads">—</div></div>
-  <div class="ads-card"><div class="ads-kpi__label">Pending Review</div><div class="ads-kpi__value" data-kpi="pending_leads">—</div></div>
-  <div class="ads-card"><div class="ads-kpi__label">Active Jobs</div><div class="ads-kpi__value" data-kpi="active_jobs">—</div></div>
-  <div class="ads-card"><div class="ads-kpi__label">Exports This Week</div><div class="ads-kpi__value" data-kpi="exports_count">—</div></div>
-  <div class="ads-card"><div class="ads-kpi__label">Verification Rate</div><div class="ads-kpi__value" data-kpi="verification_rate">—</div></div>
-  <div class="ads-card"><div class="ads-kpi__label">Job Success Rate</div><div class="ads-kpi__value" data-kpi="job_success_rate">—</div></div>
-</div>
-
-<div class="ads-section">
-  <div class="ads-card">
-    <h3>Recent Leads</h3>
-    <div id="ads-recent-leads"><div class="ads-loading">Loading…</div></div>
+<section class="hero">
+  <h1>Turn the open web into a verified pipeline of leads.</h1>
+  <p>AI Data Signal is a single-operator platform that scrapes, enriches, scores, and verifies leads — then hands you a queue of accounts ready to contact.</p>
+  <div class="cta">
+    <a class="btn" href="/dashboard/">Sign in to dashboard</a>
+    <a class="btn ghost" href="mailto:guillaumelauzier@gmail.com">Contact</a>
   </div>
-  <div class="ads-card">
-    <h3>Top Source Domains</h3>
-    <div id="ads-top-sources"><div class="ads-loading">Loading…</div></div>
-  </div>
-</div>
+</section>
 
-<div class="ads-section">
-  <div class="ads-card">
-    <h3>Recent Jobs</h3>
-    <div id="ads-recent-jobs"><div class="ads-loading">Loading…</div></div>
+<section class="features">
+  <div class="card">
+    <h3>Scrape</h3>
+    <p>Scheduled jobs pull structured signals from sources you choose, on intervals you control.</p>
   </div>
-  <div class="ads-card">
-    <h3>Leads by Category</h3>
-    <div id="ads-leads-by-category"><div class="ads-loading">Loading…</div></div>
+  <div class="card">
+    <h3>Enrich &amp; verify</h3>
+    <p>Each lead is enriched, scored, and email-verified before it reaches your review queue.</p>
   </div>
-</div>
+  <div class="card">
+    <h3>Export</h3>
+    <p>Approve from the queue and export to CSV — ready for your CRM or outbound tool.</p>
+  </div>
+</section>

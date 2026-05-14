@@ -14,13 +14,10 @@
 <body class="ads-body">
   <header class="ads-topbar">
     <div class="ads-topbar__inner">
-      <a href="/" class="ads-brand">AI Data Signal</a>
+      <a href="/dashboard/" class="ads-brand">AI Data Signal</a>
       <nav class="ads-nav">
-        <a href="/" class="{% if page.url == '/' %}active{% endif %}">Dashboard</a>
-        <a href="/jobs/" class="{% if page.url contains '/jobs' %}active{% endif %}">Jobs</a>
-        <a href="/review/" class="{% if page.url contains '/review' %}active{% endif %}">Review</a>
-        <a href="/sources/" class="{% if page.url contains '/sources' %}active{% endif %}">Sources</a>
-        <a href="/exports/" class="{% if page.url contains '/exports' %}active{% endif %}">Exports</a>
+        <a href="/dashboard/" class="{% if page.url == '/dashboard/' %}active{% endif %}">Dashboard</a>
+        <a href="/">Home</a>
       </nav>
       <div class="ads-user">
         <span id="ads-user-email" class="ads-user__email">…</span>

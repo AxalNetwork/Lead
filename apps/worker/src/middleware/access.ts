@@ -62,8 +62,20 @@ async function verifyJwt(token: string, jwks: JwksKey[], allowedAuds: string[], 
   return payload;
 }
 
+function readCookie(req: Request, name: string): string | null {
+  const raw = req.headers.get("Cookie");
+  if (!raw) return null;
+  for (const part of raw.split(";")) {
+    const [k, ...v] = part.trim().split("=");
+    if (k === name) return v.join("=");
+  }
+  return null;
+}
+
 export const accessGuard: MiddlewareHandler<{ Bindings: Env; Variables: { email: string } }> = async (c, next) => {
-  const token = c.req.header("Cf-Access-Jwt-Assertion");
+  const token =
+    c.req.header("Cf-Access-Jwt-Assertion") ||
+    readCookie(c.req.raw, "CF_Authorization");
   if (!token) return c.json({ error: "no_access_jwt" }, 401);
   try {
     const jwks = await getJwks(c.env.ACCESS_TEAM_DOMAIN);

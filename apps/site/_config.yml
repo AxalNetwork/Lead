@@ -1,12 +1,11 @@
-title: AI Data Signal — Admin
-description: Single-user admin platform for lead intelligence
-url: "https://app.aidatasignal.com"
+title: AI Data Signal
+description: Single-operator lead intelligence platform
+url: "https://aidatasignal.com"
 baseurl: ""
-permalink: "/:title"
+permalink: pretty
 
-# Worker API base used by dashboard.js / analytics.js
 api_base: "https://api.aidatasignal.com"
-cf_web_analytics_token: ""
+team_domain: "axalnetwork.cloudflareaccess.com"
 
 plugins:
   - jekyll-feed
@@ -16,5 +15,6 @@ exclude:
   - Gemfile.lock
   - node_modules
   - vendor
+  - README.md
 
 highlighter: rouge

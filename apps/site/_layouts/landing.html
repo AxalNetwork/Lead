@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if page.title %}{{ page.title }} — {% endif %}{{ site.title }}</title>
+<meta name="description" content="{{ page.description | default: site.description }}">
+<link rel="icon" type="image/webp" href="/assets/images/favicon.webp">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+       background:#0b0d12;color:#e7eaf0;line-height:1.55;-webkit-font-smoothing:antialiased}
+  a{color:#7aa2ff;text-decoration:none}
+  a:hover{color:#a8c0ff}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  header{padding:28px 0;display:flex;align-items:center;justify-content:space-between}
+  .brand{font-weight:700;font-size:18px;letter-spacing:.2px;color:#fff}
+  .brand .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#7aa2ff;margin-right:10px;vertical-align:middle}
+  .btn{display:inline-block;padding:10px 18px;border-radius:8px;font-weight:600;font-size:14px;
+       background:#7aa2ff;color:#0b0d12;border:1px solid #7aa2ff;transition:all .15s}
+  .btn:hover{background:#a8c0ff;border-color:#a8c0ff;color:#0b0d12}
+  .btn.ghost{background:transparent;color:#e7eaf0;border-color:#2a2f3a}
+  .btn.ghost:hover{border-color:#7aa2ff;color:#fff}
+  .hero{padding:80px 0 64px;text-align:center}
+  .hero h1{font-size:clamp(34px,5vw,56px);line-height:1.1;font-weight:700;color:#fff;letter-spacing:-.5px;margin-bottom:20px}
+  .hero p{font-size:clamp(16px,1.6vw,20px);color:#9aa3b2;max-width:640px;margin:0 auto 32px}
+  .cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .features{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px;padding:32px 0 80px}
+  .card{background:#11141b;border:1px solid #1d212c;border-radius:12px;padding:24px}
+  .card h3{font-size:16px;color:#fff;margin-bottom:8px}
+  .card p{font-size:14px;color:#9aa3b2}
+  footer{padding:32px 0;border-top:1px solid #1d212c;color:#6b7280;font-size:13px;
+         display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand"><span class="dot"></span>AI Data Signal</div>
+    <a class="btn ghost" href="/dashboard/">Sign in</a>
+  </header>
+
+  {{ content }}
+
+  <footer>
+    <div>&copy; {{ 'now' | date: '%Y' }} AI Data Signal</div>
+    <div>Single-operator lead intelligence</div>
+  </footer>
+</div>
+</body>
+</html>
