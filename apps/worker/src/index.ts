@@ -16,6 +16,7 @@ import { taxonomies } from "./routes/taxonomies";
 import { icp } from "./routes/icp";
 import { compliance, complianceDncAlias, complianceAuditAlias, gdpr, leadsDncActions } from "./routes/compliance";
 import { campaigns, campaignsWebhook, leadsCampaignActions } from "./routes/campaigns";
+import { firms } from "./routes/firms";
 import { piiAuditOnLeadGet } from "./middleware/pii_audit";
 import { accessGuard } from "./middleware/access";
 import { runJob } from "./scraper/pipeline";
@@ -67,6 +68,7 @@ api.route("/api/dnc", complianceDncAlias);
 api.route("/api/audit", complianceAuditAlias);
 api.route("/api/gdpr", gdpr);
 api.route("/api/campaigns", campaigns);
+api.route("/api/firms", firms);
 // /api/leads/:id/enrich, /api/leads/enrich/bulk, /:id/dnc, /:id/campaigns
 api.route("/api/leads", leadsEnrichActions);
 api.route("/api/leads", leadsDncActions);
