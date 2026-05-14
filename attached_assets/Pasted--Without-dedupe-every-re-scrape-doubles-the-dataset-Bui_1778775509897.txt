@@ -1,0 +1,41 @@
+
+Without dedupe, every re-scrape doubles the dataset. Build entity resolution.
+In apps/worker/src/dedupe/:
+keys.ts — canonicalization functions: nameKey(first,last) (strip accents, lowercase, remove punctuation), emailKey(email) (lowercase, strip plus-addressing, lowercase domain), linkedinKey(url), domainKey(url).
+match.ts — findMatches(candidate, env) -> Match[] querying D1 for leads sharing any of: canonical email, canonical LinkedIn URL, (nameKey + firm_domain), (nameKey + city), (phone E.164). Score each match 0..1 by how many keys agreed.
+merge.ts — mergeLeads(primaryId, secondaryId, env) that:
+Promotes the higher-quality lead to primary.
+Unions multi-value arrays (emails/phones/socials).
+Picks per-field winner by provider_priority and recency.
+Writes lead_history rows with change_kind='dedupe_merge' and evidence_url pointing to the discarded lead's previous URL.
+Marks the secondary lead status='merged' with merged_into=primaryId. Add those two columns to leads in this task's migration.
+Insert pipeline change: in Task 1's pipeline.ts, before INSERT, call findMatches. If max score ≥ 0.85 → auto-merge. If 0.6 ≤ score < 0.85 → insert the new lead with status='needs_review' and create a dedupe_review row. UI ticket below.
+Migration 050_dedupe.sql:
+ALTER TABLE leads ADD COLUMN merged_into INTEGER;
+ALTER TABLE leads ADD COLUMN canonical_name_key TEXT;
+ALTER TABLE leads ADD COLUMN canonical_email_key TEXT;
+ALTER TABLE leads ADD COLUMN canonical_linkedin_key TEXT;
+CREATE INDEX idx_leads_name_key ON leads(canonical_name_key);
+CREATE INDEX idx_leads_email_key ON leads(canonical_email_key);
+CREATE INDEX idx_leads_linkedin_key ON leads(canonical_linkedin_key);
+CREATE TABLE dedupe_review (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  primary_lead_id INTEGER NOT NULL,
+  secondary_lead_id INTEGER NOT NULL,
+  match_score REAL NOT NULL,
+  reasons_json TEXT,
+  status TEXT DEFAULT 'pending',
+  resolved_by TEXT,
+  resolved_at TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_dr_status ON dedupe_review(status);
+Endpoints:
+GET /api/dedupe/review?status=pending — paged list.
+POST /api/dedupe/review/:id/merge
+POST /api/dedupe/review/:id/reject
+Dashboard tab "Review" → table of side-by-side diffs of the two leads with Merge / Reject buttons, plus a "skip" that defers it 14 days.
+Acceptance criteria:
+Re-running the same scrape job twice does NOT create duplicate leads.
+Two leads with same email auto-merge.
+Two leads with same firm + same name appear in /api/dedupe/review.

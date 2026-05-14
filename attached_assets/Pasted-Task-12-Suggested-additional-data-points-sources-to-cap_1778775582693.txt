@@ -1,0 +1,25 @@
+Task 12 — Suggested additional data points & sources to capture
+This is a continuous backlog. Integrate progressively into Tasks 3, 4, and 6.
+Data points worth adding (beyond Task 3's schema):
+Education: institutions, degrees, graduation years (drives age inference).
+Employment history with start/end dates (drives seniority and tenure).
+Patents (patents.google.com) — deep tech signal.
+Publications / citations (scholar.google.com, orcid.org).
+Board memberships (public-company DEF 14A filings via SEC EDGAR).
+Government roles (USAspending.gov, EU Transparency Register).
+Political donations (FEC.gov, OpenSecrets) — geopolitical context.
+Real-estate ownership signals (county assessor APIs, ATTOM, where legal).
+Speaking engagements (conference attendee + speaker pages).
+Podcast appearances (Listen Notes API).
+News mentions (GDELT, NewsAPI, MediaCloud).
+Sentiment / influence score (followers, engagement rate from public profiles).
+Co-investor graph (Crunchbase + SEC Form D).
+Time-to-respond statistics (after campaigns run).
+Calendar availability hints (public Calendly / Cal.com pages — opt-in only).
+Source families to integrate, by category:
+VC & startup: Crunchbase, PitchBook (if licensed), CB Insights, Tracxn, Dealroom, AngelList, Signal NFX, NFX Marketplace, eu-startups.com.
+Government & regulatory: SEC EDGAR, FINRA BrokerCheck, IAPD ADV, UK Companies House, OpenCorporates, EU Transparency Register, BODACC (FR), SIRENE (FR), Handelsregister (DE), KvK (NL), ASIC (AU), MCA (IN), Hong Kong ICRIS, Singapore ACRA, USAspending.gov, GSA SAM.gov.
+Wealth: Forbes Billionaires, Forbes Midas List, Bloomberg Billionaire Index (public web pages), Hurun Report, family-office databases (FINTRX-style — licensed only).
+Conferences & lists: Web Summit, SaaStr, Slush, TechCrunch Disrupt, Money 20/20, Davos panel pages, YC demo day, fund LP letters.
+Social public: X public profiles, public Threads/Bluesky/Mastodon profiles, GitHub bios, public Substack about pages.
+News: GDELT 2.0 (free firehose), NewsAPI, Diffbot Knowledge Graph, MediaCloud.

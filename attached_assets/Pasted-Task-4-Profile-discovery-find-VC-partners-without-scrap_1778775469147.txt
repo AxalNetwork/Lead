@@ -1,0 +1,34 @@
+Task 4 — Profile discovery (find VC partners without scraping LinkedIn directly)
+LinkedIn is hostile to direct scraping and against ToS. Build a discovery layer that finds VC partner / venture-partner / government-figure profiles by querying search engines and public registries instead.
+Add a new service apps/worker/src/discovery/ with:
+searx.ts — query a self-hosted SearXNG or Brave Search API (pick Brave Search if a BRAVE_SEARCH_KEY secret is set, else fall back to a list of sites and a Google site-restricted search via the Browser Rendering binding from Task 1). Function search(query, opts) -> {url,title,snippet}[].
+queries.ts — generators that build site-restricted queries, e.g.: site:linkedin.com/in "venture partner" "{firm}", site:crunchbase.com/person "{firm}" partner, site:{firm-domain} (partner OR principal OR managing), "{name}" (partner OR investor) (linkedin.com/in OR x.com OR twitter.com).
+discover.ts — discoverPartnersForFirm(firmDomain) -> Candidate[] and discoverByPersona(persona, geo) -> Candidate[]. A Candidate is {name?, profileUrls:string[], firm?, evidence:{query,url,snippet}}.
+register.ts — wraps gov-style registries: SEC EDGAR Form ADV (https://adviserinfo.sec.gov/), OpenCorporates (api.opencorporates.com, requires OPENCORPORATES_KEY), UK Companies House (api.company-information.service.gov.uk, requires UK_CH_KEY), French BODACC, EU Transparency Register. Each exposes findOfficersByName() / findCompaniesByDirector().
+Add a new job kind kind='discover' with target being a firm domain, a persona, or a freeform query. The pipeline:
+Run the relevant query generators.
+For each candidate URL, enqueue a child kind='url' job (the Task 1 fetcher will fetch and parse it).
+Insert candidates into a new discovery_candidates table so we can show "we found 47 likely VC partners at Sequoia, 31 are confirmed, 16 awaiting review" in the dashboard.
+Migration apps/worker/migrations/030_discovery.sql:
+CREATE TABLE discovery_candidates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER,
+  firm TEXT,
+  firm_domain TEXT,
+  name TEXT,
+  primary_url TEXT,
+  profile_urls_json TEXT,
+  evidence_json TEXT,
+  confidence REAL,
+  status TEXT DEFAULT 'new',
+  lead_id INTEGER,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_disc_status ON discovery_candidates(status);
+CREATE INDEX idx_disc_firm ON discovery_candidates(firm_domain);
+Add POST /api/discover taking {firmDomain?, persona?, geo?, query?}, and GET /api/discover/candidates?status=....
+Add a "Discover partners" tab to the Start Scrape panel from Task 2 with firm-domain or freeform-query input.
+Compliance note to include verbatim in apps/worker/src/discovery/README.md: "This module only queries public search engines and public registries. It does not log into any platform, does not solve captchas on user-gated sites, and respects robots.txt for any direct fetch."
+Acceptance criteria:
+POST /api/discover {firmDomain:'sequoiacap.com'} returns a job id and within ~60s the discovery_candidates table has rows referencing public pages mentioning Sequoia partners.
+The dashboard's new tab shows pending candidates with an "Approve → create lead" button calling a new POST /api/discover/:id/resolve.

@@ -1,0 +1,150 @@
+# Lead Scraping & Generation — Replit Build Roadmap
+
+This document is the authoritative task breakdown for Replit to continue building
+the axal.vc lead platform (`aidatasignal.com` + `axal.vc`). Each task below is a
+self-contained prompt you can paste into Replit's AI builder. Tasks are ordered
+by dependency — earlier tasks unblock later ones.
+
+Infrastructure constraints (do not break):
+
+- Static pages: GitHub Pages + Jekyll at `apps/site/` (custom domain
+  `app.aidatasignal.com`).
+- API: Cloudflare Worker at `apps/worker/` (custom domain `api.aidatasignal.com`),
+  using Hono, D1 (`aidatasignal-leads`), KV (`SESSIONS`), Queue
+  (`aidatasignal-lead-jobs`).
+- Auth: Cloudflare Access OTP + JWT verified by `accessGuard` middleware. Single
+  allowlisted user; preserve this on every new endpoint.
+
+---
+
+## Audit summary — what exists vs. what's missing
+
+What exists today:
+
+- D1 schema with `leads`, `sources`, `jobs`, `exports`, `analytics_daily`,
+  `dashboard_snapshots`, `analytics_events` (only `leads`, `jobs`, `exports`,
+  `analytics_events` are actively used).
+- Worker routes: `/api/auth/me`, `/api/leads`, `/api/leads/:id`,
+  `/api/leads/:id/approve`, `/api/exports/csv`, `/api/analytics/summary`,
+  `/api/analytics/trends`, `/api/analytics/sources`, `/api/analytics/event`.
+- Queue binding (`LEAD_QUEUE`) is configured both as producer and consumer, but
+  the consumer at `apps/worker/src/index.ts:52-63` is a stub that only acks.
+- Dashboard renders 8 KPIs + 4 read-only tables. No scrape trigger UI, no source
+  input form, no job detail, no chart.
+
+What's missing (the build list):
+
+1. Queue consumer with an actual scraper.
+2. Browser Rendering binding for JS-heavy sites + a fingerprint/anti-bot stack.
+3. Source ingestion UI (Linktree, Beacons, conference attendee pages, fund
+   websites, government registries, LinkedIn profile lists pasted by hand).
+4. Profile discovery layer (search-engine driven, not direct LinkedIn scraping).
+5. Enrichment connectors (email, phone, holdings, residency, net worth signals).
+6. Rich lead schema (sector, persona, geography, age bracket, net-worth tier,
+   companies founded/owned, residency, citizenship, board seats, social handles,
+   investment history, contact channels, change history).
+7. Lead scoring + deduplication + entity resolution.
+8. Scraper observability (per-job + per-source health, cost, captcha rate,
+   bot-block rate, freshness).
+9. Compliance layer (per-source ToS flags, robots.txt cache, GDPR/CCPA opt-out
+   table, PII access log).
+10. Marketing-ready segmentation + outbound campaign exports.
+
+Tasks 1-12 below cover this scope.
+
+---
+
+## Task 1 — Cloudflare Worker scraper engine (queue consumer + Browser Rendering)
+
+**Replit prompt:**
+
+> In `apps/worker/`, replace the queue consumer stub at
+> `src/index.ts:52-63` with a real scraping pipeline.
+>
+> Add a Cloudflare Browser Rendering binding `BROWSER` to `wrangler.toml` and a
+> KV binding `SCRAPE_CACHE` (24h TTL) so we don't re-fetch the same URL twice in
+> a day. Add an R2 binding `RAW_HTML` to archive every successfully fetched page
+> (key = sha256(url) + '/' + ISO date).
+>
+> Create `src/scraper/` with:
+> - `fetcher.ts` — `fetchPage(url, opts)` that tries plain `fetch` first, falls
+>   back to `BROWSER.launch()` (puppeteer-core) when the response is < 2KB, is a
+>   200 with a captcha keyword, or status in (403, 429, 503). Rotates user-agent
+>   from a small pool, sets `Accept-Language`, randomized viewport, honors a
+>   per-host rate limit stored in KV (`rl:{host}`).
+> - `parsers/` — one file per source type: `linktree.ts`, `beacons.ts`,
+>   `crunchbase.ts`, `pitchbook.ts`, `sec-edgar.ts`, `opencorporates.ts`,
+>   `gov-registry.ts`, `personal-site.ts`, `generic.ts`. Each exports
+>   `parse(html, url) -> ParsedLead[]`. Use `cheerio` (works in Workers via
+>   `nodejs_compat`) or `linkedom`.
+> - `pipeline.ts` — `runJob(job, env)`: fetch → parse → normalize → dedupe →
+>   write to D1. On error, write `jobs.error` and bump `jobs.status='failed'`.
+>   On success, set `jobs.leads_found`, `jobs.finished_at`, `status='completed'`.
+> - `normalize.ts` — clean email (lowercase, strip plus-addressing for dedupe
+>   key only), E.164 phone, country ISO-3166-1 alpha-2, LinkedIn URL canonical
+>   form, etc.
+>
+> Wire the queue consumer to call `pipeline.runJob` per message. Message
+> payload shape: `{ jobId: number, kind: 'url'|'linktree'|'profile_list',
+> target: string, config: {...} }`.
+>
+> Add a `POST /api/jobs` endpoint that inserts a row into `jobs`, sends a
+> message to `LEAD_QUEUE`, and returns `{ jobId }`. Add `GET /api/jobs`,
+> `GET /api/jobs/:id`, `POST /api/jobs/:id/cancel` (cancel = set
+> `status='cancelled'`; consumer must check before each page).
+>
+> Add a scheduled trigger to `wrangler.toml` (`cron = ["0 */6 * * *"]`) that
+> re-runs every `sources.enabled=1` row whose `last_scraped_at` is older than
+> 24h. Implement in a new `src/scheduled.ts` and export `scheduled` from
+> `index.ts`.
+>
+> Write a migration `apps/worker/migrations/010_scraper.sql` that adds:
+> `jobs.kind`, `jobs.target`, `jobs.cancelled_at`, `jobs.cost_ms`,
+> `jobs.pages_fetched`, `jobs.pages_blocked`, `jobs.captcha_hits`.
+>
+> Add `cheerio` (or `linkedom`) and `@cloudflare/puppeteer` to
+> `apps/worker/package.json`. Update `tsconfig.json` if needed. Run
+> `npm run typecheck` and fix all errors before finishing.
+
+**Acceptance criteria:**
+
+- `POST /api/jobs` with `{kind:'url', target:'https://example.com'}` returns a
+  `jobId` and the consumer fetches, parses, and inserts at least the
+  `source_domain` and `source_url` into `leads`.
+- `GET /api/jobs/:id` reflects status transitions queued → running → completed.
+- `wrangler deploy` succeeds; `wrangler tail` shows the consumer running.
+
+---
+
+## Task 2 — Dashboard: "Start Scrape" + Linktree / source ingestion UI
+
+**Replit prompt:**
+
+> In `apps/site/dashboard/index.html` and
+> `apps/site/assets/js/dashboard.js`, add a "Start Scrape" panel at the top of
+> the dashboard, above the KPI cards.
+>
+> The panel has three input modes (tabs):
+>
+> 1. **Single URL** — one text input + "Scrape" button. POSTs `{kind:'url',
+>    target}` to `/api/jobs`.
+> 2. **Link tree / list page** — text input + parser selector dropdown
+>    (`linktree`, `beacons`, `conference_attendees`, `fund_team_page`,
+>    `generic_list`). POSTs `{kind:'linktree', target, config:{parser}}`.
+> 3. **Bulk paste** — `<textarea>` accepting newline-separated URLs or
+>    LinkedIn/Twitter handles. POSTs one job per non-empty line, then shows
+>    counts (queued / rejected).
+>
+> Below the input, render a live "Active jobs" strip that polls
+> `GET /api/jobs?status=queued,running` every 3s and shows `name`, `kind`,
+> `pages_fetched`, `leads_found`, elapsed time, and a Cancel button calling
+> `POST /api/jobs/:id/cancel`.
+>
+> Add a "Jobs" page at `apps/site/dashboard/jobs.html` showing the full job
+> history with filters (status, source, date range) and a detail drawer that
+> shows `config_json`, `result_json`, `error`, `cost_ms`, `pages_blocked`,
+> `captcha_hits`.
+>
+> Keep all CSS in `apps/site/assets/css/dashboard.css`. Match the existing
+> color tokens and KPI card styling — no new design language. Do not introduce
+> a frontend framework; use the vanilla JS pattern already in `dashboard.js`.

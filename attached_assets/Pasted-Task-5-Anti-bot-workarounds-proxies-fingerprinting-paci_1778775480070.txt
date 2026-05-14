@@ -1,0 +1,42 @@
+Task 5 — Anti-bot workarounds (proxies, fingerprinting, pacing, fallbacks)
+Most VC-firm sites, conference attendee lists, and aggregator profile pages serve bot-detection (Cloudflare challenge, PerimeterX, DataDome, Akamai BMP) or rate-limit aggressively. Build a tiered fetch strategy in apps/worker/src/scraper/fetcher.ts (extends Task 1):
+Tier 0 — direct fetch with rotating UA, realistic headers, KV-backed per-host token bucket (rl:{host} = {tokens, refilledAt}, default 1 req / 4s, configurable per-source in sources.config_json).
+Tier 1 — Cloudflare Browser Rendering (env.BROWSER.launch()) with puppeteer-extra-plugin-stealth-style header & navigator overrides inlined (the plugin itself doesn't run in Workers; reimplement the 8 most impactful overrides manually). Randomize viewport, languages, platform, webdriver=false.
+Tier 2 — residential proxy via a configurable provider (BrightData / Oxylabs / SOAX). Read PROXY_URL and PROXY_AUTH from secrets. Route fetch through it via the Workers fetch(url, {cf:{resolveOverride}}) pattern OR by calling the proxy's HTTPS gateway directly.
+Tier 3 — third-party scraping APIs (ScrapingBee, ZenRows, ScrapFly) as a last resort. Read SCRAPER_API_KEY and SCRAPER_API_PROVIDER secrets.
+Each tier escalates only if the previous tier returns a block signal:
+status in {401, 403, 407, 408, 423, 429, 451, 503, 520, 521, 522, 524}
+body matches /captcha|cf-mitigated|attention required|access denied|are you a robot|recaptcha|hcaptcha|datadome/i
+body < 2048 bytes when content-type=text/html and we expected an HTML page
+DOM has < 20 visible text characters after rendering
+Record per-fetch outcome in a new fetch_log table:
+CREATE TABLE fetch_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER,
+  url TEXT NOT NULL,
+  host TEXT NOT NULL,
+  tier INTEGER NOT NULL,
+  status INTEGER,
+  bytes INTEGER,
+  block_reason TEXT,
+  duration_ms INTEGER,
+  cost_usd REAL,
+  fetched_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_fl_host_time ON fetch_log(host, fetched_at);
+CREATE INDEX idx_fl_job ON fetch_log(job_id);
+Provide fallback strategies for sites we still can't fetch:
+Wayback Machine fallback: if all 4 tiers fail, fetch https://web.archive.org/web/2y/{url} and parse the archived copy. Tag the resulting lead rows with meta_json.fetched_from='wayback' and meta_json.archive_date.
+Google Cache (cache: operator via Brave Search).
+RSS / sitemap mining: every time we resolve a new source_domain, try /sitemap.xml, /feed, /rss, /team, /about first — they're often unprotected.
+PDF reports: many funds publish team rosters in annual letters / pitch decks hosted on their CDN. Add a parsers/pdf.ts using pdfjs-dist (works in Workers with nodejs_compat).
+Add GET /api/scrapers/health returning a per-host roll-up of the last 24h: total fetches, block rate, p50/p95 duration, $ cost, tier mix. The dashboard (Task 7) will visualize this.
+Compliance guardrails (must implement):
+Always honor robots.txt. Add src/scraper/robots.ts with a 24h KV cache; if a URL is disallowed, write block_reason='robots_disallow' and do not fetch.
+Never disable robots checking for LinkedIn, Facebook, Twitter/X, or any social platform login-gated page. For those, rely exclusively on the Task 4 search-engine discovery path (which only fetches public snippets).
+Respect any Crawl-Delay directive.
+Acceptance criteria:
+A test URL that returns 403 on Tier 0 succeeds on Tier 1 or 2.
+fetch_log is populated with one row per attempt.
+GET /api/scrapers/health returns a non-empty body.
+robots.txt-disallowed URLs never appear in leads.

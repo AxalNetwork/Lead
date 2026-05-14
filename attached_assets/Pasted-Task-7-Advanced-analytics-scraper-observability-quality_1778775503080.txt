@@ -1,0 +1,70 @@
+Task 7 — Advanced analytics, scraper observability, quality & value metrics
+Expand the analytics surface. Add a new migration 040_analytics_v2.sql:
+CREATE TABLE lead_quality_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id INTEGER NOT NULL,
+  snapshot_date TEXT NOT NULL,
+  completeness REAL,
+  freshness_days INTEGER,
+  provider_count INTEGER,
+  confidence REAL,
+  quality_score REAL,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE source_kpis_daily (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  metric_date TEXT NOT NULL,
+  source_domain TEXT NOT NULL,
+  pages_fetched INTEGER,
+  pages_blocked INTEGER,
+  leads_found INTEGER,
+  verified_added INTEGER,
+  avg_quality REAL,
+  cost_usd REAL,
+  UNIQUE(metric_date, source_domain)
+);
+CREATE TABLE pipeline_kpis_daily (
+  metric_date TEXT PRIMARY KEY,
+  jobs_run INTEGER,
+  jobs_failed INTEGER,
+  leads_created INTEGER,
+  leads_enriched INTEGER,
+  leads_approved INTEGER,
+  provider_cost_usd REAL,
+  browser_render_minutes REAL,
+  proxy_gb REAL,
+  captcha_hits INTEGER
+);
+Add new API endpoints under /api/analytics/:
+GET /scrapers/health — moved here from Task 5; per-host roll-up.
+GET /scrapers/cost — daily $ broken down by tier and provider.
+GET /leads/quality — distribution of quality_score, completeness histogram, freshness distribution.
+GET /leads/funnel — counts at every status (new → enriched → verified → pending → approved → contacted → replied → meeting). Add the new statuses to the status enum check.
+GET /leads/segments — top sectors × geographies × persona combos with counts and avg quality.
+GET /leads/value — total addressable AUM, average check size, sum of companies_owned_count across approved leads. The "portfolio value" view.
+GET /jobs/perf — p50/p95 job duration, success rate, leads-per-job, leads-per-dollar.
+GET /trends/leads?bucket=day|week|month&persona=&geo=&sector= — time series with optional dimension filters.
+Implement a nightly scheduled job (cron = ["15 3 * * *"]) that:
+Computes one lead_quality_snapshots row per lead changed in the last 24h.
+Aggregates source_kpis_daily from fetch_log + leads.
+Aggregates pipeline_kpis_daily from jobs, provider_usage, and fetch_log.
+Writes a dashboard_snapshots row (table already exists but unused — finally use it).
+On the dashboard (apps/site/dashboard/):
+Add a small line chart (use a single dependency-free SVG line chart, no Chart.js — keep the bundle clean) for the 30-day trend in leads-created and leads-approved.
+Add a "Scraper health" card showing block rate, captcha rate, $ today, and a tier-mix sparkline.
+Add a "Lead quality" card showing avg quality, % complete leads, % stale.
+Add a "Funnel" widget.
+Add a analytics.html page with deep-dive charts: segment heatmap, per-source ROI bar chart, cost-per-verified-lead by source.
+Quality score formula (document in code):
+quality_score =
+  0.30 * completeness
++ 0.20 * verification_score
++ 0.15 * provider_corroboration
++ 0.15 * freshness_score
++ 0.10 * persona_priority_match
++ 0.10 * track_record_density
+All weights live in apps/worker/src/scoring/config.ts so they're easy to tune.
+Acceptance criteria:
+All new endpoints return well-formed JSON.
+Nightly job populates the three new tables and dashboard_snapshots.
+Dashboard renders charts without external CDN dependencies.

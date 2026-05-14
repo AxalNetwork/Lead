@@ -1,0 +1,67 @@
+
+);
+CREATE TABLE dnc_list (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  identifier TEXT NOT NULL,
+  identifier_kind TEXT NOT NULL,
+  reason TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(identifier_kind, identifier)
+);
+CREATE TABLE pii_access_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_email TEXT NOT NULL,
+  lead_id INTEGER NOT NULL,
+  fields_json TEXT,
+  reason TEXT,
+  accessed_at TEXT DEFAULT (datetime('now'))
+);
+Middleware: any /api/leads/:id GET writes a pii_access_log row capturing the user_email (from accessGuard), lead_id, and which sensitive fields (emails, phones, residency, net_worth) were in the response.
+Pre-insert hook: before writing any leads.email / leads.phones_json / leads.socials_json entry, check dnc_list. If match, drop the field and set do_not_contact=1, dnc_reason='dnc_list_match'.
+Endpoints:
+POST /api/dnc — add an identifier to the DNC list.
+POST /api/leads/:id/dnc — flag a lead DNC.
+GET /api/audit/pii?from=&to= — export PII access log (admin only).
+POST /api/gdpr/erase — {email} → cascades: nulls PII columns on every matching lead, adds to dnc_list, writes lead_history with change_kind='gdpr_erasure'.
+robots.txt: apps/worker/src/scraper/robots.ts checks source_policies first, falls back to a fresh fetch when older than 24h. Block fetches against disallowed paths.
+ToS: a static apps/worker/data/tos-flags.json ships with manual entries for LinkedIn, Facebook, Instagram, X, Glassdoor (tos_allows_scraping=0). The pipeline refuses to enqueue direct fetches against those domains and emits a clear error.
+Acceptance criteria:
+Adding an email to dnc_list then scraping a page containing it does NOT store that email.
+Every GET /api/leads/:id writes a pii_access_log row.
+POST /api/gdpr/erase removes the email from all matching leads in one transaction.
+Task 11 — Outbound marketing exports + campaign tracking
+Build the outbound side so marketing can use this dataset without copy-paste.
+Migration 080_campaigns.sql:
+CREATE TABLE campaigns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  icp_id INTEGER,
+  status TEXT DEFAULT 'draft',
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE campaign_members (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  campaign_id INTEGER NOT NULL,
+  lead_id INTEGER NOT NULL,
+  status TEXT DEFAULT 'queued',
+  sent_at TEXT, opened_at TEXT, clicked_at TEXT, replied_at TEXT,
+  UNIQUE(campaign_id, lead_id)
+);
+Endpoints:
+POST /api/campaigns — create from an ICP id or a saved filter.
+POST /api/campaigns/:id/export?format=csv|json|hubspot|lemlist|instantly — emits the export format the marketing tool expects.
+POST /api/campaigns/:id/webhook — public route (HMAC-signed) that the marketing tool calls back to update campaign_members.status.
+Export formats:
+hubspot — columns matching the Hubspot Contacts CSV importer.
+lemlist — first_name, last_name, company, email, linkedin_url, + liquid-template variables filled from lead fields.
+instantly — Instantly's required schema.
+Dashboard: a "Campaigns" tab with new-campaign wizard:
+Pick ICP or filter.
+Pick channel.
+Preview the audience (count + sample table).
+Export.
+Add per-lead "campaigns" sub-tab on the lead detail view showing every campaign the lead has been in and current status.
+Acceptance criteria:
+A campaign created from an ICP can be exported as a valid Lemlist CSV that imports without errors.
+Posting to the webhook updates campaign_members.status and surfaces in the funnel analytics from Task 7.
