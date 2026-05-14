@@ -21,6 +21,10 @@ import type { FirmCandidate } from "./parsers/firmlists/types";
 export interface UpsertResult {
   firmId: number;
   action: "created" | "updated" | "unchanged";
+  /** Canonical website persisted on the firm row after upsert (may be null). */
+  website: string | null;
+  /** Canonical lowercase domain persisted on the firm row (may be null). */
+  domain: string | null;
 }
 
 const SCALAR_FIELDS = [
@@ -115,7 +119,7 @@ async function insertNew(
     `INSERT INTO firms (${cols.join(",")}) VALUES (${placeholders})`,
   ).bind(...vals).run();
   const firmId = Number(r.meta.last_row_id);
-  return { firmId, action: "created" };
+  return { firmId, action: "created", website: c.website ?? null, domain };
 }
 
 async function mergeInto(
@@ -164,12 +168,16 @@ async function mergeInto(
     sets.push("imported_from = ?");
     binds.push(importedFromExisting ? `${importedFromExisting},${importedFrom}` : importedFrom);
   }
-  if (!sets.length) return { firmId: existing.id, action: "unchanged" };
+  // Always bump last_modified on every dedupe hit — even when no field
+  // deltas applied — so reruns leave a verifiable timestamp trail.
+  const action: "updated" | "unchanged" = sets.length ? "updated" : "unchanged";
   sets.push("last_modified = ?");
   binds.push(new Date().toISOString());
   binds.push(existing.id);
   await env.DB.prepare(`UPDATE firms SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
-  return { firmId: existing.id, action: "updated" };
+  const persistedWebsite = (existing.website as string | null) ?? c.website ?? null;
+  const persistedDomain = (existing.domain as string | null) ?? deriveDomain(persistedWebsite);
+  return { firmId: existing.id, action, website: persistedWebsite, domain: persistedDomain };
 }
 
 function deriveDomain(website: string | null | undefined): string | null {
