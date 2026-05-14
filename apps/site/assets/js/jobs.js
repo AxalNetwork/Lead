@@ -194,6 +194,16 @@
       drawer.addEventListener("click", function (e) {
         if (e.target.closest("[data-close]")) closeDrawer();
       });
+      // After the shared cancel handler in dashboard.js posts /cancel, refresh
+      // both the jobs table and the open drawer so the operator sees the
+      // status flip from running -> cancelled without a manual reload.
+      drawer.addEventListener("click", function (e) {
+        var btn = e.target.closest("button[data-cancel-job]");
+        if (!btn) return;
+        var id = btn.getAttribute("data-cancel-job");
+        // Defer one tick so dashboard.js completes the POST first.
+        setTimeout(function () { loadJobs(); openDrawer(id); }, 400);
+      });
     }
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape") closeDrawer();
