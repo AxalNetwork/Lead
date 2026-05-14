@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "updated_at": "2026-05-14",
+  "blocked_domains": [
+    {
+      "domain": "linkedin.com",
+      "reason": "LinkedIn ToS Section 8.2 prohibits automated scraping (hiQ v. LinkedIn ongoing). Use the official LinkedIn API or the discovery layer instead."
+    },
+    {
+      "domain": "facebook.com",
+      "reason": "Meta Platform Terms prohibit automated data collection without written permission."
+    },
+    {
+      "domain": "instagram.com",
+      "reason": "Meta Platform Terms prohibit automated data collection without written permission."
+    },
+    {
+      "domain": "twitter.com",
+      "reason": "X/Twitter Developer Agreement requires the official API for any programmatic access."
+    },
+    {
+      "domain": "x.com",
+      "reason": "X/Twitter Developer Agreement requires the official API for any programmatic access."
+    },
+    {
+      "domain": "glassdoor.com",
+      "reason": "Glassdoor ToS Section 5 prohibits automated scraping and use of bots/crawlers."
+    }
+  ]
+}

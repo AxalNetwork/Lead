@@ -9,6 +9,11 @@ export interface Env {
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
   ACCESS_APP_AUD: string;
+  // Fetcher tier secrets (all optional; absent ⇒ tier is skipped).
+  PROXY_URL?: string;             // e.g. https://proxy.example.com:8443
+  PROXY_AUTH?: string;            // "user:pass" basic auth for the proxy
+  SCRAPER_API_KEY?: string;
+  SCRAPER_API_PROVIDER?: string;  // "scraperapi" | "scrapingbee" | "zenrows"
 }
 
 export type JobKind = "url" | "linktree" | "profile_list";

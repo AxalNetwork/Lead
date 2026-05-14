@@ -2,6 +2,7 @@ import type { Env, JobMessage, ParsedLead } from "../types";
 import { fetchPage } from "./fetcher";
 import { selectParser } from "./parsers";
 import { extractDomain } from "./normalize";
+import { discoverUrls } from "./fallbacks/sitemap";
 import { LeadsRepo } from "../db/leads.repo";
 import type { Lead } from "../db/leads.types";
 import { buildCanonicalKeys, recordReview, resolveIncoming } from "../dedupe";
@@ -121,6 +122,7 @@ async function insertLead(
   parsed: ParsedLead,
   parserName: string,
   jobId: string,
+  fetchedFrom: "live" | "wayback" = "live",
 ): Promise<string | null> {
   const incoming = leadToIncoming(parsed, parserName);
   const decision = await resolveIncoming(env.DB, incoming, { jobId, provider: parserName });
@@ -131,7 +133,7 @@ async function insertLead(
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  const meta = JSON.stringify({ ...(parsed.meta ?? {}), job_id: jobId });
+  const meta = JSON.stringify({ ...(parsed.meta ?? {}), job_id: jobId, fetched_from: fetchedFrom });
   const status = decision.action === "needs_review" ? "needs_review" : "new";
   const keys = buildCanonicalKeys({
     email: incoming.email,
@@ -189,9 +191,10 @@ async function insertLead(
   return id;
 }
 
-async function touchSource(env: Env, url: string): Promise<void> {
+async function touchSource(env: Env, url: string): Promise<boolean> {
   const domain = extractDomain(url);
-  if (!domain) return;
+  if (!domain) return false;
+  const existing = await env.DB.prepare("SELECT id FROM sources WHERE domain = ?").bind(domain).first<{ id: string }>();
   const now = new Date().toISOString();
   await env.DB.prepare(
     `INSERT INTO sources (id, domain, kind, enabled, last_scraped_at, created_at)
@@ -200,6 +203,30 @@ async function touchSource(env: Env, url: string): Promise<void> {
   )
     .bind(crypto.randomUUID(), domain, now, now)
     .run();
+  return !existing;
+}
+
+/**
+ * On the first time we see a `source_domain`, mine the sitemap and likely
+ * team/about/people URLs and enqueue them as child jobs. Bounded so we never
+ * fan out beyond a handful of pages per new domain.
+ */
+async function seedDomainDiscovery(env: Env, parentJobId: string, seedUrl: string): Promise<void> {
+  const { guessed, fromSitemap } = await discoverUrls(seedUrl);
+  const candidates = [...guessed, ...fromSitemap].slice(0, 12);
+  if (!candidates.length) return;
+  const now = new Date().toISOString();
+  for (const childUrl of candidates) {
+    if (childUrl === seedUrl) continue;
+    const childId = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
+       VALUES (?, ?, ?, 'queued', 'url', ?, ?, ?, ?)`,
+    )
+      .bind(childId, `discovery:${childUrl}`, extractDomain(childUrl), childUrl, JSON.stringify({ parent: parentJobId, discovery: true }), now, now)
+      .run();
+    await env.LEAD_QUEUE.send({ jobId: childId, kind: "url", target: childUrl });
+  }
 }
 
 async function processSingleUrl(
@@ -215,7 +242,7 @@ async function processSingleUrl(
 
   if (await isCancelled(env, jobId)) return { leadsFound, pagesFetched, pagesBlocked, captchaHits, costMs };
 
-  const fetched = await fetchPage(env, url);
+  const fetched = await fetchPage(env, url, { jobId });
   costMs += fetched.durationMs;
 
   if (!fetched.ok) {
@@ -226,15 +253,23 @@ async function processSingleUrl(
 
   pagesFetched += 1;
   await archiveRawHtml(env, url, fetched.html);
-  await touchSource(env, url);
+  const isNewDomain = await touchSource(env, url);
 
   const { name: parserName, parser } = selectParser(url);
   const parsed = parser(fetched.html, fetched.url);
 
   for (const lead of parsed) {
     if (await isCancelled(env, jobId)) break;
-    const id = await insertLead(env, lead, parserName, jobId);
+    const id = await insertLead(env, lead, parserName, jobId, fetched.fetched_from);
     if (id) leadsFound += 1;
+  }
+
+  if (isNewDomain && fetched.fetched_from === "live") {
+    try {
+      await seedDomainDiscovery(env, jobId, url);
+    } catch (e) {
+      console.warn("seedDomainDiscovery failed", (e as Error).message);
+    }
   }
 
   return { leadsFound, pagesFetched, pagesBlocked, captchaHits, costMs };
@@ -254,7 +289,7 @@ async function processLinktree(
 
   if (await isCancelled(env, jobId)) return { leadsFound, pagesFetched, pagesBlocked, captchaHits, costMs };
 
-  const fetched = await fetchPage(env, target);
+  const fetched = await fetchPage(env, target, { jobId });
   costMs += fetched.durationMs;
   if (!fetched.ok) {
     pagesBlocked += 1;
@@ -273,7 +308,7 @@ async function processLinktree(
 
   for (const lead of parsed) {
     if (await isCancelled(env, jobId)) break;
-    const id = await insertLead(env, lead, parserName, jobId);
+    const id = await insertLead(env, lead, parserName, jobId, fetched.fetched_from);
     if (id) leadsFound += 1;
 
     const outbound = Array.isArray(lead.meta?.outbound) ? (lead.meta!.outbound as string[]) : [];

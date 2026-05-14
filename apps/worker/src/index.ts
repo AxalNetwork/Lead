@@ -8,6 +8,7 @@ import { leads } from "./routes/leads";
 import { exports_ } from "./routes/exports";
 import { jobs } from "./routes/jobs";
 import { dedupe } from "./routes/dedupe";
+import { scrapers } from "./routes/scrapers";
 import { accessGuard } from "./middleware/access";
 import { runJob } from "./scraper/pipeline";
 import { scheduled as scheduledHandler } from "./scheduled";
@@ -41,6 +42,7 @@ api.route("/api/leads", leads);
 api.route("/api/exports", exports_);
 api.route("/api/jobs", jobs);
 api.route("/api/dedupe", dedupe);
+api.route("/api/scrapers", scrapers);
 
 api.notFound((c) => c.json({ error: "not_found" }, 404));
 api.onError((err, c) => {
