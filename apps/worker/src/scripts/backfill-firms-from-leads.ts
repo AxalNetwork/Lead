@@ -83,17 +83,27 @@ export async function backfillFirmsFromLeads(env: Env): Promise<BackfillSummary>
   }
 
   for (const g of groups.values()) {
-    const slug = slugify(g.name);
     let firmId: number | null = null;
 
+    // Look up by (lower(name), domain) so two distinct groups with the same
+    // org name but different source domains don't collapse into one firm.
     const existing = await env.DB
-      .prepare("SELECT id FROM firms WHERE slug = ? LIMIT 1")
-      .bind(slug)
+      .prepare(
+        `SELECT id FROM firms
+         WHERE LOWER(name) = LOWER(?)
+           AND COALESCE(domain, '') = COALESCE(?, '')
+         LIMIT 1`,
+      )
+      .bind(g.name, g.domain)
       .first<{ id: number }>();
     if (existing) {
       firmId = existing.id;
       summary.firms_existing += 1;
     } else {
+      // Build a domain-aware slug to avoid collisions when same org is
+      // recorded under multiple source domains.
+      const baseSlug = slugify(g.name);
+      const slug = g.domain ? `${baseSlug}-${slugify(g.domain)}` : baseSlug;
       try {
         const ins = await env.DB
           .prepare(
@@ -105,10 +115,15 @@ export async function backfillFirmsFromLeads(env: Env): Promise<BackfillSummary>
         firmId = (ins.meta.last_row_id as number) ?? null;
         summary.firms_created += 1;
       } catch {
-        // Slug race: re-read.
+        // Slug collision race: re-read by (name, domain).
         const re = await env.DB
-          .prepare("SELECT id FROM firms WHERE slug = ? LIMIT 1")
-          .bind(slug)
+          .prepare(
+            `SELECT id FROM firms
+             WHERE LOWER(name) = LOWER(?)
+               AND COALESCE(domain, '') = COALESCE(?, '')
+             LIMIT 1`,
+          )
+          .bind(g.name, g.domain)
           .first<{ id: number }>();
         if (re) {
           firmId = re.id;
@@ -120,18 +135,17 @@ export async function backfillFirmsFromLeads(env: Env): Promise<BackfillSummary>
 
     for (const lead of g.leads) {
       const role = inferRole(lead.seniority, lead.persona_role, lead.title);
-      try {
-        const r = await env.DB
-          .prepare(
-            `INSERT INTO firm_people (firm_id, lead_id, role) VALUES (?, ?, ?)`,
-          )
-          .bind(firmId, lead.id, role)
-          .run();
-        if ((r.meta.changes ?? 0) > 0) summary.links_created += 1;
-      } catch (e) {
-        const msg = (e as Error).message ?? "";
-        if (msg.includes("UNIQUE")) summary.links_existing += 1;
-      }
+      // INSERT OR IGNORE relies on the (firm_id, lead_id) UNIQUE constraint
+      // so re-runs are truly idempotent regardless of the inferred role
+      // (SQLite UNIQUE does not dedupe NULLs across tuples otherwise).
+      const r = await env.DB
+        .prepare(
+          `INSERT OR IGNORE INTO firm_people (firm_id, lead_id, role) VALUES (?, ?, ?)`,
+        )
+        .bind(firmId, lead.id, role)
+        .run();
+      if ((r.meta.changes ?? 0) > 0) summary.links_created += 1;
+      else summary.links_existing += 1;
     }
   }
 
