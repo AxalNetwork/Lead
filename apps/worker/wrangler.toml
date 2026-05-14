@@ -10,7 +10,7 @@ workers_dev = true
 ALLOWED_EMAIL = "guillaumelauzier@gmail.com"
 ACCESS_TEAM_DOMAIN = "axalnetwork.cloudflareaccess.com"
 ACCESS_AUD = "f9cbce05165afb5af93e5929ff93dc4591aa18cd8234244327e78fd29fa849dd"
-ACCESS_APP_AUD = "d9cde0e58496fb9f512cf697c93f587bcbf4e8faf363726ff83c1a8190fe0158"
+ACCESS_APP_AUD = ""
 
 [[d1_databases]]
 binding = "DB"
@@ -32,16 +32,4 @@ max_batch_timeout = 5
 
 [[routes]]
 pattern = "api.aidatasignal.com"
-custom_domain = true
-
-[[routes]]
-pattern = "aidatasignal.com"
-custom_domain = true
-
-[[routes]]
-pattern = "www.aidatasignal.com"
-custom_domain = true
-
-[[routes]]
-pattern = "app.aidatasignal.com"
 custom_domain = true
