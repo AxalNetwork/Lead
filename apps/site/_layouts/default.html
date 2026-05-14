@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+  <title>{% if page.title %}{{ page.title }} — {% endif %}{{ site.title }}</title>
+  <link rel="icon" type="image/webp" href="/assets/images/favicon.webp">
+  <link rel="stylesheet" href="/assets/css/bootstrap.min.css">
+  <link rel="stylesheet" href="/assets/css/plugins.css">
+  <link rel="stylesheet" href="/assets/css/style.css">
+  <link rel="stylesheet" href="/assets/css/dashboard.css">
+</head>
+<body class="ads-body">
+  <header class="ads-topbar">
+    <div class="ads-topbar__inner">
+      <a href="/" class="ads-brand">AI Data Signal</a>
+      <nav class="ads-nav">
+        <a href="/" class="{% if page.url == '/' %}active{% endif %}">Dashboard</a>
+        <a href="/jobs/" class="{% if page.url contains '/jobs' %}active{% endif %}">Jobs</a>
+        <a href="/review/" class="{% if page.url contains '/review' %}active{% endif %}">Review</a>
+        <a href="/sources/" class="{% if page.url contains '/sources' %}active{% endif %}">Sources</a>
+        <a href="/exports/" class="{% if page.url contains '/exports' %}active{% endif %}">Exports</a>
+      </nav>
+      <div class="ads-user">
+        <span id="ads-user-email" class="ads-user__email">…</span>
+        <a href="https://axalnetwork.cloudflareaccess.com/cdn-cgi/access/logout" class="ads-user__logout">Sign out</a>
+      </div>
+    </div>
+  </header>
+  <main class="ads-main">
+    {{ content }}
+  </main>
+  <script src="/assets/js/jquery.min.js"></script>
+  <script src="/assets/js/dashboard.js"></script>
+  <script src="/assets/js/analytics.js"></script>
+  {% if site.cf_web_analytics_token != "" %}
+  <script defer src="https://static.cloudflareinsights.com/beacon.min.js"
+    data-cf-beacon='{"token":"{{ site.cf_web_analytics_token }}"}'></script>
+  {% endif %}
+</body>
+</html>
