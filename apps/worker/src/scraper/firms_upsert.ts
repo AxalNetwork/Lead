@@ -58,18 +58,27 @@ export async function upsertFirm(
   const rawDomain = candidate.domain ?? deriveDomain(candidate.website);
   const domain = rawDomain ? rawDomain.toLowerCase().trim() : null;
   if (domain) candidate.domain = domain;
+
+  // Quality gate: require name + (domain OR website). Without either,
+  // dedupe is impossible and reruns would create endless duplicates.
+  if (!domain && !candidate.website) {
+    throw new Error("upsertFirm: candidate must have domain or website");
+  }
   const lname = name.toLowerCase();
 
-  // Dedupe lookup. We require BOTH name and domain to match when domain is
-  // present; otherwise we fall back to name-only (and rely on the operator to
-  // de-dupe later via the merge UI).
-  const existing = domain
-    ? await env.DB.prepare(
-        "SELECT * FROM firms WHERE lower(name) = ? AND domain = ? LIMIT 1",
-      ).bind(lname, domain).first<FirmRow>()
-    : await env.DB.prepare(
-        "SELECT * FROM firms WHERE lower(name) = ? AND domain IS NULL LIMIT 1",
-      ).bind(lname).first<FirmRow>();
+  // Dedupe lookup. Match on the effective domain (stored.domain coalesced
+  // with the parsed hostname of stored.website) so a rerun that supplies
+  // a domain still merges with a row that originally only had a website.
+  const candidates = await env.DB.prepare(
+    "SELECT * FROM firms WHERE lower(name) = ? LIMIT 50",
+  ).bind(lname).all<FirmRow>();
+  const rows = candidates.results ?? [];
+  let existing: FirmRow | null = null;
+  for (const r of rows) {
+    const storedDomain = (r.domain as string | null) ?? deriveDomain((r.website as string | null) ?? undefined);
+    if (domain && storedDomain && storedDomain.toLowerCase() === domain) { existing = r; break; }
+    if (!domain && !storedDomain) { existing = r; break; }
+  }
 
   if (existing) return mergeInto(env, existing, candidate, importedFrom);
   return insertNew(env, candidate, domain, importedFrom);

@@ -337,6 +337,9 @@
         btn.disabled = false;
       }
     });
+    var refreshBtn = document.getElementById("ads-firmlist-refresh");
+    if (refreshBtn) refreshBtn.addEventListener("click", loadFirmlistHistory);
+    loadFirmlistHistory();
     var nfxBtn = document.getElementById("ads-nfx-submit");
     if (nfxBtn) {
       nfxBtn.addEventListener("click", async function () {
@@ -365,6 +368,51 @@
       });
     }
   }
+
+  async function loadFirmlistHistory() {
+    var totalsEl = document.getElementById("ads-firmlist-totals");
+    var byEl = document.getElementById("ads-firmlist-by-importer");
+    var listEl = document.getElementById("ads-firmlist-history");
+    if (!totalsEl && !byEl && !listEl) return;
+    var data;
+    try { data = await api("/api/imports?limit=50"); }
+    catch (e) { if (listEl) listEl.innerHTML = '<p class="ads-muted">Failed: ' + escapeHtml(e.message) + '</p>'; return; }
+    if (!data) { if (listEl) listEl.innerHTML = '<p class="ads-muted">API unavailable.</p>'; return; }
+    var t = data.totals || {};
+    if (totalsEl) {
+      totalsEl.innerHTML =
+        kpiPill("Jobs", t.jobs) + kpiPill("Seen", t.total_seen) +
+        kpiPill("Created", t.created) + kpiPill("Updated", t.updated) +
+        kpiPill("Unchanged", t.unchanged) + kpiPill("Child crawls", t.child_jobs) +
+        kpiPill("Errors", t.errors);
+    }
+    if (byEl) {
+      var keys = Object.keys(data.by_importer || {});
+      if (!keys.length) { byEl.innerHTML = '<p class="ads-muted">No imports yet.</p>'; }
+      else {
+        byEl.innerHTML = '<table class="ads-table"><thead><tr><th>Importer</th><th>Jobs</th><th>Seen</th><th>Created</th><th>Updated</th><th>Unchanged</th><th>Errors</th></tr></thead><tbody>' +
+          keys.map(function (k) {
+            var v = data.by_importer[k];
+            return '<tr><td>' + escapeHtml(k) + '</td><td>' + fmtInt(v.jobs) + '</td><td>' + fmtInt(v.total_seen) + '</td><td>' + fmtInt(v.created) + '</td><td>' + fmtInt(v.updated) + '</td><td>' + fmtInt(v.unchanged) + '</td><td>' + fmtInt(v.errors) + '</td></tr>';
+          }).join("") + '</tbody></table>';
+      }
+    }
+    if (listEl) {
+      var items = data.items || [];
+      if (!items.length) { listEl.innerHTML = ""; }
+      else {
+        listEl.innerHTML = '<table class="ads-table"><thead><tr><th>When</th><th>Importer</th><th>Target</th><th>Status</th><th>Seen</th><th>Created</th><th>Updated</th><th>Unchanged</th><th>Errors</th></tr></thead><tbody>' +
+          items.map(function (it) {
+            return '<tr><td>' + escapeHtml(it.started_at || it.created_at || "—") + '</td><td>' + escapeHtml(it.importer || "—") + '</td><td title="' + escapeHtml(it.target || "") + '">' + escapeHtml(truncate(it.target || "", 60)) + '</td><td>' + escapeHtml(it.status || "—") + '</td><td>' + fmtInt(it.total_seen) + '</td><td>' + fmtInt(it.created) + '</td><td>' + fmtInt(it.updated) + '</td><td>' + fmtInt(it.unchanged) + '</td><td>' + fmtInt((it.errors || []).length) + '</td></tr>';
+          }).join("") + '</tbody></table>';
+      }
+    }
+  }
+  function kpiPill(label, val) {
+    return '<span class="ads-pill"><b>' + fmtInt(val) + '</b> ' + escapeHtml(label) + '</span>';
+  }
+  function truncate(s, n) { s = String(s); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
+  function escapeHtml(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]; }); }
 
   // Approve / reject candidate delegates.
   document.addEventListener("click", async function (e) {

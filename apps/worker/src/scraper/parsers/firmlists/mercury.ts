@@ -13,16 +13,62 @@ import { deriveDomain, rowToCandidate } from "./_helpers";
  * meta the card surfaces (stage, check size, geography).
  */
 export async function importFirms(url: string, env: Env): Promise<FirmlistImportResult> {
-  const fetched = await fetchPage(env, url, { forceBrowser: true });
-  if (!fetched.ok) return { firms: [], totalSeen: 0, errors: [`fetch_failed:${fetched.blockReason ?? "unknown"}`] };
-
-  // Card anchors. Mercury slugs are `/investor-database/<slug>` or
-  // `/raise/investor-database/<slug>`; both are accepted.
-  const cardRe = /<a\b[^>]*href="([^"]*\/investor-database\/[^"#?]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  // Mercury paginates the investor list with a `?page=N` query param. We
+  // walk pages until either an empty result page comes back, the same
+  // anchor set repeats, or we hit a 30-page safety cap (~3000 firms).
   const seen = new Set<string>();
   const firms: FirmCandidate[] = [];
+  const errors: string[] = [];
+  const MAX_PAGES = 30;
+  let totalRowsSeen = 0;
+
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const pageUrl = appendPageParam(url, page);
+    const fetched = await fetchPage(env, pageUrl, { forceBrowser: true });
+    if (!fetched.ok) {
+      errors.push(`page_${page}_fetch_failed:${fetched.blockReason ?? "unknown"}`);
+      if (page === 1) return { firms: [], totalSeen: 0, errors };
+      break;
+    }
+    const before = seen.size;
+    extractCards(fetched.html, pageUrl, seen, firms);
+    totalRowsSeen += seen.size - before;
+    if (seen.size === before) {
+      // No new firms on this page — assume we've walked off the end.
+      if (page === 1 && !firms.length) {
+        // Page 1 yielded nothing — try JSON-LD fallback before bailing.
+        const jsonLd = scanJsonLd(fetched.html);
+        for (const r of jsonLd) {
+          const c = rowToCandidate(r, pageUrl);
+          if (c) firms.push(c.candidate);
+        }
+        return { firms, totalSeen: jsonLd.length, errors };
+      }
+      break;
+    }
+  }
+
+  for (const f of firms) {
+    if (!f.domain && f.website) f.domain = deriveDomain(f.website);
+  }
+  return { firms, totalSeen: totalRowsSeen, errors };
+}
+
+function appendPageParam(url: string, page: number): string {
+  if (page <= 1) return url;
+  try {
+    const u = new URL(url);
+    u.searchParams.set("page", String(page));
+    return u.toString();
+  } catch {
+    return url + (url.includes("?") ? "&" : "?") + `page=${page}`;
+  }
+}
+
+function extractCards(html: string, pageUrl: string, seen: Set<string>, firms: FirmCandidate[]): void {
+  const cardRe = /<a\b[^>]*href="([^"]*\/investor-database\/[^"#?]+)"[^>]*>([\s\S]*?)<\/a>/gi;
   let m: RegExpExecArray | null;
-  while ((m = cardRe.exec(fetched.html)) !== null) {
+  while ((m = cardRe.exec(html)) !== null) {
     const href = m[1];
     const inner = m[2];
     if (seen.has(href)) continue;
@@ -38,36 +84,20 @@ export async function importFirms(url: string, env: Env): Promise<FirmlistImport
     if (parts[1]) row["check"] = parts[1];
     if (parts[2]) row["stage"] = parts[2];
     if (parts[3]) row["geo"] = parts[3];
-    const cand = rowToCandidate(row, url);
+    const cand = rowToCandidate(row, pageUrl);
     if (cand) {
       const slug = href.split("/").filter(Boolean).pop() ?? "";
       cand.candidate.openvc_url = null;
       cand.candidate.notes = (cand.candidate.notes ? cand.candidate.notes + "\n" : "") + `mercury_slug: ${slug}`;
       // Card source URL — keep absolute, falls back to relative against the page.
       try {
-        cand.candidate.source_url = new URL(href, url).toString();
+        cand.candidate.source_url = new URL(href, pageUrl).toString();
       } catch {
-        cand.candidate.source_url = url;
+        cand.candidate.source_url = pageUrl;
       }
       firms.push(cand.candidate);
     }
   }
-
-  // Fallback for older builds: scan structured data for InvestorList JSON.
-  if (!firms.length) {
-    const jsonLd = scanJsonLd(fetched.html);
-    for (const r of jsonLd) {
-      const c = rowToCandidate(r, url);
-      if (c) firms.push(c.candidate);
-    }
-    return { firms, totalSeen: jsonLd.length };
-  }
-
-  // Domain inference: if we have a website-like string in name, prefer that.
-  for (const f of firms) {
-    if (!f.domain && f.website) f.domain = deriveDomain(f.website);
-  }
-  return { firms, totalSeen: seen.size };
 }
 
 function scanJsonLd(html: string): Array<Record<string, unknown>> {

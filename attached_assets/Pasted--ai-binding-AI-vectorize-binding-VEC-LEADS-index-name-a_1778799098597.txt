@@ -1,0 +1,236 @@
+[ai]
+binding = "AI"
+[[vectorize]]
+binding = "VEC_LEADS"
+index_name = "axal-leads-768"
+[[vectorize]]
+binding = "VEC_FIRMS"
+index_name = "axal-firms-768"
+[[vectorize]]
+binding = "VEC_COMPANIES"
+index_name = "axal-companies-768"
+[[durable_objects.bindings]]
+name = "ENTITY_LOCK"
+class_name = "EntityLock"
+[[migrations]]
+tag = "v1"
+new_classes = ["EntityLock"]
+[browser]
+binding = "BROWSER"
+[[r2_buckets]]
+binding = "RAW_HTML"
+bucket_name = "axal-raw-html"
+[[r2_buckets]]
+binding = "UPLOADS"
+bucket_name = "axal-uploads"
+[[r2_buckets]]
+binding = "AI_CACHE"
+bucket_name = "axal-ai-cache"
+[[analytics_engine_datasets]]
+binding = "ANALYTICS"
+dataset = "axal_events"
+[[unsafe.bindings]]
+name = "RL_HOST"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }
+[[unsafe.bindings]]
+name = "RL_AI"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 600, period = 60 }
+[[images]]
+binding = "IMAGES"
+[[workflows]]
+name = "enrich-lead"
+binding = "WF_ENRICH_LEAD"
+class_name = "EnrichLeadWorkflow"
+script_name = "lead"
+[[workflows]]
+name = "enrich-firm"
+binding = "WF_ENRICH_FIRM"
+class_name = "EnrichFirmWorkflow"
+script_name = "lead"
+[[workflows]]
+name = "ingest-page"
+binding = "WF_INGEST_PAGE"
+class_name = "IngestPageWorkflow"
+script_name = "lead"
+Run wrangler vectorize create axal-leads-768 --dimensions=768 --metric=cosine (and likewise for firms and companies). Run wrangler r2 bucket create axal-raw-html axal-uploads axal-ai-cache.
+Add to apps/worker/src/types.ts the full Env interface with every binding above.
+2. Workers AI–powered extraction (apps/worker/src/ai/extract.ts)
+Replace the brittle 8-strategy parsing in Task 15's personExtract.ts with a hybrid: keep the cheap deterministic strategies as the first pass, but route anything they miss through Workers AI for structured extraction.
+type ExtractedPerson = {
+  name: string;
+  first_name?: string;
+  last_name?: string;
+  role?: string;
+  email?: string;
+  linkedin?: string;
+  twitter?: string;
+  crunchbase?: string;
+  personal_site?: string;
+  city?: string;
+  country_iso2?: string;
+  bio?: string;
+  persona?: string;
+  confidence: number;
+}
+extractPeopleFromHTML(html, sourceUrl, env):
+Reduce the HTML to plain text + retained anchor URLs (strip scripts/styles, keep <a> href + text, keep headings).
+Chunk into ~6KB windows (the text + a few hundred chars of surrounding context).
+For each chunk, call env.AI.run("@cf/meta/llama-3.1-8b-instruct-fast", { messages, response_format: { type: "json_schema", json_schema: PERSON_ARRAY_SCHEMA }}). The system prompt: "Extract every person mentioned on this VC firm page. Return strict JSON matching the schema. Only include people clearly working at this firm. Persona must be one of: vc_partner, vc_principal, vc_analyst, advisor, operating_partner, founder, other."
+Merge across chunks using nameKey (Task 8).
+For each AI-extracted person, also run a verification pass: @cf/meta/llama-3.1-8b-instruct-fast with prompt "Given the page text, does the role {role} appear next to the name {name}? Answer yes/no with confidence 0-1." Anything below 0.6 confidence gets dropped.
+Cache every AI call: key = sha256(model + prompt + html_chunk), store JSON response in AI_CACHE R2 bucket. 30-day TTL via lifecycle rule. Workers AI is cheap but not free; this halves the bill on re-runs.
+Use the same pattern for:
+Firm-page understanding (ai/extractFirm.ts): one shot extracting firm thesis, stages, sectors, check size from the homepage + about page combined text. Output schema matches firms columns.
+Bio summarization (ai/summarizeBio.ts): given a person's full scraped corpus (LinkedIn snippet + Crunchbase bio + personal site about + Wikipedia summary), produce a 1-sentence sweet_spot and a 200-word long_bio.
+Normalization (ai/normalize.ts): convert freeform strings to taxonomy slugs. "Seed and Series A, sometimes B" → ["seed","series_a","series_b"]. "$500K to $2M" → {min:500000,max:2000000,typical:1250000}. "AI and ML, especially infra and tooling" → ["ai_ml","infrastructure","developer_tools"]. Use @cf/meta/llama-3.1-8b-instruct-fast with strict JSON schema response format.
+Persona inference (ai/inferPersona.ts): from role string + bio → one of the persona enum values from Task 3.
+OCR fallback (ai/ocr.ts): for image-based team pages or scanned PDF rosters, send the image through @cf/unum/uform-gen2-qwen-500m for OCR, then run the standard extraction.
+Email classification (ai/classifyEmail.ts): given a scraped email, classify as personal, work, role (info@, contact@), or generic. Don't enqueue outreach to generic.
+3. Vectorize-powered entity resolution (apps/worker/src/dedupe/vector.ts)
+Replace Task 8's exact-key dedup with vector + AI arbitration. Exact-key still runs first as a cheap pre-filter.
+For every lead, firm, and company, on insert OR update, compute an embedding:
+buildLeadText(lead) = "${lead.name} | ${role} | ${firm.name} | ${city}, ${country} | ${bio.slice(0,500)} | ${emails_json.map(.email).join(' ')} | ${socials_json.map(.url).join(' ')}"
+Call env.AI.run("@cf/baai/bge-base-en-v1.5", { text: [buildLeadText(lead)] }) → 768-dim vector. Upsert into VEC_LEADS with id = lead.id, metadata = { name, firm_id, country, persona }.
+On every new candidate person (from any scrape job), before INSERT:
+Build the candidate text.
+Embed it via @cf/baai/bge-base-en-v1.5.
+Query VEC_LEADS.query(vector, { topK: 5, returnMetadata: true }).
+For each match with score > 0.82:
+Run an AI arbitration call: @cf/meta/llama-3.1-8b-instruct-fast with prompt "Given Person A: {existing JSON}. Given Person B: {candidate JSON}. Are they the same person? Output strict JSON: {match: 'yes'|'no'|'maybe', confidence: 0..1, reason: '...'}."
+If match=yes && confidence>0.85 → enqueue MERGE into existing (route through Durable Object lock below).
+If match=maybe or match=yes && confidence<0.85 → create a dedupe_review row (Task 8) with both AI arbitration JSONs as evidence.
+If match=no → continue to next top-K result.
+If no match survives → INSERT new lead and add its vector to VEC_LEADS.
+Same flow for firms (vector text = name + domain + thesis + sectors + city) and companies (text = name + domain + tagline + description + founders + sectors).
+This is the "when similar info is found, populate existing profile" guarantee: the moment a scraper sees a person who is semantically the same as someone already in the DB (even if name spelling, firm phrasing, or city formatting differs), we merge into the existing profile instead of creating a duplicate, and every new field gets added with full provenance.
+Add a backfill job apps/worker/src/scripts/embed-all.ts that walks every row and populates the three Vectorize indexes. Run once via wrangler triggers --execution-mode=remote.
+4. Durable Object merge locks (apps/worker/src/do/EntityLock.ts)
+Two scrapers can hit the same person at the same time. Without a lock you race and lose fields. Use a Durable Object per {kind, id} as a serialized merge queue.
+export class EntityLock {
+  state: DurableObjectState;
+  env: Env;
+  constructor(state: DurableObjectState, env: Env) { this.state = state; this.env = env; }
+  async fetch(req: Request) {
+    const { op, payload } = await req.json();
+    // The DO's single-threaded execution model serializes all merges for this id.
+    if (op === "merge_lead") return Response.json(await mergeLeadFields(this.env, payload));
+    if (op === "merge_firm") return Response.json(await mergeFirmFields(this.env, payload));
+    if (op === "merge_company") return Response.json(await mergeCompanyFields(this.env, payload));
+    return new Response("unknown op", { status: 400 });
+  }
+}
+mergeLeadFields runs:
+SELECT current lead row.
+For each incoming field, decide: keep current (manual-edit, higher-priority provider, or newer enrich) or replace.
+Union-merge emails_json, phones_json, socials_json, investor_investments-derived stats.
+Write lead_history rows per changed field.
+Recompute quality_score (Task 7 formula).
+Re-embed and upsert into Vectorize.
+Caller pattern (in pipeline, enrichment, importers):
+const id = env.ENTITY_LOCK.idFromName(`lead:${leadId}`);
+const stub = env.ENTITY_LOCK.get(id);
+await stub.fetch(new Request("https://do/merge", { method: "POST", body: JSON.stringify({ op: "merge_lead", payload }) }));
+Same for firm:${firmId} and company:${companyId}.
+5. Workflows for durable enrichment (apps/worker/src/workflows/)
+Replace the ad-hoc enrichment orchestrator (Task 6) with Cloudflare Workflows. Workflows give automatic retries, checkpoints, and survives Worker restarts — critical for chains that hit 10+ external APIs.
+EnrichLeadWorkflow.ts:
+export class EnrichLeadWorkflow extends WorkflowEntrypoint<Env, { leadId: number }> {
+  async run(event: WorkflowEvent<{leadId: number}>, step: WorkflowStep) {
+    const leadId = event.payload.leadId;
+    const lead = await step.do("load lead", () => loadLead(this.env, leadId));
+    const providers = await step.do("pick providers", () => decideProviders(this.env, lead));
+    const results = [];
+    for (const provider of providers) {
+      const r = await step.do(`fetch ${provider}`, { retries: { limit: 3, backoff: "exponential" } }, () => callProvider(this.env, provider, lead));
+      results.push(r);
+      await step.sleep(`pace ${provider}`, "1 second");
+    }
+    const merged = await step.do("merge results", () => mergeProviderResults(results));
+    await step.do("vector match", () => vectorEntityResolve(this.env, "lead", merged));
+    await step.do("merge into lead via DO", () => doMerge(this.env, "lead", leadId, merged));
+    await step.do("re-embed", () => embedLead(this.env, leadId));
+    await step.do("recompute stats", () => recomputeInvestorStats(this.env, leadId));
+    return { ok: true, fieldsUpdated: merged.changedFields };
+  }
+}
+Same shape for EnrichFirmWorkflow (team crawl + provider enrichment + portfolio fetch) and IngestPageWorkflow (fetch → extract → resolve → merge for any scraped URL).
+Replace POST /api/leads/:id/enrich (Task 6) with env.WF_ENRICH_LEAD.create({ params: { leadId }}). Replace the queue consumer (Task 1) so each message kicks off IngestPageWorkflow instead of running inline.
+6. Rate Limiter binding for per-host pacing (apps/worker/src/scraper/rateLimit.ts)
+Replace Task 5's KV-backed token bucket with the native Rate Limiter binding. Compose two limiters:
+env.RL_HOST.limit({ key: host }) — 60 req/min per host (configurable per-host via D1 sources.config_json).
+env.RL_AI.limit({ key: "global" }) — 600 AI calls/min global ceiling (Workers AI Neurons cost).
+If success=false, queue retry with backoff. Write block_reason='rate_limit' to fetch_log. The KV rl:{host} keys can be removed.
+7. Analytics Engine for high-volume metrics (apps/worker/src/analytics/events.ts)
+Stop bloating D1 with per-fetch and per-AI-call rows. Stream them to Analytics Engine instead.
+function trackFetch(env, evt) {
+  env.ANALYTICS.writeDataPoint({
+    blobs: [evt.host, evt.url, evt.tier, evt.block_reason, evt.job_id],
+    doubles: [evt.duration_ms, evt.bytes, evt.cost_usd],
+    indexes: [evt.host]
+  });
+}
+function trackAI(env, evt) {
+  env.ANALYTICS.writeDataPoint({
+    blobs: [evt.model, evt.purpose, evt.cache_hit ? "hit" : "miss"],
+    doubles: [evt.input_tokens, evt.output_tokens, evt.duration_ms, evt.neurons],
+    indexes: [evt.purpose]
+  });
+}
+Keep the D1 fetch_log table from Task 5 for last-24h hot data only — truncate to 7 days. Long-tail analytics come from Analytics Engine queries via the GraphQL API in a new /api/analytics/ae/* endpoint set. Add GET /api/analytics/ae/ai-cost?days=30 showing $-per-purpose breakdown (extraction, embeddings, normalization).
+8. AI Search for semantic search (apps/worker/src/search/aiSearch.ts)
+Create an AI Search namespace axal-profiles over a synced dataset:
+One document per lead: {id, type:"lead", text: buildLeadText(lead), metadata:{...}}.
+One per firm.
+One per company.
+Sync via a Worker job that runs on every write through the Durable Object merge: after merge, POST the updated document to AI Search. Backfill all rows on first deploy.
+Expose:
+GET /api/search?q=...&type=... — calls AI Search with the user's freeform query. Returns ranked hits across leads/firms/companies with snippets.
+Top-bar global search in the dashboard (replaces the per-page text filters as the primary entry point). Hitting Enter takes the user to a unified search results page; clicking a hit opens the detail page.
+Example queries that should "just work":
+"GPs in Paris doing climate seed"
+"Firms that have invested with a16z in fintech"
+"Angels who exited to Stripe"
+"Companies acquired by Salesforce in 2023"
+9. Images binding for avatars & logos (apps/worker/src/media/images.ts)
+Whenever a scrape pulls an avatar_url or logo_url:
+Fetch the original image.
+Upload to Images: await env.IMAGES.upload({ source: stream, metadata: { entityKind, entityId }}).
+Store the returned Image ID in leads.avatar_id / firms.logo_id / companies.logo_id (add these columns).
+Serve via Cloudflare Images variants: face-100 (round 100px for tables), card-300, hero-800. Add a small helper imageUrl(id, variant).
+Benefits: no hotlinking, automatic AVIF/WebP, polite CDN cache, dead-link protection.
+10. Wire-up rules (cross-cutting)
+Every Worker entrypoint (fetch, queue, scheduled, Workflows) takes the same Env type.
+Workers AI calls must check env.RL_AI.limit({key:"global"}) first; on rate-limit, return cached result or fall back to deterministic parser.
+Every AI call writes one Analytics Engine event with purpose (extraction, embedding, arbitration, normalization, bio_summary, persona_infer, ocr, email_classify), neurons, and cache_hit.
+Every Vectorize upsert is fire-and-forget from the DO merge — failures get logged but don't block the merge transaction.
+The KV bindings stay only for short-lived caches: robots:{host}, enrich:{provider}:{key} (14d), profile:investor:{id} (5min). Bulk caches move to AI_CACHE R2.
+11. Cost ceilings
+Add to wrangler.toml [vars]:
+AI_DAILY_NEURONS_CAP = "500000"
+VECTORIZE_DAILY_QUERIES_CAP = "100000"
+Read in ai/budget.ts and refuse the call when the day's running total (tracked in Analytics Engine queries, cached 1min in KV) exceeds the cap. Surface in GET /api/scrapers/health so the dashboard shows AI budget burn-down.
+Acceptance criteria:
+Running a team-page scrape against a noisy SPA-rendered VC site (e.g. a16z.com/people) produces ≥ 90% of the listed partners with names, roles, and at least one social link — without writing a site-specific parser.
+Inserting a candidate person whose name is a slight misspelling but firm and city match an existing lead results in MERGE into the existing lead, with new fields appended and one lead_history row per field. No duplicate row created.
+Two scrape jobs hitting the same firm at the same time both succeed; the resulting firm row has the union of fields, not a last-write-wins clobber. Verifiable by inspecting firm_history for interleaved writes.
+GET /api/search?q=climate%20seed%20paris returns relevant leads, firms, and companies with semantic ranking — not just substring matches.
+Workflows show up in the Cloudflare dashboard with per-step success/failure and retried-on-failure markers.
+AI Search namespace is populated with ≥ all current leads/firms/companies, kept in sync on every merge.
+Avatars and logos render fast from Cloudflare Images with WebP/AVIF.
+Analytics Engine axal_events dataset is queryable; GET /api/analytics/ae/ai-cost?days=30 returns daily $ broken down by purpose.
+Implementation order (do these in this order, each is a deployable step):
+Add all bindings to wrangler.toml and the Env type. Run the create commands. Deploy.
+Add ai/extract.ts + AI_CACHE plumbing. Switch Task 15's team crawler to call it as a second-pass after the deterministic strategies. Confirm coverage jump on 3 test firms.
+Add dedupe/vector.ts + Vectorize indexes + embed-all backfill. Confirm the next 50 scraped people route through it.
+Add Durable Object EntityLock. Migrate Task 1's pipeline to call DO for every INSERT/UPDATE.
+Convert Task 6's enrichment to EnrichLeadWorkflow. Convert Task 15 to EnrichFirmWorkflow. Convert Task 1's queue consumer to IngestPageWorkflow.
+Replace KV rate-limit with Rate Limiter binding.
+Stream metrics to Analytics Engine; truncate fetch_log retention.
+Stand up AI Search namespace + sync hook in the DO + global search bar.
+Move avatar/logo storage to Images binding.
+Add budget caps + /api/scrapers/health updates.
+Cross-cutting reminders (same as prior tasks): accessGuard on every new route, prepared D1 statements only, robots.txt honored on every fetch, vanilla JS on the dashboard, npm --prefix apps/worker run typecheck clean before merge.
