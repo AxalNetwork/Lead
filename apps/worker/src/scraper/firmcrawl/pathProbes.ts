@@ -156,7 +156,7 @@ export async function buildSeedUrls(
 
   // (a) Homepage — always our first fetch. The HTML doubles as the source
   // for the anchor scan and as a fallback team listing on small firm sites.
-  const hp = await fetchPage(env, homepage, { jobId, minIntervalMs: 1500 });
+  const hp = await fetchPage(env, homepage, { jobId, minIntervalMs: 1500, liveOnly: true });
   probesSpent += 1;
   let homepageAnchors: string[] = [];
   if (hp.ok && hp.html) {
@@ -168,7 +168,7 @@ export async function buildSeedUrls(
   // (b) sitemap.xml — discovery only, never extracted from.
   let sitemapMatches: string[] = [];
   try {
-    const sm = await fetchPage(env, `${origin}/sitemap.xml`, { jobId, minIntervalMs: 1500 });
+    const sm = await fetchPage(env, `${origin}/sitemap.xml`, { jobId, minIntervalMs: 1500, liveOnly: true });
     probesSpent += 1;
     if (sm.ok && sm.html) sitemapMatches = extractSitemapMatches(sm.html);
   } catch {
@@ -182,20 +182,27 @@ export async function buildSeedUrls(
   const queue = dedupeUrls([...homepageAnchors, ...sitemapMatches, ...probedPaths])
     .filter((u) => !seenUrls.has(u.toLowerCase()));
 
-  // Actively probe each candidate via the tiered fetcher. The fetcher's
-  // `shouldEscalate` does not include status_404, so missing curated paths
-  // cost one Tier-0 request and do not trigger browser/proxy escalation.
+  // Actively probe each candidate via the tiered fetcher. Two safeguards
+  // keep a missing /team path from contaminating the seed set:
+  //   1. The fetcher's `shouldEscalate` whitelist excludes status_404, so
+  //      a missing curated path costs one Tier-0 request and does not
+  //      trigger browser/proxy escalation.
+  //   2. `liveOnly: true` bypasses the Brave Search cache (tier 5) and
+  //      Wayback Machine (tier 4) fallback chain entirely, so an archived
+  //      snapshot of a now-removed /team page can never be returned as a
+  //      live seed page. Defensive: also reject any non-"live"
+  //      fetched_from in the result.
   for (const url of queue) {
     if (pages.length >= maxPages) break;
     let r;
     try {
-      r = await fetchPage(env, url, { jobId, minIntervalMs: 1500 });
+      r = await fetchPage(env, url, { jobId, minIntervalMs: 1500, liveOnly: true });
     } catch {
       probesSpent += 1;
       continue;
     }
     probesSpent += 1;
-    if (r.ok && r.html) {
+    if (r.ok && r.html && r.fetched_from === "live") {
       const key = (r.url || url).toLowerCase();
       if (seenUrls.has(key)) continue;
       seenUrls.add(key);

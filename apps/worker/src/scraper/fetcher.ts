@@ -41,6 +41,14 @@ export interface FetchOptions {
   jobId?: string;
   /** Allow callers to disable robots/ToS checks for trusted internal URLs. */
   skipPolicy?: boolean;
+  /**
+   * When true, fetchPage returns the last live tier result without
+   * escalating to Brave Search cache (tier 5) or Wayback (tier 4).
+   * Used by team-path probes which require a verified live response —
+   * a missing /team page must NOT be satisfied from an archived
+   * snapshot, since that would feed stale people into the crawl.
+   */
+  liveOnly?: boolean;
 }
 
 export interface FetchResult {
@@ -469,6 +477,12 @@ export async function fetchPage(env: Env, url: string, opts: FetchOptions = {}):
     if (r.ok) return r;
     last = r;
     if (!shouldEscalate(r.blockReason)) break;
+  }
+
+  // Live-only callers (e.g. team-path probes) must not be satisfied by
+  // archived/cached snapshots — return the last live tier result as-is.
+  if (opts.liveOnly) {
+    return last ?? blockResult(url, 0, "no_tiers_available");
   }
 
   // Penultimate fallback: Brave Search cache (only when BRAVE_API_KEY is
