@@ -1,0 +1,48 @@
+name: Deploy Cloudflare Worker (lead)
+
+# Auto-deploy the lead Worker on every push to main. This replaces the
+# Cloudflare-hosted "Workers Build" pipeline, which kept failing because the
+# repo is a monorepo and Cloudflare's auto-detect ran `npx wrangler deploy`
+# from the repo root with no install of worker deps.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/worker/**"
+      - "wrangler.toml"
+      - "package.json"
+      - ".github/workflows/deploy-worker.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: apps/worker/package-lock.json
+
+      - name: Install worker dependencies
+        run: npm ci || npm install
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Deploy via wrangler
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          workingDirectory: apps/worker
+          wranglerVersion: "3.99.0"
