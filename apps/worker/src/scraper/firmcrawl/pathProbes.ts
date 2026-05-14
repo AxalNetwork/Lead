@@ -1,12 +1,15 @@
 // Build the seed URL set for a firm team crawl. We try, in order:
-//   (a) sitemap.xml — keep entries whose path matches the team-page regex.
-//   (b) the firm homepage — extract internal anchors whose visible text
-//       matches /team|people|partner|about|leadership|founder/i.
-//   (c) probe a curated list of TEAM_PATHS against the firm origin.
+//   (a) the firm homepage — extract internal anchors whose visible text or
+//       href matches /team|people|partner|about|leadership|founder/i.
+//   (b) sitemap.xml — keep URLs whose path matches the team-page regex.
+//   (c) actively probe a curated list of TEAM_PATHS against the firm origin
+//       via the tiered fetcher. Tier-0 404 does NOT escalate (the fetcher's
+//       `shouldEscalate` whitelist excludes status_404), so each missing
+//       path costs exactly one Tier-0 request.
 //
 // All probes go through the Task #5 fetcher so robots.txt + ToS + per-host
-// rate limiting are honored. The caller decides how many of the returned
-// candidates to actually crawl (Task #17 spec caps at 8).
+// rate limiting are honored. We return the actual `{url, html}` of every
+// successfully fetched page so the caller does not need to re-fetch.
 
 import type { Env } from "../../types";
 import { fetchPage } from "../fetcher";
@@ -42,11 +45,18 @@ const ANCHOR_RE = /<a\s+[^>]*href\s*=\s*["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/g
 const SITEMAP_LOC_RE = /<loc>\s*([^<]+?)\s*<\/loc>/gi;
 const TAG_STRIP = /<[^>]+>/g;
 
+export interface FetchedPage {
+  url: string;
+  html: string;
+}
+
 export interface SeedSet {
-  /** Ordered, deduped candidate URLs to crawl. Caller caps the slice. */
-  candidates: string[];
-  /** Number of probe fetches we've already spent on this set. */
+  /** Pages that returned 200 (homepage + verified team pages), in order. */
+  pages: FetchedPage[];
+  /** Total fetcher requests spent on this discovery (including misses). */
   probesSpent: number;
+  /** Total candidate URLs considered before the page cap. */
+  candidatesConsidered: number;
 }
 
 function originOf(url: string): string | null {
@@ -66,23 +76,27 @@ function sameOrigin(a: string, b: string): boolean {
   }
 }
 
+function canonicalize(u: string): string | null {
+  try {
+    const url = new URL(u);
+    url.hash = "";
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return null;
+  }
+}
+
 function dedupeUrls(urls: string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const u of urls) {
     if (!u) continue;
-    let canonical: string;
-    try {
-      const url = new URL(u);
-      url.hash = "";
-      canonical = url.toString().replace(/\/+$/, "");
-    } catch {
-      continue;
-    }
-    const k = canonical.toLowerCase();
+    const c = canonicalize(u);
+    if (!c) continue;
+    const k = c.toLowerCase();
     if (seen.has(k)) continue;
     seen.add(k);
-    out.push(canonical);
+    out.push(c);
   }
   return out;
 }
@@ -120,58 +134,74 @@ function extractSitemapMatches(xml: string): string[] {
 }
 
 /**
- * Build a deduped, ordered set of candidate team-page URLs for a firm.
- * Performs at most 2 discovery fetches (sitemap.xml + homepage); TEAM_PATHS
- * are NOT pre-probed — the caller fetches them as part of the crawl loop
- * (and counts them toward the 8-page budget).
+ * Build a fetched-and-verified set of team-page candidates for a firm.
+ * Returns up to `maxPages` pages with HTML payloads so the caller can run
+ * the extractor without re-fetching. Discovery probes (sitemap + non-200
+ * TEAM_PATHS) are counted in `probesSpent` but do NOT consume the page
+ * budget.
  */
 export async function buildSeedUrls(
   env: Env,
   homepage: string,
   jobId: string,
+  maxPages = 8,
 ): Promise<SeedSet> {
   const origin = originOf(homepage);
-  if (!origin) return { candidates: [], probesSpent: 0 };
+  if (!origin) return { pages: [], probesSpent: 0, candidatesConsidered: 0 };
 
+  const pages: FetchedPage[] = [];
   let probesSpent = 0;
-  const sitemapUrls: string[] = [];
-  const homepageAnchors: string[] = [];
+  const homepageCanonical = canonicalize(homepage) ?? homepage;
+  const seenUrls = new Set<string>();
 
-  // (a) sitemap.xml — best-effort. Failures (404, blocked, etc.) are silent.
-  try {
-    const sm = await fetchPage(env, `${origin}/sitemap.xml`, { jobId, minIntervalMs: 1000 });
-    probesSpent += 1;
-    if (sm.ok && sm.html) {
-      sitemapUrls.push(...extractSitemapMatches(sm.html));
-    }
-  } catch {
-    // ignore
+  // (a) Homepage — always our first fetch. The HTML doubles as the source
+  // for the anchor scan and as a fallback team listing on small firm sites.
+  const hp = await fetchPage(env, homepage, { jobId, minIntervalMs: 1500 });
+  probesSpent += 1;
+  let homepageAnchors: string[] = [];
+  if (hp.ok && hp.html) {
+    pages.push({ url: hp.url || homepage, html: hp.html });
+    seenUrls.add((hp.url || homepageCanonical).toLowerCase());
+    homepageAnchors = extractAnchorMatches(hp.html, hp.url || homepage);
   }
 
-  // (b) homepage anchor scan — also best-effort.
+  // (b) sitemap.xml — discovery only, never extracted from.
+  let sitemapMatches: string[] = [];
   try {
-    const hp = await fetchPage(env, homepage, { jobId, minIntervalMs: 1000 });
+    const sm = await fetchPage(env, `${origin}/sitemap.xml`, { jobId, minIntervalMs: 1500 });
     probesSpent += 1;
-    if (hp.ok && hp.html) {
-      homepageAnchors.push(...extractAnchorMatches(hp.html, hp.url || homepage));
-    }
+    if (sm.ok && sm.html) sitemapMatches = extractSitemapMatches(sm.html);
   } catch {
-    // ignore
+    // ignore — sitemap is optional
   }
 
-  // (c) curated TEAM_PATHS — synthesized; the crawl loop fetches them.
+  // (c) Build the probe queue: anchors first (operator-curated nav),
+  // then sitemap discoveries, then the curated TEAM_PATHS. Dedupe
+  // against the homepage and itself.
   const probedPaths = TEAM_PATHS.map((p) => `${origin}${p}`);
+  const queue = dedupeUrls([...homepageAnchors, ...sitemapMatches, ...probedPaths])
+    .filter((u) => !seenUrls.has(u.toLowerCase()));
 
-  // Order: explicit anchors first (operator-curated nav links), then
-  // sitemap discoveries, then the curated path probes. Homepage itself
-  // last as a fallback so we still extract from /index when no /team page
-  // exists.
-  const candidates = dedupeUrls([
-    ...homepageAnchors,
-    ...sitemapUrls,
-    ...probedPaths,
-    homepage,
-  ]);
+  // Actively probe each candidate via the tiered fetcher. The fetcher's
+  // `shouldEscalate` does not include status_404, so missing curated paths
+  // cost one Tier-0 request and do not trigger browser/proxy escalation.
+  for (const url of queue) {
+    if (pages.length >= maxPages) break;
+    let r;
+    try {
+      r = await fetchPage(env, url, { jobId, minIntervalMs: 1500 });
+    } catch {
+      probesSpent += 1;
+      continue;
+    }
+    probesSpent += 1;
+    if (r.ok && r.html) {
+      const key = (r.url || url).toLowerCase();
+      if (seenUrls.has(key)) continue;
+      seenUrls.add(key);
+      pages.push({ url: r.url || url, html: r.html });
+    }
+  }
 
-  return { candidates, probesSpent };
+  return { pages, probesSpent, candidatesConsidered: queue.length + 1 };
 }

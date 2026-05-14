@@ -9,7 +9,7 @@ import { discoverPartnersForFirm, discoverByPersona } from "../discovery/discove
 import { saveCandidates } from "../discovery/store";
 import { selectImporter, FIRMLIST_IMPORTERS } from "./parsers/firmlists";
 import { upsertFirm } from "./firms_upsert";
-import { buildSeedUrls } from "./firmcrawl/pathProbes";
+import { buildSeedUrls, type FetchedPage } from "./firmcrawl/pathProbes";
 import { extractPeopleFromPage, nameKeyOf, type ExtractedPerson } from "./firmcrawl/personExtract";
 import { guessEmails } from "./firmcrawl/emailGuess";
 import { enqueueLinkedinDiscovery, enqueueCrunchbaseUrl } from "./firmcrawl/profileFollow";
@@ -505,15 +505,18 @@ async function processFirmlist(
       let childSource = "";
       try { childSource = new URL(teamUrl).hostname.toLowerCase(); } catch { /* leave blank */ }
       const childName = `firm_team_crawl:${f.name}`;
+      // Spec contract: firm_team_crawl jobs use target=String(firmId).
+      // The processor resolves the homepage from firms.website/domain.
+      const childTarget = String(upsertRes.firmId);
       await env.DB.prepare(
         `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
          VALUES (?, ?, ?, 'queued', 'firm_team_crawl', ?, ?, ?, ?)`,
-      ).bind(childId, childName, childSource, teamUrl, JSON.stringify({ firmId: upsertRes.firmId, parentJobId: jobId }), now, now).run();
+      ).bind(childId, childName, childSource, childTarget, JSON.stringify({ firmId: upsertRes.firmId, parentJobId: jobId, homepage_hint: teamUrl }), now, now).run();
       await env.LEAD_QUEUE.send({
         jobId: childId,
         kind: "firm_team_crawl",
-        target: teamUrl,
-        config: { firmId: upsertRes.firmId, parentJobId: jobId },
+        target: childTarget,
+        config: { firmId: upsertRes.firmId, parentJobId: jobId, homepage_hint: teamUrl },
       });
       childJobIds.push(childId);
     }
@@ -588,6 +591,67 @@ interface FirmRow {
  * the row firm_people should join to. We pass through the same DNC scrub +
  * resolveIncoming arbitration as the standard scraper insert.
  */
+interface EmailEntry { email: string; verified: 0 | 1; source: string; source_url: string | null; observed_at: string }
+interface SocialEntry { platform: string; url: string; source: string; source_url: string | null; observed_at: string }
+
+function buildEmailsJson(person: ExtractedPerson, guesses: { email: string; pattern: string }[], sourceUrl: string, now: string): EmailEntry[] {
+  const out: EmailEntry[] = [];
+  if (person.email) {
+    out.push({ email: person.email.toLowerCase(), verified: 0, source: "firm_team_page", source_url: sourceUrl, observed_at: now });
+  }
+  for (const g of guesses) {
+    out.push({ email: g.email.toLowerCase(), verified: 0, source: "pattern_guess", source_url: sourceUrl, observed_at: now });
+  }
+  return out;
+}
+
+function buildSocialsJson(person: ExtractedPerson, sourceUrl: string, now: string): SocialEntry[] {
+  const out: SocialEntry[] = [];
+  if (person.linkedin) out.push({ platform: "linkedin", url: person.linkedin, source: "firm_team_page", source_url: sourceUrl, observed_at: now });
+  if (person.twitter) out.push({ platform: "twitter", url: person.twitter, source: "firm_team_page", source_url: sourceUrl, observed_at: now });
+  if (person.crunchbase) out.push({ platform: "crunchbase", url: person.crunchbase, source: "firm_team_page", source_url: sourceUrl, observed_at: now });
+  if (person.personal_site) out.push({ platform: "personal", url: person.personal_site, source: "firm_team_page", source_url: sourceUrl, observed_at: now });
+  return out;
+}
+
+function unionEntries<T extends { email?: string; url?: string }>(existing: string | null, additions: T[], dedupeKey: (e: T) => string): { json: string; changed: boolean } {
+  const cur: T[] = (() => {
+    if (!existing) return [];
+    try { const v = JSON.parse(existing); return Array.isArray(v) ? v : []; } catch { return []; }
+  })();
+  const seen = new Set(cur.map((e) => dedupeKey(e).toLowerCase()));
+  let changed = false;
+  for (const a of additions) {
+    const k = dedupeKey(a).toLowerCase();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    cur.push(a);
+    changed = true;
+  }
+  return { json: JSON.stringify(cur), changed };
+}
+
+async function appendEmailsAndSocials(
+  env: Env,
+  leadId: string,
+  emails: EmailEntry[],
+  socials: SocialEntry[],
+): Promise<void> {
+  if (emails.length === 0 && socials.length === 0) return;
+  const row = await env.DB
+    .prepare("SELECT emails_json, socials_json FROM leads WHERE id = ?")
+    .bind(leadId)
+    .first<{ emails_json: string | null; socials_json: string | null }>();
+  if (!row) return;
+  const e = unionEntries(row.emails_json, emails, (x) => (x as EmailEntry).email);
+  const s = unionEntries(row.socials_json, socials, (x) => (x as SocialEntry).url);
+  if (!e.changed && !s.changed) return;
+  await env.DB
+    .prepare("UPDATE leads SET emails_json = ?, socials_json = ?, updated_at = ? WHERE id = ?")
+    .bind(e.json, s.json, new Date().toISOString(), leadId)
+    .run();
+}
+
 async function upsertCrawlLead(
   env: Env,
   jobId: string,
@@ -597,6 +661,7 @@ async function upsertCrawlLead(
 ): Promise<{ leadId: string; action: "merged" | "inserted" | "needs_review" } | null> {
   const fullName = person.name?.trim();
   if (!fullName) return null;
+  const observedAt = new Date().toISOString();
 
   // Rerun-safety pre-check (Task #17 invariant): if this firm already has a
   // person with the same canonical name+firm key joined via firm_people,
@@ -618,7 +683,18 @@ async function upsertCrawlLead(
         WHERE fp.firm_id = ? AND l.canonical_name_firm_key = ?
         LIMIT 1`,
     ).bind(firm.id, nameFirmKey).first<{ id: string }>();
-    if (prior?.id) return { leadId: prior.id, action: "merged" };
+    if (prior?.id) {
+      // Even on the rerun-bind path, append any newly observed emails/socials
+      // to the existing lead so a partial earlier crawl can be enriched.
+      const guesses = person.email ? [] : guessEmails(fullName, firm.domain);
+      await appendEmailsAndSocials(
+        env,
+        prior.id,
+        buildEmailsJson(person, guesses, sourceUrl, observedAt),
+        buildSocialsJson(person, sourceUrl, observedAt),
+      );
+      return { leadId: prior.id, action: "merged" };
+    }
   }
 
   // Build a synthetic primary email from the strongest pattern guess when
@@ -675,22 +751,27 @@ async function upsertCrawlLead(
   });
 
   if (decision.action === "merged") {
+    // Append structured emails/socials to the surviving lead so guessed
+    // patterns and discovered socials are not lost on dedupe.
+    await appendEmailsAndSocials(
+      env,
+      decision.into,
+      buildEmailsJson(person, guesses, sourceUrl, observedAt),
+      buildSocialsJson(person, sourceUrl, observedAt),
+    );
     return { leadId: decision.into, action: "merged" };
   }
 
   // Insert path (either fresh or borderline-needs-review).
   const id = crypto.randomUUID();
-  const now = new Date().toISOString();
+  const now = observedAt;
   const persona = inferPersona(person.role ?? null);
-  const socials: Array<{ platform: string; url: string }> = [];
-  if (person.linkedin) socials.push({ platform: "linkedin", url: person.linkedin });
-  if (person.twitter) socials.push({ platform: "twitter", url: person.twitter });
-  if (person.crunchbase) socials.push({ platform: "crunchbase", url: person.crunchbase });
+  const emailsJson = buildEmailsJson(person, guesses, sourceUrl, now);
+  const socialsJson = buildSocialsJson(person, sourceUrl, now);
   const meta = JSON.stringify({
     job_id: jobId,
     firm_id: firm.id,
     source_strategy: person.source_strategy,
-    socials,
     avatar_url: person.avatar ?? null,
     email_pattern_guess: !person.email && primaryEmail ? guesses[0]?.pattern ?? null : null,
   });
@@ -744,6 +825,12 @@ async function upsertCrawlLead(
   if (persona.persona_role) (lead as unknown as Record<string, unknown>).persona_role = persona.persona_role;
   if (persona.seniority) (lead as unknown as Record<string, unknown>).seniority = persona.seniority;
   if (dnc.hit) (lead as unknown as Record<string, unknown>).do_not_contact = 1;
+  // Structured emails_json + socials_json (Task #17 spec). Each entry
+  // carries verified/source/source_url so downstream verification can
+  // mark Hunter-confirmed addresses without losing the pattern_guess
+  // provenance.
+  if (emailsJson.length) (lead as unknown as Record<string, unknown>).emails_json = JSON.stringify(emailsJson);
+  if (socialsJson.length) (lead as unknown as Record<string, unknown>).socials_json = JSON.stringify(socialsJson);
 
   const repo = new LeadsRepo(env.DB);
   await repo.insert(lead);
@@ -789,58 +876,48 @@ async function processFirmTeamCrawl(
 ): Promise<{ leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number; result: Record<string, unknown> }> {
   const start = Date.now();
   let leadsFound = 0;
-  let pagesFetched = 0;
   let pagesBlocked = 0;
   let captchaHits = 0;
 
-  const firmIdRaw = config?.firmId;
-  const firmId = typeof firmIdRaw === "number" ? firmIdRaw : Number(firmIdRaw);
-  if (!Number.isFinite(firmId)) {
-    throw new Error("firm_team_crawl:missing_firm_id");
-  }
+  // Spec contract: target = String(firmId). Fall back to config.firmId for
+  // backward compat with any legacy queued jobs.
+  const targetNum = Number(target);
+  const firmIdRaw = Number.isFinite(targetNum) ? targetNum : Number(config?.firmId);
+  if (!Number.isFinite(firmIdRaw)) throw new Error("firm_team_crawl:missing_firm_id");
+  const firmId = firmIdRaw;
   const firm = await loadFirm(env, firmId);
   if (!firm) throw new Error(`firm_team_crawl:firm_not_found:${firmId}`);
 
   const homepage = (() => {
-    if (firm.website) {
-      try { return new URL(firm.website).toString(); } catch { /* fall through */ }
+    const hint = typeof config?.homepage_hint === "string" ? (config?.homepage_hint as string) : null;
+    for (const cand of [firm.website, hint, firm.domain ? `https://${firm.domain}` : null]) {
+      if (!cand) continue;
+      try { return new URL(cand).toString(); } catch { /* try next */ }
     }
-    if (firm.domain) {
-      try { return new URL(`https://${firm.domain}`).toString(); } catch { /* fall through */ }
-    }
-    try { return new URL(target).toString(); } catch { return target; }
+    throw new Error(`firm_team_crawl:no_homepage:${firmId}`);
   })();
 
-  // Build the candidate seed set (sitemap + homepage anchors + curated paths).
-  const seeds = await buildSeedUrls(env, homepage, jobId);
-  const candidates = seeds.candidates.slice(0, TEAM_CRAWL_PAGE_CAP);
+  // Build the candidate seed set. buildSeedUrls actively probes the curated
+  // TEAM_PATHS (Tier-0 only; 404 does not escalate) and returns up to
+  // TEAM_CRAWL_PAGE_CAP pages already fetched, so we don't re-fetch here.
+  const seeds = await buildSeedUrls(env, homepage, jobId, TEAM_CRAWL_PAGE_CAP);
+  const fetchedPages: FetchedPage[] = seeds.pages;
+  const pagesFetched = fetchedPages.length;
+  // pagesBlocked = probes that didn't land in pages (404, robots, etc.)
+  pagesBlocked = Math.max(0, seeds.probesSpent - pagesFetched);
 
   // Cross-page dedupe — we only count a person once across the full crawl.
   const peopleByKey = new Map<string, ExtractedPerson & { source_url: string }>();
-  let pagesTried = 0;
-  let pagesParsed = 0;
-
-  for (const url of candidates) {
+  for (const pg of fetchedPages) {
     if (await isCancelled(env, jobId)) break;
-    pagesTried += 1;
-    const res = await fetchPage(env, url, { jobId, minIntervalMs: 2000 });
-    if (!res.ok) {
-      pagesBlocked += 1;
-      if (res.blockReason === "captcha") captchaHits += 1;
-      // 404s on a curated path are expected and silent. Other failures are
-      // logged via fetch_log already.
-      continue;
-    }
-    pagesFetched += 1;
-    pagesParsed += 1;
-    await archiveRawHtml(env, url, res.html);
-    const people = extractPeopleFromPage(res.html, res.url || url, firm.domain);
+    await archiveRawHtml(env, pg.url, pg.html);
+    const people = extractPeopleFromPage(pg.html, pg.url, firm.domain);
     for (const p of people) {
       const k = nameKeyOf(p.name);
       if (!k) continue;
       const cur = peopleByKey.get(k);
       if (!cur) {
-        peopleByKey.set(k, { ...p, source_url: res.url || url });
+        peopleByKey.set(k, { ...p, source_url: pg.url });
         continue;
       }
       cur.role ??= p.role;
@@ -862,10 +939,12 @@ async function processFirmTeamCrawl(
   for (const person of peopleByKey.values()) {
     if (await isCancelled(env, jobId)) break;
     // Acceptance criterion: every persisted person must have at least one
-    // contact channel — verified email, LinkedIn, Twitter, or (when the
-    // firm has a usable domain) a pattern-guessed email.
-    const hasGuessableEmail = !!firm.domain && /^[a-z0-9.\-]+\.[a-z]{2,}$/.test(firm.domain.toLowerCase().replace(/^www\./, ""));
-    if (!person.email && !person.linkedin && !person.twitter && !hasGuessableEmail) {
+    // contact channel — verified email, LinkedIn, Twitter, or a successful
+    // pattern-guessed email. We actually run guessEmails here so a valid
+    // domain that yields zero guesses (e.g., single-token names) does NOT
+    // satisfy the channel guard.
+    const guessProbe = person.email ? [] : guessEmails(person.name, firm.domain);
+    if (!person.email && !person.linkedin && !person.twitter && guessProbe.length === 0) {
       skippedNoChannel += 1;
       continue;
     }
@@ -910,15 +989,15 @@ async function processFirmTeamCrawl(
     kind: "firm_team_crawl",
     firm_id: firm.id,
     firm_name: firm.name,
-    pages_tried: pagesTried,
-    pages_parsed: pagesParsed,
+    pages_tried: seeds.probesSpent,
+    pages_parsed: pagesFetched,
     people_found: leadsFound,
     emails_found: emailsFound,
     skipped_no_channel: skippedNoChannel,
     follow_linkedin: followLinkedin,
     follow_crunchbase: followCrunchbase,
     seeds_probed: seeds.probesSpent,
-    seeds_total: seeds.candidates.length,
+    seeds_total: seeds.candidatesConsidered,
   };
   // fetch_log audit row mirrors the firmlist processor's pattern; the
   // jobs.result_json write happens via runJob → markCompleted (which now

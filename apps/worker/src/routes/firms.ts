@@ -294,17 +294,14 @@ firms.post("/:id/crawl-team", async (c) => {
     .bind(firmId)
     .first<{ id: number; name: string; website: string | null; domain: string | null }>();
   if (!firm) return c.json({ error: "not_found" }, 404);
-  // Synthesize a homepage URL from website or https://{domain}. We refuse
-  // to enqueue when neither is present — there's nothing to crawl.
-  let target: string | null = null;
-  if (firm.website) {
-    try { target = new URL(firm.website).toString(); } catch { target = null; }
+  // Refuse when there is nothing to crawl. The processor itself synthesizes
+  // the homepage from website/domain — we just gate enqueue here.
+  if (!firm.website && !firm.domain) {
+    return c.json({ error: "bad_request", message: "firm has no website or domain" }, 400);
   }
-  if (!target && firm.domain) {
-    try { target = new URL(`https://${firm.domain}`).toString(); } catch { target = null; }
-  }
-  if (!target) return c.json({ error: "bad_request", message: "firm has no website or domain" }, 400);
 
+  // Spec contract: firm_team_crawl uses target=String(firmId).
+  const target = String(firm.id);
   const jobId = crypto.randomUUID();
   const now = new Date().toISOString();
   const source = firm.domain ?? "";
