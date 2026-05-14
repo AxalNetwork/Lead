@@ -130,6 +130,7 @@
   });
 
   document.addEventListener("DOMContentLoaded", function () {
+    if (!document.getElementById("ads-icp-list")) return;
     loadList();
     var form = document.getElementById("ads-icp-form");
     if (form) form.addEventListener("submit", saveIcp);

@@ -88,6 +88,7 @@
   });
 
   document.addEventListener("DOMContentLoaded", function () {
+    if (!document.getElementById("ads-camp-list")) return;
     loadList();
     var qs = new URL(window.location.href).searchParams;
     var id = qs.get("id");

@@ -77,5 +77,8 @@
     catch (err) { alert("Failed: " + err.message); }
   });
 
-  document.addEventListener("DOMContentLoaded", function () { loadDnc(); loadPii(); });
+  document.addEventListener("DOMContentLoaded", function () {
+    if (!document.getElementById("ads-dnc-list")) return;
+    loadDnc(); loadPii();
+  });
 })();
