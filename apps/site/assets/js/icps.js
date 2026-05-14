@@ -12,7 +12,7 @@
   async function loadList() {
     var c = document.getElementById("ads-icp-list");
     try {
-      var data = await api("/api/icp/");
+      var data = await api("/api/icp");
       var items = (data && data.items) || [];
       if (!items.length) { c.innerHTML = '<div class="ads-empty">No ICPs yet — click + New ICP.</div>'; return; }
       var html = '<table class="ads-table ads-table--clickable"><thead><tr><th>Name</th><th>Description</th><th>Sectors</th><th>Geographies</th><th>Updated</th><th></th></tr></thead><tbody>';
@@ -80,7 +80,7 @@
     showMsg(form, "Saving…");
     try {
       if (id) await api("/api/icp/" + encodeURIComponent(id), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      else await api("/api/icp/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      else await api("/api/icp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       showMsg(form, "Saved.", "ok");
       document.getElementById("ads-icp-editor").style.display = "none";
       loadList();
@@ -123,7 +123,7 @@
       var name = prompt("Campaign name?");
       if (!name) return;
       try {
-        var c = await api("/api/campaigns/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name, icp_id: CURRENT_ID, channel: "email" }) });
+        var c = await api("/api/campaigns", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name, icp_id: CURRENT_ID, channel: "email" }) });
         window.location.href = "/dashboard/campaigns/?id=" + encodeURIComponent(c.id);
       } catch (err) { alert("Failed: " + err.message); }
     }
