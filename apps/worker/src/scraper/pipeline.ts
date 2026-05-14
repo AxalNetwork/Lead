@@ -4,6 +4,21 @@ import { selectParser } from "./parsers";
 import { parsePdf } from "./parsers/pdf";
 import { extractDomain } from "./normalize";
 import { discoverUrls } from "./fallbacks/sitemap";
+import { tosBlockedReason } from "./tos";
+
+/**
+ * Filter helper used by every enqueue site so ToS-blocked domains never even
+ * get a job row. The fetcher also refuses these at request time as a second
+ * line of defence.
+ */
+function isEnqueueable(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return tosBlockedReason(host) === null;
+  } catch {
+    return false;
+  }
+}
 import { LeadsRepo } from "../db/leads.repo";
 import type { Lead } from "../db/leads.types";
 import { buildCanonicalKeys, recordReview, resolveIncoming } from "../dedupe";
@@ -219,6 +234,7 @@ async function seedDomainDiscovery(env: Env, parentJobId: string, seedUrl: strin
   const now = new Date().toISOString();
   for (const childUrl of candidates) {
     if (childUrl === seedUrl) continue;
+    if (!isEnqueueable(childUrl)) continue;
     const childId = crypto.randomUUID();
     await env.DB.prepare(
       `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
@@ -243,8 +259,9 @@ async function processSingleUrl(
 
   if (await isCancelled(env, jobId)) return { leadsFound, pagesFetched, pagesBlocked, captchaHits, costMs };
 
-  // PDF path: sniff by URL extension first (cheap), then by content-type. PDFs
-  // are fetched as bytes and parsed via pdfjs-dist instead of the HTML parsers.
+  // PDF path: sniff by URL extension first (cheap). For URLs without a `.pdf`
+  // suffix we still fall through to fetchPage; if the fetched body starts with
+  // the PDF magic bytes (`%PDF-`) we re-fetch as bytes and route to parsePdf.
   const looksLikePdf = /\.pdf(\?|#|$)/i.test(url);
   if (looksLikePdf) {
     const blob = await fetchBytes(env, url, { jobId });
@@ -274,6 +291,24 @@ async function processSingleUrl(
   }
 
   pagesFetched += 1;
+
+  // Magic-byte sniff: some sites serve PDFs from URLs without a `.pdf` suffix.
+  // The HTML fetcher returns the binary as text; if it starts with `%PDF-` we
+  // re-fetch as bytes and dispatch to the PDF parser instead.
+  if (fetched.html.startsWith("%PDF-")) {
+    const blob = await fetchBytes(env, url, { jobId });
+    if (blob.ok) {
+      await touchSource(env, url);
+      const pdfLeads = await parsePdf(blob.bytes, url);
+      for (const lead of pdfLeads) {
+        if (await isCancelled(env, jobId)) break;
+        const id = await insertLead(env, lead, "pdf", jobId, fetched.fetched_from);
+        if (id) leadsFound += 1;
+      }
+      return { leadsFound, pagesFetched, pagesBlocked, captchaHits, costMs: costMs + blob.durationMs };
+    }
+  }
+
   await archiveRawHtml(env, url, fetched.html);
   const isNewDomain = await touchSource(env, url);
 
@@ -335,6 +370,7 @@ async function processLinktree(
 
     const outbound = Array.isArray(lead.meta?.outbound) ? (lead.meta!.outbound as string[]) : [];
     for (const childUrl of outbound.slice(0, 50)) {
+      if (!isEnqueueable(childUrl)) continue;
       const childId = crypto.randomUUID();
       const now = new Date().toISOString();
       await env.DB.prepare(
