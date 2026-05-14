@@ -66,8 +66,24 @@ export default {
         await runJob(body as JobMessage, env);
         msg.ack();
       } catch (e) {
-        console.error("Queue handler error", (e as Error).message);
-        msg.retry();
+        const message = (e as Error).message ?? "";
+        // Permanent failures already wrote status='failed' on the job row;
+        // only retry on transient signals so we don't loop on dead URLs.
+        const transient =
+          message.includes("status_429") ||
+          message.includes("status_503") ||
+          message.includes("status_502") ||
+          message.includes("status_504") ||
+          message.includes("fetch_error") ||
+          message.includes("D1_ERROR") ||
+          message.includes("Network connection lost");
+        if (transient) {
+          console.warn("Queue retry (transient)", msg.id, message);
+          msg.retry({ delaySeconds: 30 });
+        } else {
+          console.error("Queue ack (permanent)", msg.id, message);
+          msg.ack();
+        }
       }
     }
   },
