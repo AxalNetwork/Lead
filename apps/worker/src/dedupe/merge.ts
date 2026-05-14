@@ -152,20 +152,28 @@ export async function mergeIntoExisting(
   }
 
   // Bump canonical keys if any participating field moved.
+  const keys = await import("./keys");
+  const finalName = ("name" in patch ? (patch.name as string | null) : existing.name) ?? null;
+  const finalOrg = ("org" in patch ? (patch.org as string | null) : existing.org) ?? null;
+  const finalCity = ("city" in patch ? (patch.city as string | null) : existing.city ?? null) ?? null;
+
   if ("email" in patch) {
-    patch.canonical_email_key = await import("./keys").then((m) =>
-      m.canonicalEmailKey((patch.email as string) ?? existing.email),
-    );
+    patch.canonical_email_key = keys.canonicalEmailKey((patch.email as string) ?? existing.email);
   }
   if ("phone" in patch) {
-    patch.canonical_phone_key = await import("./keys").then((m) =>
-      m.canonicalPhoneKey((patch.phone as string) ?? existing.phone ?? null),
-    );
+    patch.canonical_phone_key = keys.canonicalPhoneKey((patch.phone as string) ?? existing.phone ?? null);
   }
   if ("linkedin_url" in patch) {
-    patch.canonical_linkedin_key = await import("./keys").then((m) =>
-      m.canonicalLinkedinKey((patch.linkedin_url as string) ?? existing.linkedin_url ?? null),
+    patch.canonical_linkedin_key = keys.canonicalLinkedinKey(
+      (patch.linkedin_url as string) ?? existing.linkedin_url ?? null,
     );
+  }
+  // name+firm / name+city composite keys move whenever any participant changes.
+  if ("name" in patch || "org" in patch) {
+    patch.canonical_name_firm_key = keys.canonicalNameFirmKey(finalName, finalOrg);
+  }
+  if ("name" in patch || "city" in patch) {
+    patch.canonical_name_city_key = keys.canonicalNameCityKey(finalName, finalCity);
   }
 
   return repo.updateLead(existing.id, patch, { ...ctx, source: ctx.source || "dedupe_merge" });

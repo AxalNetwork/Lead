@@ -20,7 +20,7 @@ const HISTORY_FIELDS: ReadonlyArray<keyof Lead> = [
   "net_worth_band", "aum_usd", "fund_size_usd", "last_round_usd", "salary_band",
   "companies_json", "board_seats_json", "awards_json", "exits_json",
   "priority", "owner_email", "next_action_at", "tags_json", "sector_focus_json",
-  "status", "verified", "flagged",
+  "status", "verified", "flagged", "approved_at", "approved_by",
   "merged_into", "canonical_email_key", "canonical_phone_key",
   "canonical_linkedin_key", "canonical_name_firm_key", "canonical_name_city_key",
   "provider", "provider_score",
