@@ -13,6 +13,7 @@ import { buildSeedUrls, type FetchedPage } from "./firmcrawl/pathProbes";
 import { extractPeopleFromPage, nameKeyOf, type ExtractedPerson } from "./firmcrawl/personExtract";
 import { guessEmails } from "./firmcrawl/emailGuess";
 import { enqueueLinkedinDiscovery, enqueueCrunchbaseUrl } from "./firmcrawl/profileFollow";
+import { dispatchProfile } from "./parsers/profile";
 
 /**
  * Filter helper used by every enqueue site so ToS-blocked domains never even
@@ -287,10 +288,158 @@ async function seedDomainDiscovery(env: Env, parentJobId: string, seedUrl: strin
   }
 }
 
+// ----------------------------------------------------------------------------
+// Task #18: profile-aware URL dispatcher. Owns its own fetching strategy for
+// LinkedIn (no fetch — search snippet only), Twitter (Nitter mirror), GitHub
+// (REST API), NFX (gated source — reject), Crunchbase person (__NEXT_DATA__),
+// Crunchbase organization (→ FirmCandidate), and personal site (Task #17
+// 8-strategy extractor + /about /contact /now probes).
+//
+// Fanout depth is tracked on the job's config_json. The first url-job is
+// `depth=0`; outbound socials/personal links it surfaces are enqueued as
+// `depth=1` children. We refuse to enqueue when `depth >= 1` so a single
+// profile cannot trigger an unbounded crawl.
+// ----------------------------------------------------------------------------
+
+const PROFILE_FANOUT_MAX_DEPTH = 1;
+
+async function fanoutProfileUrls(
+  env: Env,
+  parentJobId: string,
+  parentUrl: string,
+  outbound: string[],
+  parentDepth: number,
+): Promise<number> {
+  if (parentDepth >= PROFILE_FANOUT_MAX_DEPTH) return 0;
+  let enqueued = 0;
+  const seen = new Set<string>([parentUrl.toLowerCase()]);
+  for (const childUrl of outbound) {
+    const norm = childUrl.toLowerCase();
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    if (!isEnqueueable(childUrl)) continue;
+    const childId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const cfg = JSON.stringify({ parent: parentJobId, depth: parentDepth + 1 });
+    await env.DB.prepare(
+      `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
+       VALUES (?, ?, ?, 'queued', 'url', ?, ?, ?, ?)`,
+    ).bind(childId, `profile_fanout:${childUrl}`, extractDomain(childUrl), childUrl, cfg, now, now).run();
+    await env.LEAD_QUEUE.send({
+      jobId: childId, kind: "url", target: childUrl,
+      config: { parent: parentJobId, depth: parentDepth + 1 },
+    });
+    enqueued += 1;
+  }
+  return enqueued;
+}
+
+async function processProfileUrl(
+  env: Env,
+  jobId: string,
+  url: string,
+  config?: Record<string, unknown>,
+): Promise<{ leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number }> {
+  if (await isCancelled(env, jobId)) {
+    return { leadsFound: 0, pagesFetched: 0, pagesBlocked: 0, captchaHits: 0, costMs: 0 };
+  }
+  const depth = Number((config?.depth as number | string | undefined) ?? 0) || 0;
+
+  const dispatch = await dispatchProfile(env, url, jobId);
+
+  // Archive the actually-fetched HTML when applicable. Personal-site
+  // dispatch may have followed `/about` `/contact` `/now` probes — each
+  // gets its own archival + sources row so the dashboard accounts for
+  // every byte the worker actually pulled. LinkedIn/GitHub still touch
+  // the lead's source domain so it shows up in cost roll-ups even though
+  // there's no HTML to store.
+  if (dispatch.fetched && dispatch.fetched.ok && dispatch.fetched.html) {
+    await archiveRawHtml(env, dispatch.fetched.url || url, dispatch.fetched.html);
+    await touchSource(env, dispatch.fetched.url || url);
+  } else if (dispatch.kind === "linkedin" || dispatch.kind === "github") {
+    await touchSource(env, url);
+  }
+  // Personal-site probes (`/about` `/contact` `/now`) live in
+  // `dispatch.extraFetched`. Archive each + record a sources row so the
+  // dashboard accounts for every page the worker actually pulled.
+  for (const extra of dispatch.extraFetched ?? []) {
+    if (extra.result.ok && extra.result.html) {
+      await archiveRawHtml(env, extra.result.url || extra.url, extra.result.html);
+      await touchSource(env, extra.result.url || extra.url);
+    }
+  }
+
+  // Crunchbase organization → upsert into `firms` instead of `leads`.
+  // We deliberately do NOT swallow upsertFirm errors: a Crunchbase-org URL
+  // exists for the sole purpose of producing a firm row, so an upsert
+  // failure means the job did not achieve its purpose and should fail
+  // loudly rather than report a misleading "0 leads, success".
+  let firmsCreated = 0;
+  if (dispatch.firmCandidate) {
+    const r = await upsertFirm(env, dispatch.firmCandidate, "profile/crunchbase-org");
+    if (r.action === "created" || r.action === "updated") firmsCreated += 1;
+  }
+
+  let leadsFound = 0;
+  for (const lead of dispatch.leads) {
+    if (await isCancelled(env, jobId)) break;
+    // Per-lead provenance: personal probes pass `_fetched_from` via meta so
+    // a live `/about` lead is not mislabeled `wayback` because the primary
+    // page came from the archive (or vice versa). Strip the hint before
+    // inserting so it doesn't leak into the persisted meta_json.
+    const metaHint = lead.meta as { _fetched_from?: "live" | "wayback" } | undefined;
+    const perLeadFrom = metaHint?._fetched_from;
+    const fallbackFrom: "live" | "wayback" =
+      dispatch.fetched && dispatch.fetched.fetched_from === "wayback" ? "wayback" : "live";
+    const fetchedFrom = perLeadFrom ?? fallbackFrom;
+    if (lead.meta && "_fetched_from" in lead.meta) delete (lead.meta as Record<string, unknown>)._fetched_from;
+    const id = await insertLead(env, lead, `profile/${dispatch.kind}`, jobId, fetchedFrom);
+    if (id) leadsFound += 1;
+  }
+
+  // Depth-1 fanout: enqueue any outbound socials/personal links. The cap
+  // is enforced inside fanoutProfileUrls.
+  let fanoutEnqueued = 0;
+  if (dispatch.outboundUrls.length > 0) {
+    try {
+      fanoutEnqueued = await fanoutProfileUrls(env, jobId, url, dispatch.outboundUrls, depth);
+    } catch (e) {
+      console.warn("profile fanout failed", (e as Error).message);
+    }
+  }
+
+  // Stash a small per-job summary so /api/jobs/:id renders something useful.
+  await env.DB.prepare(
+    `INSERT INTO fetch_log (job_id, host, url, tier, status, bytes, block_reason, duration_ms, cost_usd, created_at)
+     VALUES (?, ?, ?, 0, 200, 0, ?, ?, 0, ?)`,
+  ).bind(
+    jobId, safeHost(url), url,
+    JSON.stringify({
+      profile_kind: dispatch.kind,
+      depth,
+      leads: leadsFound,
+      firms_created: firmsCreated,
+      outbound_total: dispatch.outboundUrls.length,
+      fanout_enqueued: fanoutEnqueued,
+    }),
+    dispatch.costMs,
+    new Date().toISOString(),
+  ).run();
+
+  return {
+    leadsFound: leadsFound + firmsCreated,
+    pagesFetched: dispatch.pagesFetched,
+    pagesBlocked: dispatch.pagesBlocked,
+    captchaHits: dispatch.captchaHits,
+    costMs: dispatch.costMs,
+  };
+}
+
 async function processSingleUrl(
   env: Env,
   jobId: string,
   url: string,
+  config?: Record<string, unknown>,
 ): Promise<{ leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number }> {
   let leadsFound = 0;
   let pagesFetched = 0;
@@ -299,6 +448,17 @@ async function processSingleUrl(
   let costMs = 0;
 
   if (await isCancelled(env, jobId)) return { leadsFound, pagesFetched, pagesBlocked, captchaHits, costMs };
+
+  // Task #18: profile-aware dispatcher. PDFs always take the bytes path
+  // below; everything else routes through `selectParser` and, when the
+  // parser registry returns "profile", through the URL-aware async
+  // dispatcher (which handles LinkedIn snippets without fetching, Twitter
+  // → Nitter rewrite, GitHub REST API, NFX rejection, Crunchbase org →
+  // firm upsert, and personal-site multi-page probing).
+  const looksLikePdfEarly = /\.pdf(\?|#|$)/i.test(url);
+  if (!looksLikePdfEarly && selectParser(url).name === "profile") {
+    return processProfileUrl(env, jobId, url, config);
+  }
 
   // PDF path: sniff by URL extension first (cheap). For URLs without a `.pdf`
   // suffix we still fall through to fetchPage; if the fetched body starts with
@@ -1070,7 +1230,7 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
     } else if (msg.kind === "firm_team_crawl") {
       totals = await processFirmTeamCrawl(env, jobId, msg.target, msg.config);
     } else {
-      totals = await processSingleUrl(env, jobId, msg.target);
+      totals = await processSingleUrl(env, jobId, msg.target, msg.config);
     }
 
     if (await isCancelled(env, jobId)) {

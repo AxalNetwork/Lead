@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "test-dist",
+    "rootDir": "src",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": [
+    "src/scraper/parsers/profile.ts",
+    "src/scraper/parsers/profile/**/*.ts",
+    "src/scraper/normalize.ts",
+    "src/scraper/html.ts",
+    "src/scraper/firmcrawl/personExtract.ts",
+    "src/scraper/parsers/firmlists/types.ts",
+    "src/types.ts"
+  ]
+}
