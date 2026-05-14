@@ -108,6 +108,7 @@ export async function mergeIntoExisting(
   existing: Lead,
   incoming: IncomingLead,
   ctx: UpdateContext,
+  flags: { dncHit?: boolean } = {},
 ): Promise<number> {
   const repo = new LeadsRepo(db);
 
@@ -174,6 +175,16 @@ export async function mergeIntoExisting(
   }
   if ("name" in patch || "city" in patch) {
     patch.canonical_name_city_key = keys.canonicalNameCityKey(finalName, finalCity);
+  }
+
+  // GDPR/CAN-SPAM: if the incoming evidence was DNC-scrubbed, force the
+  // surviving lead onto the do-not-contact list and null any matching PII
+  // fields so the merge can't reintroduce suppressed contact info.
+  if (flags.dncHit) {
+    (patch as unknown as Record<string, unknown>).do_not_contact = 1;
+    if (existing.email && !("email" in patch)) (patch as unknown as Record<string, unknown>).email = null;
+    if (existing.phone && !("phone" in patch)) (patch as unknown as Record<string, unknown>).phone = null;
+    if (existing.linkedin_url && !("linkedin_url" in patch)) (patch as unknown as Record<string, unknown>).linkedin_url = null;
   }
 
   return repo.updateLead(existing.id, patch, { ...ctx, source: ctx.source || "dedupe_merge" });

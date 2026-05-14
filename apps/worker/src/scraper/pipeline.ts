@@ -163,7 +163,7 @@ async function insertLead(
     incoming.github_url = dnc.cleaned.github_url;
   }
 
-  const decision = await resolveIncoming(env.DB, incoming, { jobId, provider: parserName });
+  const decision = await resolveIncoming(env.DB, incoming, { jobId, provider: parserName, dncHit: dnc.hit });
 
   if (decision.action === "merged") {
     return null;

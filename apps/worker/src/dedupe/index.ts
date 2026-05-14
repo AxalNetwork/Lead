@@ -34,7 +34,7 @@ export function buildCanonicalKeys(input: MatchInput) {
 export async function resolveIncoming(
   db: D1Database,
   incoming: IncomingLead,
-  options: { jobId: string; provider: string },
+  options: { jobId: string; provider: string; dncHit?: boolean },
 ): Promise<Decision> {
   const match = await findMatch(db, {
     email: incoming.email,
@@ -52,7 +52,7 @@ export async function resolveIncoming(
       source: `scraper:${options.provider}`,
       evidence_url: incoming.source_url ?? null,
       changed_by: `job:${options.jobId}`,
-    });
+    }, { dncHit: !!options.dncHit });
     return { action: "merged", into: match.candidate.id, changedFields: changed };
   }
 

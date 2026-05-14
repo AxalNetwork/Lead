@@ -124,6 +124,7 @@ export async function matchIcp(
               aum_usd, fund_size_usd, do_not_contact, tags_json, status, meta_json
          FROM leads
         WHERE ${wheres.join(" AND ")}
+        ORDER BY id
         LIMIT 5000`,
     )
     .bind(...binds)
@@ -139,7 +140,7 @@ export async function matchIcp(
     if (opts.min_score && m.score < opts.min_score) continue;
     items.push({ lead_id: r.id, name: r.name, org: r.org, email: r.email, score: m.score, reasons: m.reasons });
   }
-  items.sort((a, b) => b.score - a.score);
+  items.sort((a, b) => (b.score - a.score) || (a.lead_id < b.lead_id ? -1 : a.lead_id > b.lead_id ? 1 : 0));
   return { items: items.slice(0, opts.limit ?? 200), total: items.length };
 }
 
