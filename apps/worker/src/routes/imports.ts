@@ -106,17 +106,116 @@ imports.post("/nfx/paste", async (c) => {
 });
 
 /**
- * GET /api/imports — recent firmlist jobs with summary stats.
+ * GET /api/imports — firmlist parent-job history with per-importer breakdown.
+ *
+ * Joins each `kind='firmlist'` job to its summary fetch_log row (the one
+ * `processFirmlist` writes with `tier=0, status=200, cost_usd=0` and the
+ * counts JSON in `block_reason`). Returns:
+ *   - items[]: per-job rows {jobId, importer, target, status, total_seen,
+ *              created, updated, unchanged, child_jobs, errors[], started_at,
+ *              finished_at}
+ *   - by_importer{}: rolled-up totals per importer
+ *   - totals{}: grand totals across the returned window
  */
 imports.get("/", async (c) => {
   const limit = Math.min(Number(c.req.query("limit") ?? "50"), 200);
-  const r = await c.env.DB.prepare(
-    `SELECT id, name, source, kind, target, status, leads_found, pages_fetched,
-            started_at, finished_at, cancelled_at, created_at, config_json
-       FROM jobs
-      WHERE kind IN ('firmlist','firm_team_crawl')
-      ORDER BY started_at DESC
+  const rows = await c.env.DB.prepare(
+    `SELECT j.id, j.name, j.source, j.target, j.status, j.config_json,
+            j.leads_found, j.pages_fetched, j.started_at, j.finished_at,
+            j.cancelled_at, j.created_at,
+            (SELECT block_reason FROM fetch_log
+              WHERE job_id = j.id AND tier = 0 AND status = 200
+              ORDER BY id DESC LIMIT 1) AS summary_json
+       FROM jobs j
+      WHERE j.kind = 'firmlist'
+      ORDER BY j.started_at DESC
       LIMIT ?`,
-  ).bind(limit).all();
-  return c.json({ items: r.results ?? [] });
+  ).bind(limit).all<Record<string, unknown>>();
+
+  const items: Array<Record<string, unknown>> = [];
+  const byImporter = new Map<string, { jobs: number; total_seen: number; created: number; updated: number; unchanged: number; child_jobs: number; errors: number }>();
+  const totals = { jobs: 0, total_seen: 0, created: 0, updated: 0, unchanged: 0, child_jobs: 0, errors: 0 };
+
+  for (const r of rows.results ?? []) {
+    const summary = parseSummary(r.summary_json as string | null);
+    const cfg = parseJsonObj(r.config_json as string | null);
+    const importer = summary.importer ?? (typeof cfg.importer === "string" ? cfg.importer : "unknown");
+    items.push({
+      jobId: r.id,
+      name: r.name,
+      target: r.target,
+      source: r.source,
+      status: r.status,
+      importer,
+      total_seen: summary.total_seen,
+      created: summary.created,
+      updated: summary.updated,
+      unchanged: summary.unchanged,
+      child_jobs: summary.child_jobs,
+      errors: summary.errors,
+      leads_found: r.leads_found,
+      started_at: r.started_at,
+      finished_at: r.finished_at,
+      cancelled_at: r.cancelled_at,
+    });
+    let agg = byImporter.get(importer);
+    if (!agg) {
+      agg = { jobs: 0, total_seen: 0, created: 0, updated: 0, unchanged: 0, child_jobs: 0, errors: 0 };
+      byImporter.set(importer, agg);
+    }
+    agg.jobs += 1;
+    agg.total_seen += summary.total_seen;
+    agg.created += summary.created;
+    agg.updated += summary.updated;
+    agg.unchanged += summary.unchanged;
+    agg.child_jobs += summary.child_jobs;
+    agg.errors += summary.errors.length;
+    totals.jobs += 1;
+    totals.total_seen += summary.total_seen;
+    totals.created += summary.created;
+    totals.updated += summary.updated;
+    totals.unchanged += summary.unchanged;
+    totals.child_jobs += summary.child_jobs;
+    totals.errors += summary.errors.length;
+  }
+  const by_importer: Record<string, unknown> = {};
+  for (const [k, v] of byImporter) by_importer[k] = v;
+  return c.json({ items, by_importer, totals });
 });
+
+interface ParsedSummary {
+  importer: string | null;
+  total_seen: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  child_jobs: number;
+  errors: string[];
+}
+
+function parseSummary(raw: string | null): ParsedSummary {
+  const empty: ParsedSummary = { importer: null, total_seen: 0, created: 0, updated: 0, unchanged: 0, child_jobs: 0, errors: [] };
+  if (!raw) return empty;
+  try {
+    const v = JSON.parse(raw) as Record<string, unknown>;
+    return {
+      importer: typeof v.importer === "string" ? v.importer : null,
+      total_seen: Number(v.total_seen ?? 0) || 0,
+      created: Number(v.created ?? 0) || 0,
+      updated: Number(v.updated ?? 0) || 0,
+      unchanged: Number(v.unchanged ?? 0) || 0,
+      child_jobs: Number(v.child_jobs ?? 0) || 0,
+      errors: Array.isArray(v.errors) ? (v.errors as unknown[]).map((e) => String(e)) : [],
+    };
+  } catch {
+    return empty;
+  }
+}
+
+function parseJsonObj(raw: string | null): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const v = JSON.parse(raw);
+    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  } catch { return {}; }
+}
