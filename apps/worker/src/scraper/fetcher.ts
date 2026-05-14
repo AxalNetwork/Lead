@@ -152,7 +152,7 @@ function buildHeaders(): Record<string, string> {
   };
 }
 
-async function tier0Direct(url: string, opts: FetchOptions): Promise<FetchResult> {
+async function tier0Direct(_env: Env, url: string, opts: FetchOptions): Promise<FetchResult> {
   const start = Date.now();
   const ctl = new AbortController();
   const tm = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 20_000);
@@ -393,6 +393,16 @@ function blockResult(url: string, tier: FetchTier, reason: string): FetchResult 
 
 function shouldEscalate(reason: string | null): boolean {
   if (!reason) return false;
+  // "Tier unavailable / not configured" reasons must always escalate so that a
+  // missing browser binding or unset proxy doesn't short-circuit the chain.
+  if (
+    reason === "browser_binding_unavailable" ||
+    reason === "puppeteer_module_missing" ||
+    reason === "proxy_not_configured" ||
+    reason === "scraping_api_not_configured"
+  ) {
+    return true;
+  }
   return (
     reason === "captcha" ||
     reason === "too_small" ||
@@ -404,7 +414,10 @@ function shouldEscalate(reason: string | null): boolean {
     reason === "status_521" ||
     reason === "status_522" ||
     reason === "status_524" ||
-    reason.startsWith("fetch_error")
+    reason.startsWith("fetch_error") ||
+    reason.startsWith("proxy_error") ||
+    reason.startsWith("scraping_api_error") ||
+    reason.startsWith("browser_error")
   );
 }
 
@@ -446,7 +459,7 @@ export async function fetchPage(env: Env, url: string, opts: FetchOptions = {}):
 
   const tiers: Array<(env: Env, url: string, opts: FetchOptions) => Promise<FetchResult>> = opts.forceBrowser
     ? [tier1Browser, tier2Proxy, tier3ScrapingApi]
-    : [tier0Direct as unknown as typeof tier1Browser, tier1Browser, tier2Proxy, tier3ScrapingApi];
+    : [tier0Direct, tier1Browser, tier2Proxy, tier3ScrapingApi];
 
   let last: FetchResult | null = null;
   for (const fn of tiers) {
