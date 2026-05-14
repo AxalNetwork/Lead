@@ -12,6 +12,11 @@ import { dedupe } from "./routes/dedupe";
 import { scrapers } from "./routes/scrapers";
 import { discover } from "./routes/discover";
 import { enrichment, leadsEnrichActions } from "./routes/enrichment";
+import { taxonomies } from "./routes/taxonomies";
+import { icp } from "./routes/icp";
+import { compliance, gdpr, leadsDncActions } from "./routes/compliance";
+import { campaigns, campaignsWebhook, leadsCampaignActions } from "./routes/campaigns";
+import { piiAuditOnLeadGet } from "./middleware/pii_audit";
 import { accessGuard } from "./middleware/access";
 import { runJob } from "./scraper/pipeline";
 import { scheduled as scheduledHandler } from "./scheduled";
@@ -38,7 +43,12 @@ api.use(
 );
 
 api.route("/health", health);
+// Public webhook (HMAC-signed) — must be mounted *before* accessGuard so
+// marketing tools can post events without a Cloudflare Access cookie.
+api.route("/api/campaigns", campaignsWebhook);
 api.use("/api/*", accessGuard);
+// PII access audit — runs after the lead-detail handler.
+api.use("/api/leads/:id", piiAuditOnLeadGet);
 api.route("/api/auth", auth);
 api.route("/api/analytics", analytics);
 api.route("/api/analytics", analyticsV2);
@@ -49,8 +59,15 @@ api.route("/api/dedupe", dedupe);
 api.route("/api/scrapers", scrapers);
 api.route("/api/discover", discover);
 api.route("/api/enrichment", enrichment);
-// /api/leads/:id/enrich and /api/leads/enrich/bulk
+api.route("/api/taxonomies", taxonomies);
+api.route("/api/icp", icp);
+api.route("/api/compliance", compliance);
+api.route("/api/gdpr", gdpr);
+api.route("/api/campaigns", campaigns);
+// /api/leads/:id/enrich, /api/leads/enrich/bulk, /:id/dnc, /:id/campaigns
 api.route("/api/leads", leadsEnrichActions);
+api.route("/api/leads", leadsDncActions);
+api.route("/api/leads", leadsCampaignActions);
 
 api.notFound((c) => c.json({ error: "not_found" }, 404));
 api.onError((err, c) => {

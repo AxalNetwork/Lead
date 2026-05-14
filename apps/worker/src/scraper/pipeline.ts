@@ -25,6 +25,8 @@ import { LeadsRepo } from "../db/leads.repo";
 import type { Lead } from "../db/leads.types";
 import { buildCanonicalKeys, recordReview, resolveIncoming } from "../dedupe";
 import type { IncomingLead } from "../dedupe/merge";
+import { checkAndScrubDnc } from "../compliance/dnc";
+import { deriveSlugs } from "../tax/tag";
 
 const RAW_HTML_PREFIX = "raw";
 
@@ -143,6 +145,24 @@ async function insertLead(
   fetchedFrom: "live" | "wayback" = "live",
 ): Promise<string | null> {
   const incoming = leadToIncoming(parsed, parserName);
+
+  // ---- Compliance pre-insert hook: scrub DNC-listed PII, flag the lead. ----
+  const dnc = await checkAndScrubDnc(env, {
+    email: incoming.email ?? null,
+    phone: incoming.phone ?? null,
+    linkedin_url: incoming.linkedin_url ?? null,
+    twitter_url: incoming.twitter_url ?? null,
+    github_url: incoming.github_url ?? null,
+    source_domain: parsed.source_domain ?? null,
+  });
+  if (dnc.hit) {
+    incoming.email = dnc.cleaned.email;
+    incoming.phone = dnc.cleaned.phone;
+    incoming.linkedin_url = dnc.cleaned.linkedin_url;
+    incoming.twitter_url = dnc.cleaned.twitter_url;
+    incoming.github_url = dnc.cleaned.github_url;
+  }
+
   const decision = await resolveIncoming(env.DB, incoming, { jobId, provider: parserName });
 
   if (decision.action === "merged") {
@@ -199,6 +219,19 @@ async function insertLead(
     created_at: now,
     updated_at: now,
   };
+
+  // Tag with taxonomy slugs at insert time (no extra DB roundtrip needed).
+  const slugs = deriveSlugs({
+    category: lead.category,
+    sector_focus_json: lead.sector_focus_json ?? null,
+    city: lead.city ?? null,
+    region: lead.region ?? null,
+    country_iso2: lead.country_iso2 ?? null,
+  });
+  if (slugs.sectorSlug) (lead as unknown as Record<string, unknown>).sector_slug = slugs.sectorSlug;
+  if (slugs.geoSlug) (lead as unknown as Record<string, unknown>).geo_slug = slugs.geoSlug;
+  if (slugs.country_iso2 && !lead.country_iso2) lead.country_iso2 = slugs.country_iso2;
+  if (dnc.hit) (lead as unknown as Record<string, unknown>).do_not_contact = 1;
 
   const repo = new LeadsRepo(env.DB);
   await repo.insert(lead);

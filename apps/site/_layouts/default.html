@@ -20,6 +20,10 @@
         <a href="/dashboard/jobs/" class="{% if page.url == '/dashboard/jobs/' %}active{% endif %}">Jobs</a>
         <a href="/dashboard/review/" class="{% if page.url == '/dashboard/review/' %}active{% endif %}">Review</a>
         <a href="/dashboard/analytics/" class="{% if page.url == '/dashboard/analytics/' %}active{% endif %}">Analytics</a>
+        <a href="/dashboard/segments/" class="{% if page.url == '/dashboard/segments/' %}active{% endif %}">Segments</a>
+        <a href="/dashboard/icps/" class="{% if page.url == '/dashboard/icps/' %}active{% endif %}">ICPs</a>
+        <a href="/dashboard/campaigns/" class="{% if page.url == '/dashboard/campaigns/' %}active{% endif %}">Campaigns</a>
+        <a href="/dashboard/compliance/" class="{% if page.url == '/dashboard/compliance/' %}active{% endif %}">Compliance</a>
         <a href="/">Home</a>
       </nav>
       <div class="ads-user">
@@ -36,6 +40,9 @@
   <script src="/assets/js/charts.js"></script>
   <script src="/assets/js/dashboard_charts.js"></script>
   <script src="/assets/js/analytics.js"></script>
+  <script src="/assets/js/segments.js"></script>
+  <script src="/assets/js/icps.js"></script>
+  <script src="/assets/js/campaigns.js"></script>
   {% if site.cf_web_analytics_token != "" %}
   <script defer src="https://static.cloudflareinsights.com/beacon.min.js"
     data-cf-beacon='{"token":"{{ site.cf_web_analytics_token }}"}'></script>

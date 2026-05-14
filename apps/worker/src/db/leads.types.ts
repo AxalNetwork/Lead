@@ -67,6 +67,10 @@ export interface Lead {
   locked_fields_json?: string | null;
   enrichment_log_json?: string | null;
 
+  sector_slug?: string | null;
+  geo_slug?: string | null;
+  do_not_contact?: number;
+
   meta_json: string | null;
   created_at: string;
   updated_at: string;

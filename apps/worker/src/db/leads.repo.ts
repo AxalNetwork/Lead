@@ -24,6 +24,7 @@ const HISTORY_FIELDS: ReadonlyArray<keyof Lead> = [
   "merged_into", "canonical_email_key", "canonical_phone_key",
   "canonical_linkedin_key", "canonical_name_firm_key", "canonical_name_city_key",
   "provider", "provider_score",
+  "sector_slug", "geo_slug", "do_not_contact",
 ];
 
 export class LeadsRepo {

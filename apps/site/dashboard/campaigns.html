@@ -1,0 +1,46 @@
+---
+layout: default
+title: Campaigns
+permalink: /dashboard/campaigns/
+---
+
+<h1 class="ads-page-title">Campaigns</h1>
+<p class="ads-page-sub">Materialize an ICP into a member list and export to your marketing tool.</p>
+
+<div class="ads-card">
+  <div class="ads-active__head">
+    <h3>All campaigns</h3>
+    <button class="ads-btn" id="ads-camp-new">+ New campaign</button>
+  </div>
+  <div id="ads-camp-list"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<div class="ads-card" style="margin-top:18px;display:none" id="ads-camp-detail">
+  <div class="ads-active__head">
+    <h3 id="ads-camp-detail-title">Campaign</h3>
+    <div class="ads-form-actions" style="margin:0">
+      <select id="ads-camp-format" style="background:var(--ads-bg);border:1px solid var(--ads-border);border-radius:8px;padding:8px 10px;color:var(--ads-text)">
+        <option value="csv">Generic CSV</option>
+        <option value="lemlist">Lemlist CSV</option>
+        <option value="instantly">Instantly CSV</option>
+        <option value="hubspot">HubSpot CSV</option>
+        <option value="json">JSON</option>
+      </select>
+      <button class="ads-btn" id="ads-camp-export">Export</button>
+      <button class="ads-btn ads-btn--ghost" id="ads-camp-preview">Preview</button>
+    </div>
+  </div>
+  <div id="ads-camp-meta" class="ads-muted" style="font-size:12px;margin-bottom:14px"></div>
+  <div class="ads-detail__row">
+    <div class="ads-detail__label">Webhook URL</div>
+    <div class="ads-detail__value" id="ads-camp-webhook"></div>
+  </div>
+  <div class="ads-detail__row">
+    <div class="ads-detail__label">Webhook secret</div>
+    <pre class="ads-detail__pre" id="ads-camp-secret"></pre>
+  </div>
+  <h3 style="margin-top:18px">Members</h3>
+  <div id="ads-camp-members"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<script src="/assets/js/campaigns.js"></script>

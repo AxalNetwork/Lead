@@ -1,0 +1,36 @@
+---
+layout: default
+title: Segments
+permalink: /dashboard/segments/
+---
+
+<h1 class="ads-page-title">Segments</h1>
+<p class="ads-page-sub">Browse the sector and geography taxonomies used by ICP matching.</p>
+
+<div class="ads-section">
+  <div class="ads-card">
+    <h3>Sectors</h3>
+    <div id="ads-tax-sectors"><div class="ads-loading">Loading…</div></div>
+  </div>
+  <div class="ads-card">
+    <h3>Geographies</h3>
+    <div class="ads-tabs" style="margin-bottom:12px" role="tablist">
+      <button type="button" class="ads-tab active" data-geo-kind="">All</button>
+      <button type="button" class="ads-tab" data-geo-kind="country">Countries</button>
+      <button type="button" class="ads-tab" data-geo-kind="metro">Metros</button>
+    </div>
+    <div id="ads-tax-geos"><div class="ads-loading">Loading…</div></div>
+  </div>
+</div>
+
+<div class="ads-card" style="margin-top:18px">
+  <h3>Resolve a label</h3>
+  <p class="ads-muted" style="font-size:12px">Type a freeform sector or location to see how it maps to canonical slugs.</p>
+  <div class="ads-form-actions">
+    <input type="text" id="ads-resolve-q" placeholder='e.g. "Silicon Valley" or "applied AI"' style="flex:1;background:var(--ads-bg);border:1px solid var(--ads-border);border-radius:8px;padding:10px 12px;color:var(--ads-text);font-size:14px">
+    <button class="ads-btn" id="ads-resolve-btn">Resolve</button>
+  </div>
+  <pre class="ads-detail__pre" id="ads-resolve-out" style="margin-top:12px;display:none"></pre>
+</div>
+
+<script src="/assets/js/segments.js"></script>

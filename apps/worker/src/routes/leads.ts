@@ -16,6 +16,7 @@ const RICH_COLUMNS = [
   "companies_json", "board_seats_json", "awards_json", "exits_json",
   "priority", "owner_email", "next_action_at", "tags_json", "sector_focus_json",
   "merged_into", "provider", "provider_score",
+  "sector_slug", "geo_slug", "do_not_contact",
   "created_at", "updated_at",
 ].join(", ");
 

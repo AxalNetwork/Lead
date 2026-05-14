@@ -1,0 +1,70 @@
+2026-05-14T17:21:58.362Z	Initializing build environment...
+2026-05-14T17:22:02.168Z	Success: Finished initializing build environment
+2026-05-14T17:22:02.953Z	Cloning repository...
+2026-05-14T17:22:06.764Z	Restoring from dependencies cache
+2026-05-14T17:22:06.766Z	Restoring from build output cache
+2026-05-14T17:22:06.769Z	Detected the following tools from environment: npm@10.9.2, nodejs@22.16.0, ruby@3.4.7
+2026-05-14T17:22:06.911Z	Installing project dependencies: npm clean-install --progress=false
+2026-05-14T17:22:10.161Z	npm warn deprecated rollup-plugin-inject@3.0.2: This package has been deprecated and is no longer maintained. Please use @rollup/plugin-inject.
+2026-05-14T17:22:10.226Z	npm warn deprecated sourcemap-codec@1.4.8: Please use @jridgewell/sourcemap-codec instead
+2026-05-14T17:22:16.665Z	
+2026-05-14T17:22:16.665Z	added 145 packages, and audited 146 packages in 9s
+2026-05-14T17:22:16.665Z	
+2026-05-14T17:22:16.665Z	17 packages are looking for funding
+2026-05-14T17:22:16.665Z	  run `npm fund` for details
+2026-05-14T17:22:16.729Z	
+2026-05-14T17:22:16.730Z	4 vulnerabilities (3 moderate, 1 high)
+2026-05-14T17:22:16.730Z	
+2026-05-14T17:22:16.730Z	To address all issues (including breaking changes), run:
+2026-05-14T17:22:16.730Z	  npm audit fix --force
+2026-05-14T17:22:16.730Z	
+2026-05-14T17:22:16.730Z	Run `npm audit` for details.
+2026-05-14T17:22:16.815Z	Installing ruby 3.4.7
+2026-05-14T17:22:16.884Z	Installing project dependencies: BUNDLE_WITHOUT="development test" bundle install
+2026-05-14T17:22:18.764Z	The Gemfile specifies no dependencies
+2026-05-14T17:22:18.786Z	Resolving dependencies...
+2026-05-14T17:22:18.797Z	Bundle complete! 0 Gemfile dependencies, 1 gem now installed.
+2026-05-14T17:22:18.797Z	Gems in the groups 'development' and 'test' were not installed.
+2026-05-14T17:22:18.797Z	Use `bundle info [gemname]` to see where a bundled gem is installed.
+2026-05-14T17:22:18.929Z	Executing user deploy command: npx wrangler versions upload
+2026-05-14T17:22:20.569Z	
+2026-05-14T17:22:20.569Z	 ⛅️ wrangler 3.114.17 (update available 4.91.0)
+2026-05-14T17:22:20.569Z	-----------------------------------------------
+2026-05-14T17:22:20.569Z	
+2026-05-14T17:22:20.620Z	▲ [WARNING] The version of Wrangler you are using is now out-of-date.
+2026-05-14T17:22:20.620Z	
+2026-05-14T17:22:20.620Z	  Please update to the latest version to prevent critical errors.
+2026-05-14T17:22:20.621Z	  Run `npm install --save-dev wrangler@4` to update to the latest version.
+2026-05-14T17:22:20.621Z	  After installation, run Wrangler with `npx wrangler`.
+2026-05-14T17:22:20.621Z	
+2026-05-14T17:22:20.621Z	
+2026-05-14T17:22:21.303Z	Total Upload: 994.28 KiB / gzip: 186.18 KiB
+2026-05-14T17:22:21.930Z	Your worker has access to the following bindings:
+2026-05-14T17:22:21.931Z	- KV Namespaces:
+2026-05-14T17:22:21.931Z	  - SESSIONS: 302eb1a32ae64ce588dee452e14b3217
+2026-05-14T17:22:21.931Z	  - SCRAPE_CACHE: 302eb1a32ae64ce588dee452e14b3217
+2026-05-14T17:22:21.931Z	- Queues:
+2026-05-14T17:22:21.931Z	  - LEAD_QUEUE: aidatasignal-lead-jobs
+2026-05-14T17:22:21.932Z	- D1 Databases:
+2026-05-14T17:22:21.933Z	  - DB: aidatasignal-leads (ecd7272e-533d-4e01-81ba-e1b98bce6e1c)
+2026-05-14T17:22:21.933Z	- R2 Buckets:
+2026-05-14T17:22:21.942Z	  - RAW_HTML: aidatasignal-raw-html
+2026-05-14T17:22:21.942Z	- Browser:
+2026-05-14T17:22:21.942Z	  - Name: BROWSER
+2026-05-14T17:22:21.942Z	- Vars:
+2026-05-14T17:22:21.942Z	  - ALLOWED_EMAIL: "guillaumelauzier@gmail.com"
+2026-05-14T17:22:21.942Z	  - ACCESS_TEAM_DOMAIN: "axalnetwork.cloudflareaccess.com"
+2026-05-14T17:22:21.942Z	  - ACCESS_AUD: "f9cbce05165afb5af93e5929ff93dc4591aa1..."
+2026-05-14T17:22:21.942Z	  - ACCESS_APP_AUD: "3677234625cd7a8a9065c46ec41ab908bb7a2..."
+2026-05-14T17:22:21.943Z	
+2026-05-14T17:22:21.943Z	✘ [ERROR] A request to the Cloudflare API (/accounts/30c9362191318777b71647145decda48/workers/scripts/lead/versions) failed.
+2026-05-14T17:22:21.943Z	
+2026-05-14T17:22:21.943Z	  R2 bucket 'aidatasignal-raw-html' not found. Verify the bucket exists in your account and that the bucket_name in your configuration is correct. [code: 10085]
+2026-05-14T17:22:21.943Z	  To learn more about this error, visit: https://developers.cloudflare.com/r2/get-started/
+2026-05-14T17:22:21.943Z	
+2026-05-14T17:22:21.943Z	  
+2026-05-14T17:22:21.943Z	  If you think this is a bug, please open an issue at: https://github.com/cloudflare/workers-sdk/issues/new/choose
+2026-05-14T17:22:21.943Z	
+2026-05-14T17:22:21.943Z	
+2026-05-14T17:22:21.943Z	🪵  Logs were written to "/opt/buildhome/.config/.wrangler/logs/wrangler-2026-05-14_17-22-19_907.log"
+2026-05-14T17:22:22.021Z	Failed: error occurred while running deploy command

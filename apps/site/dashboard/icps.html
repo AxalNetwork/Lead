@@ -1,0 +1,54 @@
+---
+layout: default
+title: ICPs
+permalink: /dashboard/icps/
+---
+
+<h1 class="ads-page-title">Ideal Customer Profiles</h1>
+<p class="ads-page-sub">Save reusable filters that pick a target list out of the lead universe.</p>
+
+<div class="ads-card">
+  <div class="ads-active__head">
+    <h3>Saved ICPs</h3>
+    <button class="ads-btn" id="ads-icp-new">+ New ICP</button>
+  </div>
+  <div id="ads-icp-list"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<div class="ads-card" style="margin-top:18px;display:none" id="ads-icp-editor">
+  <h3 id="ads-icp-editor-title">New ICP</h3>
+  <form id="ads-icp-form" autocomplete="off">
+    <input type="hidden" name="id">
+    <label class="ads-field"><span>Name</span><input name="name" required></label>
+    <label class="ads-field"><span>Description</span><input name="description"></label>
+    <label class="ads-field"><span>Sectors (comma-separated slugs)</span><input name="sectors"></label>
+    <label class="ads-field"><span>Geographies (comma-separated slugs or ISO2)</span><input name="geographies"></label>
+    <label class="ads-field"><span>Personas</span><input name="personas" placeholder="partner, venture_partner, gov_official"></label>
+    <label class="ads-field"><span>Seniority</span><input name="seniority" placeholder="c_level, founder, partner"></label>
+    <label class="ads-field ads-field--inline"><span>Min AUM (USD)</span><input name="min_aum_usd" type="number" min="0" step="1000000"></label>
+    <label class="ads-field ads-field--inline"><span>Min Fund Size (USD)</span><input name="min_fund_size_usd" type="number" min="0" step="1000000"></label>
+    <label class="ads-field ads-field--inline"><span>Min Quality (0–1)</span><input name="min_quality" type="number" min="0" max="1" step="0.05"></label>
+    <div style="margin:6px 0 12px">
+      <label style="margin-right:14px"><input type="checkbox" name="require_email"> Require email</label>
+      <label style="margin-right:14px"><input type="checkbox" name="require_linkedin"> Require LinkedIn</label>
+      <label><input type="checkbox" name="exclude_dnc" checked> Exclude DNC</label>
+    </div>
+    <div class="ads-form-actions">
+      <button type="submit" class="ads-btn">Save</button>
+      <button type="button" class="ads-btn ads-btn--ghost" id="ads-icp-cancel">Cancel</button>
+      <span class="ads-form-msg" data-msg></span>
+    </div>
+  </form>
+</div>
+
+<div class="ads-card" style="margin-top:18px;display:none" id="ads-icp-preview-card">
+  <div class="ads-active__head">
+    <h3>Match preview <span class="ads-muted" id="ads-icp-preview-meta"></span></h3>
+    <div class="ads-form-actions" style="margin:0">
+      <button class="ads-btn" id="ads-icp-make-campaign">Create campaign…</button>
+    </div>
+  </div>
+  <div id="ads-icp-preview"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<script src="/assets/js/icps.js"></script>

@@ -1,0 +1,52 @@
+---
+layout: default
+title: Compliance
+permalink: /dashboard/compliance/
+---
+
+<h1 class="ads-page-title">Compliance</h1>
+<p class="ads-page-sub">Do-not-contact list, PII access audit log, and GDPR right-to-erasure.</p>
+
+<div class="ads-card">
+  <div class="ads-active__head">
+    <h3>Do-not-contact list</h3>
+    <span class="ads-muted" id="ads-dnc-meta"></span>
+  </div>
+  <form id="ads-dnc-form" autocomplete="off" style="margin-bottom:14px">
+    <div class="ads-form-actions">
+      <select name="kind" style="background:var(--ads-bg);border:1px solid var(--ads-border);border-radius:8px;padding:8px 10px;color:var(--ads-text)">
+        <option value="email">Email</option>
+        <option value="phone">Phone</option>
+        <option value="domain">Domain</option>
+        <option value="linkedin">LinkedIn URL</option>
+      </select>
+      <input name="value" placeholder="Value to block" style="flex:1;background:var(--ads-bg);border:1px solid var(--ads-border);border-radius:8px;padding:8px 12px;color:var(--ads-text)">
+      <input name="reason" placeholder="Reason (optional)" style="flex:1;background:var(--ads-bg);border:1px solid var(--ads-border);border-radius:8px;padding:8px 12px;color:var(--ads-text)">
+      <button class="ads-btn" type="submit">Add to DNC</button>
+      <span class="ads-form-msg" data-msg></span>
+    </div>
+  </form>
+  <div id="ads-dnc-list"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<div class="ads-card" style="margin-top:18px">
+  <h3>GDPR erasure</h3>
+  <p class="ads-muted" style="font-size:12px">Erases all matching leads' PII and adds the identifiers to DNC. Audit row written.</p>
+  <form id="ads-gdpr-form" autocomplete="off">
+    <label class="ads-field"><span>Email</span><input name="email" type="email"></label>
+    <label class="ads-field"><span>Phone</span><input name="phone"></label>
+    <label class="ads-field"><span>LinkedIn URL</span><input name="linkedin_url"></label>
+    <div class="ads-form-actions">
+      <button type="submit" class="ads-btn">Erase</button>
+      <span class="ads-form-msg" data-msg></span>
+    </div>
+  </form>
+  <pre class="ads-detail__pre" id="ads-gdpr-out" style="margin-top:12px;display:none"></pre>
+</div>
+
+<div class="ads-card" style="margin-top:18px">
+  <h3>PII access audit (last 200)</h3>
+  <div id="ads-pii-log"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<script src="/assets/js/compliance.js"></script>
