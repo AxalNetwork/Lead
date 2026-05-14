@@ -73,11 +73,12 @@ dedupe.post("/review/:id/reject", async (c) => {
   const skipDays = typeof body.skip_days === "number" ? Math.max(0, Math.min(365, body.skip_days)) : 0;
   const skipUntil = skipDays > 0 ? new Date(Date.now() + skipDays * 86_400_000).toISOString() : null;
   const status = skipDays > 0 ? "open" : "rejected";
-  await c.env.DB.prepare(
+  const r = await c.env.DB.prepare(
     "UPDATE dedupe_review SET status = ?, skip_until = ?, resolved_by = ?, resolved_at = ? WHERE id = ?",
   )
     .bind(status, skipUntil, c.get("email"), skipDays > 0 ? null : new Date().toISOString(), id)
     .run();
+  if ((r.meta.changes ?? 0) === 0) return c.json({ error: "not_found" }, 404);
   return c.json({ ok: true, status, skip_until: skipUntil });
 });
 

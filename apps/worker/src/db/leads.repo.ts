@@ -46,9 +46,14 @@ export class LeadsRepo {
   }
 
   /**
-   * Patch a lead. Diffs old vs new on the configured set of fields, writes
-   * one lead_history row per actual change (source, evidence_url, changed_by
-   * provided by the caller). Returns the count of changed fields.
+   * Patch a lead. Diffs old vs new on the configured set of fields
+   * (`HISTORY_FIELDS`), writes one lead_history row per actual change
+   * (source, evidence_url, changed_by provided by the caller), and returns
+   * the count of changed fields.
+   *
+   * Contract note: patch keys NOT in `HISTORY_FIELDS` are silently ignored.
+   * If you add a new tracked column to `leads`, add it to `HISTORY_FIELDS`
+   * here so updates persist and audit rows are written.
    */
   async updateLead(id: string, patch: LeadPatch, ctx: UpdateContext): Promise<number> {
     const before = await this.getById(id);
