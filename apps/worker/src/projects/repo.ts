@@ -105,9 +105,10 @@ export async function insertProject(env: Env, body: Partial<ProjectRow> & { name
   const now = new Date().toISOString();
   const cols = ["id","created_by","created_at","updated_at","last_modified", ...PROJECT_FIELDS];
   const binds: unknown[] = [id, by ?? null, now, now, now];
-  // Per migration 180: status NOT NULL DEFAULT 'active', kind NOT NULL DEFAULT 'product'.
-  // Provide explicit defaults so unset payloads do not violate NOT NULL.
-  const COL_DEFAULTS: Record<string, unknown> = { status: "active", kind: "product" };
+  // Only fill defaults for columns the schema declares NOT NULL without
+  // a SQL default we can rely on; `kind` is optional in spec, so we
+  // leave it null unless the caller chose one.
+  const COL_DEFAULTS: Record<string, unknown> = { status: "active" };
   for (const f of PROJECT_FIELDS) {
     const v = (body as Record<string, unknown>)[f];
     binds.push(v != null ? v : (COL_DEFAULTS[f] ?? null));
@@ -153,6 +154,14 @@ export async function softDeleteProject(env: Env, id: string, by?: string): Prom
   if (changed) {
     await env.DB.prepare(`INSERT INTO project_history (id, project_id, field, new_value, changed_by) VALUES (?, ?, 'archived', 'archived', ?)`)
       .bind(crypto.randomUUID(), id, by ?? null).run();
+    // Best-effort GC: drop persisted matches and the project's vector
+    // so archive doesn't leak storage/index space. Non-fatal.
+    try { await env.DB.prepare(`DELETE FROM project_matches WHERE project_id = ?`).bind(id).run(); } catch {}
+    try {
+      if (env.VEC_PROJECTS && typeof (env.VEC_PROJECTS as { deleteByIds?: (ids: string[]) => Promise<unknown> }).deleteByIds === "function") {
+        await (env.VEC_PROJECTS as { deleteByIds: (ids: string[]) => Promise<unknown> }).deleteByIds([id]);
+      }
+    } catch (e) { console.warn("VEC_PROJECTS.deleteByIds failed", (e as Error).message); }
   }
   return changed;
 }

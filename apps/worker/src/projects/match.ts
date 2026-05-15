@@ -5,7 +5,7 @@
 import type { Env } from "../types";
 import {
   getProject, rowToSpec, setMatchCounts, demoteStaleNewMatches,
-  loadPersonaFitMap, loadAccountFactsBulk, loadFirmFactsBulk,
+  loadPersonaFitMap, loadAccountFactsBulk, loadFirmFactsBulk, setProjectEmbeddingMeta,
   loadCompanyFactsBulk, loadLeadFactsBulk, bulkUpsertMatches,
 } from "./repo";
 import { embedProject, semanticCandidatesForAudience, type SemanticHit } from "./embed";
@@ -112,8 +112,13 @@ export async function matchProject(env: Env, projectId: string): Promise<{ ok: t
   if (!row) throw new Error(`project_not_found:${projectId}`);
   const spec = rowToSpec(row);
 
-  // Re-embed (cheap if cached). Persist meta only when text changed.
-  const { vector } = await embedProject(env, spec);
+  // Re-embed (cheap if cached). Refresh embedding meta inside the
+  // recompute path so observability stays in sync regardless of which
+  // trigger (create/patch/cron) fired.
+  const { vector, text } = await embedProject(env, spec);
+  if (vector && vector.length) {
+    try { await setProjectEmbeddingMeta(env, projectId, vector.length, text ?? ""); } catch {}
+  }
 
   const enabled = AUDIENCES.filter((a) => spec.audiences[a] !== false);
   const counts: Record<string, number> = {};
