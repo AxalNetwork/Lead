@@ -20,7 +20,7 @@ import type { Env, JobMessage } from "../types";
 export const uploads = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
 const MAX_BYTES = 50 * 1024 * 1024;
-const ALLOWED_EXT = new Set(["csv", "tsv", "xlsx", "xls", "ods", "pdf", "png", "jpg", "jpeg", "webp"]);
+const ALLOWED_EXT = new Set(["csv", "tsv", "xlsx", "xls", "ods", "pdf", "png", "jpg", "jpeg", "webp", "html", "htm"]);
 
 function safeName(name: string): string {
   return name.replace(/[^\w.\-]+/g, "_").slice(0, 200) || "file";

@@ -9,6 +9,13 @@ export interface ParsedTable {
   confidence?: number;
   /** XLSX/ODS sheet name; Google Sheets tab name. */
   sheetName?: string;
+  /** Per-cell OCR-vs-vision disagreement count (>30% Levenshtein). Only
+   *  populated by vision_pdf for image-PDF tabs. */
+  ocrDisagreements?: number;
+  /** Cells whose vision-extracted value disagrees materially with the
+   *  pdfjs text on the same page. Each entry is {row, col, vision, pdf,
+   *  distance}. */
+  lowConfidenceCells?: Array<{ row: number; col: string; vision: string; pdf: string; distance: number }>;
 }
 
 const DELIMS = [",", "\t", ";", "|"];

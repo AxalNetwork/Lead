@@ -154,16 +154,18 @@ export async function processParseFile(env: Env, importId: string): Promise<void
       ).run();
     }
 
-    // 5-row preview for the primary tab (legacy dashboard.js consumes it).
+    // 10-row preview for the primary tab (v2 spec). Legacy dashboards that
+    // only expect 5 rows still work since they slice their own range.
     await env.SCRAPE_CACHE.put(`upload_preview:${importId}`, JSON.stringify({
       headers: primary.headers,
-      rows: primary.rows.slice(0, 5),
+      rows: primary.rows.slice(0, 10),
       tables_found: tables.length,
     }), { expirationTtl: 60 * 60 * 24 * 7 });
-    // Per-tab previews so the v2 UI can flip pills without re-fetching.
+    // Per-tab previews (10 rows) so the v2 UI can flip pills without
+    // re-fetching and apply bad-cell highlighting on real data.
     const tabPreviews: Record<string, { headers: string[]; rows: Array<Record<string, string>> }> = {};
     for (let i = 0; i < tables.length; i++) {
-      tabPreviews[String(i)] = { headers: tables[i].headers, rows: tables[i].rows.slice(0, 5) };
+      tabPreviews[String(i)] = { headers: tables[i].headers, rows: tables[i].rows.slice(0, 10) };
     }
     await env.SCRAPE_CACHE.put(`upload_tab_previews:${importId}`, JSON.stringify(tabPreviews), {
       expirationTtl: 60 * 60 * 24 * 7,
@@ -175,19 +177,42 @@ export async function processParseFile(env: Env, importId: string): Promise<void
     // Pre-confirmation entity from the dominant tab's intent.
     const entity = primaryTab.intent === "firms" ? "firms" : (inferEntity(toMappedFieldRecord(primaryTab.columnMap)));
 
-    const summary = {
-      format,
-      tab_count: tables.length,
-      tabs: tabResults.map((t) => ({
+    // Acceptance-schema summary: per-tab `rows_seen / rows_imported /
+    // rows_updated / rows_rejected / low_confidence_cells /
+    // ocr_disagreements`, plus aggregate keys at the top level. The
+    // *_imported / *_updated / *_rejected counters land at confirm-map
+    // time (import.ts) — here at parse time we seed the rest.
+    const lowConfThreshold = 0.65;
+    const summaryTabs = tabResults.map((t, i) => {
+      const src = tables[i] ?? { lowConfidenceCells: [], ocrDisagreements: 0 };
+      const lowConfCells = Object.values(t.mapConfidence).filter((c) => c < lowConfThreshold).length;
+      return {
         index: t.tabIndex,
         sheet: t.sheetName,
         page: t.pageNumber,
         intent: t.intent,
         intent_subkind: t.intentSubkind,
         intent_confidence: t.intentConfidence,
-        rows_in: t.rowCount,
+        rows_seen: t.rowCount,
+        rows_imported: 0,
+        rows_updated: 0,
+        rows_rejected: 0,
+        low_confidence_cells: lowConfCells,
+        ocr_disagreements: src.ocrDisagreements ?? 0,
+        ocr_disagreement_samples: (src.lowConfidenceCells ?? []).slice(0, 10),
         avg_map_confidence: avg(Object.values(t.mapConfidence)),
-      })),
+      };
+    });
+    const summary = {
+      format,
+      tab_count: tables.length,
+      rows_seen_total: summaryTabs.reduce((s, t) => s + t.rows_seen, 0),
+      rows_imported_total: 0,
+      rows_updated_total: 0,
+      rows_rejected_total: 0,
+      low_confidence_cells_total: summaryTabs.reduce((s, t) => s + t.low_confidence_cells, 0),
+      ocr_disagreements_total: summaryTabs.reduce((s, t) => s + t.ocr_disagreements, 0),
+      tabs: summaryTabs,
       source_signature: signature,
       template_applied: appliedTemplate,
     };
@@ -317,10 +342,36 @@ function decodeJsonBlob(bytes: ArrayBuffer): { format?: string; tables: ParsedTa
   } catch { return null; }
 }
 
-/** Public Google-Sheets entrypoint used by routes/uploads.ts when an URL is
- *  uploaded instead of a file. */
+/** Public URL entrypoint used by routes/uploads.ts when a URL is uploaded
+ *  instead of a file. Supports Google Sheets natively; for Airtable shared
+ *  views we follow the standard `?download=csv` export. Other URLs are
+ *  fetched and probed for HTML <table> markup. */
 export async function fetchAndParseUrl(url: string): Promise<{ tables: ParsedTable[]; format: UploadFormat }> {
   const fmt = detectFormat({ url });
   if (fmt === "gsheet") return { tables: await fetchGoogleSheet(url), format: "gsheet" };
-  return { tables: [], format: fmt };
+  if (fmt === "airtable") {
+    // Airtable public-share views expose a CSV download at the same path.
+    const csvUrl = url.includes("?") ? `${url}&download=csv` : `${url}?download=csv`;
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 15_000);
+    try {
+      const r = await fetch(csvUrl, { signal: ac.signal, headers: { accept: "text/csv,*/*" } });
+      if (!r.ok) return { tables: [], format: "airtable" };
+      const txt = await r.text();
+      const tab = parseCsv(txt);
+      tab.sheetName = tab.sheetName ?? "Airtable";
+      return { tables: [tab], format: "airtable" };
+    } catch { return { tables: [], format: "airtable" }; }
+    finally { clearTimeout(t); }
+  }
+  // Generic HTML — fetch and try sheetjs HTML table parser if installed.
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 15_000);
+  try {
+    const r = await fetch(url, { signal: ac.signal });
+    if (!r.ok) return { tables: [], format: fmt };
+    const bytes = await r.arrayBuffer();
+    return { tables: await parseSpreadsheet(bytes), format: "html" };
+  } catch { return { tables: [], format: fmt }; }
+  finally { clearTimeout(t); }
 }

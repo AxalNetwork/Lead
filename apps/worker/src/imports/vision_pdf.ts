@@ -155,25 +155,73 @@ export function detectTabStripNames(pageTexts: string[]): string[] {
   return out;
 }
 
-/** Cheap OCR-vs-vision disagreement: fraction of vision-extracted cell
- *  tokens that do NOT appear in pdfjs text on the same page. Higher = more
- *  hallucination risk. Returned per page so the operator can spot bad
- *  pages in summary_json. */
-function scoreDisagreement(visionRows: Array<Record<string, string>>, pdfText: string): number {
-  if (!visionRows.length) return 0;
-  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  const haystack = norm(pdfText);
-  if (!haystack) return 0;
-  let total = 0, missed = 0;
-  for (const r of visionRows) {
-    for (const v of Object.values(r)) {
-      const t = norm(String(v));
-      if (t.length < 3) continue;
+/** Bounded Levenshtein distance (early-exits when distance exceeds `max`).
+ *  Used to compare vision-extracted cells against pdfjs OCR text. */
+function levenshtein(a: string, b: string, max: number): number {
+  if (a === b) return 0;
+  if (!a.length) return Math.min(b.length, max + 1);
+  if (!b.length) return Math.min(a.length, max + 1);
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = new Array(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      const v = Math.min(cur[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+      cur.push(v);
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > max) return max + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/** Per-cell OCR-vs-vision disagreement: for each non-empty vision cell, find
+ *  the closest token of similar length in the pdfjs text and compute a
+ *  normalized Levenshtein distance. Cells with distance > 0.30 are flagged
+ *  for review and persisted in `lowConfidenceCells`. The page-level
+ *  disagreement count = number of flagged cells. */
+function scoreCellDisagreement(
+  visionRows: Array<Record<string, string>>,
+  pdfText: string,
+  pageNumber: number,
+): { score: number; flagged: number; samples: Array<{ row: number; col: string; vision: string; pdf: string; distance: number }>; total: number } {
+  const samples: Array<{ row: number; col: string; vision: string; pdf: string; distance: number }> = [];
+  if (!visionRows.length || !pdfText) return { score: 0, flagged: 0, samples, total: 0 };
+  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+  // Tokenize pdf text on whitespace; we'll search by length window.
+  const tokens = norm(pdfText).split(" ").filter(Boolean);
+  let flagged = 0, total = 0;
+  for (let r = 0; r < visionRows.length; r++) {
+    for (const [col, raw] of Object.entries(visionRows[r])) {
+      const v = norm(String(raw));
+      if (v.length < 3) continue;
       total += 1;
-      if (!haystack.includes(t)) missed += 1;
+      // Find nearest pdf token within ±50% length window.
+      let bestDist = Infinity, bestTok = "";
+      const max = Math.ceil(v.length * 0.6);
+      for (const tok of tokens) {
+        if (Math.abs(tok.length - v.length) > max) continue;
+        const d = levenshtein(v, tok, max);
+        if (d < bestDist) { bestDist = d; bestTok = tok; if (d === 0) break; }
+      }
+      const norm01 = bestDist === Infinity ? 1 : bestDist / Math.max(v.length, 1);
+      if (norm01 > 0.30) {
+        flagged += 1;
+        if (samples.length < 25) {
+          samples.push({ row: r, col, vision: String(raw).slice(0, 80), pdf: bestTok.slice(0, 80), distance: Math.round(norm01 * 100) / 100 });
+        }
+      }
     }
   }
-  return total ? Math.round((missed / total) * 100) / 100 : 0;
+  void pageNumber;
+  return {
+    score: total ? Math.round((flagged / total) * 100) / 100 : 0,
+    flagged, samples, total,
+  };
 }
 
 function bytesToBase64(b: Uint8Array): string {
@@ -212,9 +260,6 @@ export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer): P
 
   const model = env.AI_VISION_MODEL ?? VISION_MODEL_DEFAULT;
   const out: ParsedTable[] = [];
-  /** Per-table OCR-vs-vision disagreement scores, surfaced via parse.ts
-   *  into file_imports.summary_json so the operator sees bad pages. */
-  const disagreementByTable: number[] = [];
   let lastHeaderKey: string | null = null;
   let tableIdx = -1;
   for (let p = 0; p < images.length; p++) {
@@ -253,24 +298,29 @@ export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer): P
         return obj;
       }).filter((r) => Object.values(r).some((v) => v.length > 0));
       if (!rows.length) continue;
-      const disagreement = scoreDisagreement(rows, pdfText);
+      const dis = scoreCellDisagreement(rows, pdfText, p + 1);
       if (lastHeaderKey === headerKey && out.length) {
-        out[out.length - 1].rows.push(...rows);
-        // Average disagreement across continuation pages.
-        disagreementByTable[tableIdx] = (disagreementByTable[tableIdx] + disagreement) / 2;
+        const last = out[out.length - 1];
+        const baseRow = last.rows.length;
+        last.rows.push(...rows);
+        last.ocrDisagreements = (last.ocrDisagreements ?? 0) + dis.flagged;
+        last.lowConfidenceCells = (last.lowConfidenceCells ?? []).concat(
+          dis.samples.map((s) => ({ ...s, row: s.row + baseRow }))
+        ).slice(0, 25);
       } else {
         tableIdx++;
         const sheetName = tabNames[tableIdx] ?? null;
-        out.push({ headers, rows, pageNumber: p + 1, confidence: Math.max(0.3, 0.85 - disagreement),
-          sheetName: sheetName ?? undefined });
-        disagreementByTable.push(disagreement);
+        out.push({
+          headers, rows, pageNumber: p + 1,
+          confidence: Math.max(0.3, 0.95 - dis.score),
+          sheetName: sheetName ?? undefined,
+          ocrDisagreements: dis.flagged,
+          lowConfidenceCells: dis.samples,
+        });
         lastHeaderKey = headerKey;
       }
     }
   }
-  // Stash per-table disagreement on each ParsedTable.confidence so the
-  // mapping UI can surface low-quality pages without touching the schema.
-  void disagreementByTable;
   return out;
 }
 
