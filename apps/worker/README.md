@@ -71,12 +71,67 @@ A note on each:
 
 Set via `wrangler secret put NAME` (or in the CF dashboard):
 
-- `CLOUDFLARE_API_TOKEN` (GitHub Actions secret) — needs Workers Scripts
-  Edit + R2 Edit + D1 Edit on the account.
+- `CLOUDFLARE_API_TOKEN` (GitHub Actions secret) — see required scopes below.
 - Per-provider API keys: `HUNTER_API_KEY`, `APOLLO_API_KEY`,
   `ROCKETREACH_API_KEY`, `PEOPLEDATALABS_API_KEY`, `PROXYCURL_API_KEY`,
   `CRUNCHBASE_API_KEY`, `WHOISXML_API_KEY`, `BRAVE_API_KEY`,
   `SCRAPING_API_KEY`, `PROXY_URL` (optional).
+
+### Required scopes for `CLOUDFLARE_API_TOKEN`
+
+The deploy workflow (`.github/workflows/deploy-worker.yml`) calls the
+Cloudflare REST API directly to pre-create resources before
+`wrangler deploy` runs, then runs drift detection, then `d1 migrations
+apply --remote`, then `wrangler deploy` itself. Each step requires a
+specific scope. Mint the token in the Cloudflare dashboard (account
+`30c9362191318777b71647145decda48`) and grant **all** of the following
+account-scoped permissions, scoped to "Include → All accounts" (or
+this account specifically):
+
+**Required to deploy** — without these the workflow will fail hard:
+
+| Scope                          | Used by                                                              |
+| ------------------------------ | -------------------------------------------------------------------- |
+| **Workers Scripts: Edit**      | `wrangler deploy` (uploads the worker bundle, custom domain route)   |
+| **Workers KV Storage: Edit**   | `Ensure KV namespaces exist` step + KV writes during deploy          |
+| **Workers R2 Storage: Edit**   | `Ensure R2 buckets exist` step + R2 binding validation               |
+| **D1: Edit**                   | `Apply D1 migrations (remote)` step + D1 binding validation          |
+| **Queues: Edit**               | `Ensure Queues exist` step + queue producer/consumer binding         |
+| **Workers AI: Read**           | runtime AI binding validation                                        |
+
+**Required for full drift diagnostics without warnings** — the deploy
+still goes green without these (the affected steps emit a GHA
+`::warning::` and continue), but you give up orphan detection and
+Vectorize-shape drift detection until they're granted:
+
+| Scope                          | Used by                                                                                         |
+| ------------------------------ | ----------------------------------------------------------------------------------------------- |
+| **Vectorize: Edit**            | `Ensure Vectorize indexes exist` step + Vectorize read in `Detect Cloudflare resource drift`    |
+| **Account Analytics: Read**    | `Ensure Analytics Engine datasets are reachable` step (AE SQL probe)                            |
+
+(`R2: Read` and `Queues: Read` are needed for the orphan portion of
+drift detection but are normally implied by their `Edit` counterparts;
+verify in the dashboard if the drift step skips R2/Queue reads.)
+
+The `Ensure Vectorize indexes exist`, `Ensure Analytics Engine datasets
+are reachable`, and `Detect Cloudflare resource drift` steps **tolerate**
+`code:10000 / Authentication error` responses by emitting a GitHub
+Actions `::warning::` annotation (and, for drift detection, a final
+prominent `Drift detection ran blind for N endpoint(s)` summary line)
+and continuing — these steps are defensive convenience checks, and a
+true missing-binding failure will still surface in the actual
+`wrangler deploy` step. This is so a partial-scope token doesn't
+completely block production deploys; the warnings make the missing
+scope obvious in the run summary so it gets fixed on the next rotation.
+**If you ignore the drift-skipped warning, you can ship a Vectorize
+index whose live `dimensions`/`metric` doesn't match `wrangler.toml` —
+queries against a mismatched index silently corrupt results.**
+
+To rotate without downtime: mint the new token first, paste it into
+the `CLOUDFLARE_API_TOKEN` repo secret (Settings → Secrets and
+variables → Actions), trigger a `workflow_dispatch` run of
+`deploy-worker.yml` to confirm it goes green, then revoke the old
+token in the CF dashboard.
 
 ## Remote D1 migrations
 

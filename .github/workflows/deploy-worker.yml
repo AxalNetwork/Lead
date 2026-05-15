@@ -131,6 +131,16 @@ jobs:
               echo "  created."
             elif echo "$RESP" | grep -q '"code":3149' || echo "$RESP" | grep -qi 'already exists'; then
               echo "  already exists — ok."
+            elif echo "$RESP" | grep -q '"code":10000' || echo "$RESP" | grep -qi 'authentication error'; then
+              # Task #69: CLOUDFLARE_API_TOKEN is missing the Vectorize Edit
+              # scope. We can't pre-create the index here, but this step is
+              # only a defensive convenience — if the index doesn't already
+              # exist, `wrangler deploy` below will fail with a clear
+              # missing-binding error. If it does exist, the deploy proceeds
+              # normally. Surface a loud GHA warning so the operator knows
+              # to rotate the token (see apps/worker/README.md "Required
+              # scopes for CLOUDFLARE_API_TOKEN").
+              echo "::warning title=Vectorize pre-create skipped::Token lacks Vectorize Edit scope (code:10000). Skipping pre-create for '${I}'; relying on wrangler deploy to catch real binding failures. Rotate CLOUDFLARE_API_TOKEN per apps/worker/README.md."
             else
               echo "  unexpected response: $RESP" >&2
               exit 1
@@ -203,6 +213,14 @@ jobs:
               echo "  exists and queryable — ok."
             elif echo "$RESP" | grep -qiE 'table.*not found|unknown table|no such table|does not exist'; then
               echo "  not yet written to — will be auto-provisioned on first writeDataPoint."
+            elif echo "$RESP" | grep -q '"code":10000' || echo "$RESP" | grep -qiE 'authentication error|authorization error'; then
+              # Task #69: token lacks Account Analytics: Read scope. The probe
+              # is purely diagnostic (AE datasets self-provision on first
+              # writeDataPoint), so a missing-scope error here doesn't break
+              # production — the Worker still writes events fine. Surface a
+              # warning so the operator rotates the token (see
+              # apps/worker/README.md "Required scopes for CLOUDFLARE_API_TOKEN").
+              echo "::warning title=AE probe skipped::Token lacks Account Analytics: Read scope. Skipping AE probe for '${D}'; dataset will still self-provision on first writeDataPoint. Rotate CLOUDFLARE_API_TOKEN per apps/worker/README.md."
             else
               echo "  unexpected response: $RESP" >&2
               exit 1
@@ -297,6 +315,8 @@ jobs:
           DRIFT_FATAL=0
           ORPHAN_COUNT=0
           DRIFT_COUNT=0
+          DRIFT_SKIPPED=0
+          DRIFT_SKIPPED_URLS=""
 
           # Fetch a CF API URL and assert top-level "success":true. Echos the
           # raw JSON on stdout when ok, fails the step with the error payload
@@ -307,7 +327,22 @@ jobs:
             local url="$1"
             local resp
             resp=$(curl -sS "$url" -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
-            if [ "$(echo "$resp" | jq -r '.success')" != "true" ]; then
+            if [ "$(echo "$resp" | jq -r '.success' 2>/dev/null)" != "true" ]; then
+              # Task #69: when the token is missing the per-resource Read
+              # scope (e.g. Vectorize Read, Account Analytics Read), CF
+              # returns code:10000 / "Authentication error". Drift detection
+              # is purely diagnostic — failing the deploy here would be
+              # worse than running blind, so emit a GHA warning and return
+              # an empty success envelope so the caller's `jq` finds no
+              # rows. The downstream Ensure-… and wrangler-deploy steps
+              # are responsible for catching real failures.
+              if echo "$resp" | grep -q '"code":10000' || echo "$resp" | grep -qiE 'authentication error|authorization error'; then
+                echo "::warning title=Drift detection skipped::Token lacks Read scope for ${url}. Skipping drift check; rotate CLOUDFLARE_API_TOKEN per apps/worker/README.md." >&2
+                DRIFT_SKIPPED=$((DRIFT_SKIPPED+1))
+                DRIFT_SKIPPED_URLS="${DRIFT_SKIPPED_URLS}${url}\n"
+                echo '{"success":true,"result":[],"errors":[],"messages":[]}'
+                return 0
+              fi
               echo "Cloudflare API call failed: $url" >&2
               echo "$resp" >&2
               exit 1
@@ -402,7 +437,16 @@ jobs:
           done <<< "$DECLARED_VEC"
           echo "::endgroup::"
 
-          echo "Drift summary: ${ORPHAN_COUNT} orphan(s), ${DRIFT_COUNT} drifted resource(s)."
+          echo "Drift summary: ${ORPHAN_COUNT} orphan(s), ${DRIFT_COUNT} drifted resource(s), ${DRIFT_SKIPPED} skipped check(s)."
+          if [ "$DRIFT_SKIPPED" -gt 0 ]; then
+            # Loud, prominent summary so a reviewer scrolling the workflow
+            # log can't miss that drift detection ran blind. Repeats the
+            # warning at step end (in addition to the per-call ::warning::
+            # annotations) and lists the skipped endpoints. Non-fatal —
+            # see apps/worker/README.md for the rationale.
+            echo "::warning title=Drift detection ran blind for ${DRIFT_SKIPPED} endpoint(s)::CLOUDFLARE_API_TOKEN is missing Read scope on the following endpoints; orphan + Vectorize-shape drift were NOT checked. Rotate the token per apps/worker/README.md to restore full diagnostics."
+            printf "Skipped endpoints:\n%b" "$DRIFT_SKIPPED_URLS" >&2
+          fi
           if [ "$DRIFT_FATAL" -ne 0 ]; then
             echo "Fatal drift detected (see DRIFT lines above). Failing the deploy." >&2
             exit 1
