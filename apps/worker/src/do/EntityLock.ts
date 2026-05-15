@@ -145,14 +145,30 @@ export class EntityLock {
   }
 }
 
+// Per-table allowlist of columns the EntityLock merge path is permitted to
+// write. Computed columns (intent_score / account_score / fit_score /
+// score_recomputed_at / *_at), foreign keys (account_id), and identity
+// columns (id) are intentionally excluded. The route handlers also pass a
+// sanitized subset, so this is a defense-in-depth check against a malicious
+// or buggy caller bypassing the route allowlist.
+const MERGE_ALLOWLIST: Record<string, ReadonlySet<string>> = {
+  leads:     new Set(["name","org","title","bio","city","email","source_url","status","notes"]),
+  firms:     new Set(["name","website","thesis","hq_city","hq_country_iso2","aum_usd","stage","sector","notes"]),
+  companies: new Set(["name","website","description","hq_city","hq_country_iso2","sector","stage","notes"]),
+  accounts:  new Set(["name","domain","website","industry","sub_industry","employees","employees_range","revenue_range","stage","funding_total_usd","hq_city","hq_country_iso2","description","linkedin_url","notes","status","tier"]),
+  buyers:    new Set(["name","title","email","phone","linkedin_url","role_slug","seniority","department","is_decision_maker","notes","status"]),
+};
+
+export const ALLOWED_MERGE_FIELDS = MERGE_ALLOWLIST;
+
 async function applyMerge(env: Env, table: "leads" | "firms" | "companies" | "accounts" | "buyers", body: MergeRequest): Promise<number> {
-  const fields = Object.entries(body.fields).filter(([, v]) => v != null && v !== "");
+  const allow = MERGE_ALLOWLIST[table];
+  const fields = Object.entries(body.fields).filter(([k, v]) => allow.has(k) && v != null && v !== "");
   if (!fields.length) return 0;
   const sets = fields.map(([k]) => `${k} = ?`).join(", ");
   const binds = fields.map(([, v]) => v);
-  binds.push(body.id);
   await env.DB.prepare(`UPDATE ${table} SET ${sets}, updated_at = COALESCE(updated_at, ?) WHERE id = ?`)
-    .bind(...binds.slice(0, -1), new Date().toISOString(), body.id)
+    .bind(...binds, new Date().toISOString(), body.id)
     .run()
     .catch((e) => console.warn(`applyMerge ${table} failed`, e.message));
   return fields.length;

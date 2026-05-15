@@ -20,7 +20,14 @@ import {
 } from "../prospects/repo";
 import { SIGNAL_KINDS, isSignalKind } from "../prospects/signalKinds";
 import { indexEntity } from "../ai/search_sync";
-import { withEntityLock } from "../do/EntityLock";
+import { withEntityLock, ALLOWED_MERGE_FIELDS } from "../do/EntityLock";
+
+function pickAllowed(table: "accounts" | "buyers", body: Record<string, unknown>): Record<string, unknown> {
+  const allow = ALLOWED_MERGE_FIELDS[table];
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(body)) if (allow.has(k)) out[k] = v;
+  return out;
+}
 
 export const accountsRoute = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 export const buyersRoute = new Hono<{ Bindings: Env; Variables: { email: string } }>();
@@ -129,13 +136,14 @@ accountsRoute.put("/:id", async (c) => {
   // concurrent updates (manual edit + crawler enrichment) cannot race.
   // When the binding is absent (local dev) we fall through to the direct
   // repo path so the route still works.
+  const safeFields = pickAllowed("accounts", body as Record<string, unknown>);
   const lockResp = await withEntityLock(c.env, "account", id, "merge_account", {
-    id, fields: body as Record<string, unknown>, history_source: "api",
+    id, fields: safeFields, history_source: "api",
   });
   if (lockResp && !lockResp.ok) {
     console.warn("EntityLock merge_account failed", lockResp.status);
   }
-  const row = await updateAccount(c.env, id, body, c.get("email"));
+  const row = await updateAccount(c.env, id, safeFields as Partial<AccountRow>, c.get("email"));
   if (!row) return c.json({ error: "not_found" }, 404);
   c.executionCtx.waitUntil(syncAccountAi(c.env, row));
   return c.json({ account: row });
@@ -248,13 +256,14 @@ buyersRoute.put("/:id", async (c) => {
   const body = (await c.req.json().catch(() => null)) as Partial<BuyerRow> | null;
   if (!body) return c.json({ error: "bad_request" }, 400);
   // Serialize concurrent buyer merges (e.g. crawler + manual edit) via DO.
+  const safeFields = pickAllowed("buyers", body as Record<string, unknown>);
   const lockResp = await withEntityLock(c.env, "buyer", id, "merge_buyer", {
-    id, fields: body as Record<string, unknown>, history_source: "api",
+    id, fields: safeFields, history_source: "api",
   });
   if (lockResp && !lockResp.ok) {
     console.warn("EntityLock merge_buyer failed", lockResp.status);
   }
-  const r = await updateBuyer(c.env, id, body);
+  const r = await updateBuyer(c.env, id, safeFields as Partial<BuyerRow>);
   if (!r) return c.json({ error: "not_found" }, 404);
   return c.json({ buyer: r });
 });
