@@ -1,6 +1,7 @@
 // Firms search page (Task #20).
 // Filter form -> querystring -> /api/firms (list), /api/firms/aggregate
-// (summary strip), /api/saved-filters (sidebar).
+// (summary strip), /api/saved-filters (sidebar), /api/taxonomies/sectors
+// (sector multi-select source).
 (function () {
   if (!document.getElementById("ads-firms-filters")) return;
 
@@ -8,28 +9,46 @@
 
   var DEFAULT_COLS = ["name", "kind", "hq", "stages", "sectors", "check_size_typical_usd", "aum_usd", "lead_or_co", "portfolio_count", "last_modified"];
   var ALL_COLS = DEFAULT_COLS.concat(["website", "founded_year", "team_size", "unicorns_count", "exits_count", "contact_email", "status", "quality_score"]);
+  // Maps display column -> server sort key. `hq` is composite, so unsorted.
+  var SORT_KEYS = {
+    name: "name", kind: "kind", check_size_typical_usd: "check_size_typical_usd",
+    aum_usd: "aum_usd", portfolio_count: "portfolio_count",
+    last_modified: "last_modified", founded_year: "founded_year",
+    unicorns_count: "unicorns_count", exits_count: "exits_count",
+    quality_score: "quality_score",
+  };
 
   var state = {
     cols: load("ads_firms_cols", DEFAULT_COLS),
     nextCursor: null,
     items: [],
+    sort_by: "",
+    sort_dir: "desc",
   };
 
   function load(k, fb) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : fb; } catch (_) { return fb; } }
   function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} }
-
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]; }); }
   function fmtMoney(n) { if (!n) return "—"; if (n >= 1e9) return "$" + (n / 1e9).toFixed(1) + "B"; if (n >= 1e6) return "$" + (n / 1e6).toFixed(1) + "M"; if (n >= 1e3) return "$" + (n / 1e3).toFixed(0) + "k"; return "$" + n; }
   function fmtArr(j) { try { var a = JSON.parse(j); return Array.isArray(a) ? a.join(", ") : ""; } catch (_) { return ""; } }
   function fmtDate(d) { return d ? String(d).slice(0, 10) : ""; }
 
+  // Multi-select aware: each multi-select contributes comma-joined values
+  // under a single key — the server's parseFirmFilter already accepts this.
   function buildQS(form) {
-    var fd = new FormData(form);
     var p = new URLSearchParams();
-    fd.forEach(function (v, k) {
-      v = String(v).trim(); if (!v) return;
-      p.append(k, v);
+    Array.prototype.forEach.call(form.elements, function (el) {
+      if (!el.name || el.disabled) return;
+      if (el.type === "checkbox") { if (el.checked) p.set(el.name, el.value || "1"); return; }
+      if (el.tagName === "SELECT" && el.multiple) {
+        var vals = []; for (var i = 0; i < el.options.length; i++) if (el.options[i].selected) vals.push(el.options[i].value);
+        if (vals.length) p.set(el.name, vals.join(","));
+        return;
+      }
+      var v = String(el.value || "").trim();
+      if (v) p.set(el.name, v);
     });
+    if (state.sort_by) { p.set("sort_by", state.sort_by); p.set("sort_dir", state.sort_dir); }
     return p;
   }
 
@@ -37,9 +56,14 @@
     var p = new URLSearchParams(window.location.search);
     var form = document.getElementById("ads-firms-filters");
     p.forEach(function (v, k) {
+      if (k === "sort_by") { state.sort_by = v; return; }
+      if (k === "sort_dir") { state.sort_dir = v; return; }
       var el = form.elements[k]; if (!el) return;
       if (el.type === "checkbox") el.checked = (v === "1" || v === "true");
-      else el.value = v;
+      else if (el.tagName === "SELECT" && el.multiple) {
+        var set = v.split(",");
+        for (var i = 0; i < el.options.length; i++) el.options[i].selected = set.indexOf(el.options[i].value) !== -1;
+      } else el.value = v;
     });
   }
 
@@ -51,7 +75,7 @@
 
   function rowFor(f, col) {
     switch (col) {
-      case "name": return '<a href="/dashboard/firm-detail/?id=' + f.id + '">' + esc(f.name) + '</a>';
+      case "name": return '<a href="/dashboard/firms/detail/?id=' + f.id + '">' + esc(f.name) + '</a>';
       case "kind": return esc(f.kind || "");
       case "hq": return esc([f.hq_city, f.hq_country_iso2].filter(Boolean).join(", "));
       case "stages": return esc(fmtArr(f.stages_json));
@@ -76,8 +100,22 @@
   function renderTable() {
     var thead = document.getElementById("ads-firms-thead");
     thead.innerHTML = state.cols.map(function (c) {
-      return '<th style="text-align:left;padding:6px;border-bottom:1px solid #eee;font-size:12px;text-transform:uppercase;color:#667">' + esc(c) + '</th>';
+      var sortable = !!SORT_KEYS[c];
+      var ind = "";
+      if (sortable && state.sort_by === SORT_KEYS[c]) ind = state.sort_dir === "asc" ? " ▲" : " ▼";
+      var cursor = sortable ? "cursor:pointer" : "cursor:default";
+      return '<th data-col="' + esc(c) + '" style="text-align:left;padding:6px;border-bottom:1px solid #eee;font-size:12px;text-transform:uppercase;color:#667;' + cursor + '">' + esc(c) + esc(ind) + '</th>';
     }).join("");
+    thead.querySelectorAll("th").forEach(function (th) {
+      var col = th.dataset.col, key = SORT_KEYS[col];
+      if (!key) return;
+      th.addEventListener("click", function () {
+        if (state.sort_by === key) state.sort_dir = state.sort_dir === "asc" ? "desc" : "asc";
+        else { state.sort_by = key; state.sort_dir = "asc"; }
+        state.nextCursor = null;
+        loadResults(false);
+      });
+    });
     var tbody = document.getElementById("ads-firms-tbody");
     if (!state.items.length) { tbody.innerHTML = '<tr><td colspan="' + state.cols.length + '" class="ads-muted" style="padding:12px">No matches.</td></tr>'; return; }
     tbody.innerHTML = state.items.map(function (f) {
@@ -88,7 +126,7 @@
     tbody.querySelectorAll("tr").forEach(function (tr) {
       tr.addEventListener("click", function (e) {
         if (e.target && e.target.tagName === "A") return;
-        window.location.href = "/dashboard/firm-detail/?id=" + tr.dataset.id;
+        window.location.href = "/dashboard/firms/detail/?id=" + tr.dataset.id;
       });
     });
     document.getElementById("ads-firms-shown").textContent = state.items.length + " row" + (state.items.length === 1 ? "" : "s");
@@ -96,12 +134,7 @@
     more.hidden = !state.nextCursor;
   }
 
-  function api(path) {
-    return fetch(API_BASE + path, { credentials: "include" }).then(function (r) {
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      return r.json();
-    });
-  }
+  function api(path, opts) { return fetch(API_BASE + path, Object.assign({ credentials: "include" }, opts || {})).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }); }
 
   function loadResults(append) {
     var p = buildQS(document.getElementById("ads-firms-filters"));
@@ -118,6 +151,7 @@
 
   function loadSummary() {
     var p = buildQS(document.getElementById("ads-firms-filters"));
+    p.delete("sort_by"); p.delete("sort_dir");
     return api("/api/firms/aggregate?" + p.toString()).then(function (s) {
       var card = document.getElementById("ads-firms-summary");
       card.querySelector('[data-k="count"]').textContent = (s.count || 0).toLocaleString();
@@ -134,7 +168,7 @@
       var items = (data && data.items) || [];
       if (!items.length) { ul.innerHTML = '<li class="ads-muted">No saved views yet.</li>'; return; }
       ul.innerHTML = items.map(function (v) {
-        return '<li style="margin:4px 0;display:flex;justify-content:space-between;align-items:center"><a href="?' + esc(v.querystring) + '" data-qs="' + esc(v.querystring) + '">' + esc(v.name) + '</a><button class="ads-view-del" data-id="' + v.id + '" style="background:none;border:none;color:#a00;cursor:pointer">&times;</button></li>';
+        return '<li style="margin:4px 0;display:flex;justify-content:space-between;align-items:center"><a href="?' + esc(v.querystring) + '">' + esc(v.name) + '</a><button class="ads-view-del" data-id="' + v.id + '" style="background:none;border:none;color:#a00;cursor:pointer">&times;</button></li>';
       }).join("");
       ul.querySelectorAll(".ads-view-del").forEach(function (b) {
         b.addEventListener("click", function (e) {
@@ -144,6 +178,51 @@
         });
       });
     }).catch(function () { ul.innerHTML = '<li class="ads-muted">Failed to load.</li>'; });
+  }
+
+  function loadSectors() {
+    var sel = document.getElementById("ads-firms-sectors");
+    return api("/api/taxonomies/sectors").then(function (data) {
+      var items = (data && data.items) || [];
+      var preset = (new URLSearchParams(window.location.search).get("sectors") || "").split(",").filter(Boolean);
+      sel.innerHTML = items.map(function (s) {
+        return '<option value="' + esc(s.slug) + '"' + (preset.indexOf(s.slug) !== -1 ? " selected" : "") + '>' + esc(s.label || s.slug) + '</option>';
+      }).join("") || '<option class="ads-muted">No sectors</option>';
+    }).catch(function () { sel.innerHTML = '<option class="ads-muted">Failed</option>'; });
+  }
+
+  // Dual-handle slider: builds two range inputs sharing a track. The min/max
+  // values are mirrored into the form's hidden inputs so buildQS picks them up.
+  function buildDualSliders() {
+    document.querySelectorAll(".ads-dual").forEach(function (host) {
+      var minName = host.dataset.minName, maxName = host.dataset.maxName;
+      var cap = Number(host.dataset.cap || "100000000");
+      var step = Number(host.dataset.step || "1000");
+      var hMin = host.parentNode.querySelector('input[name="' + minName + '"]');
+      var hMax = host.parentNode.querySelector('input[name="' + maxName + '"]');
+      var outId = host.parentNode.querySelector("output");
+      host.innerHTML =
+        '<div class="track"></div><div class="fill"></div>' +
+        '<input type="range" min="0" max="' + cap + '" step="' + step + '" value="0" class="lo">' +
+        '<input type="range" min="0" max="' + cap + '" step="' + step + '" value="' + cap + '" class="hi">';
+      var lo = host.querySelector(".lo"), hi = host.querySelector(".hi"), fill = host.querySelector(".fill");
+      function fmt(n) { if (!n) return "$0"; if (n >= 1e9) return "$" + (n / 1e9).toFixed(1) + "B"; if (n >= 1e6) return "$" + (n / 1e6).toFixed(1) + "M"; if (n >= 1e3) return "$" + (n / 1e3).toFixed(0) + "k"; return "$" + n; }
+      function paint() {
+        var l = Number(lo.value), h = Number(hi.value);
+        if (l > h) { var t = l; l = h; h = t; lo.value = l; hi.value = h; }
+        fill.style.left = (l / cap * 100) + "%";
+        fill.style.right = (100 - h / cap * 100) + "%";
+        hMin.value = l > 0 ? String(l) : "";
+        hMax.value = h < cap ? String(h) : "";
+        if (outId) outId.textContent = (l === 0 && h === cap) ? "any" : (fmt(l) + " – " + fmt(h));
+      }
+      lo.addEventListener("input", paint); hi.addEventListener("input", paint);
+      // Initialize from existing query params
+      var p = new URLSearchParams(window.location.search);
+      if (p.get(minName)) lo.value = p.get(minName);
+      if (p.get(maxName)) hi.value = p.get(maxName);
+      paint();
+    });
   }
 
   function setupColumnsModal() {
@@ -170,8 +249,8 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
-    readQS();
     setupColumnsModal();
+    buildDualSliders();
     document.getElementById("ads-firms-filters").addEventListener("submit", function (e) {
       e.preventDefault();
       state.nextCursor = null;
@@ -179,7 +258,14 @@
     });
     document.getElementById("ads-firms-reset").addEventListener("click", function () {
       var f = document.getElementById("ads-firms-filters"); f.reset();
-      state.nextCursor = null;
+      // Re-init sliders so handles snap back to extremes
+      f.querySelectorAll('input[type="hidden"]').forEach(function (h) { h.value = ""; });
+      f.querySelectorAll('.ads-dual').forEach(function (host) {
+        host.querySelector(".lo").value = 0;
+        host.querySelector(".hi").value = host.querySelector(".hi").max;
+        host.querySelector(".lo").dispatchEvent(new Event("input"));
+      });
+      state.nextCursor = null; state.sort_by = "";
       syncURL(new URLSearchParams());
       loadResults(false); loadSummary();
     });
@@ -194,16 +280,12 @@
       }).then(loadViews);
     });
     document.getElementById("ads-firms-export").addEventListener("click", function () {
-      // Defer to Task #19's export modal: pre-populate via window.adsExport hook
-      // when present, otherwise fall back to opening the dashboard's modal.
       var qs = buildQS(document.getElementById("ads-firms-filters"));
-      var filter = {};
-      qs.forEach(function (v, k) { filter[k] = v; });
+      var filter = {}; qs.forEach(function (v, k) { filter[k] = v; });
       if (window.adsExport && typeof window.adsExport.openCustom === "function") {
         window.adsExport.openCustom({ entity: "firms", filter: filter });
         return;
       }
-      // Fallback: post directly with the firm-default columns and download CSV.
       fetch(API_BASE + "/api/exports/csv", {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -220,6 +302,8 @@
       });
     });
 
-    loadViews(); loadResults(false); loadSummary();
+    // Load taxonomy first so the URL-driven preselect lands on the right rows.
+    loadSectors().then(function () { readQS(); loadResults(false); loadSummary(); });
+    loadViews();
   });
 })();

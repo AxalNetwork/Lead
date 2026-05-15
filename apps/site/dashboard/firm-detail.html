@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Firm detail
-permalink: /dashboard/firm-detail/
+permalink: /dashboard/firms/detail/
 ---
 
 <div id="ads-firm-detail" data-loading>
@@ -18,6 +18,7 @@ permalink: /dashboard/firm-detail/
       </div>
     </div>
     <div style="display:flex;gap:6px">
+      <button class="ads-btn ads-btn--ghost" data-act="edit">Edit</button>
       <button class="ads-btn ads-btn--ghost" data-act="enrich">Enrich</button>
       <button class="ads-btn ads-btn--ghost" data-act="archive">Archive</button>
       <button class="ads-btn ads-btn--ghost" data-act="export">Export</button>
@@ -82,13 +83,36 @@ permalink: /dashboard/firm-detail/
     </section>
 
     <section data-pane="sources" hidden>
-      <h3 style="margin:12px 0 4px;font-size:14px">Sources</h3>
+      <h3 style="margin:12px 0 4px;font-size:14px">Sources <span class="ads-muted" data-k="sources-host"></span></h3>
       <table class="ads-table" style="width:100%;border-collapse:collapse">
-        <thead><tr><th>URL</th><th>Tier</th><th>Status</th><th>Last fetched</th><th>Bytes</th></tr></thead>
-        <tbody data-k="sources-rows"><tr><td colspan="5" class="ads-muted">Loading…</td></tr></tbody>
+        <thead><tr><th>URL</th><th>Tier</th><th>Status</th><th>Last fetched</th><th>Bytes</th><th>Block reason</th></tr></thead>
+        <tbody data-k="sources-rows"><tr><td colspan="6" class="ads-muted">Loading…</td></tr></tbody>
       </table>
     </section>
   </div>
 </template>
+
+<div id="ads-firm-edit-modal" class="ads-modal" hidden style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:200;display:flex;align-items:center;justify-content:center">
+  <form id="ads-firm-edit-form" style="background:#fff;border-radius:8px;width:min(540px,94vw);max-height:84vh;overflow:auto;padding:16px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    <h3 style="grid-column:span 2;margin:0 0 4px">Edit firm</h3>
+    <label class="ads-field" style="grid-column:span 2"><span>Name</span><input name="name"></label>
+    <label class="ads-field"><span>Kind</span>
+      <select name="kind"><option value="">—</option><option>vc</option><option>pe</option><option>family_office</option><option>corp_vc</option><option>angel_group</option><option>accelerator</option><option>gov_fund</option></select>
+    </label>
+    <label class="ads-field"><span>Lead/co</span><select name="lead_or_co"><option value="">—</option><option>lead</option><option>co</option></select></label>
+    <label class="ads-field" style="grid-column:span 2"><span>Website</span><input name="website" type="url"></label>
+    <label class="ads-field"><span>HQ city</span><input name="hq_city"></label>
+    <label class="ads-field"><span>HQ country (ISO2)</span><input name="hq_country_iso2" maxlength="2"></label>
+    <label class="ads-field"><span>Founded year</span><input name="founded_year" type="number"></label>
+    <label class="ads-field"><span>AUM USD</span><input name="aum_usd" type="number"></label>
+    <label class="ads-field"><span>Check size typ. USD</span><input name="check_size_typical_usd" type="number"></label>
+    <label class="ads-field"><span>Contact email</span><input name="contact_email" type="email"></label>
+    <label class="ads-field" style="grid-column:span 2"><span>Thesis</span><textarea name="thesis" rows="3"></textarea></label>
+    <div style="grid-column:span 2;display:flex;gap:6px;justify-content:flex-end;margin-top:8px">
+      <button type="button" class="ads-btn ads-btn--ghost" data-act="edit-cancel">Cancel</button>
+      <button type="submit" class="ads-btn">Save</button>
+    </div>
+  </form>
+</div>
 
 <script src="/assets/js/firm-detail.js?v={{ site.time | date: '%s' }}"></script>

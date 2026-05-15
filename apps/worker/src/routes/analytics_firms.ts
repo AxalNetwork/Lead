@@ -146,11 +146,13 @@ async function liveConnected(env: Env, limit: number) {
     .all<{ id: number; name: string; people_count: number; portfolio_count_actual: number; total: number }>();
   return { items: r.results ?? [] };
 }
+interface ConnectedPayload { items: Array<{ id: number; name: string; people_count: number; portfolio_count_actual: number; total: number }> }
+
 analyticsFirms.get("/connected", async (c) => {
   const limit = Math.min(100, Math.max(5, Number(c.req.query("limit") ?? "20")));
-  const cached = await readMaterialized(c.env, "connected");
-  if (cached && (cached as any).items) {
-    return c.json({ items: (cached as any).items.slice(0, limit) });
+  const cached = (await readMaterialized(c.env, "connected")) as ConnectedPayload | null;
+  if (cached && Array.isArray(cached.items)) {
+    return c.json({ items: cached.items.slice(0, limit) });
   }
   return c.json(await liveConnected(c.env, limit));
 });

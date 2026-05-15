@@ -17,11 +17,10 @@ permalink: /dashboard/firms/
   </aside>
 
   <div>
-    <form id="ads-firms-filters" class="ads-card" autocomplete="off" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;align-items:end">
-      <label class="ads-field"><span>Search</span><input type="text" name="q" placeholder="name or thesis…"></label>
-      <label class="ads-field"><span>Kind</span>
-        <select name="kind">
-          <option value="">all</option>
+    <form id="ads-firms-filters" class="ads-card" autocomplete="off" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;align-items:end">
+      <label class="ads-field" style="grid-column:span 2"><span>Search</span><input type="text" name="q" placeholder="name or thesis…"></label>
+      <label class="ads-field"><span>Kind (multi)</span>
+        <select name="kind" multiple size="4" style="height:auto">
           <option value="vc">vc</option>
           <option value="pe">pe</option>
           <option value="family_office">family_office</option>
@@ -31,20 +30,47 @@ permalink: /dashboard/firms/
           <option value="gov_fund">gov_fund</option>
         </select>
       </label>
-      <label class="ads-field"><span>HQ country (ISO2)</span><input type="text" name="country" maxlength="2"></label>
-      <label class="ads-field"><span>HQ city</span><input type="text" name="city"></label>
-      <label class="ads-field"><span>Stages (comma)</span><input type="text" name="stages" placeholder="seed,series_a"></label>
-      <label class="ads-field"><span>Sectors (comma)</span><input type="text" name="sectors" placeholder="ai,fintech" id="ads-firms-sectors"></label>
-      <label class="ads-field"><span>Invests in (geo, comma)</span><input type="text" name="invests_in" placeholder="us,emea"></label>
+      <label class="ads-field"><span>HQ country (ISO2, comma)</span><input type="text" name="country" placeholder="us,gb,ca"></label>
+      <label class="ads-field"><span>HQ city (contains)</span><input type="text" name="city"></label>
+      <label class="ads-field"><span>Stages (multi)</span>
+        <select name="stages" multiple size="4" style="height:auto">
+          <option value="pre_seed">pre_seed</option>
+          <option value="seed">seed</option>
+          <option value="series_a">series_a</option>
+          <option value="series_b">series_b</option>
+          <option value="series_c">series_c</option>
+          <option value="growth">growth</option>
+          <option value="late">late</option>
+        </select>
+      </label>
+      <label class="ads-field"><span>Sectors (multi, from taxonomy)</span>
+        <select name="sectors" id="ads-firms-sectors" multiple size="4" style="height:auto">
+          <option class="ads-muted">Loading…</option>
+        </select>
+      </label>
+      <label class="ads-field"><span>Invests in geo (multi)</span>
+        <select name="invests_in" multiple size="4" style="height:auto">
+          <option value="us">us</option><option value="ca">ca</option>
+          <option value="emea">emea</option><option value="latam">latam</option>
+          <option value="apac">apac</option><option value="africa">africa</option>
+          <option value="global">global</option>
+        </select>
+      </label>
       <label class="ads-field"><span>Lead/co</span>
         <select name="lead_or_co"><option value="">both</option><option value="lead">lead</option><option value="co">co</option></select>
       </label>
-      <label class="ads-field"><span>Check size USD</span>
-        <div style="display:flex;gap:4px"><input type="number" name="check_min" placeholder="min" style="width:50%"><input type="number" name="check_max" placeholder="max" style="width:50%"></div>
-      </label>
-      <label class="ads-field"><span>AUM USD</span>
-        <div style="display:flex;gap:4px"><input type="number" name="aum_min" placeholder="min" style="width:50%"><input type="number" name="aum_max" placeholder="max" style="width:50%"></div>
-      </label>
+
+      <div class="ads-field" style="grid-column:span 2">
+        <span>Check size USD: <output id="ads-fm-check-out">any</output></span>
+        <div class="ads-dual" data-min-name="check_min" data-max-name="check_max" data-cap="100000000" data-step="50000" data-fmt="money"></div>
+        <input type="hidden" name="check_min"><input type="hidden" name="check_max">
+      </div>
+      <div class="ads-field" style="grid-column:span 2">
+        <span>AUM USD: <output id="ads-fm-aum-out">any</output></span>
+        <div class="ads-dual" data-min-name="aum_min" data-max-name="aum_max" data-cap="50000000000" data-step="10000000" data-fmt="money"></div>
+        <input type="hidden" name="aum_min"><input type="hidden" name="aum_max">
+      </div>
+
       <label class="ads-field"><span>Min portfolio</span><input type="number" name="min_portfolio" min="0"></label>
       <label class="ads-field"><span>Last modified</span>
         <div style="display:flex;gap:4px"><input type="date" name="modified_from" style="width:50%"><input type="date" name="modified_to" style="width:50%"></div>
@@ -53,7 +79,8 @@ permalink: /dashboard/firms/
         <span><input type="checkbox" name="has_unicorns" value="1"> Has unicorns</span>
         <span><input type="checkbox" name="has_email" value="1"> Has contact email</span>
       </label>
-      <div style="grid-column:span 2;display:flex;gap:6px;justify-content:flex-end">
+
+      <div style="grid-column:span 4;display:flex;gap:6px;justify-content:flex-end">
         <button type="button" class="ads-btn ads-btn--ghost" id="ads-firms-reset">Reset</button>
         <button type="button" class="ads-btn ads-btn--ghost" id="ads-firms-columns">Columns…</button>
         <button type="button" class="ads-btn ads-btn--ghost" id="ads-firms-export">Export…</button>
@@ -91,5 +118,14 @@ permalink: /dashboard/firms/
     </div>
   </div>
 </div>
+
+<style>
+  .ads-dual { position:relative; height:36px; padding:14px 0 0 0; }
+  .ads-dual input[type=range] { -webkit-appearance:none; pointer-events:none; position:absolute; left:0; right:0; width:100%; height:6px; background:transparent; }
+  .ads-dual input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; pointer-events:auto; width:16px; height:16px; border-radius:50%; background:#5b8cff; border:2px solid #fff; box-shadow:0 0 0 1px #5b8cff; cursor:pointer; }
+  .ads-dual input[type=range]::-moz-range-thumb { pointer-events:auto; width:16px; height:16px; border-radius:50%; background:#5b8cff; border:2px solid #fff; cursor:pointer; }
+  .ads-dual .track { position:absolute; left:0; right:0; top:18px; height:4px; border-radius:2px; background:#dde3f0; }
+  .ads-dual .fill { position:absolute; top:18px; height:4px; border-radius:2px; background:#5b8cff; }
+</style>
 
 <script src="/assets/js/firms.js?v={{ site.time | date: '%s' }}"></script>

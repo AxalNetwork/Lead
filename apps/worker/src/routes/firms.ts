@@ -41,19 +41,40 @@ function intOrNull(v: string | undefined): number | null {
 // --------- LIST ---------
 // Uses the shared filter parser/builder so /aggregate and analytics drilldowns
 // stay consistent with the search page. Cursor pagination is layered on top.
+// Allowed sort columns. Whitelist prevents SQL injection — anything not in
+// this set falls through to the default `id DESC`.
+const SORTABLE: Record<string, string> = {
+  name: "name", kind: "kind", hq_country_iso2: "hq_country_iso2",
+  hq_city: "hq_city", check_size_typical_usd: "check_size_typical_usd",
+  aum_usd: "aum_usd", portfolio_count: "portfolio_count",
+  unicorns_count: "unicorns_count", exits_count: "exits_count",
+  last_modified: "last_modified", created_at: "created_at",
+  founded_year: "founded_year", quality_score: "quality_score",
+};
+
 firms.get("/", async (c) => {
   const url = new URL(c.req.url);
   const limit = Math.min(Number(url.searchParams.get("limit") ?? "50"), 200);
   const cursor = intOrNull(url.searchParams.get("cursor") ?? undefined);
+  const sortByRaw = url.searchParams.get("sort_by") ?? "";
+  const sortDirRaw = (url.searchParams.get("sort_dir") ?? "desc").toLowerCase();
+  const sortCol = SORTABLE[sortByRaw] ?? "id";
+  const sortDir = sortDirRaw === "asc" ? "ASC" : "DESC";
   const filter = parseFirmFilter(url.searchParams);
   const { sql: whereCore, binds } = buildFirmWhere(filter);
   let whereSql = whereCore;
-  if (cursor != null) {
+  // Cursor pagination is only valid alongside the default id-DESC order. When
+  // the client sorts by a different column, we drop the cursor (UI uses
+  // offset-style pagination via load-more re-issuing the query).
+  if (cursor != null && sortCol === "id" && sortDir === "DESC") {
     whereSql = whereCore ? `${whereCore} AND id < ?` : "WHERE id < ?";
     binds.push(cursor);
   }
+  const orderBy = sortCol === "id"
+    ? `id ${sortDir}`
+    : `${sortCol} ${sortDir} NULLS LAST, id DESC`;
   const r = await c.env.DB
-    .prepare(`SELECT * FROM firms ${whereSql} ORDER BY id DESC LIMIT ?`)
+    .prepare(`SELECT * FROM firms ${whereSql} ORDER BY ${orderBy} LIMIT ?`)
     .bind(...binds, limit + 1)
     .all<Record<string, unknown>>();
   const rows = r.results ?? [];
@@ -237,6 +258,42 @@ firms.get("/:id/history", async (c) => {
     .bind(id)
     .all();
   return c.json({ items: r.results ?? [] });
+});
+
+// --------- SOURCES (server-side join from fetch_log) ---------
+// Direct join on host extracted from the firm's website/domain. We resolve
+// the host server-side rather than asking the client to do it so the URL
+// stays cacheable and we can apply RBAC + tier labels in one shot.
+firms.get("/:id/sources", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isFinite(id)) return c.json({ error: "bad_request" }, 400);
+  const limit = Math.min(200, Math.max(1, Number(c.req.query("limit") ?? "50")));
+  const firm = await c.env.DB
+    .prepare("SELECT domain, website FROM firms WHERE id = ?")
+    .bind(id).first<{ domain: string | null; website: string | null }>();
+  if (!firm) return c.json({ error: "not_found" }, 404);
+  let host = (firm.domain || "").trim().toLowerCase();
+  if (!host && firm.website) {
+    try { host = new URL(firm.website).host.toLowerCase(); } catch { /* invalid url */ }
+  }
+  if (!host) return c.json({ items: [], host: null });
+  // Strip leading www. so the join hits regardless of canonicalization.
+  const hostBare = host.replace(/^www\./, "");
+  const r = await c.env.DB
+    .prepare(
+      `SELECT url, tier, status, bytes, block_reason, duration_ms, created_at
+       FROM fetch_log
+       WHERE host = ? OR host = ?
+       ORDER BY created_at DESC LIMIT ?`,
+    )
+    .bind(host, "www." + hostBare, limit)
+    .all<{ url: string; tier: number; status: number; bytes: number; block_reason: string | null; duration_ms: number; created_at: string }>();
+  const TIER = ["direct", "browser", "proxy", "scraping_api", "wayback", "brave_cache"];
+  const items = (r.results ?? []).map((row) => ({
+    ...row,
+    tier_label: TIER[row.tier] ?? String(row.tier),
+  }));
+  return c.json({ host, items });
 });
 
 // --------- ATTACH PERSON ---------

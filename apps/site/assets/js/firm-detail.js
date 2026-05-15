@@ -1,4 +1,4 @@
-// Firm detail page (Task #20). URL: /dashboard/firm-detail/?id=N
+// Firm detail page (Task #20). URL: /dashboard/firms/detail/?id=N
 (function () {
   var root = document.getElementById("ads-firm-detail");
   if (!root) return;
@@ -13,7 +13,6 @@
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]; }); }
   function fmtMoney(n) { if (!n) return "—"; if (n >= 1e9) return "$" + (n / 1e9).toFixed(1) + "B"; if (n >= 1e6) return "$" + (n / 1e6).toFixed(1) + "M"; if (n >= 1e3) return "$" + (n / 1e3).toFixed(0) + "k"; return "$" + n; }
   function fmtArr(j) { try { var a = JSON.parse(j); return Array.isArray(a) ? a.join(", ") : ""; } catch (_) { return ""; } }
-
   function api(path, opts) { return fetch(API_BASE + path, Object.assign({ credentials: "include" }, opts || {})).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }); }
 
   function setupTabs() {
@@ -84,7 +83,35 @@
     bindActions(firm);
   }
 
+  function openEditModal(firm) {
+    var modal = document.getElementById("ads-firm-edit-modal");
+    var form = document.getElementById("ads-firm-edit-form");
+    ["name","kind","lead_or_co","website","hq_city","hq_country_iso2","founded_year","aum_usd","check_size_typical_usd","contact_email","thesis"].forEach(function (k) {
+      if (form.elements[k]) form.elements[k].value = firm[k] == null ? "" : firm[k];
+    });
+    modal.hidden = false;
+    form.querySelector('[data-act="edit-cancel"]').onclick = function () { modal.hidden = true; };
+    modal.onclick = function (e) { if (e.target === modal) modal.hidden = true; };
+    form.onsubmit = function (e) {
+      e.preventDefault();
+      var patch = {};
+      Array.prototype.forEach.call(form.elements, function (el) {
+        if (!el.name) return;
+        var v = el.value === "" ? null : (el.type === "number" ? Number(el.value) : el.value);
+        // Only send fields that actually changed.
+        if (String(firm[el.name] == null ? "" : firm[el.name]) !== String(el.value)) patch[el.name] = v;
+      });
+      if (!Object.keys(patch).length) { modal.hidden = true; return; }
+      api("/api/firms/" + firm.id, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      }).then(function () { window.location.reload(); })
+        .catch(function (err) { alert("Save failed: " + err.message); });
+    };
+  }
+
   function bindActions(firm) {
+    root.querySelector('[data-act="edit"]').addEventListener("click", function () { openEditModal(firm); });
     root.querySelector('[data-act="find-team"]').addEventListener("click", function () {
       api("/api/firms/" + firm.id + "/crawl-team", { method: "POST" })
         .then(function (r) { alert("Team crawl queued (job " + r.job_id + ")."); })
@@ -99,7 +126,6 @@
       }).then(function () { window.location.reload(); }).catch(function (e) { alert("Failed: " + e.message); });
     });
     root.querySelector('[data-act="enrich"]').addEventListener("click", function () {
-      // Queue the team crawl + enqueue a per-lead enrich for every linked person.
       Promise.all([
         api("/api/firms/" + firm.id + "/crawl-team", { method: "POST" }),
         Promise.all((firm.people || []).filter(function (p) { return p.id; }).map(function (p) {
@@ -109,14 +135,13 @@
     });
     root.querySelector('[data-act="archive"]').addEventListener("click", function () {
       if (!confirm("Archive this firm?")) return;
-      fetch(API_BASE + "/api/firms/" + firm.id, {
-        method: "PATCH", credentials: "include",
-        headers: { "Content-Type": "application/json" },
+      api("/api/firms/" + firm.id, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "archived" }),
       }).then(function () { window.location.reload(); });
     });
     root.querySelector('[data-act="export"]').addEventListener("click", function () {
-      window.location.href = "/dashboard/firms/?" + encodeURIComponent("q=" + (firm.name || ""));
+      window.location.href = "/dashboard/firms/?q=" + encodeURIComponent(firm.name || "");
     });
   }
 
@@ -142,32 +167,28 @@
   function loadSources() {
     var tbody = root.querySelector('[data-k="sources-rows"]');
     if (tbody.dataset.loaded) return;
-    // Pull from /api/jobs?source=<firm.domain> as a proxy: each fetch_log row
-    // surfaces via the job's tier mix. We approximate by listing the most
-    // recent fetch_log rows for the firm's host. The server-side route used
-    // is /api/scrapers/fetch-log?host=... which already exists for diagnostics.
-    var host = (window.__firmDomain || "").replace(/^https?:\/\//, "").replace(/\/.*$/, "");
-    if (!host) { tbody.innerHTML = '<tr><td colspan="5" class="ads-muted">No host known.</td></tr>'; tbody.dataset.loaded = "1"; return; }
-    fetch(API_BASE + "/api/scrapers/fetch-log?host=" + encodeURIComponent(host) + "&limit=50", { credentials: "include" })
-      .then(function (r) { return r.ok ? r.json() : { items: [] }; })
-      .then(function (data) {
-        var items = (data && data.items) || [];
-        tbody.innerHTML = items.length ? items.map(function (s) {
-          return "<tr>" +
-            "<td>" + (s.url ? '<a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.url) + "</a>" : "") + "</td>" +
-            "<td>" + (s.tier != null ? s.tier : "") + "</td>" +
-            "<td>" + esc(s.status || "") + "</td>" +
-            "<td>" + esc(s.created_at || "") + "</td>" +
-            "<td>" + (s.bytes != null ? s.bytes : "") + "</td>" +
-            "</tr>";
-        }).join("") : '<tr><td colspan="5" class="ads-muted">No fetches recorded.</td></tr>';
-        tbody.dataset.loaded = "1";
-      })
-      .catch(function () { tbody.innerHTML = '<tr><td colspan="5" class="ads-muted">Failed to load.</td></tr>'; tbody.dataset.loaded = "1"; });
+    api("/api/firms/" + firmId + "/sources?limit=50").then(function (data) {
+      var hostEl = root.querySelector('[data-k="sources-host"]');
+      hostEl.textContent = data.host ? "(" + data.host + ")" : "";
+      var items = data.items || [];
+      tbody.innerHTML = items.length ? items.map(function (s) {
+        return "<tr>" +
+          "<td>" + (s.url ? '<a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.url) + "</a>" : "") + "</td>" +
+          "<td>" + esc(s.tier_label || "") + "</td>" +
+          "<td>" + (s.status || "") + "</td>" +
+          "<td>" + esc(s.created_at || "") + "</td>" +
+          "<td>" + (s.bytes != null ? s.bytes : "") + "</td>" +
+          "<td>" + esc(s.block_reason || "") + "</td>" +
+          "</tr>";
+      }).join("") : '<tr><td colspan="6" class="ads-muted">No fetches recorded.</td></tr>';
+      tbody.dataset.loaded = "1";
+    }).catch(function () {
+      tbody.innerHTML = '<tr><td colspan="6" class="ads-muted">Failed to load.</td></tr>';
+      tbody.dataset.loaded = "1";
+    });
   }
 
   api("/api/firms/" + firmId).then(function (firm) {
-    window.__firmDomain = firm.domain || (firm.website || "").replace(/^https?:\/\//, "").replace(/\/.*$/, "");
     document.title = (firm.name || "Firm") + " — AI Data Signal";
     render(firm);
   }).catch(function () {
