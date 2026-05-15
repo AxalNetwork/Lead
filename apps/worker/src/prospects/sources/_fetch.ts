@@ -40,7 +40,8 @@ export async function compliantFetch(
   try { host = new URL(url).hostname; } catch { return { ok: false, status: 0, body: "", blocked: "bad_url" }; }
 
   // ToS allowlist — same gate the deterministic crawler uses.
-  const tos = tosBlockedReason(url);
+  // tosBlockedReason matches by hostname suffix, so pass the host (not URL).
+  const tos = tosBlockedReason(host);
   if (tos) {
     console.warn("compliantFetch tos_blocked", source, host, tos);
     return null;
