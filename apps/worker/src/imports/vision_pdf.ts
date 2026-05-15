@@ -278,7 +278,13 @@ export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer, op
   const pdfTabNames = detectTabStripNames(pages.map((p) => p.pdfText));
   const visionTabNames: string[] = [];
   const images = pages.map((p) => p.jpeg).filter((b): b is Uint8Array => b !== null);
-  if (!images.length) return [];
+  if (!images.length) {
+    // Whole-PDF vision fallback: many image-PDFs embed image objects we
+    // can't decode (non-JPEG XObjects, JPX, inline images). Send the entire
+    // PDF bytes to the vision model as a last resort so we don't hard-fail
+    // with no_table_found on otherwise-readable scans.
+    return await wholePdfFallback(env, bytes, opts);
+  }
 
   const model = env.AI_VISION_MODEL ?? VISION_MODEL_DEFAULT;
   const out: ParsedTable[] = [];
@@ -349,6 +355,48 @@ export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer, op
         lastHeaderKey = headerKey;
       }
     }
+  }
+  return out;
+}
+
+/** Whole-PDF vision fallback: send the raw PDF bytes to the vision model
+ *  with the same extract-tables prompt. Used when per-page JPEG extraction
+ *  yields no decodable bitmaps. Cached by content hash. */
+async function wholePdfFallback(env: Env, bytes: ArrayBuffer, opts: { skipOcr?: boolean }): Promise<ParsedTable[]> {
+  if (!env.AI) return [];
+  const ai = env.AI;
+  const u8 = new Uint8Array(bytes);
+  const model = env.AI_VISION_MODEL ?? VISION_MODEL_DEFAULT;
+  const cacheKey = await sha256Hex(`${model}:vision-tables-pdf:` + (await sha256Hex(bytesToBase64(u8))));
+  let parsed: VisionParse | null = await aiCacheGet<VisionParse>(env, cacheKey);
+  if (!parsed && opts.skipOcr) return [];
+  if (!parsed) {
+    if (!(await limitAi(env))) return [];
+    try {
+      const res = (await ai.run(model, {
+        image: Array.from(u8),
+        prompt: "Extract every tabular row visible in this PDF as strict JSON {tables:[{headers,rows}]}. Skip page numbers, watermarks, and prose." + VISION_TAB_STRIP_PROMPT,
+        max_tokens: 4096,
+        response_format: { type: "json_schema", json_schema: VISION_TABLE_SCHEMA },
+      })) as { response?: string; tables?: Array<{ headers: string[]; rows: string[][] }>; tab_strip?: string[] };
+      parsed = parseTables(res);
+    } catch { parsed = { tables: [], tabStrip: [] }; }
+    await aiCachePut(env, cacheKey, parsed);
+  }
+  const out: ParsedTable[] = [];
+  let idx = -1;
+  for (const t of parsed.tables) {
+    if (!Array.isArray(t.headers) || t.headers.length < 2) continue;
+    if (!Array.isArray(t.rows) || t.rows.length < 1) continue;
+    const headers = t.headers.map((h) => String(h || "").trim());
+    const rows = t.rows.map((r) => {
+      const obj: Record<string, string> = {};
+      for (let c = 0; c < headers.length; c++) obj[headers[c] || `col_${c}`] = String(r?.[c] ?? "").trim();
+      return obj;
+    }).filter((r) => Object.values(r).some((v) => v.length > 0));
+    if (!rows.length) continue;
+    idx++;
+    out.push({ headers, rows, confidence: 0.5, sheetName: parsed.tabStrip[idx] });
   }
   return out;
 }

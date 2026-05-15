@@ -151,15 +151,14 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
             // Force kind=gov_fund when the tab subkind says so.
             if (subkind === "gov_fund" && !projected.fields.kind) projected.fields.kind = "gov_fund";
             const r = await tryUpsertFirm(env, await projected.awaited(), sourceUrl, importedFrom);
-            if (r.action === "created") { sum.firms_created++; firmsCreatedHere++; }
-            else if (r.action === "updated") { sum.firms_updated++; firmsUpdatedHere++; }
+            if (r.action === "created") { sum.firms_created++; firmsCreatedHere++; sum.rows_imported++; }
+            else if (r.action === "updated") { sum.firms_updated++; firmsUpdatedHere++; sum.rows_imported++; }
             else if (r.action === "skip") sum.rows_skipped++;
-            else if (r.action === "error") sum.errors.push(`firm:${(projected.fields.name ?? "?").slice(0, 40)}`);
+            else if (r.action === "error") { sum.rows_skipped++; sum.errors.push(`firm:${(projected.fields.name ?? "?").slice(0, 40)}`); }
             if (r.firmId != null) {
               firmIdsTouched.add(r.firmId);
               if (fallbackFirmId == null) fallbackFirmId = r.firmId;
             }
-            sum.rows_imported++;
           }
           await env.DB.prepare(
             `UPDATE file_imports SET rows_imported = ?, firms_created = ?, firms_updated = ?, updated_at = ? WHERE id = ?`,
@@ -178,11 +177,10 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
             const projected = projectAndCoerceRow(raw, columnMap, env);
             const fields = (await projected.awaited()).fields;
             const r = await tryInsertLead(env, fields, importId, importedFrom, sourceUrl, inserts);
-            if (r === "created") sum.leads_created++;
-            else if (r === "merged") sum.leads_updated++;
+            if (r === "created") { sum.leads_created++; sum.rows_imported++; }
+            else if (r === "merged") { sum.leads_updated++; sum.rows_imported++; }
             else if (r === "skip") sum.rows_skipped++;
-            else if (r === "error") sum.errors.push(`lead:${(fields.name ?? "?").slice(0, 40)}`);
-            sum.rows_imported++;
+            else if (r === "error") { sum.rows_skipped++; sum.errors.push(`lead:${(fields.name ?? "?").slice(0, 40)}`); }
           }
           if (inserts.length) await env.DB.batch(inserts);
         }
@@ -270,7 +268,8 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
     merged.jobsQueued = queuedJobs;
     merged.warnings = warnings;
     merged.rows_imported_total = totalImported;
-    merged.rows_updated_total = totalFirmsUpdated;
+    // Aggregate matches per-tab semantics (firms + leads updates).
+    merged.rows_updated_total = totalFirmsUpdated + totalLeadsUpdated;
     merged.rows_rejected_total = totalSkipped;
     merged.metrics_inserted = totalMetricsInserted;
     merged.leads_created = totalLeadsCreated;
