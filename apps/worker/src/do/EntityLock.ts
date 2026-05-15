@@ -152,11 +152,25 @@ export class EntityLock {
 // sanitized subset, so this is a defense-in-depth check against a malicious
 // or buggy caller bypassing the route allowlist.
 const MERGE_ALLOWLIST: Record<string, ReadonlySet<string>> = {
-  leads:     new Set(["name","org","title","bio","city","email","source_url","status","notes"]),
-  firms:     new Set(["name","website","thesis","hq_city","hq_country_iso2","aum_usd","stage","sector","notes"]),
-  companies: new Set(["name","website","description","hq_city","hq_country_iso2","sector","stage","notes"]),
-  accounts:  new Set(["name","domain","website","industry","sub_industry","employees","employees_range","revenue_range","stage","funding_total_usd","hq_city","hq_country_iso2","description","linkedin_url","notes","status","tier"]),
-  buyers:    new Set(["name","title","email","phone","linkedin_url","role_slug","seniority","department","is_decision_maker","notes","status"]),
+  // Note: lead/firm/company allowlists pre-date Task #44; they were
+  // forwarded raw before. Keeping a permissive shape that matches the
+  // existing merge body fields used by the older crawler call sites.
+  leads:     new Set(["name","org","title","bio","city","email","source_url"]),
+  firms:     new Set(["name","website","thesis","hq_city","hq_country_iso2"]),
+  companies: new Set(["name","website","description","hq_city","hq_country_iso2"]),
+  accounts:  new Set([
+    "name","legal_name","domain","website","logo_id","description",
+    "industry","industries_json","size_band","employees","founded_year",
+    "hq_country_iso2","hq_region","hq_city","timezone",
+    "funding_stage","total_funding_usd","last_round_usd","last_round_at","revenue_band",
+    "linkedin_url","crunchbase_url","twitter_handle","github_org",
+    "status","owner_email","source_url","imported_from","meta_json","last_enriched_at",
+  ]),
+  buyers:    new Set([
+    "name","email","title","role_slug","seniority","department",
+    "linkedin_url","twitter_url","phone",
+    "is_decision_maker","is_champion","last_seen_at","meta_json",
+  ]),
 };
 
 export const ALLOWED_MERGE_FIELDS = MERGE_ALLOWLIST;
