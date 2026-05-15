@@ -105,8 +105,27 @@
             : '<p class="ads-muted">No signals contributing yet.</p>') +
         "</div>" +
         "<div><h4>Fit</h4><p>" + bar(s.fit_score != null ? s.fit_score : d.account.fit_score) + "</p>" +
-          "<p class=\"ads-muted\">Set by the persona profiler. Until that ships fits remain at 0.</p>" +
-          "<h4>Account = 0.6·intent + 0.4·fit</h4><p>" + bar(s.account_score != null ? s.account_score : d.account.account_score) + "</p>" +
+          (function () {
+            var fb = s.fit_breakdown || {};
+            var comps = fb.components || [];
+            var head = fb.icp_name ? '<p class="ads-muted">ICP: ' + esc(fb.icp_name) + ' — weighted avg of industry · size · geo · funding · buyer-role coverage.</p>' :
+              '<p class="ads-muted">Weighted avg of industry · size · geo · funding · buyer-role coverage.</p>';
+            if (!comps.length) return head + '<p class="ads-muted">No fit components yet.</p>';
+            return head + '<table style="width:100%;border-collapse:collapse"><thead><tr>' +
+              '<th align="left" style="padding:4px">Component</th>' +
+              '<th align="right" style="padding:4px">Score</th>' +
+              '<th align="right" style="padding:4px">Weight</th>' +
+              '<th align="left" style="padding:4px">Why</th></tr></thead><tbody>' +
+              comps.map(function (c) {
+                return '<tr>' +
+                  '<td style="padding:4px">' + esc(c.name) + '</td>' +
+                  '<td style="padding:4px;text-align:right">' + bar(c.score) + '</td>' +
+                  '<td style="padding:4px;text-align:right">' + esc(c.weight) + '</td>' +
+                  '<td style="padding:4px">' + esc(c.reason || '') + '</td>' +
+                "</tr>";
+              }).join("") + "</tbody></table>";
+          })() +
+          "<h4 style=\"margin-top:12px\">Account = 0.6·intent + 0.4·fit</h4><p>" + bar(s.account_score != null ? s.account_score : d.account.account_score) + "</p>" +
         "</div>" +
       "</div>";
   }

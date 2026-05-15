@@ -176,14 +176,13 @@ accountsRoute.get("/:id/score", async (c) => {
   const id = c.req.param("id");
   const r = await recomputeAccountScore(c.env, id);
   if (!r) return c.json({ error: "not_found" }, 404);
-  const cur = await getAccount(c.env, id);
   return c.json({
     account_id: id,
     intent_score: r.intent.intent_score,
-    fit_score: r.fit,
+    fit_score: r.fit.fit_score,
     account_score: r.account,
     intent_breakdown: { by_kind: r.intent.by_kind, raw_sum: r.intent.raw_sum, signal_count: r.intent.signal_count, newest_at: r.intent.newest_at },
-    fit_breakdown: parseJson<unknown>(cur?.fit_breakdown_json ?? null, null),
+    fit_breakdown: { icp_id: r.fit.icp_id, icp_name: r.fit.icp_name, components: r.fit.components, computed_at: r.fit.computed_at },
     formula: { intent_blend: 0.6, fit_blend: 0.4, half_life_days: 30, scale: 25 },
   });
 });

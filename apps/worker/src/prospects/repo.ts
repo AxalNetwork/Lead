@@ -7,6 +7,7 @@
 import type { Env } from "../types";
 import { assertSignalKind, DEFAULT_WEIGHT, type SignalKind } from "./signalKinds";
 import { blendAccountScore, computeIntent, type IntentResult } from "./score";
+import { computeFit, DEFAULT_ICP, type FitResult, type RoleTaxonomyRow } from "./fit";
 
 export interface AccountRow {
   id: string;
@@ -427,16 +428,39 @@ export async function listHistory(env: Env, accountId: string, limit = 100): Pro
 }
 
 // ----- score recompute
-export async function recomputeAccountScore(env: Env, accountId: string): Promise<{ intent: IntentResult; fit: number; account: number } | null> {
+//
+// Task #51: also (re)computes accounts.fit_score and fit_breakdown_json
+// from the default ICP (industry/size/geo/funding + buyer role coverage).
+// Until per-ICP scoring lands the call site is unchanged; the dashboard
+// "Score breakdown" tab now sees real fit components instead of 0.
+async function loadRoleTaxonomy(env: Env): Promise<Map<string, RoleTaxonomyRow>> {
+  const out = new Map<string, RoleTaxonomyRow>();
+  try {
+    const r = await env.DB.prepare(`SELECT slug, department, seniority, decision_maker, aliases_json FROM role_taxonomy`).all<RoleTaxonomyRow>();
+    for (const row of r.results ?? []) out.set(row.slug, row);
+  } catch (e) {
+    console.warn("loadRoleTaxonomy failed", (e as Error).message);
+  }
+  return out;
+}
+
+export async function recomputeAccountScore(env: Env, accountId: string): Promise<{ intent: IntentResult; fit: FitResult; account: number } | null> {
   const cur = await getAccount(env, accountId);
   if (!cur) return null;
   const sigs = await env.DB.prepare(`SELECT kind, weight, confidence, occurred_at FROM signals WHERE account_id = ?`).bind(accountId).all<{ kind: string; weight: number; confidence: number; occurred_at: string }>();
   const intent = computeIntent(sigs.results ?? []);
-  const fit = cur.fit_score ?? 0;
-  const account = blendAccountScore(intent.intent_score, fit);
-  const breakdownPayload = JSON.stringify({ by_kind: intent.by_kind, raw_sum: intent.raw_sum, signal_count: intent.signal_count, newest_at: intent.newest_at });
+  const buyers = await listBuyers(env, accountId);
+  const taxonomy = await loadRoleTaxonomy(env);
+  const fit = computeFit(cur, buyers, taxonomy, DEFAULT_ICP);
+  const account = blendAccountScore(intent.intent_score, fit.fit_score);
+  const intentBreakdownPayload = JSON.stringify({ by_kind: intent.by_kind, raw_sum: intent.raw_sum, signal_count: intent.signal_count, newest_at: intent.newest_at });
+  const fitBreakdownPayload = JSON.stringify({
+    icp_id: fit.icp_id, icp_name: fit.icp_name,
+    components: fit.components, computed_at: fit.computed_at,
+  });
   const now = new Date().toISOString();
-  await env.DB.prepare(`UPDATE accounts SET intent_score = ?, account_score = ?, intent_breakdown_json = ?, score_recomputed_at = ?, updated_at = ? WHERE id = ?`)
-    .bind(intent.intent_score, account, breakdownPayload, now, now, accountId).run();
+  await env.DB.prepare(`UPDATE accounts SET intent_score = ?, fit_score = ?, account_score = ?, intent_breakdown_json = ?, fit_breakdown_json = ?, score_recomputed_at = ?, updated_at = ? WHERE id = ?`)
+    .bind(intent.intent_score, fit.fit_score, account, intentBreakdownPayload, fitBreakdownPayload, now, now, accountId).run();
   return { intent, fit, account };
 }
+
