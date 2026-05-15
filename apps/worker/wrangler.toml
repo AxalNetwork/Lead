@@ -197,7 +197,12 @@ pattern = "api.aidatasignal.com"
 custom_domain = true
 
 [triggers]
-# Every 6 hours: re-scrape stale sources + re-enrich stale leads.
-# 03:15 UTC nightly: roll up lead_quality_snapshots, source_kpis_daily,
-# pipeline_kpis_daily, and dashboard_snapshots.
-crons = ["0 * * * *", "0 */6 * * *", "15 3 * * *", "20 3 * * *", "30 3 * * *", "45 3 * * *", "10 4 * * *"]
+# Free plan caps cron triggers at 5 per Worker. We use 3:
+#   `0 * * * *`     hourly — buyer-signal crawl (Task #45).
+#   `0 */6 * * *`   every 6h — re-scrape stale sources + re-enrich stale leads.
+#   `15 3 * * *`    nightly — runs ALL nightly jobs sequentially:
+#       analytics aggregator → account-score refresh → investor stats
+#       → relationship derivation → project match refresh.
+#       Previously 5 separate cron times (15/20/30/45 03:UTC, 10 04:UTC)
+#       but Free plan limit is 5 crons total; consolidated into one slot.
+crons = ["0 * * * *", "0 */6 * * *", "15 3 * * *"]

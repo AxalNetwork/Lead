@@ -23,52 +23,6 @@ interface LeadRow {
  * (>30d, or p0/p1 >7d, capped at 500/run). Called every 6h via wrangler.toml.
  */
 export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-  // Cron 15 3 * * * → nightly analytics aggregator. The cron string itself
-  // is matched in wrangler.toml; here we route by the scheduled-event cron.
-  if (event && (event as ScheduledEvent).cron === "15 3 * * *") {
-    ctx.waitUntil(
-      runNightlyAggregator(env).catch((e) => console.error("nightly aggregator failed", (e as Error).message)),
-    );
-    return;
-  }
-  // Cron 45 3 * * * → nightly relationship derivation. Runs after the
-  // analytics aggregator so any new entities created today are picked up.
-  if (event && (event as ScheduledEvent).cron === "45 3 * * *") {
-    ctx.waitUntil(
-      runRelationshipDerivation(env)
-        .then((r) => console.log("relationship derivation done", JSON.stringify(r)))
-        .catch((e) => console.error("relationship derivation failed", (e as Error).message)),
-    );
-    return;
-  }
-  // Cron 20 3 * * * → Task #44 nightly account-score refresh. Re-decays
-  // intent for stale rows (score_recomputed_at NULL or > 24h old) and
-  // ensures the role_taxonomy seed has been applied at least once.
-  if (event && (event as ScheduledEvent).cron === "20 3 * * *") {
-    ctx.waitUntil((async () => {
-      try {
-        await ensureRoleTaxonomySeeded(env);
-        const r = await env.DB.prepare(
-          `SELECT id FROM accounts
-            WHERE status NOT IN ('lost','disqualified')
-              AND (score_recomputed_at IS NULL OR datetime(score_recomputed_at) < datetime('now','-1 day'))
-            ORDER BY score_recomputed_at IS NULL DESC, score_recomputed_at ASC
-            LIMIT 1000`,
-        ).all<{ id: string }>();
-        let n = 0;
-        for (const row of r.results ?? []) {
-          try { await recomputeAccountScore(env, row.id); n += 1; } catch (e) { console.warn("nightly account score failed", row.id, (e as Error).message); }
-        }
-        console.log("nightly account scores done", n);
-      } catch (e) {
-        console.error("nightly account scores failed", (e as Error).message);
-      }
-    })());
-    return;
-  }
-  // Cron 30 3 * * * → recompute investor counters + snapshot daily stats
-  // (Task #24). Runs between the analytics aggregator (15) and relationship
-  // derivation (45) so today's snapshot is fresh when downstream jobs read.
   // Cron 0 * * * * → Task #45 hourly buyer-signal crawl. Dispatches the
   // CrawlSignalsWorkflow when bound; otherwise runs the source registry
   // directly so dev environments without workflows still produce signals.
@@ -89,11 +43,57 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
     })());
     return;
   }
-  // Cron 10 4 * * * → Task #47 nightly project match refresh. Walks
-  // every active project and dispatches MatchProjectWorkflow (or runs
-  // the matcher inline when the WF binding is absent).
-  if (event && (event as ScheduledEvent).cron === "10 4 * * *") {
+  // Cron 15 3 * * * → consolidated nightly job (Free plan caps crons at 5).
+  // Runs every nightly task sequentially:
+  //   1. analytics aggregator (lead_quality / source_kpis / pipeline_kpis /
+  //      dashboard_snapshots rollups)
+  //   2. account-score refresh (Task #44 — re-decay intent for stale rows)
+  //   3. investor stats (Task #24 — counters + daily snapshot)
+  //   4. relationship derivation (runs after analytics so today's entities
+  //      are picked up)
+  //   5. project match refresh (Task #47 — re-dispatch MatchProjectWorkflow
+  //      for every active project)
+  if (event && (event as ScheduledEvent).cron === "15 3 * * *") {
     ctx.waitUntil((async () => {
+      // 1. Analytics aggregator
+      try { await runNightlyAggregator(env); } catch (e) { console.error("nightly aggregator failed", (e as Error).message); }
+
+      // 2. Account-score refresh
+      try {
+        await ensureRoleTaxonomySeeded(env);
+        const r = await env.DB.prepare(
+          `SELECT id FROM accounts
+            WHERE status NOT IN ('lost','disqualified')
+              AND (score_recomputed_at IS NULL OR datetime(score_recomputed_at) < datetime('now','-1 day'))
+            ORDER BY score_recomputed_at IS NULL DESC, score_recomputed_at ASC
+            LIMIT 1000`,
+        ).all<{ id: string }>();
+        let n = 0;
+        for (const row of r.results ?? []) {
+          try { await recomputeAccountScore(env, row.id); n += 1; } catch (e) { console.warn("nightly account score failed", row.id, (e as Error).message); }
+        }
+        console.log("nightly account scores done", n);
+      } catch (e) {
+        console.error("nightly account scores failed", (e as Error).message);
+      }
+
+      // 3. Investor stats
+      try {
+        const r = await runInvestorStats(env);
+        console.log("investor stats done", JSON.stringify(r));
+      } catch (e) {
+        console.error("investor stats failed", (e as Error).message);
+      }
+
+      // 4. Relationship derivation
+      try {
+        const r = await runRelationshipDerivation(env);
+        console.log("relationship derivation done", JSON.stringify(r));
+      } catch (e) {
+        console.error("relationship derivation failed", (e as Error).message);
+      }
+
+      // 5. Project match refresh
       try {
         const r = await env.DB.prepare(`SELECT id FROM projects WHERE deleted_at IS NULL AND status = 'active' ORDER BY last_modified DESC LIMIT 200`).all<{ id: string }>();
         for (const row of r.results ?? []) {
@@ -110,14 +110,6 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         console.error("nightly project match refresh failed", (e as Error).message);
       }
     })());
-    return;
-  }
-  if (event && (event as ScheduledEvent).cron === "30 3 * * *") {
-    ctx.waitUntil(
-      runInvestorStats(env)
-        .then((r) => console.log("investor stats done", JSON.stringify(r)))
-        .catch((e) => console.error("investor stats failed", (e as Error).message)),
-    );
     return;
   }
   const r = await env.DB.prepare(
