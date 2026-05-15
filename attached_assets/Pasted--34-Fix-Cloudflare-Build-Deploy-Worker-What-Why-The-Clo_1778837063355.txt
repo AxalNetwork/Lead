@@ -1,0 +1,33 @@
+#34 - Fix Cloudflare Build & Deploy Worker
+
+What & Why
+
+The Cloudflare Pages / Workers build is failing on the latest push to origin/main. The user pasted the build log but the file was lost in session cleanup, so the executor must reproduce the failure locally, diagnose, fix, and confirm a successful wrangler deploy of the worker (and a successful Pages build of the site if Pages is wired in too).
+
+Done looks like
+
+cd apps/worker && npx wrangler deploy completes successfully against account 30c9362191318777b71647145decda48, with all bindings (D1 ecd7272e-533d-4e01-81ba-e1b98bce6e1c, KV, R2 RAW_HTML + UPLOADS, Queues, Browser Rendering, AI) intact and nodejs_compat enabled.
+The deployed worker responds 200 on https://api.aidatasignal.com/health.
+The Cloudflare Pages build for apps/site (Jekyll) goes green again and https://aidatasignal.com/ serves the latest commit.
+All migrations through 130_file_imports.sql are applied to the remote D1 (wrangler d1 migrations apply DB --remote).
+apps/worker/wrangler.toml is checked in and matches the deployed configuration; no required secrets are missing in the dashboard.
+Out of scope
+
+New feature work, schema changes, or refactors beyond the minimum needed to make the build pass.
+Changes to Task #24 / #25 scope.
+Touching production data beyond the migration apply step.
+Steps
+
+Reproduce the failure — run the same build command Cloudflare runs (worker: npx wrangler deploy --dry-run; pages: bundle exec jekyll build) and capture the actual error. Inspect Cloudflare dashboard build logs via the API token if helpful.
+Fix the build — most likely culprits given recent Task #22 work: missing xlsx peer / dynamic-import warning, missing UPLOADS R2 binding in wrangler.toml, missing queue producer/consumer entries, or migration not applied. Patch whatever the log actually shows.
+Apply remote migrations — run wrangler d1 migrations apply DB --remote so the deployed worker doesn't crash on missing file_imports table.
+Deploy — wrangler deploy the worker, trigger a Pages rebuild, and smoke-test /health, /api/uploads, and the dashboard page.
+Document any config delta in replit.md so subsequent agents don't re-introduce the failure.
+Relevant files
+
+apps/worker/wrangler.toml
+apps/worker/package.json
+apps/worker/src/index.ts
+apps/worker/migrations/130_file_imports.sql
+apps/site/_config.yml
+apps/site/Gemfile

@@ -40,6 +40,39 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # Task #35: Pre-create any R2 buckets declared in wrangler.toml so
+      # `wrangler deploy` doesn't 10085 on a missing bucket. The Cloudflare
+      # API returns code 10004 when the bucket already exists, which we
+      # treat as success. We extract bucket_name values from wrangler.toml
+      # to keep the list authoritative in one place.
+      - name: Ensure R2 buckets exist
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: 30c9362191318777b71647145decda48
+        run: |
+          set -euo pipefail
+          BUCKETS=$(grep -E '^bucket_name' wrangler.toml | sed -E 's/.*"([^"]+)".*/\1/' | sort -u)
+          if [ -z "$BUCKETS" ]; then
+            echo "No R2 buckets declared in wrangler.toml; skipping."
+            exit 0
+          fi
+          for B in $BUCKETS; do
+            echo "Ensuring R2 bucket: $B"
+            RESP=$(curl -sS -X POST \
+              "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/r2/buckets" \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "{\"name\":\"${B}\"}")
+            if echo "$RESP" | grep -q '"success":true'; then
+              echo "  created."
+            elif echo "$RESP" | grep -q '"code":10004'; then
+              echo "  already exists — ok."
+            else
+              echo "  unexpected response: $RESP" >&2
+              exit 1
+            fi
+          done
+
       - name: Deploy via wrangler
         uses: cloudflare/wrangler-action@v3
         with:
