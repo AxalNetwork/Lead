@@ -75,9 +75,9 @@ jobs:
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
               -H "Content-Type: application/json" \
               --data "{\"name\":\"${B}\"}")
-            if echo "$RESP" | grep -q '"success":true'; then
+            if echo "$RESP" | grep -qE '"success":[[:space:]]*true'; then
               echo "  created."
-            elif echo "$RESP" | grep -q '"code":10004'; then
+            elif echo "$RESP" | grep -qE '"code":[[:space:]]*10004'; then
               echo "  already exists — ok."
             else
               echo "  unexpected response: $RESP" >&2
@@ -139,11 +139,11 @@ jobs:
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
               -H "Content-Type: application/json" \
               --data "{\"name\":\"${I}\",\"config\":{\"dimensions\":${DIM},\"metric\":\"${METRIC}\"}}")
-            if echo "$RESP" | grep -q '"success":true'; then
+            if echo "$RESP" | grep -qE '"success":[[:space:]]*true'; then
               echo "  created."
-            elif echo "$RESP" | grep -q '"code":3149' || echo "$RESP" | grep -qi 'already exists'; then
+            elif echo "$RESP" | grep -qE '"code":[[:space:]]*3149' || echo "$RESP" | grep -qi 'already exists'; then
               echo "  already exists — ok."
-            elif echo "$RESP" | grep -q '"code":10000' || echo "$RESP" | grep -qi 'authentication error'; then
+            elif echo "$RESP" | grep -qE '"code":[[:space:]]*10000' || echo "$RESP" | grep -qi 'authentication error'; then
               # Task #69: code:10000 here means the CLOUDFLARE_API_TOKEN is
               # missing the Vectorize Edit scope. Fail hard so the operator
               # rotates the token — see apps/worker/README.md "Required
@@ -181,9 +181,9 @@ jobs:
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
               -H "Content-Type: application/json" \
               --data "{\"queue_name\":\"${Q}\"}")
-            if echo "$RESP" | grep -q '"success":true'; then
+            if echo "$RESP" | grep -qE '"success":[[:space:]]*true'; then
               echo "  created."
-            elif echo "$RESP" | grep -q '"code":100123' || echo "$RESP" | grep -qi 'already exists'; then
+            elif echo "$RESP" | grep -qE '"code":[[:space:]]*100123' || echo "$RESP" | grep -qi 'already exists'; then
               echo "  already exists — ok."
             else
               echo "  unexpected response: $RESP" >&2
@@ -219,11 +219,11 @@ jobs:
               "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/analytics_engine/sql" \
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
               --data "SELECT 1 FROM \"${D}\" LIMIT 1")
-            if echo "$RESP" | grep -q '"success":true'; then
+            if echo "$RESP" | grep -qE '"success":[[:space:]]*true'; then
               echo "  exists and queryable — ok."
             elif echo "$RESP" | grep -qiE 'table.*not found|unknown table|no such table|does not exist'; then
               echo "  not yet written to — will be auto-provisioned on first writeDataPoint."
-            elif echo "$RESP" | grep -q '"code":10000' || echo "$RESP" | grep -qiE 'authentication error|authorization error'; then
+            elif echo "$RESP" | grep -qE '"code":[[:space:]]*10000' || echo "$RESP" | grep -qiE 'authentication error|authorization error'; then
               # Task #69: token lacks Account Analytics: Read scope. Fail
               # hard so the operator rotates the token — see
               # apps/worker/README.md "Required scopes for CLOUDFLARE_API_TOKEN".
@@ -264,11 +264,11 @@ jobs:
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
               -H "Content-Type: application/json" \
               --data "{\"title\":\"${B}\"}")
-            if echo "$RESP" | grep -q '"success":true'; then
-              NEW_ID=$(echo "$RESP" | sed -E 's/.*"id":"([^"]+)".*/\1/')
+            if echo "$RESP" | grep -qE '"success":[[:space:]]*true'; then
+              NEW_ID=$(echo "$RESP" | jq -r '.result.id')
               echo "  created (id=${NEW_ID})."
               echo "  ACTION REQUIRED: paste id=${NEW_ID} into the [[kv_namespaces]] block for binding ${B} in apps/worker/wrangler.toml." >&2
-            elif echo "$RESP" | grep -q '"code":10014' || echo "$RESP" | grep -qi 'already exists'; then
+            elif echo "$RESP" | grep -qE '"code":[[:space:]]*10014' || echo "$RESP" | grep -qi 'already exists'; then
               echo "  already exists — ok."
             else
               echo "  unexpected response: $RESP" >&2
