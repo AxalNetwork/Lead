@@ -78,6 +78,48 @@ export function clipSnippet(text: string, max = 480): string {
   return t.length > max ? t.slice(0, max - 1) + "…" : t;
 }
 
+export interface BraveHit {
+  url: string;
+  title: string;
+  description: string;
+  pageAge?: string;
+}
+
+/**
+ * Brave Search snippet helper — used by the LinkedIn / G2 / Capterra
+ * source modules that are forbidden from fetching the target site
+ * directly. Returns an empty array when the BRAVE_API_KEY (or the
+ * BRAVE_SEARCH_KEY alias) is not configured.
+ *
+ * The result is plain SERP metadata (URL, title, description, age) —
+ * never the cached page body. Modules build SignalEventDrafts from the
+ * snippet text itself, which is what Brave's ToS permits.
+ */
+export async function braveSearch(env: Env, query: string, count = 10): Promise<BraveHit[]> {
+  const key = env.BRAVE_API_KEY ?? env.BRAVE_SEARCH_KEY;
+  if (!key) return [];
+  try {
+    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${Math.min(count, 20)}`;
+    const r = await fetch(url, {
+      headers: {
+        "X-Subscription-Token": key,
+        Accept: "application/json",
+        "User-Agent": "AIDataSignalBot/1.0 (+https://aidatasignal.com)",
+      },
+    });
+    if (!r.ok) return [];
+    const j = (await r.json()) as { web?: { results?: Array<{ url?: string; title?: string; description?: string; page_age?: string }> } };
+    const out: BraveHit[] = [];
+    for (const h of j.web?.results ?? []) {
+      if (!h.url) continue;
+      out.push({ url: h.url, title: h.title ?? "", description: h.description ?? "", pageAge: h.page_age });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 export function apexDomain(input: string | undefined | null): string | undefined {
   if (!input) return undefined;
   let host = input.trim().toLowerCase();

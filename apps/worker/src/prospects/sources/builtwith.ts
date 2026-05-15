@@ -17,7 +17,7 @@ const mod: SourceModule = {
   slug: "builtwith",
   label: "BuiltWith Tech Stack",
   schedule: "daily",
-  enabledByDefault: false,
+  enabledByDefault: true,
   requiresEnv: "BUILTWITH_API_KEY",
   docsUrl: "https://api.builtwith.com/",
   async crawl(ctx: SourceContext): Promise<CrawlResult> {
