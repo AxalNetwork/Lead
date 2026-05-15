@@ -232,7 +232,7 @@
     var counts = document.getElementById("ads-upload-progress-counts");
     var progMeta = document.getElementById("ads-upload-progress-meta");
 
-    var current = { id: null, headers: [], map: {}, totalRows: 0, pollHandle: null };
+    var current = { id: null, headers: [], map: {}, entity: "firms", totalRows: 0, pollHandle: null };
 
     function setStep(name) {
       root.setAttribute("data-step", name);
@@ -247,7 +247,7 @@
     }
     function resetFlow() {
       stopPoll();
-      current = { id: null, headers: [], map: {}, totalRows: 0, pollHandle: null };
+      current = { id: null, headers: [], map: {}, entity: "firms", totalRows: 0, pollHandle: null };
       if (fileInput) fileInput.value = "";
       tellMsg("");
       setStep("pick");
@@ -330,6 +330,7 @@
       var urls = data.urls || [];
       current.headers = headers;
       current.map = {};
+      current.entity = entity;
       // seed with auto-detected map
       var seed = data.column_map || {};
       var opts = ['<option value="__skip__">— skip —</option>'];
@@ -383,7 +384,7 @@
     confirmBtn.addEventListener("click", async function () {
       try {
         confirmBtn.disabled = true;
-        var body = { column_map: current.map, scrape_urls: scrapeChk.checked ? 1 : 0 };
+        var body = { column_map: current.map, scrape_urls: scrapeChk.checked ? 1 : 0, entity: current.entity };
         var res = await fetch(API_BASE + "/api/uploads/" + current.id + "/confirm-map", {
           method: "POST", credentials: "include",
           headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),

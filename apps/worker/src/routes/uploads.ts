@@ -97,13 +97,17 @@ uploads.post("/:id/confirm-map", async (c) => {
   const body = (await c.req.json().catch(() => null)) as
     | { column_map?: Record<string, string>; entity?: "firms" | "leads"; scrape_urls?: boolean | number }
     | null;
-  const row = await c.env.DB.prepare("SELECT id, status FROM file_imports WHERE id = ?").bind(id).first<{ id: string; status: string }>();
+  const row = await c.env.DB.prepare("SELECT id, status, entity FROM file_imports WHERE id = ?").bind(id).first<{ id: string; status: string; entity: string | null }>();
   if (!row) return c.json({ error: "not_found" }, 404);
   if (row.status === "importing" || row.status === "done") {
     return c.json({ error: "bad_state", status: row.status }, 409);
   }
   const map = body?.column_map ?? {};
-  const entity = body?.entity === "leads" ? "leads" : "firms";
+  // Honor an explicit body.entity, otherwise keep what the parse phase
+  // inferred. Only fall back to "firms" if neither is set.
+  const entity = body?.entity === "leads" ? "leads"
+    : body?.entity === "firms" ? "firms"
+    : (row.entity === "leads" ? "leads" : "firms");
   // Accept boolean OR 0/1 from clients. Treat undefined as enabled (default on).
   const su = body?.scrape_urls;
   const scrape = (su === false || su === 0) ? 0 : 1;

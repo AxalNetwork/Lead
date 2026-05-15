@@ -19,7 +19,6 @@ import type { FirmCandidate } from "../scraper/parsers/firmlists/types";
 import { resolveIncoming, buildCanonicalKeys } from "../dedupe";
 import { mergeIntoExisting } from "../dedupe/merge";
 import { findMatch } from "../dedupe/match";
-import { LeadsRepo } from "../db/leads.repo";
 import type { Lead } from "../db/leads.types";
 import { tosBlockedReason } from "../scraper/tos";
 import { checkAndScrubDnc } from "../compliance/dnc";
@@ -61,13 +60,18 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
     if (!tables.length) throw new Error("no_table_found");
     tables.sort((a, b) => b.rows.length - a.rows.length);
     // Pick a primary table that is *not* portfolio-shaped if possible (so
-    // the firm-row upsert uses the right columns). If the only tables are
-    // all portfolio-shaped (typical for annual-report PDFs), fall back to
-    // the largest one.
+    // the firm-row upsert uses the right columns). If every table is
+    // portfolio-shaped (typical for annual-report PDFs that are nothing
+    // but a holdings list), fall back to the largest table AND treat it
+    // as portfolio data — we'll synthesize a firm row from the filename
+    // below so there is something to attach the holdings to.
     const nonPortfolio = tables.filter((t) => !isPortfolioTable(t));
+    const allArePortfolio = nonPortfolio.length === 0;
     const parsed = nonPortfolio[0] ?? tables[0];
     const portfolioTables = entity_isFirms(row.entity)
-      ? tables.filter((t) => t !== parsed && isPortfolioTable(t))
+      ? (allArePortfolio
+          ? tables.filter(isPortfolioTable)                       // single-table annual report
+          : tables.filter((t) => t !== parsed && isPortfolioTable(t)))
       : [];
 
     const map = parseMap(row.column_map_json);
@@ -81,6 +85,20 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
     /** Unique firm ids we touched so PDF portfolio tables can be attached
      *  even when many rows resolve to the same firm. */
     const firmIdsTouched = new Set<number>();
+
+    // Annual-report PDF case: every detected table is portfolio-shaped.
+    // Synthesize a firm row from the filename so portfolio rows have a
+    // canonical owner. We skip the per-row firm upsert loop entirely in
+    // this branch since the parsed "firm" table is actually holdings.
+    if (entity === "firms" && allArePortfolio) {
+      const firmName = filenameToFirmName(row.filename);
+      if (firmName) {
+        const r = await tryUpsertFirm(env, { name: firmName }, sourceUrl, importedFrom);
+        if (r.action === "created") firmsCreated += 1;
+        else if (r.action === "updated") firmsUpdated += 1;
+        if (r.firmId != null) firmIdsTouched.add(r.firmId);
+      }
+    }
 
     // Stream in chunks of 200 so memory stays bounded and progress is
     // visible if the worker restarts mid-import. Per-row dedupe (firm
@@ -97,8 +115,17 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
              leads_created = ?, leads_updated = ?, updated_at = ?
        WHERE id = ?`,
     );
-    for (let off = 0; off < parsed.rows.length; off += BATCH_SIZE) {
+    // When all tables are portfolio-shaped (annual report PDF) we already
+    // upserted the synthesized firm above; skip the per-row firm loop so
+    // we don't try to upsert holdings as separate firms.
+    const skipFirmLoop = entity === "firms" && allArePortfolio;
+    if (!skipFirmLoop) for (let off = 0; off < parsed.rows.length; off += BATCH_SIZE) {
       const slice = parsed.rows.slice(off, off + BATCH_SIZE);
+      // Lead "insert" decisions are accumulated and committed as a single
+      // env.DB.batch() per chunk (true D1 transaction). Merges & firm
+      // upserts stay sequential because they are read-modify-write and
+      // can't share a batch with an intervening read.
+      const leadInsertStmts: D1PreparedStatement[] = [];
       for (const raw of slice) {
         const projected = projectRow(raw, map);
         if (entity === "firms") {
@@ -108,19 +135,19 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
           else if (r.action === "error") errors.push(`firm:${projected.name ?? "?"}`);
           if (r.firmId != null) firmIdsTouched.add(r.firmId);
         } else {
-          const r = await tryInsertLead(env, projected, importId, importedFrom, sourceUrl);
+          const r = await tryInsertLead(env, projected, importId, importedFrom, sourceUrl, leadInsertStmts);
           if (r === "created") leadsCreated += 1;
           else if (r === "merged") leadsUpdated += 1;
           else if (r === "error") errors.push(`lead:${projected.name ?? "?"}`);
         }
       }
-      await env.DB.batch([
-        progressStmt.bind(
-          Math.min(off + slice.length, parsed.rows.length),
-          firmsCreated, firmsUpdated, leadsCreated, leadsUpdated,
-          new Date().toISOString(), importId,
-        ),
-      ]);
+      const tail: D1PreparedStatement[] = leadInsertStmts.slice();
+      tail.push(progressStmt.bind(
+        Math.min(off + slice.length, parsed.rows.length),
+        firmsCreated, firmsUpdated, leadsCreated, leadsUpdated,
+        new Date().toISOString(), importId,
+      ));
+      await env.DB.batch(tail);
     }
 
     // ---- PDF portfolio attribution. Annual-report uploads typically map
@@ -262,6 +289,10 @@ async function tryInsertLead(
   jobId: string,
   importedFrom: string,
   sourceUrl: string,
+  /** Output buffer: when the resolved decision is `insert`, push the
+   *  prepared INSERT statement here and return "created" — the caller
+   *  commits the chunk's inserts as a single env.DB.batch() transaction. */
+  insertBuffer: D1PreparedStatement[],
 ): Promise<"created" | "merged" | "needs_review" | "skip" | "error"> {
   const email = (fields.email ?? "").trim().toLowerCase() || null;
   const name = (fields.name ?? "").trim() || null;
@@ -358,7 +389,7 @@ async function tryInsertLead(
       updated_at: now,
     };
     if (dnc.hit) (lead as unknown as Record<string, unknown>).do_not_contact = 1;
-    await new LeadsRepo(env.DB).insert(lead);
+    insertBuffer.push(buildLeadInsertStmt(env.DB, lead));
     return "created";
   } catch {
     return "error";
@@ -367,6 +398,24 @@ async function tryInsertLead(
 
 function entity_isFirms(e: string | null | undefined): boolean {
   return e === "firms" || e == null;
+}
+
+/** Strip extension + path noise from filename to derive a firm name guess. */
+function filenameToFirmName(filename: string): string | null {
+  const base = filename.replace(/\.[a-z0-9]+$/i, "").replace(/[_-]+/g, " ").trim();
+  // Drop common annual-report suffixes so "Acme Capital Annual Report 2024"
+  // → "Acme Capital".
+  const cleaned = base.replace(/\b(annual report|portfolio|holdings|fy\s?\d{4}|\d{4})\b/gi, "").replace(/\s{2,}/g, " ").trim();
+  return cleaned || base || null;
+}
+
+/** Build the prepared INSERT statement for a Lead so callers can batch them. */
+function buildLeadInsertStmt(db: D1Database, lead: Lead): D1PreparedStatement {
+  const rec = lead as unknown as Record<string, unknown>;
+  const cols = Object.keys(rec);
+  const placeholders = cols.map(() => "?").join(", ");
+  const values = cols.map((c) => rec[c] ?? null);
+  return db.prepare(`INSERT INTO leads (${cols.join(", ")}) VALUES (${placeholders})`).bind(...values);
 }
 
 function extOf(filename: string): string {
