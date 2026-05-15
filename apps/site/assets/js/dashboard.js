@@ -485,9 +485,261 @@
     setupDiscoverForm();
     setupFirmlistForm();
     startActiveJobsPolling();
-    var btn = document.getElementById("ads-export-btn");
-    if (btn) btn.addEventListener("click", function () { window.location.href = API_BASE + "/api/exports/csv"; });
+    setupExportBuilder();
   });
+
+  // -------- Custom export builder (Task #19) --------------------------
+  // Mirror of the worker-side whitelist.
+  var EXPORT_FIELDS = {
+    leads: ["id","name","first_name","last_name","email","primary_email","primary_phone","primary_linkedin","phone","org","title","category","status","verified","persona_role","seniority","function_area","country_iso2","region","city","linkedin_url","twitter_url","github_url","personal_url","emails_json","socials_json","tags_json","sector_focus_json","provider","provider_score","source_domain","source_url","aum_usd","fund_size_usd","firm_name","firm_domain","firm_aum_usd","do_not_contact","sector_slug","geo_slug","created_at","updated_at"],
+    firms: ["id","name","legal_name","slug","kind","website","domain","hq_country_iso2","hq_region","hq_city","geo_focus_json","stages_json","sectors_json","thesis","check_size_min_usd","check_size_max_usd","check_size_typical_usd","aum_usd","fund_count","current_fund_name","current_fund_size_usd","lead_or_co","portfolio_count","portfolio_count_actual","partner_count","gp_count","top_partner_name","unicorns_count","exits_count","founded_year","team_size","linkedin_url","crunchbase_url","twitter_handle","openvc_url","contact_email","status","quality_score","last_modified","created_at"],
+    firm_people: ["firm_id","firm_name","firm_domain","firm_kind","firm_country_iso2","firm_aum_usd","role","is_decision_maker","started_at","ended_at","lead_id","name","email","primary_email","title","linkedin_url","twitter_url","country_iso2"],
+    portfolio: ["id","firm_id","firm_name","firm_domain","firm_country_iso2","company_name","company_domain","company_url","investment_year","stage","amount_usd","is_lead","outcome","exit_value_usd","source_url","created_at"],
+  };
+
+  var exportState = { selected: [], activeIdx: -1 };
+
+  function setupExportBuilder() {
+    var btn = document.getElementById("ads-export-btn");
+    var menu = document.getElementById("ads-export-menu");
+    if (!btn || !menu) return;
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (menu.hidden) { loadExportMenu(); menu.hidden = false; btn.setAttribute("aria-expanded","true"); }
+      else { menu.hidden = true; btn.setAttribute("aria-expanded","false"); }
+    });
+    document.addEventListener("click", function (e) {
+      if (!menu.hidden && !menu.contains(e.target) && e.target !== btn) {
+        menu.hidden = true; btn.setAttribute("aria-expanded","false");
+      }
+    });
+    document.getElementById("ads-export-cancel").addEventListener("click", closeExportModal);
+    document.getElementById("ads-export-modal").addEventListener("click", function (e) {
+      if (e.target.id === "ads-export-modal") closeExportModal();
+    });
+    document.getElementById("ads-export-entity").addEventListener("change", function () {
+      exportState.selected = []; exportState.activeIdx = -1;
+      renderExportColumns();
+    });
+    document.getElementById("ads-export-col-add").addEventListener("click", function () {
+      var sel = document.getElementById("ads-export-cols-available");
+      if (!sel.value) return;
+      exportState.selected.push({ field: sel.value });
+      exportState.activeIdx = exportState.selected.length - 1;
+      renderExportColumns();
+    });
+    document.getElementById("ads-export-col-header").addEventListener("input", function (e) {
+      if (exportState.activeIdx < 0) return;
+      exportState.selected[exportState.activeIdx].header = e.target.value || undefined;
+      renderExportColumns(true);
+    });
+    document.getElementById("ads-export-col-transform").addEventListener("change", function (e) {
+      if (exportState.activeIdx < 0) return;
+      exportState.selected[exportState.activeIdx].transform = e.target.value || undefined;
+      renderExportColumns(true);
+    });
+    document.getElementById("ads-export-form").addEventListener("submit", function (e) {
+      e.preventDefault(); downloadCustomExport();
+    });
+    document.getElementById("ads-export-save").addEventListener("click", saveExportTemplate);
+  }
+
+  function loadExportMenu() {
+    var menu = document.getElementById("ads-export-menu");
+    fetch(API_BASE + "/api/exports/templates", { credentials: "include" })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var items = (data && data.items) || [];
+        var html = "";
+        var sys = items.filter(function (t) { return t.is_system; });
+        var usr = items.filter(function (t) { return !t.is_system; });
+        if (sys.length) {
+          html += '<div class="ads-muted" style="padding:6px 12px;font-size:11px;text-transform:uppercase;letter-spacing:.05em">Presets</div>';
+          sys.forEach(function (t) {
+            html += '<a href="#" class="ads-export-preset" data-id="' + t.id + '" style="display:block;padding:8px 12px;color:inherit;text-decoration:none">' + escapeHtml(t.name) + ' <span class="ads-muted" style="font-size:11px">(' + t.entity + ')</span></a>';
+          });
+        }
+        if (usr.length) {
+          html += '<div class="ads-muted" style="padding:6px 12px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;border-top:1px solid #eee;margin-top:4px">Saved</div>';
+          usr.forEach(function (t) {
+            html += '<div style="display:flex;align-items:center;justify-content:space-between"><a href="#" class="ads-export-preset" data-id="' + t.id + '" style="flex:1;padding:8px 12px;color:inherit;text-decoration:none">' + escapeHtml(t.name) + ' <span class="ads-muted" style="font-size:11px">(' + t.entity + ')</span></a><button class="ads-export-del" data-id="' + t.id + '" style="background:none;border:none;color:#a00;cursor:pointer;padding:0 10px" title="Delete">&times;</button></div>';
+          });
+        }
+        html += '<div style="border-top:1px solid #eee;margin-top:4px"><a href="#" id="ads-export-custom" style="display:block;padding:8px 12px;color:inherit;text-decoration:none"><strong>Custom…</strong></a></div>';
+        menu.innerHTML = html;
+        menu.querySelectorAll(".ads-export-preset").forEach(function (a) {
+          a.addEventListener("click", function (e) {
+            e.preventDefault();
+            var t = items.find(function (x) { return String(x.id) === a.dataset.id; });
+            if (t) runPresetDownload(t);
+            menu.hidden = true;
+          });
+        });
+        menu.querySelectorAll(".ads-export-del").forEach(function (b) {
+          b.addEventListener("click", function (e) {
+            e.preventDefault(); e.stopPropagation();
+            if (!confirm("Delete this template?")) return;
+            fetch(API_BASE + "/api/exports/templates/" + b.dataset.id, { method: "DELETE", credentials: "include" })
+              .then(function () { loadExportMenu(); });
+          });
+        });
+        var custom = document.getElementById("ads-export-custom");
+        if (custom) custom.addEventListener("click", function (e) {
+          e.preventDefault(); menu.hidden = true; openExportModal();
+        });
+      })
+      .catch(function () { menu.innerHTML = '<div class="ads-muted" style="padding:8px 12px">Failed to load presets.</div>'; });
+  }
+
+  function runPresetDownload(t) {
+    return postExportDownload({ entity: t.entity, columns: t.columns, filter: t.filter || {}, format: t.format || "csv" });
+  }
+
+  function openExportModal() {
+    var modal = document.getElementById("ads-export-modal");
+    exportState.selected = []; exportState.activeIdx = -1;
+    document.getElementById("ads-export-template-name").value = "";
+    document.getElementById("ads-export-msg").textContent = "";
+    renderExportColumns();
+    modal.hidden = false;
+  }
+
+  function closeExportModal() {
+    document.getElementById("ads-export-modal").hidden = true;
+  }
+
+  function renderExportColumns(skipFocus) {
+    var entity = document.getElementById("ads-export-entity").value;
+    var avail = document.getElementById("ads-export-cols-available");
+    var used = exportState.selected.map(function (c) { return c.field; });
+    avail.innerHTML = (EXPORT_FIELDS[entity] || []).filter(function (f) {
+      return used.indexOf(f) === -1;
+    }).map(function (f) {
+      return '<option value="' + f + '">' + f + '</option>';
+    }).join("");
+    var ol = document.getElementById("ads-export-cols-selected");
+    ol.innerHTML = exportState.selected.map(function (c, i) {
+      var label = c.field + (c.header ? ' → "' + c.header + '"' : "") + (c.transform ? " · " + c.transform : "");
+      var active = i === exportState.activeIdx ? "background:#eef" : "";
+      return '<li draggable="true" data-i="' + i + '" style="padding:6px 10px;border-bottom:1px solid #f0f0f0;display:flex;justify-content:space-between;align-items:center;cursor:move;' + active + '"><span>' + escapeHtml(label) + '</span><button type="button" class="ads-export-rm" data-i="' + i + '" style="background:none;border:none;color:#a00;cursor:pointer">&times;</button></li>';
+    }).join("");
+    document.getElementById("ads-export-col-count").textContent = exportState.selected.length + " selected";
+    ol.querySelectorAll("li").forEach(function (li) {
+      li.addEventListener("click", function (e) {
+        if (e.target.classList.contains("ads-export-rm")) return;
+        exportState.activeIdx = Number(li.dataset.i);
+        var cur = exportState.selected[exportState.activeIdx];
+        document.getElementById("ads-export-col-header").value = cur.header || "";
+        document.getElementById("ads-export-col-transform").value = cur.transform || "";
+        renderExportColumns(true);
+      });
+      li.addEventListener("dragstart", function (e) { e.dataTransfer.setData("i", li.dataset.i); });
+      li.addEventListener("dragover", function (e) { e.preventDefault(); });
+      li.addEventListener("drop", function (e) {
+        e.preventDefault();
+        var from = Number(e.dataTransfer.getData("i")), to = Number(li.dataset.i);
+        if (from === to) return;
+        var moved = exportState.selected.splice(from, 1)[0];
+        exportState.selected.splice(to, 0, moved);
+        exportState.activeIdx = to;
+        renderExportColumns();
+      });
+    });
+    ol.querySelectorAll(".ads-export-rm").forEach(function (b) {
+      b.addEventListener("click", function (e) {
+        e.stopPropagation();
+        exportState.selected.splice(Number(b.dataset.i), 1);
+        if (exportState.activeIdx >= exportState.selected.length) exportState.activeIdx = -1;
+        renderExportColumns();
+      });
+    });
+    if (!skipFocus && exportState.activeIdx >= 0) {
+      var cur = exportState.selected[exportState.activeIdx];
+      document.getElementById("ads-export-col-header").value = cur.header || "";
+      document.getElementById("ads-export-col-transform").value = cur.transform || "";
+    } else if (exportState.activeIdx < 0) {
+      document.getElementById("ads-export-col-header").value = "";
+      document.getElementById("ads-export-col-transform").value = "";
+    }
+  }
+
+  function buildModalPayload() {
+    var f = {};
+    var st = document.getElementById("ads-export-filter-status").value.trim();
+    var co = document.getElementById("ads-export-filter-country").value.trim();
+    var sn = document.getElementById("ads-export-filter-since").value.trim();
+    var kn = document.getElementById("ads-export-filter-kind").value.trim();
+    if (st) f.status = st;
+    if (co) f.country_iso2 = co;
+    if (sn) f.since = sn;
+    if (kn) f.kind = kn;
+    if (document.getElementById("ads-export-filter-hasemail").checked) f.has_email = true;
+    if (document.getElementById("ads-export-filter-merged").checked) f.include_merged = true;
+    return {
+      entity: document.getElementById("ads-export-entity").value,
+      columns: exportState.selected,
+      filter: f,
+      format: document.getElementById("ads-export-format").value,
+    };
+  }
+
+  function downloadCustomExport() {
+    if (!exportState.selected.length) {
+      document.getElementById("ads-export-msg").textContent = "Add at least one column.";
+      return;
+    }
+    document.getElementById("ads-export-msg").textContent = "Downloading…";
+    postExportDownload(buildModalPayload()).then(function () {
+      document.getElementById("ads-export-msg").textContent = "Done.";
+    }).catch(function (e) {
+      document.getElementById("ads-export-msg").textContent = "Failed: " + (e && e.message ? e.message : e);
+    });
+  }
+
+  function postExportDownload(payload) {
+    return fetch(API_BASE + "/api/exports/csv", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then(function (r) {
+      if (!r.ok) return r.text().then(function (t) { throw new Error(t || ("HTTP " + r.status)); });
+      var disp = r.headers.get("Content-Disposition") || "";
+      var m = /filename="([^"]+)"/.exec(disp);
+      var name = m ? m[1] : (payload.entity + "." + payload.format);
+      return r.blob().then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url; a.download = name; document.body.appendChild(a); a.click();
+        setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 0);
+      });
+    });
+  }
+
+  function saveExportTemplate() {
+    var name = document.getElementById("ads-export-template-name").value.trim();
+    if (!name) { document.getElementById("ads-export-msg").textContent = "Enter a template name first."; return; }
+    if (!exportState.selected.length) { document.getElementById("ads-export-msg").textContent = "Add at least one column."; return; }
+    var payload = buildModalPayload();
+    payload.name = name;
+    fetch(API_BASE + "/api/exports/templates", {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then(function (r) {
+      if (!r.ok) return r.text().then(function (t) { throw new Error(t); });
+      document.getElementById("ads-export-msg").textContent = "Template saved.";
+      loadExportMenu();
+    }).catch(function (e) {
+      document.getElementById("ads-export-msg").textContent = "Save failed: " + (e && e.message ? e.message : e);
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
+    });
+  }
 
   // Pause polling when the tab is hidden to save quota.
   document.addEventListener("visibilitychange", function () {

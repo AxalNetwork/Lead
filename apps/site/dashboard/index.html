@@ -137,9 +137,86 @@ permalink: /dashboard/
   <div id="ads-active-jobs"><div class="ads-empty">No active jobs.</div></div>
 </div>
 
-<div class="ads-actions" style="margin:24px 0">
-  <button class="ads-btn ads-btn--ghost" id="ads-export-btn">Export CSV</button>
+<div class="ads-actions" style="margin:24px 0;position:relative">
+  <div class="ads-export-wrap" style="display:inline-block;position:relative">
+    <button class="ads-btn ads-btn--ghost" id="ads-export-btn" aria-haspopup="true" aria-expanded="false">Export &#9662;</button>
+    <div id="ads-export-menu" class="ads-export-menu" hidden style="position:absolute;top:100%;left:0;margin-top:4px;min-width:240px;background:#fff;border:1px solid #ddd;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.08);z-index:50;padding:6px 0">
+      <div class="ads-muted" style="padding:6px 12px;font-size:11px;text-transform:uppercase;letter-spacing:.05em">Loading presets…</div>
+    </div>
+  </div>
   <a class="ads-btn ads-btn--ghost" href="/dashboard/jobs/">View all jobs &rarr;</a>
+</div>
+
+<div id="ads-export-modal" class="ads-modal" hidden style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:200;display:flex;align-items:center;justify-content:center">
+  <div class="ads-modal__panel" style="background:#fff;border-radius:8px;width:min(720px,92vw);max-height:88vh;overflow:auto;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,.2)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h3 style="margin:0">Custom Export</h3>
+      <button class="ads-btn ads-btn--ghost" id="ads-export-cancel" type="button">&times;</button>
+    </div>
+    <form id="ads-export-form">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+        <label>Entity
+          <select id="ads-export-entity" style="width:100%;padding:6px">
+            <option value="leads">Leads</option>
+            <option value="firms">Firms</option>
+            <option value="firm_people">Firm people (joined)</option>
+            <option value="portfolio">Portfolio</option>
+          </select>
+        </label>
+        <label>Format
+          <select id="ads-export-format" style="width:100%;padding:6px">
+            <option value="csv">CSV</option>
+            <option value="tsv">TSV</option>
+            <option value="xlsx">Excel (XLSX)</option>
+            <option value="json">JSON</option>
+          </select>
+        </label>
+      </div>
+      <fieldset style="border:1px solid #eee;padding:10px;margin-bottom:12px">
+        <legend>Filters (optional)</legend>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+          <label>Status <input type="text" id="ads-export-filter-status" placeholder="approved" style="width:100%;padding:4px"></label>
+          <label>Country (ISO2) <input type="text" id="ads-export-filter-country" maxlength="2" style="width:100%;padding:4px"></label>
+          <label>Since <input type="date" id="ads-export-filter-since" style="width:100%;padding:4px"></label>
+          <label>Kind (firms) <input type="text" id="ads-export-filter-kind" placeholder="vc/angel/..." style="width:100%;padding:4px"></label>
+          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="ads-export-filter-hasemail"> Has email</label>
+          <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="ads-export-filter-merged"> Include merged</label>
+        </div>
+      </fieldset>
+      <div style="margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <strong>Columns (drag to reorder)</strong>
+          <span class="ads-muted" id="ads-export-col-count">0 selected</span>
+        </div>
+        <ol id="ads-export-cols-selected" style="list-style:none;padding:0;margin:0 0 8px;border:1px solid #eee;border-radius:4px;min-height:40px;background:#fafafa"></ol>
+        <div style="display:flex;gap:6px">
+          <select id="ads-export-cols-available" style="flex:1;padding:6px"></select>
+          <button class="ads-btn ads-btn--ghost" type="button" id="ads-export-col-add">Add</button>
+        </div>
+        <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          <label>Header override (current row) <input type="text" id="ads-export-col-header" placeholder="(leave blank)" style="width:100%;padding:4px"></label>
+          <label>Transform (current row)
+            <select id="ads-export-col-transform" style="width:100%;padding:4px">
+              <option value="">(none)</option>
+              <option value="lower">lower</option>
+              <option value="upper">upper</option>
+              <option value="titlecase">titlecase</option>
+              <option value="e164">e164 (phone)</option>
+              <option value="pipe_join">pipe_join</option>
+              <option value="first">first</option>
+              <option value="bool_yn">bool_yn</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input type="text" id="ads-export-template-name" placeholder="Template name (optional)" style="flex:1;min-width:200px;padding:6px">
+        <button class="ads-btn ads-btn--ghost" type="button" id="ads-export-save">Save as template</button>
+        <button class="ads-btn" type="submit" id="ads-export-download">Download</button>
+      </div>
+      <div id="ads-export-msg" class="ads-muted" style="margin-top:8px;font-size:12px"></div>
+    </form>
+  </div>
 </div>
 
 <div class="ads-section">
