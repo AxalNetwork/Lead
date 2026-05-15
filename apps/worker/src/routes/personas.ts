@@ -18,7 +18,8 @@ import type { Env } from "../types";
 import {
   listPersonas, getPersona, insertPersona, updatePersona, softDeletePersona,
   setPersonaEmbeddingMeta, setPersonaNotes,
-  loadAccountFacts, loadBuyerFacts, listMatches, countMatches, deleteMatchesForPersona,
+  loadAccountFacts, loadBuyerFacts, loadAccountFactsBulk, loadBuyerFactsBulk,
+  listMatches, countMatches, deleteMatchesForPersona,
   rowToSpec,
   type PersonaRow,
 } from "../personas/repo";
@@ -249,9 +250,14 @@ personasRoute.post("/preview", async (c) => {
       : await c.env.DB.prepare(`SELECT id FROM buyers ORDER BY updated_at DESC LIMIT 200`).all<{ id: string }>();
     candidateIds = (r.results ?? []).map((x) => x.id);
   }
+  // Bulk-load facts for all candidates in one set of set-based queries
+  // to keep the preview snappy (<3s SLA) on realistic data volumes.
+  const factsMap = spec.kind === "account"
+    ? await loadAccountFactsBulk(c.env, candidateIds)
+    : await loadBuyerFactsBulk(c.env, candidateIds);
   const scored: Array<{ id: string; name: string; fit_score: number; components: import("../personas/score").ScoreComponents; reasons: string[] }> = [];
   for (const id of candidateIds) {
-    const facts = spec.kind === "account" ? await loadAccountFacts(c.env, id) : await loadBuyerFacts(c.env, id);
+    const facts = factsMap.get(id);
     if (!facts) continue;
     const result = scoreEntity(spec, {
       account: spec.kind === "account" ? (facts.facts as never) : null,

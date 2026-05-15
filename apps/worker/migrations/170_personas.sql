@@ -87,3 +87,10 @@ CREATE TABLE IF NOT EXISTS persona_history (
   changed_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_persona_history_persona ON persona_history(persona_id, changed_at DESC);
+
+-- Buyer-side fit_score writeback: mirrors accounts.fit_score so the
+-- buyers list page can sort/filter by max-active-persona fit without
+-- re-aggregating persona_matches at read time. Maintained by
+-- writeBackEntityFit during rescore.
+ALTER TABLE buyers ADD COLUMN fit_score REAL NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_buyers_fit_score ON buyers(fit_score DESC);

@@ -295,6 +295,100 @@ export async function loadBuyerFacts(env: Env, buyerId: string): Promise<{ name:
   return { name: b.name ?? b.title ?? buyerId, facts, last_modified: b.updated_at, account_id: b.account_id };
 }
 
+// Bulk loader for AccountFacts. Issues 4 set-based queries (accounts +
+// account_tech + signals + buyers, each with WHERE id IN (?...)) and
+// stitches them together. Used by rescorePersonaFull and the
+// /preview endpoint to avoid N round-trips over the D1 binding.
+export async function loadAccountFactsBulk(env: Env, ids: string[]): Promise<Map<string, { name: string; facts: AccountFacts; last_modified: string | null }>> {
+  const out = new Map<string, { name: string; facts: AccountFacts; last_modified: string | null }>();
+  if (!ids.length) return out;
+  const ph = ids.map(() => "?").join(",");
+  const [a, tech, sigs, buyers] = await Promise.all([
+    env.DB.prepare(`SELECT id, name, status, domain, hq_country_iso2, size_band, employees, industry, industries_json, funding_stage, updated_at FROM accounts WHERE id IN (${ph})`).bind(...ids).all<{ id: string; name: string; status: string; domain: string | null; hq_country_iso2: string | null; size_band: string | null; employees: number | null; industry: string | null; industries_json: string | null; funding_stage: string | null; updated_at: string | null }>(),
+    env.DB.prepare(`SELECT account_id, vendor FROM account_tech WHERE account_id IN (${ph})`).bind(...ids).all<{ account_id: string; vendor: string }>(),
+    env.DB.prepare(`SELECT account_id, kind, weight, confidence, occurred_at FROM signals WHERE account_id IN (${ph}) ORDER BY occurred_at DESC`).bind(...ids).all<{ account_id: string; kind: string; weight: number; confidence: number; occurred_at: string }>(),
+    env.DB.prepare(`SELECT id, account_id, title, seniority, department, is_decision_maker, updated_at FROM buyers WHERE account_id IN (${ph})`).bind(...ids).all<{ id: string; account_id: string; title: string | null; seniority: string | null; department: string | null; is_decision_maker: number; updated_at: string | null }>(),
+  ]);
+  const techByAcct = new Map<string, string[]>();
+  for (const t of tech.results ?? []) {
+    const arr = techByAcct.get(t.account_id) ?? []; arr.push(t.vendor); techByAcct.set(t.account_id, arr);
+  }
+  const sigByAcct = new Map<string, Array<{ kind: string; weight: number; confidence: number; occurred_at: string }>>();
+  for (const s of sigs.results ?? []) {
+    const arr = sigByAcct.get(s.account_id) ?? [];
+    if (arr.length < 200) arr.push({ kind: s.kind, weight: s.weight, confidence: s.confidence, occurred_at: s.occurred_at });
+    sigByAcct.set(s.account_id, arr);
+  }
+  const buyByAcct = new Map<string, BuyerFacts[]>();
+  for (const b of buyers.results ?? []) {
+    const arr = buyByAcct.get(b.account_id) ?? [];
+    if (arr.length < 50) arr.push({ account: null, title: b.title, seniority: b.seniority, department: b.department, is_decision_maker: b.is_decision_maker, last_modified: b.updated_at });
+    buyByAcct.set(b.account_id, arr);
+  }
+  for (const row of a.results ?? []) {
+    const facts: AccountFacts = {
+      status: row.status, domain: row.domain, hq_country_iso2: row.hq_country_iso2,
+      size_band: row.size_band, employees: row.employees, industry: row.industry,
+      industries: parseJsonArr(row.industries_json), funding_stage: row.funding_stage,
+      techs: techByAcct.get(row.id) ?? [],
+      signals: sigByAcct.get(row.id) ?? [],
+      buyers: buyByAcct.get(row.id) ?? [],
+      last_modified: row.updated_at,
+    };
+    out.set(row.id, { name: row.name, facts, last_modified: row.updated_at });
+  }
+  return out;
+}
+
+// Bulk loader for BuyerFacts. Issues 1 query for the buyers + delegates
+// to loadAccountFactsBulk for parent accounts (one round-trip via IN).
+export async function loadBuyerFactsBulk(env: Env, ids: string[]): Promise<Map<string, { name: string; facts: BuyerFacts; last_modified: string | null; account_id: string }>> {
+  const out = new Map<string, { name: string; facts: BuyerFacts; last_modified: string | null; account_id: string }>();
+  if (!ids.length) return out;
+  const ph = ids.map(() => "?").join(",");
+  const r = await env.DB.prepare(`SELECT id, account_id, name, title, seniority, department, is_decision_maker, updated_at FROM buyers WHERE id IN (${ph})`).bind(...ids).all<{ id: string; account_id: string; name: string | null; title: string | null; seniority: string | null; department: string | null; is_decision_maker: number; updated_at: string | null }>();
+  const buyerRows = r.results ?? [];
+  const acctIds = Array.from(new Set(buyerRows.map((b) => b.account_id)));
+  const acctFacts = await loadAccountFactsBulk(env, acctIds);
+  for (const b of buyerRows) {
+    const acct = acctFacts.get(b.account_id);
+    const facts: BuyerFacts = {
+      account: acct?.facts ?? null, title: b.title, seniority: b.seniority, department: b.department,
+      is_decision_maker: b.is_decision_maker, last_modified: b.updated_at,
+    };
+    out.set(b.id, { name: b.name ?? b.title ?? b.id, facts, last_modified: b.updated_at, account_id: b.account_id });
+  }
+  return out;
+}
+
+// Bulk writeback: recompute max active-persona fit_score for each id
+// in one aggregate query, then UPDATE in one statement per kind. Used
+// at the end of each rescore batch instead of N per-row writebacks.
+export async function bulkWriteBackFit(env: Env, kind: "account" | "buyer", ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  const ph = ids.map(() => "?").join(",");
+  const rows = await env.DB.prepare(
+    `SELECT pm.entity_id AS id, MAX(pm.fit_score) AS m
+       FROM persona_matches pm
+       JOIN personas p ON p.id = pm.persona_id
+      WHERE pm.entity_kind = ? AND pm.entity_id IN (${ph})
+        AND p.status = 'active' AND p.deleted_at IS NULL
+      GROUP BY pm.entity_id`,
+  ).bind(kind, ...ids).all<{ id: string; m: number | null }>();
+  const maxById = new Map<string, number>();
+  for (const r of rows.results ?? []) maxById.set(r.id, r.m ?? 0);
+  // Issue updates as a batch (each binds its own params; D1 batches
+  // these into one HTTP round-trip via the binding's batch() API).
+  const stmts = ids.map((id) => {
+    const m = maxById.get(id) ?? 0;
+    if (kind === "account") {
+      return env.DB.prepare(`UPDATE accounts SET fit_score = ?, account_score = ROUND((0.6 * intent_score) + (0.4 * ?), 2) WHERE id = ?`).bind(m, m, id);
+    }
+    return env.DB.prepare(`UPDATE buyers SET fit_score = ? WHERE id = ?`).bind(m, id);
+  });
+  await env.DB.batch(stmts);
+}
+
 // Materialize a compact "facts" object for the AI explainer.
 export function summarizeAccountForExplanation(name: string, f: AccountFacts): Record<string, unknown> {
   return {

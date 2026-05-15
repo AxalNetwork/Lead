@@ -7,6 +7,7 @@
 import type { Env } from "../types";
 import {
   listPersonas, rowToSpec, upsertMatch, loadAccountFacts, loadBuyerFacts,
+  loadAccountFactsBulk, loadBuyerFactsBulk, bulkWriteBackFit,
   summarizeAccountForExplanation, summarizeBuyerForExplanation,
 } from "./repo";
 import { scoreEntity } from "./score";
@@ -105,29 +106,10 @@ export async function rescoreEntity(env: Env, entityKind: "account" | "buyer", e
 
   // Write back max-active-persona fit_score onto the entity row so the
   // dashboard's existing fit_score column reflects the best persona.
-  await writeBackEntityFit(env, entityKind, entityId);
+  // Bulk path is a degenerate single-id batch — same code path as the
+  // full-rescore writeback so account + buyer behavior stay aligned.
+  await bulkWriteBackFit(env, entityKind, [entityId]);
   return { scored };
-}
-
-async function writeBackEntityFit(env: Env, entityKind: "account" | "buyer", entityId: string): Promise<void> {
-  const r = await env.DB.prepare(
-    `SELECT MAX(pm.fit_score) AS m
-       FROM persona_matches pm
-       JOIN personas p ON p.id = pm.persona_id
-      WHERE pm.entity_kind = ? AND pm.entity_id = ?
-        AND p.status = 'active' AND p.deleted_at IS NULL`,
-  ).bind(entityKind, entityId).first<{ m: number | null }>();
-  const max = r?.m ?? 0;
-  if (entityKind === "account") {
-    // Don't bump accounts.updated_at — that column reflects real
-    // entity edits and is used as a cache key for explanation R2 +
-    // recency_boost. Persona-derived fit changes get their own
-    // timestamp via persona_matches.computed_at.
-    await env.DB.prepare(`UPDATE accounts SET fit_score = ?, account_score = ROUND((0.6 * intent_score) + (0.4 * ?), 2) WHERE id = ?`)
-      .bind(max, max, entityId).run();
-  }
-  // buyers table doesn't have a fit_score column; the matches table
-  // is the source of truth.
 }
 
 // Full-persona rescore. Pages every active entity of the persona's
@@ -172,13 +154,18 @@ export async function rescorePersonaFull(
     const r = await env.DB.prepare(tableSql).bind(batchSize, offset).all<{ id: string }>();
     const ids = (r.results ?? []).map((x) => x.id);
     if (!ids.length) break;
+    // Bulk-load facts for the entire page in 4 set-based queries
+    // instead of N×4 (one per id) — avoids N+1 against D1.
+    const factsMap = spec.kind === "account"
+      ? await loadAccountFactsBulk(env, ids)
+      : await loadBuyerFactsBulk(env, ids);
     // Per-batch cosine map: covers EVERY id in this page, not just
     // those in a global top-K window.
     const semMap = (spec.kind === "account" && personaVector)
       ? await cosinesForEntities(env, personaVector, { kind: "account", ids })
       : new Map<string, number>();
     for (const id of ids) {
-      const facts = spec.kind === "account" ? await loadAccountFacts(env, id) : await loadBuyerFacts(env, id);
+      const facts = factsMap.get(id);
       if (!facts) continue;
       const result = scoreEntity(spec, {
         account: spec.kind === "account" ? (facts.facts as never) : null,
@@ -210,8 +197,10 @@ export async function rescorePersonaFull(
           entity_modified_at: facts.last_modified,
         });
       }
-      if (spec.kind === "account") await writeBackEntityFit(env, "account", id);
     }
+    // Bulk fit writeback for the whole page (1 aggregate SELECT + 1
+    // batched UPDATE instead of N per-row round trips).
+    await bulkWriteBackFit(env, spec.kind, ids);
     if (ids.length < batchSize) break;
     offset += batchSize;
   }
