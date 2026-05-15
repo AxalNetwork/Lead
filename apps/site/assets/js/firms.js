@@ -180,15 +180,169 @@
     }).catch(function () { ul.innerHTML = '<li class="ads-muted">Failed to load.</li>'; });
   }
 
-  function loadSectors() {
-    var sel = document.getElementById("ads-firms-sectors");
-    return api("/api/taxonomies/sectors").then(function (data) {
-      var items = (data && data.items) || [];
-      var preset = (new URLSearchParams(window.location.search).get("sectors") || "").split(",").filter(Boolean);
-      sel.innerHTML = items.map(function (s) {
-        return '<option value="' + esc(s.slug) + '"' + (preset.indexOf(s.slug) !== -1 ? " selected" : "") + '>' + esc(s.label || s.slug) + '</option>';
-      }).join("") || '<option class="ads-muted">No sectors</option>';
-    }).catch(function () { sel.innerHTML = '<option class="ads-muted">Failed</option>'; });
+  // Chip-style picker (mirror of icps.js; a future task extracts this into a
+  // shared widget). Each .ads-picker host has data-picker (taxonomy kind) and
+  // wraps a hidden input that round-trips the comma-joined slug list through
+  // the existing query string.
+  var TAX_CACHE = {};
+  var PICKERS = {};
+
+  function loadTaxonomy(kind) {
+    if (TAX_CACHE[kind]) return Promise.resolve(TAX_CACHE[kind]);
+    var path = kind === "sectors" ? "/api/taxonomies/sectors" : "/api/taxonomies/geographies";
+    return api(path).then(function (data) {
+      TAX_CACHE[kind] = (data && data.items) || [];
+      return TAX_CACHE[kind];
+    }).catch(function () { TAX_CACHE[kind] = []; return TAX_CACHE[kind]; });
+  }
+
+  function buildPicker(host) {
+    var kind = host.getAttribute("data-picker");
+    var hidden = host.querySelector('input[type="hidden"]');
+    var placeholder = host.getAttribute("data-placeholder") || "Search…";
+    host.innerHTML = "";
+    host.appendChild(hidden);
+    var chips = document.createElement("div"); chips.className = "ads-picker__chips";
+    var input = document.createElement("input");
+    input.type = "text"; input.className = "ads-picker__input";
+    input.placeholder = placeholder; input.autocomplete = "off";
+    var dropdown = document.createElement("div"); dropdown.className = "ads-picker__dropdown"; dropdown.hidden = true;
+    chips.appendChild(input);
+    host.appendChild(chips);
+    host.appendChild(dropdown);
+
+    var state = { items: [], byslug: {}, selected: [], active: -1 };
+
+    function render() {
+      Array.prototype.slice.call(chips.querySelectorAll(".ads-chip")).forEach(function (n) { n.remove(); });
+      state.selected.forEach(function (slug) {
+        var item = state.byslug[slug];
+        var label = item ? item.label : slug;
+        var chip = document.createElement("span"); chip.className = "ads-chip";
+        chip.innerHTML = '<span class="ads-chip__label"></span><button type="button" class="ads-chip__x" aria-label="Remove">×</button>';
+        chip.querySelector(".ads-chip__label").textContent = label + " ";
+        var code = document.createElement("code"); code.className = "ads-chip__slug"; code.textContent = slug;
+        chip.querySelector(".ads-chip__label").appendChild(code);
+        chip.querySelector(".ads-chip__x").addEventListener("click", function () { remove(slug); });
+        chips.insertBefore(chip, input);
+      });
+      hidden.value = state.selected.join(",");
+    }
+    function add(slug) {
+      if (!slug || state.selected.indexOf(slug) !== -1) return;
+      state.selected.push(slug); render();
+      input.value = ""; renderDropdown("");
+    }
+    function remove(slug) {
+      state.selected = state.selected.filter(function (s) { return s !== slug; });
+      render(); renderDropdown(input.value);
+    }
+    function matchesQuery(item, q) {
+      if (!q) return true;
+      q = q.toLowerCase();
+      if ((item.label || "").toLowerCase().indexOf(q) !== -1) return true;
+      if ((item.slug || "").toLowerCase().indexOf(q) !== -1) return true;
+      if (item.country_iso2 && item.country_iso2.toLowerCase().indexOf(q) !== -1) return true;
+      var aliases = item.aliases || [];
+      for (var i = 0; i < aliases.length; i++) {
+        if (String(aliases[i]).toLowerCase().indexOf(q) !== -1) return true;
+      }
+      return false;
+    }
+    function renderDropdown(q) {
+      var pool = state.items.filter(function (i) { return state.selected.indexOf(i.slug) === -1 && matchesQuery(i, q); });
+      pool = pool.slice(0, 50);
+      state.active = pool.length ? 0 : -1;
+      if (!pool.length) {
+        dropdown.innerHTML = '<div class="ads-picker__empty">No matches</div>';
+      } else {
+        var html = "";
+        pool.forEach(function (it, idx) {
+          var meta = it.country_iso2 ? it.country_iso2 : (it.kind || "");
+          html += '<div class="ads-picker__opt' + (idx === 0 ? ' active' : '') + '" data-slug="' + esc(it.slug) + '">' +
+            '<span class="ads-picker__opt-label">' + esc(it.label || it.slug) + '</span>' +
+            '<span class="ads-picker__opt-meta"><code>' + esc(it.slug) + '</code>' + (meta ? ' · ' + esc(meta) : '') + '</span>' +
+            '</div>';
+        });
+        dropdown.innerHTML = html;
+      }
+      dropdown.hidden = false;
+    }
+    function close() { dropdown.hidden = true; state.active = -1; }
+    function moveActive(delta) {
+      var opts = dropdown.querySelectorAll(".ads-picker__opt");
+      if (!opts.length) return;
+      state.active = (state.active + delta + opts.length) % opts.length;
+      opts.forEach(function (o, i) { o.classList.toggle("active", i === state.active); });
+      var el = opts[state.active]; if (el) el.scrollIntoView({ block: "nearest" });
+    }
+    function commitActive() {
+      var opts = dropdown.querySelectorAll(".ads-picker__opt");
+      var el = opts[state.active] || opts[0];
+      if (el) add(el.getAttribute("data-slug"));
+    }
+
+    input.addEventListener("focus", function () { renderDropdown(input.value); });
+    input.addEventListener("input", function () { renderDropdown(input.value); });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowDown") { e.preventDefault(); if (dropdown.hidden) renderDropdown(input.value); else moveActive(1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); moveActive(-1); }
+      else if (e.key === "Enter") {
+        if (!dropdown.hidden) { e.preventDefault(); commitActive(); }
+      } else if (e.key === "Escape") { close(); }
+      else if (e.key === "Backspace" && !input.value && state.selected.length) {
+        remove(state.selected[state.selected.length - 1]);
+      }
+    });
+    dropdown.addEventListener("mousedown", function (e) {
+      var opt = e.target.closest(".ads-picker__opt"); if (!opt) return;
+      e.preventDefault(); add(opt.getAttribute("data-slug"));
+    });
+    document.addEventListener("click", function (e) { if (!host.contains(e.target)) close(); });
+    chips.addEventListener("click", function (e) { if (e.target === chips) input.focus(); });
+
+    var key = hidden.name || kind;
+    PICKERS[key] = {
+      setSelected: function (slugs) { state.selected = (slugs || []).slice(); render(); },
+      getSelected: function () { return state.selected.slice(); },
+      setItems: function (items) {
+        state.items = items || [];
+        state.byslug = {};
+        state.items.forEach(function (i) { state.byslug[i.slug] = i; });
+        render();
+      },
+      kind: kind,
+    };
+    return PICKERS[key];
+  }
+
+  function initPickers() {
+    var hosts = document.querySelectorAll("#ads-firms-filters .ads-picker");
+    hosts.forEach(buildPicker);
+    var needs = {};
+    Object.keys(PICKERS).forEach(function (k) { needs[PICKERS[k].kind] = true; });
+    var jobs = Object.keys(needs).map(function (kind) {
+      return loadTaxonomy(kind).then(function (items) {
+        Object.keys(PICKERS).forEach(function (k) {
+          if (PICKERS[k].kind === kind) PICKERS[k].setItems(items);
+        });
+      });
+    });
+    return Promise.all(jobs);
+  }
+
+  function hydratePickersFromForm() {
+    Object.keys(PICKERS).forEach(function (k) {
+      var f = document.getElementById("ads-firms-filters");
+      var el = f.elements[k];
+      var v = el ? String(el.value || "") : "";
+      var slugs = v ? v.split(",").map(function (s) { return s.trim(); }).filter(Boolean) : [];
+      PICKERS[k].setSelected(slugs);
+    });
+  }
+
+  function clearPickers() {
+    Object.keys(PICKERS).forEach(function (k) { PICKERS[k].setSelected([]); });
   }
 
   // Dual-handle slider: builds two range inputs sharing a track. The min/max
@@ -260,6 +414,7 @@
       var f = document.getElementById("ads-firms-filters"); f.reset();
       // Re-init sliders so handles snap back to extremes
       f.querySelectorAll('input[type="hidden"]').forEach(function (h) { h.value = ""; });
+      clearPickers();
       f.querySelectorAll('.ads-dual').forEach(function (host) {
         host.querySelector(".lo").value = 0;
         host.querySelector(".hi").value = host.querySelector(".hi").max;
@@ -303,7 +458,11 @@
     });
 
     // Load taxonomy first so the URL-driven preselect lands on the right rows.
-    loadSectors().then(function () { readQS(); loadResults(false); loadSummary(); });
+    initPickers().then(function () {
+      readQS();
+      hydratePickersFromForm();
+      loadResults(false); loadSummary();
+    });
     loadViews();
   });
 })();

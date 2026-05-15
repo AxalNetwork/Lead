@@ -43,19 +43,18 @@ permalink: /dashboard/firms/
           <option value="late">late</option>
         </select>
       </label>
-      <label class="ads-field"><span>Sectors (multi, from taxonomy)</span>
-        <select name="sectors" id="ads-firms-sectors" multiple size="4" style="height:auto">
-          <option class="ads-muted">Loading…</option>
-        </select>
-      </label>
-      <label class="ads-field"><span>Invests in geo (multi)</span>
-        <select name="invests_in" multiple size="4" style="height:auto">
-          <option value="us">us</option><option value="ca">ca</option>
-          <option value="emea">emea</option><option value="latam">latam</option>
-          <option value="apac">apac</option><option value="africa">africa</option>
-          <option value="global">global</option>
-        </select>
-      </label>
+      <div class="ads-field">
+        <span>Sectors</span>
+        <div class="ads-picker" data-picker="sectors" data-placeholder="Search sectors by name, slug or alias…">
+          <input type="hidden" name="sectors">
+        </div>
+      </div>
+      <div class="ads-field">
+        <span>Invests in geo</span>
+        <div class="ads-picker" data-picker="geographies" data-placeholder="Search countries, regions, ISO codes…">
+          <input type="hidden" name="invests_in">
+        </div>
+      </div>
       <label class="ads-field"><span>Lead/co</span>
         <select name="lead_or_co"><option value="">both</option><option value="lead">lead</option><option value="co">co</option></select>
       </label>
