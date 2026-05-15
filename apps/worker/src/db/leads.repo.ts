@@ -25,6 +25,18 @@ const HISTORY_FIELDS: ReadonlyArray<keyof Lead> = [
   "canonical_linkedin_key", "canonical_name_firm_key", "canonical_name_city_key",
   "provider", "provider_score",
   "sector_slug", "geo_slug", "do_not_contact",
+  // Task #24 investor columns — auditable so enrichment writes show up
+  // in lead_history and trigger profile cache invalidation.
+  "investor_kind", "check_size_min_usd", "check_size_max_usd",
+  "check_size_typical_usd", "sweet_spot_stage", "stage_focus_json",
+  "sector_focus_slugs_json", "geo_focus_json", "thesis",
+  "office_hours_url", "pitch_form_url", "calendly_url",
+  "signal_nfx_url", "crunchbase_url", "wikipedia_url",
+  "current_fund_id", "current_role_title",
+  "board_seats_count", "media_count", "podcast_count",
+  "portfolio_logos_json",
+  "investment_count", "unicorn_count", "exit_count",
+  "avg_check_usd", "total_deployed_usd",
 ];
 
 // Optional KV binding so updateLead() can bust the investor profile cache

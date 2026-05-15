@@ -71,6 +71,34 @@ export interface Lead {
   geo_slug?: string | null;
   do_not_contact?: number;
 
+  // Task #24 — investor profile columns (migration 140).
+  investor_kind?: string | null;
+  check_size_min_usd?: number | null;
+  check_size_max_usd?: number | null;
+  check_size_typical_usd?: number | null;
+  sweet_spot_stage?: string | null;
+  stage_focus_json?: string | null;
+  sector_focus_slugs_json?: string | null;
+  geo_focus_json?: string | null;
+  thesis?: string | null;
+  office_hours_url?: string | null;
+  pitch_form_url?: string | null;
+  calendly_url?: string | null;
+  signal_nfx_url?: string | null;
+  crunchbase_url?: string | null;
+  wikipedia_url?: string | null;
+  current_fund_id?: number | null;
+  current_role_title?: string | null;
+  board_seats_count?: number | null;
+  media_count?: number | null;
+  podcast_count?: number | null;
+  portfolio_logos_json?: string | null;
+  investment_count?: number | null;
+  unicorn_count?: number | null;
+  exit_count?: number | null;
+  avg_check_usd?: number | null;
+  total_deployed_usd?: number | null;
+
   meta_json: string | null;
   created_at: string;
   updated_at: string;
