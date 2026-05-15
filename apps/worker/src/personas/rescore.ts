@@ -12,6 +12,14 @@ import {
 import { scoreEntity } from "./score";
 import { explainFit } from "./explain";
 import { cosinesForEntities } from "./embed";
+
+function cosine(a: number[], b: number[]): number {
+  if (a.length !== b.length || !a.length) return 0;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  if (!na || !nb) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
 import { aiEmbed } from "../ai/extract";
 import { buildEmbeddingText } from "./score";
 
@@ -26,16 +34,38 @@ export async function rescoreEntity(env: Env, entityKind: "account" | "buyer", e
   const facts = entityKind === "account" ? await loadAccountFacts(env, entityId) : await loadBuyerFacts(env, entityId);
   if (!facts) return { scored: 0 };
 
+  // Fetch the entity vector once (when applicable) and re-use it
+  // across every persona we score against. Persona vectors are fetched
+  // lazily per row from VEC_PERSONAS so a fresh PATCH that re-embedded
+  // is reflected immediately. Cosine is computed locally.
+  let entityVector: number[] | null = null;
+  if (entityKind === "account" && env.VEC_ACCOUNTS) {
+    try {
+      const rows = await env.VEC_ACCOUNTS.getByIds([entityId]);
+      const v = (rows ?? [])[0]?.values;
+      if (Array.isArray(v) && v.length) entityVector = v;
+    } catch (e) { console.warn("VEC_ACCOUNTS.getByIds (single) failed", (e as Error).message); }
+  }
+  const personaVecCache = new Map<string, number[] | null>();
+
   let scored = 0;
   for (const row of targets) {
     const spec = rowToSpec(row);
     let semCos: number | null = null;
-    if (entityKind === "account" && env.VEC_PERSONAS && env.VEC_ACCOUNTS) {
-      // Single-entity rescore: query personas index by the entity id
-      // would require us to know the entity vector. Cheaper: skip
-      // semantic_fit override (scorer falls back to 50). Full-persona
-      // workflow is the path that pre-computes the cosine map.
-      semCos = null;
+    if (entityKind === "account" && entityVector && env.VEC_PERSONAS) {
+      let pv = personaVecCache.get(row.id);
+      if (pv === undefined) {
+        try {
+          const rows = await env.VEC_PERSONAS.getByIds([row.id]);
+          const v = (rows ?? [])[0]?.values;
+          pv = Array.isArray(v) && v.length ? v : null;
+        } catch (e) {
+          console.warn("VEC_PERSONAS.getByIds failed", (e as Error).message);
+          pv = null;
+        }
+        personaVecCache.set(row.id, pv);
+      }
+      if (pv) semCos = cosine(entityVector, pv);
     }
     const result = scoreEntity(spec, {
       account: entityKind === "account" ? facts.facts as never : null,
@@ -108,13 +138,16 @@ async function writeBackEntityFit(env: Env, entityKind: "account" | "buyer", ent
 export async function rescorePersonaFull(
   env: Env,
   personaId: string,
-  opts: { batchSize?: number; explainTopN?: number } = {},
-): Promise<{ scored: number }> {
+  opts: { batchSize?: number; explainCap?: number } = {},
+): Promise<{ scored: number; explained: number }> {
   const batchSize = Math.min(Math.max(1, opts.batchSize ?? 200), 500);
-  const explainTopN = opts.explainTopN ?? 50;
+  // Hard ceiling on AI explanation calls per workflow run — protects
+  // the daily neuron budget. Default 5000 covers every realistic v1
+  // dataset; explicitly settable lower for tests / smoke runs.
+  const explainCap = Math.max(0, opts.explainCap ?? 5000);
 
   const row = await env.DB.prepare(`SELECT * FROM personas WHERE id = ? AND deleted_at IS NULL`).bind(personaId).first<import("./repo").PersonaRow>();
-  if (!row) return { scored: 0 };
+  if (!row) return { scored: 0, explained: 0 };
   const spec = rowToSpec(row);
 
   // Compute the persona vector once; per-batch we'll fetch the entity
@@ -183,9 +216,14 @@ export async function rescorePersonaFull(
     offset += batchSize;
   }
 
-  // Generate explanations for top-N highest-scoring matches.
+  // Generate explanations for EVERY qualifying match (fit_score >= 50),
+  // up to explainCap. R2 cache in explainFit is keyed by
+  // (persona, entity, persona.last_modified, entity.last_modified) so
+  // reruns for unchanged rows are essentially free; the cap is a hard
+  // safety net for first-time runs on huge datasets.
   topRanked.sort((a, b) => b.score - a.score);
-  for (const t of topRanked.slice(0, explainTopN)) {
+  let explained = 0;
+  for (const t of topRanked.slice(0, explainCap)) {
     const explanation = await explainFit(env, {
       persona: { ...spec, name: row.name, thesis: row.thesis, last_modified: row.last_modified },
       entity: { kind: spec.kind, id: t.id, name: t.name, last_modified: t.entity_modified_at ?? "", facts: t.facts as Record<string, unknown> },
@@ -196,10 +234,11 @@ export async function rescorePersonaFull(
       const now = new Date().toISOString();
       await env.DB.prepare(`UPDATE persona_matches SET explanation = ?, explanation_at = ? WHERE persona_id = ? AND entity_kind = ? AND entity_id = ?`)
         .bind(explanation, now, row.id, spec.kind, t.id).run();
+      explained += 1;
     }
   }
 
-  return { scored };
+  return { scored, explained };
 }
 
 // Best-effort dispatch: prefer the workflow when available, otherwise
