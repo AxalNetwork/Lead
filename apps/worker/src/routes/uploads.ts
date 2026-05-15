@@ -347,12 +347,13 @@ uploads.post("/:id/diff-preview", async (c) => {
       const url = (r["website"] || r["url"] || r["domain"] || "").toLowerCase().replace(/^https?:\/\//, "").replace(/\/$/, "");
       const name = (r["name"] || r["firm"] || r["fund"] || "").trim();
       if (!url && !name) continue;
+      // firms schema column is hq_country_iso2 (see migration 090).
       const existing = await c.env.DB.prepare(
-        "SELECT id, name, website, hq_country FROM firms WHERE (website LIKE ? OR name = ?) LIMIT 1",
-      ).bind(`%${url}%`, name).first<{ id: string; name: string | null; website: string | null; hq_country: string | null }>();
+        "SELECT id, name, website, hq_country_iso2 FROM firms WHERE (website LIKE ? OR name = ?) LIMIT 1",
+      ).bind(`%${url}%`, name).first<{ id: string; name: string | null; website: string | null; hq_country_iso2: string | null }>();
       if (!existing) { wouldCreate++; continue; }
       wouldUpdate++;
-      for (const [field, dbField] of [["name", "name"], ["website", "website"], ["hq_country", "hq_country"]] as const) {
+      for (const [field, dbField] of [["name", "name"], ["website", "website"], ["hq_country_iso2", "hq_country_iso2"]] as const) {
         const newVal = (r[field] ?? "").trim();
         const oldVal = (existing as Record<string, string | null>)[dbField];
         if (newVal && newVal !== (oldVal ?? "") && samples.length < 10) {

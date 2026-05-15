@@ -248,7 +248,10 @@
     }
     function resetFlow() {
       stopPoll();
-      current = { id: null, headers: [], map: {}, entity: "firms", totalRows: 0, pollHandle: null };
+      // Reset to the FULL v2 shape so re-entering the flow doesn't trip
+      // over missing tabs/tabPreviews/activeTab/summary keys.
+      current = { id: null, headers: [], map: {}, entity: "firms", totalRows: 0, pollHandle: null,
+        tabs: [], tabPreviews: {}, activeTab: 0, summary: null };
       if (fileInput) fileInput.value = "";
       tellMsg("");
       setStep("pick");

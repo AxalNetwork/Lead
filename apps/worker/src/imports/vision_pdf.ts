@@ -268,7 +268,7 @@ function parseTables(res: unknown): VisionParse {
  *  consecutive pages whose headers match (continuation pattern). When
  *  productivity-app tab-strip names are detected, the n-th distinct tab
  *  name is assigned to the n-th distinct table (by first appearance). */
-export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer): Promise<ParsedTable[]> {
+export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer, opts: { skipOcr?: boolean } = {}): Promise<ParsedTable[]> {
   if (!env.AI) return [];
   const ok = await assertBudget(env, "ai");
   if (!ok.ok) return [];
@@ -291,6 +291,10 @@ export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer): P
     let parsed: VisionParse | null = await aiCacheGet<VisionParse>(env, cacheKey);
     if (parsed) {
       trackAi(env, { purpose: "extraction", model, cacheHit: true });
+    } else if (opts.skipOcr) {
+      // Cache-only mode: never invoke the vision model. Yields an empty
+      // page result, which is fine for re-classify/re-map flows.
+      parsed = { tables: [], tabStrip: [] };
     } else {
       if (!(await limitAi(env))) continue;
       const t0 = Date.now();
@@ -350,16 +354,17 @@ export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer): P
 }
 
 /** Single-image vision OCR (for image uploads — png/jpg). */
-export async function extractTablesFromImage(env: Env, bytes: ArrayBuffer): Promise<ParsedTable[]> {
+export async function extractTablesFromImage(env: Env, bytes: ArrayBuffer, opts: { skipOcr?: boolean } = {}): Promise<ParsedTable[]> {
   if (!env.AI) return [];
   const ok = await assertBudget(env, "ai");
   if (!ok.ok) return [];
-  if (!(await limitAi(env))) return [];
   const u8 = new Uint8Array(bytes);
   const model = env.AI_VISION_MODEL ?? VISION_MODEL_DEFAULT;
   const cacheKey = await sha256Hex(`${model}:vision-tables-img:` + (await sha256Hex(bytesToBase64(u8))));
   let pageTables = await aiCacheGet<Array<{ headers: string[]; rows: string[][] }>>(env, cacheKey);
+  if (!pageTables && opts.skipOcr) return [];
   if (!pageTables) {
+    if (!(await limitAi(env))) return [];
     try {
       const res = (await env.AI.run(model, {
         image: Array.from(u8),

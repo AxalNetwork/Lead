@@ -1265,7 +1265,8 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
       const importId = msg.target;
       if (msg.kind === "parse_file") {
         const { processParseFile } = await import("../imports/parse");
-        await processParseFile(env, importId);
+        const cfg = (msg.config ?? {}) as { skip_ocr?: boolean };
+        await processParseFile(env, importId, { skipOcr: cfg.skip_ocr === true });
       } else {
         const { processImportFile } = await import("../imports/import");
         await processImportFile(env, importId);

@@ -44,7 +44,12 @@ interface TabResult {
   mapConfidence: Record<string, number>;
 }
 
-export async function processParseFile(env: Env, importId: string): Promise<void> {
+/** Optional flags forwarded by the queue when re-running a parse. `skipOcr`
+ *  forces the vision pass to use cached results only (cache hits) and
+ *  return [] on a miss, so we never re-invoke the vision model. */
+export interface ParseConfig { skipOcr?: boolean }
+
+export async function processParseFile(env: Env, importId: string, config: ParseConfig = {}): Promise<void> {
   const row = await env.DB
     .prepare("SELECT id, filename, mime, r2_key, format FROM file_imports WHERE id = ?")
     .bind(importId)
@@ -65,7 +70,7 @@ export async function processParseFile(env: Env, importId: string): Promise<void
     // back to extension/MIME detection.
     const persistedFormat = (row as unknown as { format?: string | null }).format ?? null;
     const format0 = (persistedFormat as UploadFormat | null) || detectFormat({ ext, mime: row.mime });
-    let { tables, format } = await parseByFormat(bytes, format0, env);
+    let { tables, format } = await parseByFormat(bytes, format0, env, config);
     if (!tables.length || !tables[0].headers.length) throw new Error("no_table_found");
 
     // Per-tab classification + auto-mapping.
@@ -168,6 +173,13 @@ export async function processParseFile(env: Env, importId: string): Promise<void
       tabPreviews[String(i)] = { headers: tables[i].headers, rows: tables[i].rows.slice(0, 10) };
     }
     await env.SCRAPE_CACHE.put(`upload_tab_previews:${importId}`, JSON.stringify(tabPreviews), {
+      expirationTtl: 60 * 60 * 24 * 7,
+    });
+    // Persist FULL per-tab rows so /diff-preview (and any future dry-run
+    // tooling) can run against the parsed data without re-parsing.
+    const tabRows: Record<string, Array<Record<string, string>>> = {};
+    for (let i = 0; i < tables.length; i++) tabRows[String(i)] = tables[i].rows;
+    await env.SCRAPE_CACHE.put(`upload_rows:${importId}`, JSON.stringify(tabRows), {
       expirationTtl: 60 * 60 * 24 * 7,
     });
     await env.SCRAPE_CACHE.put(`upload_urls:${importId}`, JSON.stringify(urls), {
@@ -293,6 +305,7 @@ async function parseByFormat(
   bytes: ArrayBuffer,
   format0: UploadFormat,
   env: Env,
+  config: ParseConfig = {},
 ): Promise<{ tables: ParsedTable[]; format: UploadFormat }> {
   // URL uploads (Google Sheets / Airtable) are stored as a JSON blob
   // {source_url, format, tables} by routes/uploads.ts → /url. The blob is
@@ -314,13 +327,13 @@ async function parseByFormat(
     const totalRows = tables.reduce((acc, t) => acc + t.rows.length, 0);
     const density = totalRows > 0 ? totalChars / Math.max(1, totalRows) : 0;
     if ((!tables.length || density < IMAGE_PDF_DENSITY) && env.AI) {
-      const v = await extractTablesFromImagePdf(env, bytes);
+      const v = await extractTablesFromImagePdf(env, bytes, { skipOcr: config.skipOcr === true });
       if (v.length) return { tables: v, format: "pdf-image" };
     }
     return { tables, format: tables.length ? "pdf-text" : "pdf-image" };
   }
   if (format0 === "image") {
-    const v = await extractTablesFromImage(env, bytes);
+    const v = await extractTablesFromImage(env, bytes, { skipOcr: config.skipOcr === true });
     return { tables: v, format: "image" };
   }
   // Default: try spreadsheet (sheetjs sniffs CSV too).
