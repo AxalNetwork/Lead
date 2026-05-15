@@ -99,6 +99,18 @@ npx wrangler dev                 # local dev server
 Wrangler 4.x (used in local dev) requires Node ≥ 22. The CI workflow
 uses Node 20 + wrangler 3.99.0 and is fine on either.
 
+## Adding a new runtime dependency
+
+Cloudflare Pages Builds run `npm clean-install` from the **repo root**
+and then `npx wrangler deploy` against the **root** `wrangler.toml`
+(which points `main` at `apps/worker/src/index.ts`). Until this repo
+moves to npm/pnpm workspaces, every runtime dep added to
+`apps/worker/package.json` MUST also be mirrored verbatim (same version
+specifier, including tarball URLs) in the root `package.json`. Refresh
+the root `package-lock.json` (`npm install` at the repo root) and
+commit both files. Otherwise `esbuild` will fail the Pages bundle with
+`Could not resolve "<module>"`.
+
 ## Adding a new binding
 
 1. Add the binding stanza to `wrangler.toml`.
