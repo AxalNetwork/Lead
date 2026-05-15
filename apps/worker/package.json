@@ -9,6 +9,7 @@
     "test": "tsc -p tsconfig.test.json && node --test test/profile.test.mjs"
   },
   "dependencies": {
+    "fflate": "^0.8.2",
     "hono": "^4.6.14",
     "pdfjs-dist": "^4.10.38"
   },

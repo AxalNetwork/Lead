@@ -35,6 +35,11 @@ interface ColumnSpec {
   needsFirmJoin?: boolean;
 }
 
+// Real `leads` columns. Kept in sync with all migrations under
+// apps/worker/migrations (001_init, 020_rich_leads, 030_discovery,
+// 050_dedupe, 060_taxonomies, 070_compliance, 091_lead_emails_socials).
+// Adding a column anywhere in that chain SHOULD be reflected here so
+// the legacy "every leads column" CSV shim keeps working.
 const LEAD_REAL_COLUMNS = [
   "id", "name", "email", "phone", "org", "title", "category",
   "source_domain", "source_url", "status", "verified", "flagged",
@@ -47,6 +52,11 @@ const LEAD_REAL_COLUMNS = [
   "companies_json", "board_seats_json", "awards_json", "exits_json",
   "priority", "owner_email", "next_action_at", "tags_json", "sector_focus_json",
   "provider", "provider_score", "merged_into",
+  "canonical_email_key", "canonical_phone_key", "canonical_linkedin_key",
+  "canonical_name_firm_key", "canonical_name_city_key",
+  "last_enriched_at", "locked_fields_json", "enrichment_log_json",
+  "do_not_contact",
+  "sector_slug", "geo_slug",
   "emails_json", "socials_json", "meta_json",
   "created_at", "updated_at",
 ] as const;
@@ -74,9 +84,12 @@ const LEAD_FIELDS: Record<string, ColumnSpec> = {
   primary_email:    { sql: `COALESCE(l.email, json_extract(l.emails_json, '$[0].email'))`, header: "primary_email" },
   primary_phone:    { sql: `l.phone`, header: "primary_phone" },
   primary_linkedin: { sql: `COALESCE(l.linkedin_url, (SELECT json_extract(s.value,'$.url') FROM json_each(l.socials_json) s WHERE json_extract(s.value,'$.platform')='linkedin' LIMIT 1))`, header: "primary_linkedin" },
-  firm_name:    { sql: `f.name`,    header: "firm_name",    needsFirmJoin: true },
-  firm_domain:  { sql: `f.domain`,  header: "firm_domain",  needsFirmJoin: true },
-  firm_aum_usd: { sql: `f.aum_usd`, header: "firm_aum_usd", needsFirmJoin: true },
+  // Firm virtuals are scalar subqueries (NOT joins) so a lead with N firm
+  // affiliations still emits exactly one row. Picks the deterministic
+  // earliest firm_people row to stay stable across reruns.
+  firm_name:    { sql: `(SELECT f.name    FROM firm_people fp JOIN firms f ON f.id = fp.firm_id WHERE fp.lead_id = l.id ORDER BY fp.id ASC LIMIT 1)`, header: "firm_name" },
+  firm_domain:  { sql: `(SELECT f.domain  FROM firm_people fp JOIN firms f ON f.id = fp.firm_id WHERE fp.lead_id = l.id ORDER BY fp.id ASC LIMIT 1)`, header: "firm_domain" },
+  firm_aum_usd: { sql: `(SELECT f.aum_usd FROM firm_people fp JOIN firms f ON f.id = fp.firm_id WHERE fp.lead_id = l.id ORDER BY fp.id ASC LIMIT 1)`, header: "firm_aum_usd" },
 };
 
 const FIRM_REAL_COLUMNS = [
@@ -235,10 +248,8 @@ function resolveColumns(entity: Entity, columns: ColumnRequest[]): ResolvedColum
 
 function buildLeadsQuery(cols: ResolvedColumn[], filter: FilterShape): BuiltQuery {
   const selects = cols.map((c) => `${c.spec.sql} AS ${c.alias}`).join(", ");
-  const needsFirmJoin = cols.some((c) => c.spec.needsFirmJoin);
-  const join = needsFirmJoin
-    ? "LEFT JOIN firm_people fp ON fp.lead_id = l.id LEFT JOIN firms f ON f.id = fp.firm_id"
-    : "";
+  // No JOINs at the lead level — firm virtuals use scalar subqueries
+  // (see LEAD_FIELDS) so the result set is guaranteed one row per lead.
   const where: string[] = []; const binds: unknown[] = [];
   if (filter.status) { where.push("l.status = ?"); binds.push(filter.status); }
   if (filter.has_email) where.push("(l.email IS NOT NULL AND l.email <> '')");
@@ -247,7 +258,7 @@ function buildLeadsQuery(cols: ResolvedColumn[], filter: FilterShape): BuiltQuer
   if (!filter.include_merged) where.push("(l.merged_into IS NULL OR l.merged_into = '')");
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   return {
-    sql: `SELECT ${selects} FROM leads l ${join} ${whereSql} ORDER BY l.created_at DESC LIMIT 50000`,
+    sql: `SELECT ${selects} FROM leads l ${whereSql} ORDER BY l.created_at DESC LIMIT 50000`,
     binds, resolved: cols,
   };
 }
@@ -330,14 +341,34 @@ function writeDelimited(cols: ResolvedColumn[], rows: Record<string, unknown>[],
   return lines.join("\r\n");
 }
 
-function writeJson(cols: ResolvedColumn[], rows: Record<string, unknown>[]): string {
-  const out = rows.map((r) => {
-    const obj: Record<string, string> = {};
-    const vals = renderRow(cols, r);
-    cols.forEach((c, i) => { obj[c.outHeader] = vals[i]; });
-    return obj;
+// Streaming JSON: emits a top-level array without ever materializing
+// the full payload as one string. Each row is JSON.stringify'd in isolation
+// so peak memory stays O(largest row) rather than O(N * row).
+function streamJson(cols: ResolvedColumn[], rows: Record<string, unknown>[]): ReadableStream<Uint8Array> {
+  const enc = new TextEncoder();
+  let i = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (i === 0) controller.enqueue(enc.encode("["));
+      // Emit a chunk of up to 200 rows per pull to balance throughput vs
+      // backpressure; controller.desiredSize is honored implicitly because
+      // pull() is only called when the consumer is ready.
+      const end = Math.min(i + 200, rows.length);
+      let buf = "";
+      for (; i < end; i++) {
+        const obj: Record<string, string> = {};
+        const vals = renderRow(cols, rows[i]);
+        cols.forEach((c, j) => { obj[c.outHeader] = vals[j]; });
+        if (i > 0) buf += ",";
+        buf += JSON.stringify(obj);
+      }
+      if (buf) controller.enqueue(enc.encode(buf));
+      if (i >= rows.length) {
+        controller.enqueue(enc.encode("]"));
+        controller.close();
+      }
+    },
   });
-  return JSON.stringify(out);
 }
 
 function xmlEscape(s: string): string {
@@ -517,7 +548,7 @@ async function runExport(
     });
   }
   if (format === "json") {
-    return new Response(writeJson(cols, rows), {
+    return new Response(streamJson(cols, rows), {
       headers: { ...headers, "Content-Type": "application/json; charset=utf-8", "Content-Disposition": `attachment; filename="${baseFilename}.json"` },
     });
   }
@@ -574,14 +605,16 @@ exports_.post("/csv", async (c) => {
   } catch (e) { return handleHttpError(e); }
 });
 
-// GET /templates — combined system presets + saved user templates.
+// GET /templates — system presets plus the caller's own saved templates.
+// Other users' personal templates are NOT visible (per-user tenancy).
 exports_.get("/templates", async (c) => {
   try {
     const r = await c.env.DB.prepare(
       `SELECT id, slug, name, entity, columns_json, filter_json, format, created_by, created_at
        FROM export_templates
+       WHERE created_by = 'system' OR created_by = ?
        ORDER BY (created_by = 'system') DESC, name ASC`,
-    ).all<Record<string, unknown>>();
+    ).bind(c.get("email")).all<Record<string, unknown>>();
     const items = (r.results ?? []).map((row) => ({
       id: row.id,
       slug: row.slug,
@@ -622,18 +655,24 @@ exports_.post("/templates", async (c) => {
   } catch (e) { return handleHttpError(e); }
 });
 
-// DELETE /templates/:id — owner-or-creator delete; system presets refuse.
+// DELETE /templates/:id — owner-only delete. System presets are immutable
+// (403). Templates owned by another user respond 404 to avoid leaking
+// existence across tenants.
 exports_.delete("/templates/:id", async (c) => {
   try {
     const idStr = c.req.param("id");
     const id = Number(idStr);
     if (!Number.isFinite(id)) throw new HttpError(400, "invalid_id");
+    const email = c.get("email");
     const row = await c.env.DB.prepare(
       "SELECT created_by FROM export_templates WHERE id = ?",
     ).bind(id).first<{ created_by: string | null }>();
     if (!row) return c.json({ error: "not_found" }, 404);
     if (row.created_by === "system") return c.json({ error: "system_preset_immutable" }, 403);
-    await c.env.DB.prepare("DELETE FROM export_templates WHERE id = ?").bind(id).run();
+    if (row.created_by !== email) return c.json({ error: "not_found" }, 404);
+    await c.env.DB.prepare(
+      "DELETE FROM export_templates WHERE id = ? AND created_by = ?",
+    ).bind(id, email).run();
     return c.json({ ok: true });
   } catch (e) { return handleHttpError(e); }
 });
