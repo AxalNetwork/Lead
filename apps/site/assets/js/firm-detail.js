@@ -150,15 +150,42 @@
     var host = root.querySelector('[data-k="rel-graph"]');
     if (host.dataset.loaded) return;
     var name = (document.querySelector('[data-k="name"]') || {}).textContent || "";
-    // Resolve firm row id → entity id via /search, then mount reusable graph.
-    fetch(API_BASE + "/api/relationships/search?q=" + encodeURIComponent(name), { credentials: "include" })
-      .then(function (r) { return r.ok ? r.json() : { items: [] }; })
-      .then(function (j) {
-        var match = (j.items || []).find(function (e) { return e.ref_table === "firms" && String(e.ref_id) === String(firmId); });
-        if (!match) { host.innerHTML = "<p class='ads-muted'>No graph entity yet — derivation runs nightly at 03:45 UTC.</p>"; return; }
-        window.ADSRelGraph.mount(host, { entityId: match.id, depth: 1, limit: 100, height: 480 });
-        host.dataset.loaded = "1";
+    var ciTbody = root.querySelector('[data-k="coinvestors-rows"]');
+    var pathInput = root.querySelector('[data-k="path-firm-input"]');
+    var pathResult = root.querySelector('[data-k="path-result"]');
+    var pathBtn = root.querySelector('[data-act="path-go"]');
+
+    // Co-investors table — endpoint takes the firm row id directly.
+    api("/api/relationships/coinvestors/" + firmId + "?limit=15").then(function (r) {
+      var items = (r && r.items) || [];
+      ciTbody.innerHTML = items.length ? items.map(function (it) {
+        return "<tr><td><a href='/dashboard/firms/detail/?id=" + esc(it.firm_id) + "'>" + esc(it.name) + "</a></td><td>" + it.overlap + "</td></tr>";
+      }).join("") : '<tr><td colspan="2" class="ads-muted">No co-investments recorded.</td></tr>';
+    }).catch(function () { ciTbody.innerHTML = '<tr><td colspan="2" class="ads-muted">Failed to load.</td></tr>'; });
+
+    // Resolve firm row id → entity id via /search and mount reusable graph.
+    api("/api/relationships/search?q=" + encodeURIComponent(name)).then(function (j) {
+      var match = (j.items || []).find(function (e) { return e.ref_table === "firms" && String(e.ref_id) === String(firmId); });
+      if (!match) { host.innerHTML = "<p class='ads-muted'>No graph entity yet — derivation runs nightly at 03:45 UTC.</p>"; return; }
+      var fromEntityId = match.id;
+      window.ADSRelGraph.mount(host, { entityId: fromEntityId, depth: 1, limit: 100, height: 480 });
+      host.dataset.loaded = "1";
+
+      // Wire path-to-firm: search target by name, take top match, call /path.
+      pathBtn.addEventListener("click", function () {
+        var q = pathInput.value.trim(); if (!q) return;
+        pathResult.textContent = "Searching…";
+        api("/api/relationships/search?q=" + encodeURIComponent(q)).then(function (s) {
+          var target = ((s && s.items) || []).find(function (e) { return e.ref_table === "firms" && Number(e.ref_id) !== firmId; });
+          if (!target) { pathResult.textContent = "No matching firm."; return; }
+          api("/api/relationships/path?src=" + fromEntityId + "&dst=" + target.id + "&max_hops=4").then(function (p) {
+            if (!p.nodes || !p.nodes.length || p.hops < 0) { pathResult.textContent = "No path within 4 hops."; return; }
+            pathResult.innerHTML = "<strong>" + p.hops + "-hop path</strong>: " +
+              p.nodes.map(function (n) { return "<span style='padding:1px 5px;background:#eef;border-radius:3px;margin-right:2px'>" + esc(n.name) + "</span>"; }).join(" → ");
+          });
+        });
       });
+    });
   }
 
   function loadHistory() {

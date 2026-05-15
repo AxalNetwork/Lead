@@ -71,6 +71,23 @@ permalink: /dashboard/firms/detail/
     </section>
 
     <section data-pane="relationships" hidden>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:8px">
+        <div>
+          <h4 style="margin:0 0 6px;font-size:13px">Co-invested-with</h4>
+          <table class="ads-table" style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr><th>Firm</th><th>Shared deals</th></tr></thead>
+            <tbody data-k="coinvestors-rows"><tr><td colspan="2" class="ads-muted">Loading…</td></tr></tbody>
+          </table>
+        </div>
+        <div>
+          <h4 style="margin:0 0 6px;font-size:13px">Path to another firm</h4>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+            <input data-k="path-firm-input" placeholder="Search firm by name" style="flex:1;padding:4px 8px;border:1px solid #e5e5ea;border-radius:4px">
+            <button class="ads-btn ads-btn--ghost" data-act="path-go">Find path</button>
+          </div>
+          <div data-k="path-result" style="font-size:12px;color:#444"></div>
+        </div>
+      </div>
       <div data-k="rel-graph" style="padding:8px"></div>
     </section>
 

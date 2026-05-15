@@ -229,25 +229,84 @@ relationships.get("/colleagues/:leadId", async (c) => {
 });
 
 // ---------------------------------------------------------- intros
+// Resolves `to` from any of: numeric entity id, lead UUID, firm row id.
+// Resolves `from` (the caller) by preferring an existing lead with the same
+// email — that gives the intro path access to the full professional graph
+// (works_at / school_with / colleague_of). If no such lead exists we fall
+// back to a minted `users` entity, which will only have edges added later
+// (e.g. via a `referred` row) but at least keeps the call non-fatal.
 relationships.get("/intros", async (c) => {
   const callerEmail = c.get("email");
-  const to = Number(c.req.query("to"));
-  if (!Number.isFinite(to)) return c.json({ error: "bad_request" }, 400);
-  // Auto-create the caller's own entity (kind=user) on first /intros call.
-  let me = await c.env.DB
-    .prepare("SELECT id FROM entities WHERE ref_table = 'users' AND ref_id = ?")
-    .bind(callerEmail).first<{ id: number }>();
-  if (!me) {
-    const ins = await c.env.DB
-      .prepare("INSERT INTO entities (kind, ref_table, ref_id, name) VALUES ('user','users',?,?)")
-      .bind(callerEmail, callerEmail).run();
-    me = { id: ins.meta.last_row_id as number };
+  const toRaw = c.req.query("to") ?? "";
+  if (!toRaw) return c.json({ error: "bad_request" }, 400);
+
+  // `to_kind` disambiguates numeric inputs that could refer to either an
+  // `entities.id` or a `firms.id`. Allowed values: "entity" (default for
+  // numeric input), "firm", "lead". Without an explicit kind, a numeric
+  // value with collisions in both spaces returns 400 so the caller picks.
+  const toKind = (c.req.query("to_kind") ?? "").toLowerCase();
+  async function resolveTarget(raw: string): Promise<{ id: number } | { error: string; status: 400 | 404; detail?: unknown }> {
+    if (toKind === "lead") {
+      const l = await c.env.DB.prepare("SELECT id FROM entities WHERE ref_table='leads' AND ref_id=?").bind(raw).first<{ id: number }>();
+      return l ? { id: l.id } : { error: "lead_not_found", status: 404 };
+    }
+    if (toKind === "firm") {
+      const f = await c.env.DB.prepare("SELECT id FROM entities WHERE ref_table='firms' AND ref_id=?").bind(raw).first<{ id: number }>();
+      return f ? { id: f.id } : { error: "firm_not_found", status: 404 };
+    }
+    if (toKind === "entity") {
+      const e = await c.env.DB.prepare("SELECT id FROM entities WHERE id=?").bind(Number(raw)).first<{ id: number }>();
+      return e ? { id: e.id } : { error: "entity_not_found", status: 404 };
+    }
+    const num = Number(raw);
+    if (Number.isFinite(num) && raw.match(/^-?\d+$/)) {
+      // Both lookups in parallel so we can spot collisions.
+      const [ent, firm] = await Promise.all([
+        c.env.DB.prepare("SELECT id FROM entities WHERE id=?").bind(num).first<{ id: number }>(),
+        c.env.DB.prepare("SELECT id FROM entities WHERE ref_table='firms' AND ref_id=?").bind(String(num)).first<{ id: number }>(),
+      ]);
+      if (ent && firm && ent.id !== firm.id) {
+        return { error: "ambiguous_target", status: 400, detail: { entity_id: ent.id, firm_entity_id: firm.id, hint: "pass &to_kind=entity or &to_kind=firm" } };
+      }
+      if (ent) return { id: ent.id };
+      if (firm) return { id: firm.id };
+      return { error: "target_not_found", status: 404 };
+    }
+    // Non-numeric → treat as a lead UUID.
+    const l = await c.env.DB.prepare("SELECT id FROM entities WHERE ref_table='leads' AND ref_id=?").bind(raw).first<{ id: number }>();
+    return l ? { id: l.id } : { error: "target_not_found", status: 404 };
   }
+  const resolved = await resolveTarget(toRaw);
+  if ("error" in resolved) return c.json({ error: resolved.error, ...(resolved.detail ? { detail: resolved.detail } : {}) }, resolved.status);
+  const to = resolved.id;
+
+  // Resolve caller "from" entity.
+  let from: number | null = null;
+  const callerLead = await c.env.DB
+    .prepare("SELECT id FROM leads WHERE LOWER(email) = LOWER(?) AND merged_into IS NULL LIMIT 1")
+    .bind(callerEmail).first<{ id: string }>();
+  if (callerLead) {
+    const ent = await c.env.DB.prepare("SELECT id FROM entities WHERE ref_table='leads' AND ref_id=?").bind(callerLead.id).first<{ id: number }>();
+    if (ent) from = ent.id;
+  }
+  if (from == null) {
+    let me = await c.env.DB
+      .prepare("SELECT id FROM entities WHERE ref_table='users' AND ref_id=?")
+      .bind(callerEmail).first<{ id: number }>();
+    if (!me) {
+      const ins = await c.env.DB
+        .prepare("INSERT INTO entities (kind, ref_table, ref_id, name) VALUES ('user','users',?,?)")
+        .bind(callerEmail, callerEmail).run();
+      me = { id: ins.meta.last_row_id as number };
+    }
+    from = me.id;
+  }
+
   // Constrain to edge kinds that make sense as intro paths. /intros never
   // surfaces family_of, regardless of admin status, since this endpoint
   // exists to suggest professional connections.
-  const kf = kindFilter("works_at,partner_at,school_with,referred,colleague_of", false);
-  const path = await shortestPath(c.env, me.id, to, 4, kf);
+  const kf = kindFilter("works_at,partner_at,school_with,referred,colleague_of,co_invested_with", false);
+  const path = await shortestPath(c.env, from, to, 4, kf);
   // Surface intermediate contact channels: pull email/linkedin for each
   // person/firm in the path so the UI can show how to reach out.
   const channels: Record<number, { email?: string; linkedin?: string; website?: string }> = {};

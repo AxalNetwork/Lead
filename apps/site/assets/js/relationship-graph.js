@@ -73,6 +73,8 @@
     });
 
     var graph = null;
+    var expanded = {}; // entityId -> true for nodes already expanded once
+    var clickBound = false;
     function load() {
       loading.hidden = false;
       var qs = "?depth=" + depth + "&limit=" + limit + (activeKinds && activeKinds.length ? "&kinds=" + encodeURIComponent(activeKinds.join(",")) : "");
@@ -82,22 +84,59 @@
         var edges = (j.edges || []).map(function (e) { return { src: e.src, dst: e.dst, kind: e.kind, ref: e }; });
         if (graph) graph.stop();
         graph = window.ADSForceGraph(canvas, { nodes: nodes, edges: edges }, { anchorId: entityId, height: opts.height });
+        if (clickBound) return; clickBound = true;
         canvas.addEventListener("node:click", function (ev) {
           var n = ev.detail;
           var link = deepLinkFor(n);
+          var expandLabel = expanded[n.id] ? "Collapse" : "Expand";
           var html = "<h4 style='margin:0 0 6px;font-size:13px'>" + esc(n.name) + "</h4>" +
-            "<div class='ads-muted' style='margin-bottom:6px'>" + esc(n.kind) + (n.ref_table ? " · " + esc(n.ref_table) + "#" + esc(n.ref_id) : "") + "</div>";
+            "<div class='ads-muted' style='margin-bottom:6px'>" + esc(n.kind) + (n.ref_table ? " · " + esc(n.ref_table) + "#" + esc(n.ref_id) : "") + "</div>" +
+            "<button class='ads-btn ads-btn--ghost' data-act='toggle' data-id='" + n.id + "' style='margin-right:6px'>" + expandLabel + "</button>";
           if (link) html += "<a href='" + link + "'>Open detail →</a>";
           if (opts.onSelect) opts.onSelect(n);
           side.innerHTML = html;
+        });
+        canvas.addEventListener("node:dblclick", function (ev) { expandNode(ev.detail.id); });
+        side.addEventListener("click", function (ev) {
+          var b = ev.target.closest("button[data-act='toggle']");
+          if (!b) return;
+          var nid = Number(b.dataset.id);
+          if (expanded[nid]) collapseNode(nid); else expandNode(nid);
+          // Refresh the sidebar label after toggling.
+          b.textContent = expanded[nid] ? "Collapse" : "Expand";
         });
       }).catch(function (e) {
         loading.hidden = true;
         side.innerHTML = "<p class='ads-muted'>Failed to load: " + esc(e.message) + "</p>";
       });
     }
+    function expandNode(id) {
+      if (!graph || expanded[id]) return;
+      var qs = "?depth=1&limit=80" + (activeKinds && activeKinds.length ? "&kinds=" + encodeURIComponent(activeKinds.join(",")) : "");
+      api("/api/relationships/entity/" + encodeURIComponent(id) + qs).then(function (j) {
+        graph.addData({
+          nodes: (j.nodes || []).map(function (n) { return { id: n.id, label: n.name, kind: n.kind, ref_table: n.ref_table, ref_id: n.ref_id }; }),
+          edges: (j.edges || []).map(function (e) { return { src: e.src, dst: e.dst, kind: e.kind }; }),
+        });
+        expanded[id] = (j.nodes || []).map(function (n) { return n.id; }).filter(function (nid) { return nid !== id && nid !== entityId; });
+      });
+    }
+    function collapseNode(id) {
+      if (!graph || !expanded[id] || !Array.isArray(expanded[id])) return;
+      // Only collapse nodes that aren't reachable from the anchor by some
+      // other path; for simplicity we just remove the nodes added during
+      // this expansion that aren't shared with other expansions.
+      var keep = {};
+      Object.keys(expanded).forEach(function (k) {
+        if (Number(k) === id || !Array.isArray(expanded[k])) return;
+        expanded[k].forEach(function (nid) { keep[nid] = true; });
+      });
+      var rm = expanded[id].filter(function (nid) { return !keep[nid]; });
+      graph.removeNodes(rm);
+      expanded[id] = false;
+    }
     load();
-    return { reload: load };
+    return { reload: load, expand: expandNode, collapse: collapseNode };
   }
 
   window.ADSRelGraph = { mount: mount };

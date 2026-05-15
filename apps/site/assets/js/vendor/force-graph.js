@@ -171,6 +171,13 @@
     }
     canvas.addEventListener("mousemove", function (ev) {
       var p = evCoords(ev);
+      if (dragging && dragging.__pan) {
+        // Background drag → pan the viewport.
+        pan.x = p.x - dragging.sx;
+        pan.y = p.y - dragging.sy;
+        draw();
+        return;
+      }
       if (dragging) {
         var w = worldFromScreen(p.x, p.y);
         dragging.x = w.x; dragging.y = w.y; dragging.vx = 0; dragging.vy = 0;
@@ -200,6 +207,11 @@
       var n = pickNode(p.x, p.y);
       if (n) canvas.dispatchEvent(new CustomEvent("node:click", { detail: n.ref }));
     });
+    canvas.addEventListener("dblclick", function (ev) {
+      var p = evCoords(ev);
+      var n = pickNode(p.x, p.y);
+      if (n) canvas.dispatchEvent(new CustomEvent("node:dblclick", { detail: n.ref }));
+    });
     canvas.addEventListener("wheel", function (ev) {
       ev.preventDefault();
       var p = evCoords(ev);
@@ -220,6 +232,37 @@
         zoom = 1;
         pan.x = canvas.clientWidth / 2 - n.x;
         pan.y = canvas.clientHeight / 2 - n.y;
+        draw();
+      },
+      // Merge additional nodes/edges into the live graph (used by
+      // expand-on-double-click). Existing nodes keep their positions.
+      addData: function (extra) {
+        var added = 0;
+        (extra.nodes || []).forEach(function (n) {
+          if (idIx[n.id] != null) return;
+          var nn = {
+            id: n.id, label: n.label, kind: n.kind, color: colorForKind(n.kind),
+            r: 6,
+            x: canvas.clientWidth / 2 + (Math.random() - 0.5) * 80,
+            y: canvas.clientHeight / 2 + (Math.random() - 0.5) * 80,
+            vx: 0, vy: 0, pinned: false, ref: n,
+          };
+          idIx[n.id] = nodes.length;
+          nodes.push(nn);
+          added++;
+        });
+        (extra.edges || []).forEach(function (e) {
+          if (idIx[e.src] == null || idIx[e.dst] == null) return;
+          edges.push({ s: nodes[idIx[e.src]], t: nodes[idIx[e.dst]], kind: e.kind, color: edgeColor(e.kind), label: e.label, ref: e });
+        });
+        if (added) { stopped = false; requestAnimationFrame(step); }
+      },
+      // Hide nodes (and incident edges) by id (used by collapse).
+      removeNodes: function (ids) {
+        var rm = {}; ids.forEach(function (i) { rm[i] = true; });
+        nodes = nodes.filter(function (n) { return !rm[n.id]; });
+        edges = edges.filter(function (e) { return !rm[e.s.id] && !rm[e.t.id]; });
+        idIx = {}; nodes.forEach(function (n, i) { idIx[n.id] = i; });
         draw();
       },
     };

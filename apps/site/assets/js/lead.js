@@ -76,6 +76,27 @@
     var match = ((search && search.items) || []).find(function (e) { return e.ref_table === "leads" && e.ref_id === id; });
     if (!match) { host.innerHTML = "<p class='ads-muted'>No graph entity yet — derivation runs nightly at 03:45 UTC.</p>"; relMounted = true; return; }
     window.ADSRelGraph.mount(host, { entityId: match.id, depth: 1, limit: 100, height: 480 });
+    // Possible intros: shortest path from caller (resolved server-side from
+    // their email) to this lead via /intros, plus top colleagues as
+    // additional warm-intro candidates.
+    var introsBox = document.getElementById("ads-lead-intros");
+    var intros = await api("/api/relationships/intros?to=" + encodeURIComponent(id));
+    var coll = await api("/api/relationships/colleagues/" + encodeURIComponent(id) + "?limit=5");
+    var html = "";
+    if (intros && intros.nodes && intros.nodes.length && intros.hops > 0) {
+      html += "<div style='margin-bottom:6px'><strong>" + intros.hops + "-hop intro path:</strong> " +
+        intros.nodes.map(function (n) { return "<span style='padding:1px 5px;background:#eef;border-radius:3px;margin-right:2px'>" + esc(n.name) + "</span>"; }).join(" → ") + "</div>";
+    } else {
+      html += "<p class='ads-muted' style='margin:0 0 6px'>No direct intro path from your account.</p>";
+    }
+    var items = (coll && coll.items) || [];
+    if (items.length) {
+      html += "<div><strong>Top colleagues (warm intros):</strong></div>" +
+        "<ul style='margin:4px 0 0;padding-left:18px'>" +
+        items.slice(0, 5).map(function (c) { return "<li><a href='/dashboard/lead/?id=" + encodeURIComponent(c.lead_id) + "'>" + esc(c.name) + "</a> · " + c.shared_firms + " shared firm" + (c.shared_firms === 1 ? "" : "s") + "</li>"; }).join("") +
+        "</ul>";
+    }
+    introsBox.innerHTML = html;
     relMounted = true;
   }
 

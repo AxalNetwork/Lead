@@ -174,18 +174,21 @@ export async function runRelationshipDerivation(env: Env): Promise<DeriveResult>
   result.by_kind.invested_in = await upsertEdges(env, investEdges);
 
   // 3) co_invested_with — every pair of firms that backed the same company in
-  // the same investment_year (or with unknown year). Bidirectional rows so a
-  // BFS from either side finds the edge in O(1).
+  // the same investment_year (or with unknown year). The unique key is
+  // (src,dst,kind,source); we encode the company key + year into `source`
+  // so each shared deal becomes its own row and COUNT(*) on /coinvestors
+  // returns the true overlap count.
   const coInvest: UpsertRow[] = [];
-  for (const [, pairs] of byCompany.entries()) {
+  for (const [coKey, pairs] of byCompany.entries()) {
     for (let i = 0; i < pairs.length; i++) {
       for (let j = i + 1; j < pairs.length; j++) {
         const a = pairs[i], b = pairs[j];
         if (a.firmE === b.firmE) continue;
-        // Year overlap rule: same year OR either side unknown.
         if (a.year && b.year && a.year !== b.year) continue;
-        coInvest.push({ src: a.firmE, dst: b.firmE, kind: "co_invested_with", source: "derive:firm_portfolio", strength: 1 });
-        coInvest.push({ src: b.firmE, dst: a.firmE, kind: "co_invested_with", source: "derive:firm_portfolio", strength: 1 });
+        const yr = a.year || b.year || 0;
+        const src = `derive:firm_portfolio:${coKey}:${yr}`;
+        coInvest.push({ src: a.firmE, dst: b.firmE, kind: "co_invested_with", source: src, strength: 1, meta: { company: coKey, year: yr } });
+        coInvest.push({ src: b.firmE, dst: a.firmE, kind: "co_invested_with", source: src, strength: 1, meta: { company: coKey, year: yr } });
       }
     }
   }
@@ -285,6 +288,35 @@ export async function runRelationshipDerivation(env: Env): Promise<DeriveResult>
     }
   }
   result.by_kind.school_with = await upsertEdges(env, schoolEdges);
+
+  // 7) mentions — lightweight bio scan: emit person→firm `mentions` edges
+  // when a firm name (length ≥ 4 to avoid noise) appears verbatim in a
+  // lead's bio and the lead doesn't already have a works_at edge to that
+  // firm (which would dominate). Bounded to the first 5000 leads with bio.
+  const bios = await env.DB
+    .prepare("SELECT id, bio FROM leads WHERE bio IS NOT NULL AND length(bio) > 20 AND merged_into IS NULL LIMIT 5000")
+    .all<{ id: string; bio: string }>();
+  // Build a name → firm entity index, lowercased, restricted to non-trivial
+  // names. Refetch firms here since `backfillEntities`'s local var isn't
+  // visible at this scope.
+  const firmsForMentions = await env.DB
+    .prepare("SELECT id, name FROM firms WHERE name IS NOT NULL AND length(name) >= 4")
+    .all<{ id: number; name: string }>();
+  const firmNameIx: Array<{ name: string; entE: number }> = [];
+  for (const f of firmsForMentions.results ?? []) {
+    const e = lookup("firms", String(f.id)); if (!e) continue;
+    firmNameIx.push({ name: f.name.toLowerCase(), entE: e });
+  }
+  const mentionEdges: UpsertRow[] = [];
+  for (const row of bios.results ?? []) {
+    const personE = lookup("leads", row.id); if (!personE) continue;
+    const lower = row.bio.toLowerCase();
+    for (const f of firmNameIx) {
+      if (!lower.includes(f.name)) continue;
+      mentionEdges.push({ src: personE, dst: f.entE, kind: "mentions", source: "derive:leads.bio" });
+    }
+  }
+  result.by_kind.mentions = await upsertEdges(env, mentionEdges);
 
   result.edges_upserted =
     Object.values(result.by_kind).reduce((s, n) => s + n, 0);
