@@ -305,7 +305,8 @@ relationships.get("/intros", async (c) => {
   // Constrain to edge kinds that make sense as intro paths. /intros never
   // surfaces family_of, regardless of admin status, since this endpoint
   // exists to suggest professional connections.
-  const kf = kindFilter("works_at,partner_at,school_with,referred,colleague_of,co_invested_with", false);
+  // Spec: intro paths use exactly works_at | partner_at | school_with | referred.
+  const kf = kindFilter("works_at,partner_at,school_with,referred", false);
   const path = await shortestPath(c.env, from, to, 4, kf);
   // Surface intermediate contact channels: pull email/linkedin for each
   // person/firm in the path so the UI can show how to reach out.

@@ -1,0 +1,25 @@
+---
+layout: default
+title: Lead detail
+permalink: /leads/
+---
+<script>
+  // Spec asks for /leads/{id}.html. Jekyll on GitHub Pages is static, so
+  // this single page accepts both /leads/?id={uuid} and /leads/{uuid}/
+  // by extracting the id from either location and forwarding to the
+  // canonical dashboard renderer.
+  (function () {
+    var qs = new URLSearchParams(window.location.search);
+    var id = qs.get("id");
+    if (!id) {
+      var m = window.location.pathname.match(/\/leads\/([^/]+)\/?$/);
+      if (m && m[1] && m[1] !== "index.html") id = decodeURIComponent(m[1]);
+    }
+    if (id) {
+      window.location.replace("/dashboard/lead/?id=" + encodeURIComponent(id));
+    }
+  })();
+</script>
+<noscript>
+  <p>Open this lead from the <a href="/dashboard/leads/">leads dashboard</a>.</p>
+</noscript>

@@ -325,11 +325,67 @@ export async function runRelationshipDerivation(env: Env): Promise<DeriveResult>
       else mentionAgg.set(k, { src: personE, dst: f.entE, count });
     }
   }
+  // Co-occurrence on the same scraped page: any (lead_history,firm_history)
+  // row pair sharing an evidence_url indicates that page mentioned both
+  // entities. Strength = number of distinct shared pages.
+  const coPage = await env.DB.prepare(
+    `SELECT lh.lead_id AS lead_id, fh.firm_id AS firm_id, COUNT(DISTINCT lh.evidence_url) AS pages
+     FROM lead_history lh
+     JOIN firm_history fh ON fh.evidence_url = lh.evidence_url
+     WHERE lh.evidence_url IS NOT NULL AND lh.evidence_url != ''
+     GROUP BY lh.lead_id, fh.firm_id`,
+  ).all<{ lead_id: string; firm_id: number; pages: number }>();
+  for (const row of coPage.results ?? []) {
+    const personE = lookup("leads", row.lead_id); if (!personE) continue;
+    const firmE = lookup("firms", String(row.firm_id)); if (!firmE) continue;
+    const k = personE + ":" + firmE;
+    const prev = mentionAgg.get(k);
+    if (prev) prev.count += row.pages;
+    else mentionAgg.set(k, { src: personE, dst: firmE, count: row.pages });
+  }
   const mentionEdges: UpsertRow[] = [];
   for (const m of mentionAgg.values()) {
-    mentionEdges.push({ src: m.src, dst: m.dst, kind: "mentions", source: "derive:leads.bio:agg", strength: m.count });
+    mentionEdges.push({ src: m.src, dst: m.dst, kind: "mentions", source: "derive:co_page:agg", strength: m.count });
   }
   result.by_kind.mentions = await upsertEdges(env, mentionEdges);
+
+  // was_at from enrichment history: lead_history rows where the
+  // companies_json field changed and a previously listed company name no
+  // longer appears in the new value imply an ended employment.
+  const histEmpl = await env.DB.prepare(
+    `SELECT lead_id, old_value, new_value, evidence_url, changed_at
+     FROM lead_history
+     WHERE field = 'companies_json' AND old_value IS NOT NULL`,
+  ).all<{ lead_id: string; old_value: string; new_value: string | null; evidence_url: string | null; changed_at: string }>();
+  const wasAtEdges: UpsertRow[] = [];
+  function namesFromCompaniesJson(s: string | null): string[] {
+    if (!s) return [];
+    try {
+      const arr = JSON.parse(s);
+      if (!Array.isArray(arr)) return [];
+      return arr.map((c) => (c && c.name ? String(c.name).toLowerCase() : "")).filter(Boolean);
+    } catch { return []; }
+  }
+  // Reverse-lookup from lowercase firm name → entity id.
+  const firmByName = new Map<string, number>();
+  for (const f of firmsForMentions.results ?? []) {
+    const e = lookup("firms", String(f.id)); if (e) firmByName.set(f.name.toLowerCase(), e);
+  }
+  for (const row of histEmpl.results ?? []) {
+    const personE = lookup("leads", row.lead_id); if (!personE) continue;
+    const oldNames = new Set(namesFromCompaniesJson(row.old_value));
+    const newNames = new Set(namesFromCompaniesJson(row.new_value));
+    for (const n of oldNames) {
+      if (newNames.has(n)) continue;
+      const firmE = firmByName.get(n); if (!firmE) continue;
+      wasAtEdges.push({
+        src: personE, dst: firmE, kind: "was_at",
+        source: "derive:lead_history.companies_json",
+        ended_at: row.changed_at, evidence_url: row.evidence_url ?? null,
+      });
+    }
+  }
+  result.by_kind.was_at_history = await upsertEdges(env, wasAtEdges);
 
   result.edges_upserted =
     Object.values(result.by_kind).reduce((s, n) => s + n, 0);
