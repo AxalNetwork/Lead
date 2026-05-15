@@ -11,6 +11,7 @@ import { selectImporter, FIRMLIST_IMPORTERS } from "./parsers/firmlists";
 import { upsertFirm } from "./firms_upsert";
 import { buildSeedUrls, type FetchedPage } from "./firmcrawl/pathProbes";
 import { extractPeopleFromPage, nameKeyOf, type ExtractedPerson } from "./firmcrawl/personExtract";
+import { aiExtractPeople } from "../ai/extract";
 import { guessEmails } from "./firmcrawl/emailGuess";
 import { enqueueLinkedinDiscovery, enqueueCrunchbaseUrl } from "./firmcrawl/profileFollow";
 import { dispatchProfile } from "./parsers/profile";
@@ -1090,6 +1091,44 @@ async function processFirmTeamCrawl(
       cur.personal_site ??= p.personal_site;
       cur.avatar ??= p.avatar;
       cur.bio ??= p.bio;
+    }
+
+    // Task #25 step 2: AI second-pass on noisy SPA-rendered team pages.
+    // Only fires when the deterministic extractors found <3 people on a
+    // non-trivial page AND the AI binding is configured. Cached in R2 so
+    // re-scrapes don't re-bill neurons.
+    if (env.AI && people.length < 3 && pg.html.length > 2000) {
+      try {
+        const ai = await aiExtractPeople(env, pg.html, jobId);
+        for (const p of ai) {
+          const k = nameKeyOf(p.name);
+          if (!k) continue;
+          const cur = peopleByKey.get(k);
+          if (!cur) {
+            peopleByKey.set(k, {
+              name: p.name,
+              role: p.role ?? null,
+              email: p.email ?? null,
+              linkedin: p.linkedin ?? null,
+              twitter: p.twitter ?? null,
+              crunchbase: null,
+              personal_site: null,
+              avatar: null,
+              bio: p.bio ?? null,
+              source_strategy: "ai_extract",
+              source_url: pg.url,
+            } as ExtractedPerson & { source_url: string });
+            continue;
+          }
+          cur.role ??= p.role ?? null;
+          cur.email ??= p.email ?? null;
+          cur.linkedin ??= p.linkedin ?? null;
+          cur.twitter ??= p.twitter ?? null;
+          cur.bio ??= p.bio ?? null;
+        }
+      } catch (e) {
+        console.warn("aiExtractPeople second-pass failed", (e as Error).message);
+      }
     }
   }
 

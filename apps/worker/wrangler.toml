@@ -16,6 +16,14 @@ ACCESS_TEAM_DOMAIN = "axalnetwork.cloudflareaccess.com"
 ACCESS_AUD = "f9cbce05165afb5af93e5929ff93dc4591aa18cd8234244327e78fd29fa849dd"
 ACCESS_APP_AUD = "3677234625cd7a8a9065c46ec41ab908bb7a24cfbc0c20169477305327cb3e79"
 
+# Task #25: Cloudflare-native AI stack budget ceilings.
+AI_DAILY_NEURONS_CAP = "1000000"
+VECTORIZE_DAILY_QUERIES_CAP = "100000"
+AI_SEARCH_NAMESPACE = "axal-profiles"
+AI_EXTRACT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast"
+AI_EMBED_MODEL = "@cf/baai/bge-base-en-v1.5"
+AI_OCR_MODEL = "@cf/unum/uform-gen2-qwen-500m"
+
 # Per-provider daily budget caps (USD). 0 disables, blank uses the conservative default.
 HUNTER_DAILY_USD = "5"
 APOLLO_DAILY_USD = "5"
@@ -57,6 +65,75 @@ bucket_name = "aidatasignal-raw-html"
 [[r2_buckets]]
 binding = "UPLOADS"
 bucket_name = "aidatasignal-uploads"
+
+# Task #25: AI extractor / embedding response cache. 30-day TTL via R2 lifecycle.
+[[r2_buckets]]
+binding = "AI_CACHE"
+bucket_name = "aidatasignal-ai-cache"
+
+# Task #25: Workers AI binding (extraction, embeddings, arbitration, OCR).
+[ai]
+binding = "AI"
+
+# Task #25: Vectorize indexes for entity resolution. 768-dim BGE base embeddings.
+[[vectorize]]
+binding = "VEC_LEADS"
+index_name = "axal-leads-768"
+
+[[vectorize]]
+binding = "VEC_FIRMS"
+index_name = "axal-firms-768"
+
+[[vectorize]]
+binding = "VEC_COMPANIES"
+index_name = "axal-companies-768"
+
+# Task #25: Durable Object for serialized merge locks (per-entity).
+[[durable_objects.bindings]]
+name = "ENTITY_LOCK"
+class_name = "EntityLock"
+
+[[migrations]]
+tag = "v1-task25"
+new_sqlite_classes = ["EntityLock"]
+
+# Task #25: Analytics Engine high-volume metrics dataset.
+[[analytics_engine_datasets]]
+binding = "ANALYTICS"
+dataset = "axal_events"
+
+# Task #25: Cloudflare Images binding for avatars + logos.
+[images]
+binding = "IMAGES"
+
+# Task #25: Rate Limiter bindings — per-host (60/min) + global AI (600/min).
+[[unsafe.bindings]]
+name = "RL_HOST"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }
+
+[[unsafe.bindings]]
+name = "RL_AI"
+type = "ratelimit"
+namespace_id = "1002"
+simple = { limit = 600, period = 60 }
+
+# Task #25: Workflow entrypoints — durable enrichment + ingestion chains.
+[[workflows]]
+binding = "WF_ENRICH_LEAD"
+name = "enrich-lead"
+class_name = "EnrichLeadWorkflow"
+
+[[workflows]]
+binding = "WF_ENRICH_FIRM"
+name = "enrich-firm"
+class_name = "EnrichFirmWorkflow"
+
+[[workflows]]
+binding = "WF_INGEST_PAGE"
+name = "ingest-page"
+class_name = "IngestPageWorkflow"
 
 [[queues.producers]]
 binding = "LEAD_QUEUE"

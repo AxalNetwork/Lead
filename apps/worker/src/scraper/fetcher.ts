@@ -73,6 +73,18 @@ interface RateLimitState {
 }
 
 async function waitForRateLimit(env: Env, host: string, minIntervalMs: number): Promise<void> {
+  // Task #25 step 6: prefer the Cloudflare Rate Limiter binding when
+  // configured. On RL_HOST burst rejection we fall back to the legacy KV
+  // pacing so we still throttle when the RL binding is missing or returns
+  // {success:false}.
+  if (env.RL_HOST) {
+    try {
+      const r = await env.RL_HOST.limit({ key: host });
+      if (r.success) return; // RL accepted — no extra wait needed
+    } catch {
+      // fall through to KV pacer
+    }
+  }
   const key = `rl:${host}`;
   const raw = await env.SCRAPE_CACHE.get(key);
   const now = Date.now();

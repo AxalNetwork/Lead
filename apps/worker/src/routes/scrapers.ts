@@ -3,6 +3,7 @@ import type { Env } from "../types";
 import { listBlockedDomains } from "../scraper/tos";
 import { todayUsage } from "../enrichment/budget";
 import { ALL_PROVIDERS } from "../enrichment/providers";
+import { getBurn } from "../ai/budget";
 
 export const scrapers = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
@@ -103,11 +104,17 @@ scrapers.get("/health", async (c) => {
     };
   });
 
+  // Task #25: AI / Vectorize daily budget burn-down so the dashboard can
+  // surface how much of today's neuron + vector-query allowance has been
+  // spent. Falls back gracefully when the ai_cost_daily table is empty.
+  const aiBudget = await getBurn(c.env).catch(() => null);
+
   return c.json({
     window_hours: 24,
     generated_at: new Date().toISOString(),
     hosts,
     blocked_domains: listBlockedDomains(),
     providers,
+    ai_budget: aiBudget,
   });
 });
