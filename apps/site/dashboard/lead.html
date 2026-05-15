@@ -13,6 +13,7 @@ permalink: /dashboard/lead/
   <button type="button" class="ads-tab" data-tab="history" role="tab">History</button>
   <button type="button" class="ads-tab" data-tab="campaigns" role="tab">Campaigns</button>
   <button type="button" class="ads-tab" data-tab="actions" role="tab">Actions</button>
+  <button type="button" class="ads-tab" data-tab="relationships" role="tab">Relationships</button>
 </div>
 
 <section class="ads-tab-panel active" data-tab="details">
@@ -43,4 +44,10 @@ permalink: /dashboard/lead/
   </div>
 </section>
 
-<script src="/assets/js/lead.js"></script>
+<section class="ads-tab-panel" data-tab="relationships" hidden>
+  <div class="ads-card"><div id="ads-lead-rel"></div></div>
+</section>
+
+<script src="/assets/js/vendor/force-graph.js?v={{ site.time | date: '%s' }}"></script>
+<script src="/assets/js/relationship-graph.js?v={{ site.time | date: '%s' }}"></script>
+<script src="/assets/js/lead.js?v={{ site.time | date: '%s' }}"></script>

@@ -71,7 +71,7 @@ permalink: /dashboard/firms/detail/
     </section>
 
     <section data-pane="relationships" hidden>
-      <p class="ads-muted" style="padding:12px">Relationship graph view is planned in a separate task.</p>
+      <div data-k="rel-graph" style="padding:8px"></div>
     </section>
 
     <section data-pane="history" hidden>
@@ -115,4 +115,6 @@ permalink: /dashboard/firms/detail/
   </form>
 </div>
 
+<script src="/assets/js/vendor/force-graph.js?v={{ site.time | date: '%s' }}"></script>
+<script src="/assets/js/relationship-graph.js?v={{ site.time | date: '%s' }}"></script>
 <script src="/assets/js/firm-detail.js?v={{ site.time | date: '%s' }}"></script>

@@ -1,6 +1,7 @@
 import type { Env, JobMessage } from "./types";
 import { enrichLead } from "./enrichment/orchestrator";
 import { runNightlyAggregator } from "./services/analytics_v2.aggregator";
+import { runRelationshipDerivation } from "./scraper/relationships/derive";
 
 interface SourceRow {
   id: string;
@@ -24,6 +25,16 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
   if (event && (event as ScheduledEvent).cron === "15 3 * * *") {
     ctx.waitUntil(
       runNightlyAggregator(env).catch((e) => console.error("nightly aggregator failed", (e as Error).message)),
+    );
+    return;
+  }
+  // Cron 45 3 * * * → nightly relationship derivation. Runs after the
+  // analytics aggregator so any new entities created today are picked up.
+  if (event && (event as ScheduledEvent).cron === "45 3 * * *") {
+    ctx.waitUntil(
+      runRelationshipDerivation(env)
+        .then((r) => console.log("relationship derivation done", JSON.stringify(r)))
+        .catch((e) => console.error("relationship derivation failed", (e as Error).message)),
     );
     return;
   }

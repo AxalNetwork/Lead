@@ -20,6 +20,7 @@ import { firms } from "./routes/firms";
 import { imports } from "./routes/imports";
 import { savedFilters } from "./routes/saved_filters";
 import { analyticsFirms } from "./routes/analytics_firms";
+import { relationships } from "./routes/relationships";
 import { piiAuditOnLeadGet } from "./middleware/pii_audit";
 import { accessGuard } from "./middleware/access";
 import { runJob } from "./scraper/pipeline";
@@ -76,6 +77,7 @@ api.route("/api/import", imports);
 api.route("/api/imports", imports);
 api.route("/api/saved-filters", savedFilters);
 api.route("/api/analytics/firms", analyticsFirms);
+api.route("/api/relationships", relationships);
 // /api/leads/:id/enrich, /api/leads/enrich/bulk, /:id/dnc, /:id/campaigns
 api.route("/api/leads", leadsEnrichActions);
 api.route("/api/leads", leadsDncActions);

@@ -69,4 +69,4 @@ custom_domain = true
 # Every 6 hours: re-scrape stale sources + re-enrich stale leads.
 # 03:15 UTC nightly: roll up lead_quality_snapshots, source_kpis_daily,
 # pipeline_kpis_daily, and dashboard_snapshots.
-crons = ["0 */6 * * *", "15 3 * * *"]
+crons = ["0 */6 * * *", "15 3 * * *", "45 3 * * *"]

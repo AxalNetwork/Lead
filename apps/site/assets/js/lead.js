@@ -64,6 +64,21 @@
     if (r && r.ok) { await loadDetails(id); await loadHistory(id); }
   }
 
+  // Relationships tab — resolves lead UUID -> graph entity, then mounts.
+  var relMounted = false;
+  async function loadRelationships(id) {
+    if (relMounted) return;
+    var host = document.getElementById("ads-lead-rel");
+    if (!host || !window.ADSRelGraph) return;
+    var detail = await api("/api/leads/" + encodeURIComponent(id));
+    var name = (detail && (detail.full_name || detail.name || detail.email)) || "";
+    var search = await api("/api/relationships/search?q=" + encodeURIComponent(name || id.slice(0, 8)));
+    var match = ((search && search.items) || []).find(function (e) { return e.ref_table === "leads" && e.ref_id === id; });
+    if (!match) { host.innerHTML = "<p class='ads-muted'>No graph entity yet — derivation runs nightly at 03:45 UTC.</p>"; relMounted = true; return; }
+    window.ADSRelGraph.mount(host, { entityId: match.id, depth: 1, limit: 100, height: 480 });
+    relMounted = true;
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     var id = qsId();
     if (!id) {
@@ -77,6 +92,7 @@
         activate(name);
         if (name === "history") loadHistory(id);
         else if (name === "campaigns") loadCampaigns(id);
+        else if (name === "relationships") loadRelationships(id);
       });
     });
     var form = document.getElementById("ads-lead-dnc-form");

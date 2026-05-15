@@ -1,0 +1,32 @@
+---
+layout: default
+title: Relationships
+permalink: /dashboard/relationships/
+---
+
+<h1 class="ads-page-title">Relationships</h1>
+<p class="ads-page-sub">Search the graph, expand a subgraph from any entity, or find the shortest intro path between two people, firms, or companies.</p>
+
+<div class="ads-card" style="margin-bottom:12px">
+  <div style="display:grid;grid-template-columns:1fr 1fr 120px;gap:8px;align-items:end">
+    <label class="ads-field"><span>From</span><input id="ads-rel-from" placeholder="Search a person/firm/company"><div id="ads-rel-from-results" class="ads-pop" hidden></div></label>
+    <label class="ads-field"><span>To (optional, for intro path)</span><input id="ads-rel-to" placeholder="Search a person/firm/company"><div id="ads-rel-to-results" class="ads-pop" hidden></div></label>
+    <button class="ads-btn" id="ads-rel-go">Find path</button>
+  </div>
+  <p class="ads-muted" style="font-size:11px;margin:6px 0 0">Family edges are filtered out by default. Intro paths use works_at / partner_at / school_with / colleague_of / referred edges.</p>
+</div>
+
+<div class="ads-card">
+  <div id="ads-rel-graph"></div>
+</div>
+
+<style>
+  .ads-pop { position:absolute; background:#fff; border:1px solid #e5e5ea; border-radius:6px; box-shadow:0 4px 12px rgba(0,0,0,.06); margin-top:2px; max-height:240px; overflow:auto; z-index:30; min-width:240px }
+  .ads-pop button { display:block; width:100%; text-align:left; padding:6px 8px; background:none; border:0; font-size:12px; cursor:pointer }
+  .ads-pop button:hover { background:#f4f4f6 }
+  .ads-field { position:relative }
+</style>
+
+<script src="/assets/js/vendor/force-graph.js?v={{ site.time | date: '%s' }}"></script>
+<script src="/assets/js/relationship-graph.js?v={{ site.time | date: '%s' }}"></script>
+<script src="/assets/js/relationships.js?v={{ site.time | date: '%s' }}"></script>

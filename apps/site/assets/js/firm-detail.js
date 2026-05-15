@@ -25,6 +25,7 @@
         panes.forEach(function (p) { p.hidden = p.dataset.pane !== t.dataset.tab; });
         if (t.dataset.tab === "history") loadHistory();
         if (t.dataset.tab === "sources") loadSources();
+        if (t.dataset.tab === "relationships") loadRelationships();
       });
     });
   }
@@ -143,6 +144,21 @@
     root.querySelector('[data-act="export"]').addEventListener("click", function () {
       window.location.href = "/dashboard/firms/?q=" + encodeURIComponent(firm.name || "");
     });
+  }
+
+  function loadRelationships() {
+    var host = root.querySelector('[data-k="rel-graph"]');
+    if (host.dataset.loaded) return;
+    var name = (document.querySelector('[data-k="name"]') || {}).textContent || "";
+    // Resolve firm row id → entity id via /search, then mount reusable graph.
+    fetch(API_BASE + "/api/relationships/search?q=" + encodeURIComponent(name), { credentials: "include" })
+      .then(function (r) { return r.ok ? r.json() : { items: [] }; })
+      .then(function (j) {
+        var match = (j.items || []).find(function (e) { return e.ref_table === "firms" && String(e.ref_id) === String(firmId); });
+        if (!match) { host.innerHTML = "<p class='ads-muted'>No graph entity yet — derivation runs nightly at 03:45 UTC.</p>"; return; }
+        window.ADSRelGraph.mount(host, { entityId: match.id, depth: 1, limit: 100, height: 480 });
+        host.dataset.loaded = "1";
+      });
   }
 
   function loadHistory() {
