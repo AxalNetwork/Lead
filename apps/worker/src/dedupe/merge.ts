@@ -109,8 +109,9 @@ export async function mergeIntoExisting(
   incoming: IncomingLead,
   ctx: UpdateContext,
   flags: { dncHit?: boolean } = {},
+  cacheEnv?: { SCRAPE_CACHE?: KVNamespace },
 ): Promise<number> {
-  const repo = new LeadsRepo(db);
+  const repo = new LeadsRepo(db, cacheEnv);
 
   const patch: LeadPatch = {};
 
@@ -199,8 +200,9 @@ export async function markMerged(
   primaryId: string,
   duplicateId: string,
   ctx: UpdateContext,
+  cacheEnv?: { SCRAPE_CACHE?: KVNamespace },
 ): Promise<void> {
-  const repo = new LeadsRepo(db);
+  const repo = new LeadsRepo(db, cacheEnv);
   await repo.updateLead(
     duplicateId,
     { merged_into: primaryId, status: "merged" },

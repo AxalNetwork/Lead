@@ -149,27 +149,22 @@
         + (p.thesis ? '<h3 style="margin-top:14px">Thesis</h3><p>' + esc(p.thesis) + '</p>' : '<p class="ads-empty" style="margin-top:14px">No thesis on file.</p>')
         + '</div>'),
 
-      tab("checks", "Check size",
-        '<table class="ads-table"><tbody>'
+      tab("focus", "Thesis & focus",
+        (p.thesis ? '<div class="ads-card" style="margin-bottom:12px"><h3 style="margin-top:0">Thesis</h3><p>' + esc(p.thesis) + '</p></div>' : '')
+        + '<table class="ads-table"><tbody>'
         + '<tr><th>Sweet spot stage</th><td>' + esc(p.sweet_spot_stage || "—") + '</td></tr>'
+        + '<tr><th>Stages</th><td>' + ((p.stage_focus || []).map(esc).join(", ") || "—") + '</td></tr>'
+        + '<tr><th>Sectors</th><td>' + ((p.sector_focus || []).map(esc).join(", ") || "—") + '</td></tr>'
+        + '<tr><th>Geos</th><td>' + ((p.geo_focus || []).map(esc).join(", ") || "—") + '</td></tr>'
         + '<tr><th>Min check</th><td>' + fmtUsd(cs.min_usd) + '</td></tr>'
-        + '<tr><th>Typical</th><td>' + fmtUsd(cs.typical_usd) + '</td></tr>'
-        + '<tr><th>Max</th><td>' + fmtUsd(cs.max_usd) + '</td></tr>'
+        + '<tr><th>Typical check</th><td>' + fmtUsd(cs.typical_usd) + '</td></tr>'
+        + '<tr><th>Max check</th><td>' + fmtUsd(cs.max_usd) + '</td></tr>'
         + '<tr><th>Avg actual</th><td>' + fmtUsd(n.avg_check_usd) + '</td></tr>'
         + '<tr><th>Total deployed</th><td>' + fmtUsd(n.total_deployed_usd) + '</td></tr>'
+        + '<tr><th>Investments</th><td>' + fmtInt(n.investment_count) + '</td></tr>'
+        + '<tr><th>Unicorns</th><td>' + fmtInt(n.unicorn_count) + '</td></tr>'
+        + '<tr><th>Exits</th><td>' + fmtInt(n.exit_count) + '</td></tr>'
         + '</tbody></table>'),
-
-      tab("activity", "Activity",
-        '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">'
-        + kpi("Investments", fmtInt(n.investment_count))
-        + kpi("Unicorns", fmtInt(n.unicorn_count))
-        + kpi("Exits", fmtInt(n.exit_count))
-        + kpi("Board seats", fmtInt(n.board_seats_count))
-        + kpi("Avg check", fmtUsd(n.avg_check_usd))
-        + kpi("Total deployed", fmtUsd(n.total_deployed_usd))
-        + kpi("Media", fmtInt(n.media_count))
-        + kpi("Podcasts", fmtInt(n.podcast_count))
-        + '</div>'),
 
       tab("stage", "Stage",
         Object.keys(br.stage || {}).length ? breakdownTable(br.stage, "Stage focus") : empty("No stage breakdown yet.")),
@@ -190,11 +185,11 @@
               }).join("") + '</tbody></table>'
           : empty("No portfolio rows yet.")),
 
-      tab("network", "Network",
+      tab("network", "Network (co-investors)",
         '<h3 style="margin-top:0">Co-investors</h3>'
         + ((p.co_investors || []).length
             ? '<ul>' + p.co_investors.map(function (ci) {
-                return '<li><a href="/dashboard/investors/detail/?id=' + esc(ci.investor_lead_id) + '">' + esc(ci.name || ci.investor_lead_id) + '</a> — ' + fmtInt(ci.shared) + ' shared</li>';
+                return '<li><a href="/dashboard/investors/detail/?id=' + esc(ci.investor_lead_id) + '">' + esc(ci.name || ci.investor_lead_id) + '</a> — ' + fmtInt(ci.shared) + ' shared deals</li>';
               }).join("") + '</ul>'
             : empty("No co-investors yet."))
         + '<h3>Current fund</h3>'
@@ -222,9 +217,8 @@
             }).join("") + '</ul>'
           : empty("No media yet.")),
 
-      tab("contact", "Contact & history",
-        '<h3 style="margin-top:0">Contact & profiles</h3>'
-        + '<table class="ads-table"><tbody>'
+      tab("contact", "Contact",
+        '<table class="ads-table"><tbody>'
         + linkRow("Email", c.email ? 'mailto:' + c.email : null, c.email)
         + linkRow("LinkedIn", c.linkedin_url, c.linkedin_url)
         + linkRow("Twitter", c.twitter_url, c.twitter_url)
@@ -236,16 +230,17 @@
         + linkRow("NFX Signal", profs.signal_nfx_url, profs.signal_nfx_url)
         + linkRow("Crunchbase", profs.crunchbase_url, profs.crunchbase_url)
         + linkRow("Wikipedia", profs.wikipedia_url, profs.wikipedia_url)
-        + '</tbody></table>'
-        + '<h3 style="margin-top:16px">Change history (last 50)</h3>'
-        + ((p.history || []).length
-            ? '<table class="ads-table"><thead><tr><th>When</th><th>Field</th><th>Old → New</th><th>Source</th></tr></thead><tbody>'
-              + p.history.map(function (h) {
-                  return '<tr><td>' + esc(h.changed_at) + '</td><td>' + esc(h.field) + '</td>'
-                    + '<td><span class="ads-muted">' + esc(String(h.old_value || "")).slice(0, 40) + '</span> → ' + esc(String(h.new_value || "")).slice(0, 40) + '</td>'
-                    + '<td>' + esc(h.source || "—") + (h.evidence_url ? ' · <a target="_blank" rel="noopener" href="' + esc(h.evidence_url) + '">evidence</a>' : "") + '</td></tr>';
-                }).join("") + '</tbody></table>'
-            : empty("No history yet."))),
+        + '</tbody></table>'),
+
+      tab("history", "History",
+        (p.history || []).length
+          ? '<table class="ads-table"><thead><tr><th>When</th><th>Field</th><th>Old → New</th><th>Source</th></tr></thead><tbody>'
+            + p.history.map(function (h) {
+                return '<tr><td>' + esc(h.changed_at) + '</td><td>' + esc(h.field) + '</td>'
+                  + '<td><span class="ads-muted">' + esc(String(h.old_value || "")).slice(0, 40) + '</span> → ' + esc(String(h.new_value || "")).slice(0, 40) + '</td>'
+                  + '<td>' + esc(h.source || "—") + (h.evidence_url ? ' · <a target="_blank" rel="noopener" href="' + esc(h.evidence_url) + '">evidence</a>' : "") + '</td></tr>';
+              }).join("") + '</tbody></table>'
+          : empty("No history yet.")),
     ];
 
     var nav = '<div class="ads-tabs" role="tablist">' + tabs.map(function (t, i) {

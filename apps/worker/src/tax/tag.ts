@@ -28,7 +28,7 @@ function pickLocationText(lead: Lead): string | null {
  * Returns the patch that was applied (or {} when nothing changed).
  */
 export async function tagLead(env: Env, leadId: string, opts: { source?: string } = {}): Promise<LeadPatch> {
-  const repo = new LeadsRepo(env.DB);
+  const repo = new LeadsRepo(env.DB, env);
   const lead = await repo.getById(leadId);
   if (!lead) return {};
 

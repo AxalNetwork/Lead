@@ -56,14 +56,14 @@ leads.get("/:id", async (c) => {
 });
 
 leads.get("/:id/history", async (c) => {
-  const repo = new LeadsRepo(c.env.DB);
+  const repo = new LeadsRepo(c.env.DB, c.env);
   const items = await repo.history(c.req.param("id"));
   return c.json({ items });
 });
 
 leads.post("/:id/approve", async (c) => {
   const id = c.req.param("id");
-  const repo = new LeadsRepo(c.env.DB);
+  const repo = new LeadsRepo(c.env.DB, c.env);
   await repo.updateLead(
     id,
     { status: "approved", approved_at: new Date().toISOString(), approved_by: c.get("email") },

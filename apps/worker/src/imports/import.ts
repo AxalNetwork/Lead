@@ -325,7 +325,7 @@ async function tryInsertLead(
     provider: importedFrom,
   };
   try {
-    const decision = await resolveIncoming(env.DB, incoming, { jobId, provider: importedFrom, dncHit: dnc.hit });
+    const decision = await resolveIncoming(env.DB, incoming, { jobId, provider: importedFrom, dncHit: dnc.hit }, env);
     if (decision.action === "merged") return "merged";
     // For file imports we treat borderline matches as a merge to guarantee
     // idempotency on re-upload (the user explicitly opted in by confirming
@@ -341,7 +341,7 @@ async function tryInsertLead(
           source: `upload:${importedFrom}`,
           evidence_url: sourceUrl,
           changed_by: `import:${jobId}`,
-        }, { dncHit: dnc.hit });
+        }, { dncHit: dnc.hit }, env);
         return "merged";
       }
     }

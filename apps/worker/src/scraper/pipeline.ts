@@ -170,7 +170,7 @@ async function insertLead(
     incoming.github_url = dnc.cleaned.github_url;
   }
 
-  const decision = await resolveIncoming(env.DB, incoming, { jobId, provider: parserName, dncHit: dnc.hit });
+  const decision = await resolveIncoming(env.DB, incoming, { jobId, provider: parserName, dncHit: dnc.hit }, env);
 
   if (decision.action === "merged") {
     return null;
@@ -240,7 +240,7 @@ async function insertLead(
   if (slugs.country_iso2 && !lead.country_iso2) lead.country_iso2 = slugs.country_iso2;
   if (dnc.hit) (lead as unknown as Record<string, unknown>).do_not_contact = 1;
 
-  const repo = new LeadsRepo(env.DB);
+  const repo = new LeadsRepo(env.DB, env);
   await repo.insert(lead);
 
   if (decision.action === "needs_review") {
@@ -910,7 +910,7 @@ async function upsertCrawlLead(
     jobId,
     provider: "firm_team_crawl",
     dncHit: dnc.hit,
-  });
+  }, env);
 
   if (decision.action === "merged") {
     // Append structured emails/socials to the surviving lead so guessed
@@ -994,7 +994,7 @@ async function upsertCrawlLead(
   if (emailsJson.length) (lead as unknown as Record<string, unknown>).emails_json = JSON.stringify(emailsJson);
   if (socialsJson.length) (lead as unknown as Record<string, unknown>).socials_json = JSON.stringify(socialsJson);
 
-  const repo = new LeadsRepo(env.DB);
+  const repo = new LeadsRepo(env.DB, env);
   await repo.insert(lead);
 
   if (decision.action === "needs_review") {
@@ -1239,6 +1239,28 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
     }
   }
   try {
+    // Task #24: investor/company queued enrichment. The bulk
+    // /api/investors/enrich/bulk endpoint enqueues profile_list jobs whose
+    // `config.enrich_kind` selects the correct executor here. We must NOT
+    // route these through processLinktree because target is a lead/company
+    // ID, not a URL.
+    const cfg = msg.config as { enrich_kind?: string; lead_id?: string; company_id?: string | number } | undefined;
+    if (msg.kind === "profile_list" && cfg?.enrich_kind === "investor") {
+      const { enrichLead } = await import("../enrichment/orchestrator");
+      const leadId = String(cfg.lead_id ?? msg.target);
+      const outcome = await enrichLead(env, leadId);
+      await markCompleted(env, jobId, 0, 0, 0, 0, Date.now() - start,
+        { kind: msg.kind, mode: "investor_enrich", lead_id: leadId, fields_changed: outcome.fields_changed });
+      return;
+    }
+    if (msg.kind === "profile_list" && cfg?.enrich_kind === "company") {
+      // Real company-enrichment providers land in Task #25; for now this
+      // succeeds-noop so the queue doesn't keep retrying. Cache is busted
+      // by the API route on enqueue.
+      await markCompleted(env, jobId, 0, 0, 0, 0, Date.now() - start,
+        { kind: msg.kind, mode: "company_enrich_noop", company_id: cfg.company_id ?? msg.target });
+      return;
+    }
     let totals: { leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number; result?: Record<string, unknown> };
     if (msg.kind === "linktree") {
       totals = await processLinktree(env, jobId, msg.target, msg.config);

@@ -29,7 +29,7 @@ dedupe.get("/review", async (c) => {
 dedupe.get("/review/:id", async (c) => {
   const r = await c.env.DB.prepare("SELECT * FROM dedupe_review WHERE id = ?").bind(c.req.param("id")).first<Record<string, unknown>>();
   if (!r) return c.json({ error: "not_found" }, 404);
-  const repo = new LeadsRepo(c.env.DB);
+  const repo = new LeadsRepo(c.env.DB, c.env);
   const [primary, candidate] = await Promise.all([
     repo.getById(r.primary_lead_id as string),
     repo.getById(r.candidate_lead_id as string),
@@ -47,7 +47,7 @@ dedupe.post("/review/:id/merge", async (c) => {
   if (!review) return c.json({ error: "not_found" }, 404);
   if (review.status !== "open") return c.json({ error: "already_resolved" }, 409);
 
-  const repo = new LeadsRepo(c.env.DB);
+  const repo = new LeadsRepo(c.env.DB, c.env);
   const primary = await repo.getById(review.primary_lead_id);
   const candidate = await repo.getById(review.candidate_lead_id);
   if (!primary || !candidate) return c.json({ error: "missing_leads" }, 404);
@@ -55,8 +55,8 @@ dedupe.post("/review/:id/merge", async (c) => {
   const ctx = { source: "ui:dedupe_merge", changed_by: c.get("email") };
   // Promote candidate's evidence into primary, then mark candidate as merged.
   const incoming: IncomingLead = leadToIncoming(candidate);
-  await mergeIntoExisting(c.env.DB, primary, incoming, ctx);
-  await markMerged(c.env.DB, primary.id, candidate.id, ctx);
+  await mergeIntoExisting(c.env.DB, primary, incoming, ctx, {}, c.env);
+  await markMerged(c.env.DB, primary.id, candidate.id, ctx, c.env);
 
   await c.env.DB.prepare(
     "UPDATE dedupe_review SET status = 'merged', resolved_by = ?, resolved_at = ? WHERE id = ?",

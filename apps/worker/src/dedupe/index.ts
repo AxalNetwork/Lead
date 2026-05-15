@@ -35,6 +35,7 @@ export async function resolveIncoming(
   db: D1Database,
   incoming: IncomingLead,
   options: { jobId: string; provider: string; dncHit?: boolean },
+  cacheEnv?: { SCRAPE_CACHE?: KVNamespace },
 ): Promise<Decision> {
   const match = await findMatch(db, {
     email: incoming.email,
@@ -52,7 +53,7 @@ export async function resolveIncoming(
       source: `scraper:${options.provider}`,
       evidence_url: incoming.source_url ?? null,
       changed_by: `job:${options.jobId}`,
-    }, { dncHit: !!options.dncHit });
+    }, { dncHit: !!options.dncHit }, cacheEnv);
     return { action: "merged", into: match.candidate.id, changedFields: changed };
   }
 
