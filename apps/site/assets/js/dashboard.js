@@ -208,6 +208,39 @@
       }
     });
   }
+  // Inline upload form on the dashboard. Reuses /assets/js/uploads.js when
+  // it's loaded; falls back to a minimal client otherwise.
+  function setupUploadForm() {
+    var f = document.getElementById("ads-form-upload");
+    if (!f) return;
+    f.addEventListener("submit", async function (ev) {
+      ev.preventDefault();
+      var msg = f.querySelector("[data-msg]");
+      var resultEl = document.getElementById("ads-upload-result");
+      var input = f.querySelector('input[type="file"]');
+      if (!input || !input.files || !input.files[0]) { showMsg(f, "Pick a file first.", "err"); return; }
+      var file = input.files[0];
+      try {
+        showMsg(f, "Uploading " + file.name + "…", "warn");
+        var fd = new FormData(); fd.append("file", file);
+        var res = await fetch(API_BASE + "/api/uploads", { method: "POST", credentials: "include", body: fd });
+        if (!res.ok) {
+          var t = await res.text();
+          throw new Error(t || ("HTTP " + res.status));
+        }
+        var row = await res.json();
+        showMsg(f, "Uploaded. Parsing…", "ok");
+        if (resultEl) {
+          resultEl.innerHTML = '<p>Upload <code>' + escapeHtml(row.id) + '</code> created. ' +
+            '<a class="ads-btn ads-btn--ghost ads-btn--sm" href="/dashboard/uploads/">Review &amp; map &rarr;</a></p>';
+        }
+        f.reset();
+      } catch (err) {
+        showMsg(f, "Failed: " + err.message, "err");
+      }
+    });
+  }
+
   function setupBulkForm() {
     var f = document.getElementById("ads-form-bulk");
     if (!f) return;
@@ -480,6 +513,7 @@
     loadDashboard();
     setupTabs();
     setupSingleForm();
+    setupUploadForm();
     setupLinktreeForm();
     setupBulkForm();
     setupDiscoverForm();

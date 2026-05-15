@@ -3,6 +3,7 @@ export interface Env {
   SESSIONS: KVNamespace;
   SCRAPE_CACHE: KVNamespace;
   RAW_HTML: R2Bucket;
+  UPLOADS: R2Bucket;
   BROWSER?: Fetcher;
   LEAD_QUEUE: Queue<JobMessage>;
   ALLOWED_EMAIL: string;
@@ -55,7 +56,9 @@ export type JobKind =
   | "profile_list"
   | "discover"
   | "firmlist"
-  | "firm_team_crawl";
+  | "firm_team_crawl"
+  | "parse_file"
+  | "import_file";
 
 export interface JobMessage {
   jobId: string;

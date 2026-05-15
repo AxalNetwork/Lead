@@ -16,6 +16,7 @@ permalink: /dashboard/
       <button type="button" class="ads-tab" data-tab="bulk" role="tab">Bulk paste</button>
       <button type="button" class="ads-tab" data-tab="discover" role="tab">Discover partners</button>
       <button type="button" class="ads-tab" data-tab="firmlist" role="tab">Import firms from list</button>
+      <button type="button" class="ads-tab" data-tab="upload" role="tab">Import file (CSV/XLSX/PDF)</button>
     </div>
   </div>
 
@@ -115,6 +116,20 @@ permalink: /dashboard/
       <div id="ads-firmlist-by-importer" style="margin-top:8px"></div>
       <div id="ads-firmlist-history" style="margin-top:8px"></div>
     </div>
+  </form>
+
+  <form class="ads-tab-panel" data-tab="upload" id="ads-form-upload" autocomplete="off" enctype="multipart/form-data">
+    <p class="ads-muted" style="margin-top:0">Upload a spreadsheet (CSV, TSV, XLSX, XLS, ODS) or a PDF report. Headers are auto-mapped; you confirm the mapping before import. URLs in the file are auto-queued as scrape jobs.</p>
+    <label class="ads-field">
+      <span>File (max 50 MB)</span>
+      <input type="file" name="file" accept=".csv,.tsv,.xlsx,.xls,.ods,.pdf" required>
+    </label>
+    <div class="ads-form-actions">
+      <button type="submit" class="ads-btn">Upload & parse</button>
+      <a class="ads-btn ads-btn--ghost" href="/dashboard/uploads/">Manage uploads &rarr;</a>
+      <span class="ads-form-msg" data-msg></span>
+    </div>
+    <div id="ads-upload-result" style="margin-top:12px"></div>
   </form>
 
   <form class="ads-tab-panel" data-tab="bulk" id="ads-form-bulk" autocomplete="off">

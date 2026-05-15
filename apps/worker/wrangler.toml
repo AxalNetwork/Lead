@@ -52,6 +52,12 @@ id = "302eb1a32ae64ce588dee452e14b3217"
 binding = "RAW_HTML"
 bucket_name = "aidatasignal-raw-html"
 
+# Uploaded spreadsheet/PDF files (Task #22). One object per upload, keyed
+# uploads/{importId}/{filename}.
+[[r2_buckets]]
+binding = "UPLOADS"
+bucket_name = "aidatasignal-uploads"
+
 [[queues.producers]]
 binding = "LEAD_QUEUE"
 queue = "aidatasignal-lead-jobs"

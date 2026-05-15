@@ -1,0 +1,39 @@
+---
+layout: default
+title: File uploads
+permalink: /dashboard/uploads/
+---
+
+<h1 class="ads-page-title">File uploads</h1>
+<p class="ads-page-sub">Upload spreadsheets and PDFs, review the auto-detected column map, and run the import.</p>
+
+<div class="ads-card">
+  <form id="ads-uploads-form" enctype="multipart/form-data">
+    <label class="ads-field">
+      <span>Pick a file (CSV / TSV / XLSX / XLS / ODS / PDF, max 50 MB)</span>
+      <input type="file" name="file" accept=".csv,.tsv,.xlsx,.xls,.ods,.pdf" required>
+    </label>
+    <div class="ads-form-actions">
+      <button type="submit" class="ads-btn">Upload & parse</button>
+      <button type="button" class="ads-btn ads-btn--ghost" id="ads-uploads-refresh">Refresh list</button>
+      <span class="ads-form-msg" id="ads-uploads-msg"></span>
+    </div>
+  </form>
+</div>
+
+<div class="ads-card" style="margin-top:16px">
+  <div class="ads-card-head"><h3>Recent uploads</h3></div>
+  <div id="ads-uploads-list"><div class="ads-empty">Loading…</div></div>
+</div>
+
+<div id="ads-upload-detail-modal" class="ads-modal" hidden style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:200;display:flex;align-items:center;justify-content:center">
+  <div class="ads-modal__panel" style="background:#fff;border-radius:8px;width:min(900px,94vw);max-height:90vh;overflow:auto;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,.2)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h3 style="margin:0" id="ads-upload-detail-title">Review &amp; map</h3>
+      <button class="ads-btn ads-btn--ghost" id="ads-upload-detail-close" type="button">&times;</button>
+    </div>
+    <div id="ads-upload-detail-body"><div class="ads-empty">Loading…</div></div>
+  </div>
+</div>
+
+<script src="/assets/js/uploads.js?v={{ site.time | date: '%s' }}"></script>

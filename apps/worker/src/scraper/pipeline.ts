@@ -1217,6 +1217,27 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
   await markRunning(env, jobId);
 
   const start = Date.now();
+  // ----- Task #22: file-import lifecycle ------------------------------------
+  // parse_file / import_file jobs don't produce leads/pages metrics. Their
+  // detailed lifecycle lives on file_imports. We just mark the jobs row
+  // completed/failed for queue audit purposes.
+  if (msg.kind === "parse_file" || msg.kind === "import_file") {
+    try {
+      const importId = msg.target;
+      if (msg.kind === "parse_file") {
+        const { processParseFile } = await import("../imports/parse");
+        await processParseFile(env, importId);
+      } else {
+        const { processImportFile } = await import("../imports/import");
+        await processImportFile(env, importId);
+      }
+      await markCompleted(env, jobId, 0, 0, 0, 0, Date.now() - start, { kind: msg.kind, importId });
+      return;
+    } catch (e) {
+      await markFailed(env, jobId, (e as Error).message, Date.now() - start);
+      throw e;
+    }
+  }
   try {
     let totals: { leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number; result?: Record<string, unknown> };
     if (msg.kind === "linktree") {
