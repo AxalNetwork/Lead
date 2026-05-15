@@ -3,6 +3,7 @@
 
 import type { SourceModule, SignalEventDraft, CrawlResult, SourceContext } from "./_types";
 import { archiveRaw, clipSnippet } from "./_helpers";
+import { compliantFetch } from "./_fetch";
 
 interface Posting { id: string; text: string; createdAt: number; hostedUrl: string; categories?: { team?: string; location?: string; commitment?: string } }
 interface AccountRow { id: string; domain: string | null; meta_json: string | null; name: string }
@@ -25,12 +26,11 @@ const mod: SourceModule = {
       try { company = String((JSON.parse(r.meta_json ?? "{}") as Record<string, unknown>).lever_company ?? ""); } catch { /* skip */ }
       if (!company) continue;
       const url = `https://api.lever.co/v0/postings/${encodeURIComponent(company)}?mode=json`;
-      const res = await fetch(url, { headers: { Accept: "application/json" } });
-      if (!res.ok) continue;
-      const raw = await res.text();
+      const res = await compliantFetch(ctx.env, url, mod.slug, { accept: "application/json" });
+      if (!res || !res.ok) continue;
       let postings: Posting[] = [];
-      try { postings = JSON.parse(raw) as Posting[]; } catch { continue; }
-      const r2_key = await archiveRaw(ctx.env, "lever", raw, "json");
+      try { postings = JSON.parse(res.body) as Posting[]; } catch { continue; }
+      const r2_key = await archiveRaw(ctx.env, "lever", res.body, "json");
       const fresh = postings.filter((p) => p.createdAt > since);
       const burst = fresh.length >= 5;
       for (const p of fresh) {

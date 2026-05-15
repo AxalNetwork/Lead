@@ -94,6 +94,12 @@ export async function resolveAccount(env: Env, hint: AccountHint, source: string
       github_org: hint.github_org ?? null,
       imported_from: `crawler:${source}`,
     } as Parameters<typeof insertAccount>[1], `crawler:${source}`);
+    // Newly-created accounts get queued for full enrichment so we don't
+    // wait for the next nightly pass to populate fit signals.
+    if (env.WF_ENRICH_ACCOUNT) {
+      env.WF_ENRICH_ACCOUNT.create({ params: { accountId: created.id, source } })
+        .catch((e) => console.warn("WF_ENRICH_ACCOUNT enqueue failed", created.id, (e as Error).message));
+    }
     return { id: created.id, created: true, matchedBy: "created" };
   } catch (e) {
     console.warn("resolveAccount insertAccount failed", name, (e as Error).message);

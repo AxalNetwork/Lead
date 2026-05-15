@@ -4,6 +4,7 @@
 
 import type { SourceModule, SignalEventDraft, CrawlResult, SourceContext } from "./_types";
 import { archiveRaw, clipSnippet } from "./_helpers";
+import { compliantFetch } from "./_fetch";
 
 interface AshbyJob { id: string; title: string; publishedDate?: string; jobUrl: string; locationName?: string; departmentName?: string }
 interface AshbyResp { jobs?: AshbyJob[] }
@@ -27,12 +28,11 @@ const mod: SourceModule = {
       try { company = String((JSON.parse(r.meta_json ?? "{}") as Record<string, unknown>).ashby_company ?? ""); } catch { /* skip */ }
       if (!company) continue;
       const url = `https://jobs.ashbyhq.com/${encodeURIComponent(company)}.json`;
-      const res = await fetch(url, { headers: { Accept: "application/json" } });
-      if (!res.ok) continue;
-      const raw = await res.text();
+      const res = await compliantFetch(ctx.env, url, mod.slug, { accept: "application/json" });
+      if (!res || !res.ok) continue;
       let parsed: AshbyResp = {};
-      try { parsed = JSON.parse(raw) as AshbyResp; } catch { continue; }
-      const r2_key = await archiveRaw(ctx.env, "ashby", raw, "json");
+      try { parsed = JSON.parse(res.body) as AshbyResp; } catch { continue; }
+      const r2_key = await archiveRaw(ctx.env, "ashby", res.body, "json");
       const fresh = (parsed.jobs ?? []).filter((j) => j.publishedDate && Date.parse(j.publishedDate) > since);
       const burst = fresh.length >= 5;
       for (const j of fresh) {

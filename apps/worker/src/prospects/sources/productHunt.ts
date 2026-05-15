@@ -1,6 +1,7 @@
 // Product Hunt daily RSS feed — emits product_launch.
 import type { SourceModule, SignalEventDraft, CrawlResult, SourceContext } from "./_types";
 import { archiveRaw, clipSnippet, apexDomain } from "./_helpers";
+import { compliantFetch } from "./_fetch";
 
 const FEED = "https://www.producthunt.com/feed";
 
@@ -14,9 +15,9 @@ const mod: SourceModule = {
     const since = ctx.cursor ? Date.parse(ctx.cursor) : 0;
     let newest = since;
     const events: SignalEventDraft[] = [];
-    const res = await fetch(FEED, { headers: { Accept: "application/rss+xml" } });
-    if (!res.ok) return { events, cursor: ctx.cursor };
-    const xml = await res.text();
+    const res = await compliantFetch(ctx.env, FEED, mod.slug, { accept: "application/rss+xml" });
+    if (!res || !res.ok) return { events, cursor: ctx.cursor };
+    const xml = res.body;
     const r2_key = await archiveRaw(ctx.env, "product_hunt", xml, "xml");
     const items = xml.split(/<item>/).slice(1);
     for (const block of items) {

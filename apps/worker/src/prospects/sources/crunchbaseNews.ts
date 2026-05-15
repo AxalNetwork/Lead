@@ -3,6 +3,7 @@
 
 import type { SourceModule, SignalEventDraft, CrawlResult, SourceContext } from "./_types";
 import { archiveRaw, clipSnippet, apexDomain } from "./_helpers";
+import { compliantFetch } from "./_fetch";
 
 const FEED = "https://news.crunchbase.com/feed/";
 
@@ -33,9 +34,9 @@ const mod: SourceModule = {
     const since = ctx.cursor ? Date.parse(ctx.cursor) : 0;
     const events: SignalEventDraft[] = [];
     let newest = since;
-    const res = await fetch(FEED, { headers: { Accept: "application/rss+xml" } });
-    if (!res.ok) return { events, cursor: ctx.cursor };
-    const xml = await res.text();
+    const res = await compliantFetch(ctx.env, FEED, mod.slug, { accept: "application/rss+xml" });
+    if (!res || !res.ok) return { events, cursor: ctx.cursor };
+    const xml = res.body;
     const r2_key = await archiveRaw(ctx.env, "crunchbase_news", xml, "xml");
     for (const it of parseRss(xml)) {
       const ts = Date.parse(it.pubDate);

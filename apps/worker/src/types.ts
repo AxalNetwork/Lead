@@ -73,6 +73,7 @@ export interface Env {
   UK_CH_API_KEY?: string;
   WHOISXML_API_KEY?: string;
   FORBES_SIGNALS_KEY?: string;
+  BUILTWITH_API_KEY?: string;
   SEC_EDGAR_UA?: string;     // SEC requires a User-Agent
 
   // ---- Per-provider daily USD caps (strings parsed at read time) ----

@@ -4,6 +4,7 @@
 
 import type { SourceModule, SignalEventDraft, CrawlResult, SourceContext } from "./_types";
 import { archiveRaw, clipSnippet } from "./_helpers";
+import { compliantFetch } from "./_fetch";
 
 interface AccountRow { id: string; domain: string | null; name: string }
 
@@ -27,9 +28,9 @@ const mod: SourceModule = {
     for (const r of rows.results ?? []) {
       const q = encodeURIComponent(`"${r.name}"`);
       const url = `https://news.google.com/rss/search?q=${q}&hl=en-US&gl=US&ceid=US:en`;
-      const res = await fetch(url, { headers: { Accept: "application/rss+xml" } });
-      if (!res.ok) continue;
-      const xml = await res.text();
+      const res = await compliantFetch(ctx.env, url, mod.slug, { accept: "application/rss+xml" });
+      if (!res || !res.ok) continue;
+      const xml = res.body;
       const r2_key = await archiveRaw(ctx.env, "google_news", xml, "xml");
       const items = xml.split(/<item>/).slice(1);
       for (const block of items.slice(0, 20)) {

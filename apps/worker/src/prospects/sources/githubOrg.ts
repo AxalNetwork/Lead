@@ -4,6 +4,7 @@
 
 import type { SourceModule, SignalEventDraft, CrawlResult, SourceContext } from "./_types";
 import { archiveRaw, clipSnippet } from "./_helpers";
+import { compliantFetch } from "./_fetch";
 
 interface AccountRow { id: string; domain: string | null; github_org: string | null; name: string }
 interface GhEvent { id: string; type: string; created_at: string; actor: { login: string }; repo: { name: string } }
@@ -24,13 +25,11 @@ const mod: SourceModule = {
       const org = (r.github_org ?? "").trim();
       if (!org) continue;
       const url = `https://api.github.com/orgs/${encodeURIComponent(org)}/events`;
-      const headers: Record<string, string> = { Accept: "application/vnd.github+json", "User-Agent": "AIDataSignal/1.0" };
-      const res = await fetch(url, { headers });
-      if (!res.ok) continue;
-      const raw = await res.text();
+      const res = await compliantFetch(ctx.env, url, mod.slug, { accept: "application/vnd.github+json" });
+      if (!res || !res.ok) continue;
       let list: GhEvent[] = [];
-      try { list = JSON.parse(raw) as GhEvent[]; } catch { continue; }
-      const r2_key = await archiveRaw(ctx.env, "github_org", raw, "json");
+      try { list = JSON.parse(res.body) as GhEvent[]; } catch { continue; }
+      const r2_key = await archiveRaw(ctx.env, "github_org", res.body, "json");
       const lastSeen = cursorMap[org];
       let newestId: string | undefined;
       for (const ev of list) {

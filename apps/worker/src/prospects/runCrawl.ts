@@ -15,7 +15,7 @@ import type { Env } from "../types";
 import type { SignalEventDraft, SourceModule } from "./sources/_types";
 import { getCursor, setCursor, isEnabled } from "./sources/_helpers";
 import { resolveAccount } from "./resolve";
-import { insertSignal, recomputeAccountScore } from "./repo";
+import { insertSignal, recomputeAccountScore, listBuyers, insertBuyer } from "./repo";
 
 export interface RunOutcome {
   runId: string;
@@ -86,6 +86,28 @@ export async function runSource(env: Env, mod: SourceModule, opts?: { force?: bo
       });
       inserted += 1;
       touched.add(acct.id);
+
+      // Buyer routing: when the source attached a buyer, upsert by
+      // email (or LinkedIn URL) so leadership_change signals immediately
+      // create a contact record on the account.
+      if (d.buyer && (d.buyer.email || d.buyer.linkedin_url || d.buyer.name)) {
+        try {
+          const existing = await listBuyers(env, acct.id);
+          const match = existing.find((b) =>
+            (d.buyer!.email && b.email && b.email.toLowerCase() === d.buyer!.email!.toLowerCase()) ||
+            (d.buyer!.linkedin_url && b.linkedin_url && b.linkedin_url === d.buyer!.linkedin_url),
+          );
+          if (!match) {
+            await insertBuyer(env, {
+              account_id: acct.id,
+              name: d.buyer.name ?? null,
+              email: d.buyer.email ?? null,
+              title: d.buyer.title ?? null,
+              linkedin_url: d.buyer.linkedin_url ?? null,
+            });
+          }
+        } catch (e) { console.warn("buyer upsert failed", acct.id, (e as Error).message); }
+      }
     } catch (e) {
       const msg = (e as Error).message ?? "";
       // UNIQUE-index conflict = already-seen signal; count as skip not error.

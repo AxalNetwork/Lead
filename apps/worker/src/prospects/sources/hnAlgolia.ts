@@ -8,6 +8,7 @@
 
 import type { SourceModule, SignalEventDraft, CrawlResult, SourceContext } from "./_types";
 import { archiveRaw, clipSnippet, apexDomain } from "./_helpers";
+import { compliantFetch } from "./_fetch";
 
 interface AlgoliaHit { objectID: string; created_at_i: number; created_at: string; story_text?: string; comment_text?: string; title?: string; url?: string; story_url?: string; story_title?: string }
 interface AlgoliaResp { hits: AlgoliaHit[] }
@@ -31,12 +32,11 @@ const mod: SourceModule = {
     ];
     for (const q of queries) {
       const url = `https://hn.algolia.com/api/v1/search_by_date?tags=${encodeURIComponent(q.tags)}&query=${encodeURIComponent(q.query)}&numericFilters=${encodeURIComponent(`created_at_i>${since}`)}&hitsPerPage=200`;
-      const res = await fetch(url, { headers: { Accept: "application/json" } });
-      if (!res.ok) continue;
-      const raw = await res.text();
+      const res = await compliantFetch(ctx.env, url, mod.slug, { accept: "application/json" });
+      if (!res || !res.ok) continue;
       let json: AlgoliaResp = { hits: [] };
-      try { json = JSON.parse(raw) as AlgoliaResp; } catch { continue; }
-      const r2_key = await archiveRaw(ctx.env, "hn_algolia", raw, "json");
+      try { json = JSON.parse(res.body) as AlgoliaResp; } catch { continue; }
+      const r2_key = await archiveRaw(ctx.env, "hn_algolia", res.body, "json");
       for (const h of json.hits) {
         if (h.created_at_i > newest) newest = h.created_at_i;
         const txt = (h.story_text || h.comment_text || h.title || "").trim();

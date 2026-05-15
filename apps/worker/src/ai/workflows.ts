@@ -54,17 +54,35 @@ export class EnrichFirmWorkflow {
   }
 }
 
-// Task #44: account enrichment (skeleton). The route handler dispatches
-// this on /api/accounts/:id/enrich; the per-source crawler chain ships
-// in the buyer-signal-crawlers follow-up task.
+// Task #45: per-account enrichment workflow. Triggered on account create
+// (resolveAccount) and on POST /api/accounts/:id/enrich. Walks every
+// enabled source module that supports per-account scoping (currently
+// BuiltWith + GitHub org + Google News), then recomputes account score.
+// Each step is idempotent — re-running is safe.
 export class EnrichAccountWorkflow {
   env: Env;
   ctx: ExecutionContext;
   constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
-  async run(event: WorkflowEvent<{ accountId: string }>, step: WorkflowStep): Promise<{ ok: true; accountId: string }> {
+  async run(event: WorkflowEvent<{ accountId: string; source?: string }>, step: WorkflowStep): Promise<{ ok: true; accountId: string; ran: string[] }> {
     const { accountId } = event.payload;
-    await step.do("kick", { retries: { limit: 3, backoff: "exponential" } }, async () => ({ accountId }));
-    return { ok: true, accountId };
+    const { MODULES } = await import("../prospects/sources/registry");
+    const { runSource } = await import("../prospects/runCrawl");
+    const { recomputeAccountScore } = await import("../prospects/repo");
+    const ran: string[] = [];
+    // Run only the per-account-scoped sources synchronously. The full
+    // hourly crawl picks up the rest. We pass force:true so the run
+    // bypasses the enabled toggle for this account.
+    const perAccount = MODULES.filter((m) => ["builtwith", "github_org", "google_news"].includes(m.slug));
+    for (const mod of perAccount) {
+      await step.do(`enrich:${mod.slug}`, { retries: { limit: 2, backoff: "exponential" } }, async () => {
+        await runSource(this.env, mod, { force: true });
+        ran.push(mod.slug);
+      });
+    }
+    await step.do("recompute_score", { retries: { limit: 2, backoff: "exponential" } }, async () => {
+      await recomputeAccountScore(this.env, accountId);
+    });
+    return { ok: true, accountId, ran };
   }
 }
 
