@@ -249,6 +249,165 @@ jobs:
             fi
           done
 
+      # Task #43: Detect drift between wrangler.toml and the live Cloudflare
+      # account. The "Ensure …" steps above create anything declared in
+      # wrangler.toml; this step does the inverse and lists what actually
+      # lives in the account, then compares.
+      #
+      # Two outcomes per resource kind:
+      #   - ORPHAN  — exists in the CF account but no [[…]] block in
+      #               wrangler.toml references it. Non-fatal (someone may
+      #               be pruning a binding intentionally and want to keep
+      #               the data around) but loud, because orphans cost
+      #               money and rot quietly.
+      #   - DRIFT   — exists on both sides but the live config doesn't
+      #               match what we'd create. Currently only checked for
+      #               Vectorize (dimensions / metric) because that's the
+      #               only kind where wrangler.toml carries enough shape
+      #               to compare and where the wrong shape silently
+      #               corrupts queries. Drift is FATAL.
+      #
+      # Anything orphaned is matched against an opt-in allowlist
+      # (`apps/worker/.cf-orphan-allowlist`) so known-and-accepted
+      # leftovers don't spam the workflow output. Lines starting with
+      # `#` are comments; one resource name per line; the file is
+      # optional.
+      - name: Detect Cloudflare resource drift
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: 30c9362191318777b71647145decda48
+          VECTORIZE_DEFAULT_DIM: "768"
+          VECTORIZE_DEFAULT_METRIC: "cosine"
+        run: |
+          set -euo pipefail
+
+          ALLOWLIST_FILE=".cf-orphan-allowlist"
+          load_allowlist() {
+            if [ -f "$ALLOWLIST_FILE" ]; then
+              grep -vE '^[[:space:]]*(#|$)' "$ALLOWLIST_FILE" | sed -E 's/[[:space:]]+$//'
+            fi
+          }
+          ALLOWED=$(load_allowlist || true)
+          is_allowed() {
+            local n="$1"
+            [ -z "$ALLOWED" ] && return 1
+            echo "$ALLOWED" | grep -Fxq "$n"
+          }
+
+          DRIFT_FATAL=0
+          ORPHAN_COUNT=0
+          DRIFT_COUNT=0
+
+          # Fetch a CF API URL and assert top-level "success":true. Echos the
+          # raw JSON on stdout when ok, fails the step with the error payload
+          # otherwise — so a bad token / scope surfaces here instead of
+          # silently producing empty lists (which would look like "no
+          # orphans" and hide real drift).
+          cf_get() {
+            local url="$1"
+            local resp
+            resp=$(curl -sS "$url" -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+            if [ "$(echo "$resp" | jq -r '.success')" != "true" ]; then
+              echo "Cloudflare API call failed: $url" >&2
+              echo "$resp" >&2
+              exit 1
+            fi
+            echo "$resp"
+          }
+
+          echo "::group::R2 bucket drift"
+          DECLARED_R2=$(grep -E '^[[:space:]]*bucket_name[[:space:]]*=' wrangler.toml | sed -E 's/.*"([^"]+)".*/\1/' | sort -u)
+          LIVE_R2=$(cf_get "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/r2/buckets" \
+            | jq -r '.result.buckets[]?.name' | sort -u)
+          echo "declared: $(echo "$DECLARED_R2" | tr '\n' ' ')"
+          echo "live:     $(echo "$LIVE_R2" | tr '\n' ' ')"
+          for B in $LIVE_R2; do
+            if ! echo "$DECLARED_R2" | grep -Fxq "$B"; then
+              if is_allowed "$B"; then
+                echo "  allowlisted-orphan: $B"
+              else
+                echo "  ORPHAN R2 bucket: $B (not referenced from wrangler.toml)" >&2
+                ORPHAN_COUNT=$((ORPHAN_COUNT+1))
+              fi
+            fi
+          done
+          echo "::endgroup::"
+
+          echo "::group::Queue drift"
+          DECLARED_Q=$(awk '/^\[\[queues\.(producers|consumers)\]\]/{flag=1;next} /^\[/{flag=0} flag && /^[[:space:]]*queue[[:space:]]*=/' wrangler.toml \
+            | sed -E 's/.*"([^"]+)".*/\1/' | sort -u)
+          LIVE_Q=$(cf_get "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues" \
+            | jq -r '.result[]?.queue_name' | sort -u)
+          echo "declared: $(echo "$DECLARED_Q" | tr '\n' ' ')"
+          echo "live:     $(echo "$LIVE_Q" | tr '\n' ' ')"
+          for Q in $LIVE_Q; do
+            if ! echo "$DECLARED_Q" | grep -Fxq "$Q"; then
+              if is_allowed "$Q"; then
+                echo "  allowlisted-orphan: $Q"
+              else
+                echo "  ORPHAN Queue: $Q (not referenced from wrangler.toml)" >&2
+                ORPHAN_COUNT=$((ORPHAN_COUNT+1))
+              fi
+            fi
+          done
+          echo "::endgroup::"
+
+          echo "::group::Vectorize drift"
+          # name<TAB>dim<TAB>metric for each declared index.
+          DECLARED_VEC=$(awk -v ddim="$VECTORIZE_DEFAULT_DIM" -v dmet="$VECTORIZE_DEFAULT_METRIC" '
+            /^\[\[vectorize\]\]/ { flag=1; next }
+            /^\[/ { flag=0 }
+            flag && /^[[:space:]]*index_name[[:space:]]*=/ {
+              name=""; dim=ddim; met=dmet
+              if (match($0, /"[^"]+"/)) name=substr($0, RSTART+1, RLENGTH-2)
+              if (match($0, /dim[[:space:]]*=[[:space:]]*[0-9]+/)) {
+                s=substr($0, RSTART, RLENGTH); sub(/^dim[[:space:]]*=[[:space:]]*/, "", s); dim=s
+              }
+              if (match($0, /metric[[:space:]]*=[[:space:]]*[A-Za-z_-]+/)) {
+                s=substr($0, RSTART, RLENGTH); sub(/^metric[[:space:]]*=[[:space:]]*/, "", s); met=s
+              }
+              if (name != "") printf "%s\t%s\t%s\n", name, dim, met
+            }
+          ' wrangler.toml | sort -u)
+          # name<TAB>dim<TAB>metric for each live index.
+          LIVE_VEC=$(cf_get "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/vectorize/v2/indexes" \
+            | jq -r '.result[]? | [.name, (.config.dimensions|tostring), .config.metric] | @tsv' | sort -u)
+          echo "declared:"; echo "$DECLARED_VEC" | sed 's/^/  /'
+          echo "live:"; echo "$LIVE_VEC" | sed 's/^/  /'
+          DECLARED_VEC_NAMES=$(echo "$DECLARED_VEC" | awk -F'\t' '{print $1}' | sort -u)
+          LIVE_VEC_NAMES=$(echo "$LIVE_VEC" | awk -F'\t' '{print $1}' | sort -u)
+          for I in $LIVE_VEC_NAMES; do
+            [ -z "$I" ] && continue
+            if ! echo "$DECLARED_VEC_NAMES" | grep -Fxq "$I"; then
+              if is_allowed "$I"; then
+                echo "  allowlisted-orphan: $I"
+              else
+                echo "  ORPHAN Vectorize index: $I (not referenced from wrangler.toml)" >&2
+                ORPHAN_COUNT=$((ORPHAN_COUNT+1))
+              fi
+            fi
+          done
+          # Drift: for each name present on both sides, compare dim+metric.
+          while IFS=$'\t' read -r I DIM MET; do
+            [ -z "$I" ] && continue
+            LIVE_ROW=$(echo "$LIVE_VEC" | awk -F'\t' -v n="$I" '$1==n {print; exit}')
+            [ -z "$LIVE_ROW" ] && continue
+            LIVE_DIM=$(echo "$LIVE_ROW" | awk -F'\t' '{print $2}')
+            LIVE_MET=$(echo "$LIVE_ROW" | awk -F'\t' '{print $3}')
+            if [ "$DIM" != "$LIVE_DIM" ] || [ "$MET" != "$LIVE_MET" ]; then
+              echo "  DRIFT Vectorize index: $I declared dim=${DIM}/metric=${MET} but live is dim=${LIVE_DIM}/metric=${LIVE_MET}" >&2
+              DRIFT_FATAL=1
+              DRIFT_COUNT=$((DRIFT_COUNT+1))
+            fi
+          done <<< "$DECLARED_VEC"
+          echo "::endgroup::"
+
+          echo "Drift summary: ${ORPHAN_COUNT} orphan(s), ${DRIFT_COUNT} drifted resource(s)."
+          if [ "$DRIFT_FATAL" -ne 0 ]; then
+            echo "Fatal drift detected (see DRIFT lines above). Failing the deploy." >&2
+            exit 1
+          fi
+
       # Task #40: Apply pending D1 migrations BEFORE the Worker deploy.
       # `wrangler d1 migrations apply` is idempotent — already-applied
       # migrations are tracked in the d1_migrations table and skipped on

@@ -12,6 +12,23 @@ Anything declared in `wrangler.toml` MUST exist in the account before
 auto-creates R2 buckets, Vectorize indexes, Queues, and KV namespaces,
 and probes Analytics Engine datasets via the AE SQL endpoint.
 
+The same workflow also runs a drift detector (Task #43) right before
+`wrangler deploy`. It lists every R2 bucket, Queue, and Vectorize
+index that actually lives in the account and compares against
+`wrangler.toml`:
+
+- **Orphan** (resource exists in the CF account but no binding in
+  `wrangler.toml`) prints a warning to the workflow log but does NOT
+  fail the deploy — it's frequently intentional (e.g. keeping a
+  bucket around while removing its binding). Add the resource name
+  to `apps/worker/.cf-orphan-allowlist` (one per line, `#` comments
+  ok) to suppress a known orphan.
+- **Drift** (Vectorize index exists on both sides but the live
+  dimensions/metric don't match the `# dim=N metric=M` annotation in
+  `wrangler.toml`) is FATAL — querying a 768-d index as if it were
+  1024-d silently corrupts results, so we'd rather fail the deploy
+  than ship.
+
 A note on each:
 
 - **Vectorize**: each `[[vectorize]]` block must annotate dimensions
