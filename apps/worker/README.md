@@ -59,13 +59,13 @@ A note on each:
 | Queue            | `aidatasignal-lead-jobs`   | auto-created by the deploy workflow (`Ensure Queues exist` step)              |
 | Browser Render   | `BROWSER`                  | enabled per-account in CF dashboard                                           |
 | Workers AI       | `AI`                       | enabled per-account in CF dashboard                                           |
-| Vectorize × 3    | `axal-{leads,firms,companies}-768` (768d, cosine) | auto-created by the deploy workflow (`Ensure Vectorize indexes exist` step)   |
+| Vectorize × 6    | `axal-{leads,firms,companies,accounts,personas,projects}-768` (768d, cosine) | auto-created by the deploy workflow (`Ensure Vectorize indexes exist` step)   |
 | Durable Object   | `EntityLock` (binding `ENTITY_LOCK`) | created on first deploy via the `[[migrations]]` block                        |
 | Analytics Engine | dataset `axal_events`      | auto-provisioned by Cloudflare on the first `writeDataPoint` call; deploy workflow probes via AE SQL |
 | Images           | `IMAGES`                   | enable Cloudflare Images for the account                                      |
 | Rate Limiter × 2 | `RL_HOST` (ns 1001), `RL_AI` (ns 1002) | declared as `[[unsafe.bindings]]` — created on first deploy                   |
-| Workflows × 3    | `enrich-lead`, `enrich-firm`, `ingest-page` | created on first deploy via `[[workflows]]` blocks                            |
-| Custom domain    | `api.aidatasignal.com`     | route declared in `wrangler.toml`; DNS + zone must be in this account         |
+| Workflows × 7    | `enrich-lead`, `enrich-firm`, `ingest-page`, `enrich-account`, `crawl-signals`, `rescore-persona`, `match-project` | created on first deploy via `[[workflows]]` blocks                            |
+| Custom domain    | `api.aidatasignal.com`     | route declared in `apps/worker/wrangler.toml`; DNS + zone must be in this account |
 
 ## Required secrets
 
