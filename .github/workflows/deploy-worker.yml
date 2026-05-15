@@ -183,7 +183,7 @@ jobs:
               --data "{\"queue_name\":\"${Q}\"}")
             if echo "$RESP" | grep -qE '"success":[[:space:]]*true'; then
               echo "  created."
-            elif echo "$RESP" | grep -qE '"code":[[:space:]]*100123' || echo "$RESP" | grep -qi 'already exists'; then
+            elif echo "$RESP" | grep -qE '"code":[[:space:]]*(100123|11009)' || echo "$RESP" | grep -qiE 'already exists|already taken'; then
               echo "  already exists — ok."
             else
               echo "  unexpected response: $RESP" >&2
