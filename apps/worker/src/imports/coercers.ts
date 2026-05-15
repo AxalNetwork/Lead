@@ -58,6 +58,63 @@ export function parseMoney(raw: string | null | undefined): MoneyParse {
   return { usd: null, currency, native: Math.round(native * 100) / 100, scale: scale || null };
 }
 
+export interface MoneyRange {
+  currency: string | null;
+  min: number | null;          // native min
+  max: number | null;          // native max
+  typical_native: number | null;
+  typical_usd: number | null;
+}
+
+/** Parse a money range like "50-100M EUR", "$1M – $5M", "€500K to €2M".
+ *  When the input is a single value, min=max=typical=that value. */
+export function parseMoneyRange(raw: string | null | undefined): MoneyRange {
+  const empty: MoneyRange = { currency: null, min: null, max: null, typical_native: null, typical_usd: null };
+  if (raw == null) return empty;
+  const s = String(raw).trim();
+  if (!s || /^(n\/?a|tbd|undisclosed|unknown|—|-)$/i.test(s)) return empty;
+  // Split on common range separators while keeping the surrounding context
+  // for currency / scale inference (e.g. "50-100M EUR" → ["50", "100M EUR"]).
+  const parts = s.split(/\s*(?:-|–|—|to|through|\.\.|—|→)\s*/i);
+  if (parts.length === 2) {
+    // Inherit currency/scale from whichever side has it.
+    const right = parseMoney(parts[1]);
+    const leftRaw = parts[0].trim();
+    // If the left side has no scale/currency, glue them on from the right.
+    const leftHydrated = /[a-z€£¥$]/i.test(leftRaw)
+      ? leftRaw
+      : `${leftRaw}${right.scale ?? ""} ${right.currency ?? ""}`.trim();
+    const left = parseMoney(leftHydrated);
+    if (left.native != null && right.native != null) {
+      const typ = (left.native + right.native) / 2;
+      return {
+        currency: right.currency ?? left.currency,
+        min: Math.min(left.native, right.native),
+        max: Math.max(left.native, right.native),
+        typical_native: Math.round(typ * 100) / 100,
+        typical_usd: null,
+      };
+    }
+  }
+  const single = parseMoney(s);
+  if (single.native == null) return empty;
+  return {
+    currency: single.currency,
+    min: single.native, max: single.native,
+    typical_native: single.native, typical_usd: null,
+  };
+}
+
+/** Range version with FX cache → fills typical_usd. */
+export async function parseMoneyRangeUsd(env: Env, raw: string | null | undefined): Promise<MoneyRange> {
+  const r = parseMoneyRange(raw);
+  if (r.typical_native == null) return r;
+  if (!r.currency || r.currency === "USD") return { ...r, typical_usd: r.typical_native };
+  const rate = await fxToUsd(env, r.currency);
+  if (rate == null) return r;
+  return { ...r, typical_usd: Math.round(r.typical_native * rate * 100) / 100 };
+}
+
 /** Same as parseMoney but applies an FX cache to fill `usd`. */
 export async function parseMoneyUsd(env: Env, raw: string | null | undefined): Promise<MoneyParse> {
   const m = parseMoney(raw);

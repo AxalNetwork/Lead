@@ -28,6 +28,7 @@ interface FileImportRow {
   filename: string;
   mime: string | null;
   r2_key: string;
+  format: string | null;
 }
 
 interface TabResult {
@@ -45,7 +46,7 @@ interface TabResult {
 
 export async function processParseFile(env: Env, importId: string): Promise<void> {
   const row = await env.DB
-    .prepare("SELECT id, filename, mime, r2_key FROM file_imports WHERE id = ?")
+    .prepare("SELECT id, filename, mime, r2_key, format FROM file_imports WHERE id = ?")
     .bind(importId)
     .first<FileImportRow>();
   if (!row) throw new Error(`file_import_not_found:${importId}`);
@@ -60,7 +61,10 @@ export async function processParseFile(env: Env, importId: string): Promise<void
     if (!obj) throw new Error("upload_object_missing");
     const bytes = await obj.arrayBuffer();
     const ext = extOf(row.filename);
-    const format0 = detectFormat({ ext, mime: row.mime });
+    // Honor the persisted format (set by /api/uploads/url) before falling
+    // back to extension/MIME detection.
+    const persistedFormat = (row as unknown as { format?: string | null }).format ?? null;
+    const format0 = (persistedFormat as UploadFormat | null) || detectFormat({ ext, mime: row.mime });
     let { tables, format } = await parseByFormat(bytes, format0, env);
     if (!tables.length || !tables[0].headers.length) throw new Error("no_table_found");
 
@@ -266,13 +270,12 @@ async function parseByFormat(
   env: Env,
 ): Promise<{ tables: ParsedTable[]; format: UploadFormat }> {
   // URL uploads (Google Sheets / Airtable) are stored as a JSON blob
-  // {source_url, format, tables} by routes/uploads.ts → /url. Decode and
-  // return the embedded tables so per-tab classification works identically
-  // to a local file upload.
-  if (format0 === "gsheet" || format0 === "airtable") {
-    const decoded = decodeJsonBlob(bytes);
-    if (decoded) return { tables: decoded.tables, format: (decoded.format as UploadFormat) || format0 };
-  }
+  // {source_url, format, tables} by routes/uploads.ts → /url. The blob is
+  // saved with a `.csv` filename for backward-compat, so extension-based
+  // detection can mislabel it. Sniff the body magic FIRST so the JSON
+  // envelope wins regardless of declared format.
+  const decoded = decodeJsonBlob(bytes);
+  if (decoded) return { tables: decoded.tables, format: (decoded.format as UploadFormat) || (format0 === "csv" ? "gsheet" : format0) };
   if (format0 === "csv")  return { tables: [parseCsv(new TextDecoder().decode(bytes))], format: "csv" };
   if (format0 === "tsv")  return { tables: [parseCsv(new TextDecoder().decode(bytes), "\t")], format: "tsv" };
   if (format0 === "xlsx" || format0 === "xls" || format0 === "ods") {
@@ -295,9 +298,6 @@ async function parseByFormat(
     const v = await extractTablesFromImage(env, bytes);
     return { tables: v, format: "image" };
   }
-  // Last-resort: maybe the caller didn't set format and we got a JSON blob.
-  const jb = decodeJsonBlob(bytes);
-  if (jb) return { tables: jb.tables, format: (jb.format as UploadFormat) || "gsheet" };
   // Default: try spreadsheet (sheetjs sniffs CSV too).
   return { tables: await parseSpreadsheet(bytes), format: format0 };
 }

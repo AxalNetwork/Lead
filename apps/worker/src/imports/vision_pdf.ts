@@ -23,6 +23,7 @@ import { aiCacheGet, aiCachePut, sha256Hex } from "../ai/cache";
 import { assertBudget } from "../ai/budget";
 import { limitAi } from "../scraper/rateLimit";
 import { trackAi } from "../analytics/events";
+import { isChromeText } from "./chrome_filter";
 
 const VISION_MODEL_DEFAULT = "@cf/meta/llama-3.2-11b-vision-instruct";
 const MAX_VISION_PAGES = 10;
@@ -53,6 +54,7 @@ interface PdfDoc {
 }
 interface PdfPage {
   getOperatorList: () => Promise<{ fnArray: number[]; argsArray: unknown[][] }>;
+  getTextContent?: () => Promise<{ items: Array<{ str: string }> }>;
   objs: { get: (name: string, cb?: (obj: unknown) => void) => unknown };
   commonObjs?: { get: (name: string, cb?: (obj: unknown) => void) => unknown };
 }
@@ -67,18 +69,33 @@ async function loadPdfjs(): Promise<PdfMod | null> {
   return cachedMod;
 }
 
-/** Extract embedded JPEG bitmaps per page. Returns at most one image per
- *  page (the largest), so we don't blow up the AI budget on logo bitmaps. */
-async function extractPageJpegs(bytes: ArrayBuffer): Promise<Uint8Array[]> {
+interface PageExtraction {
+  jpeg: Uint8Array | null;
+  /** pdfjs-extracted text on the page (if any), used for OCR-vs-vision
+   *  disagreement scoring and tab-strip name detection. */
+  pdfText: string;
+}
+
+/** Extract embedded JPEG bitmaps + pdfjs text per page. Returns at most one
+ *  image per page (the largest), so we don't blow up the AI budget on logo
+ *  bitmaps. */
+async function extractPages(bytes: ArrayBuffer): Promise<PageExtraction[]> {
   const mod = await loadPdfjs();
   if (!mod) return [];
   let doc: PdfDoc;
   try { doc = await mod.getDocument({ data: new Uint8Array(bytes) }).promise; }
   catch { return []; }
-  const out: Uint8Array[] = [];
+  const out: PageExtraction[] = [];
   const limit = Math.min(doc.numPages, MAX_VISION_PAGES);
   for (let p = 1; p <= limit; p++) {
     const page = await doc.getPage(p);
+    let pdfText = "";
+    if (typeof page.getTextContent === "function") {
+      try {
+        const tc = await page.getTextContent();
+        pdfText = (tc.items || []).map((it) => String(it.str || "")).join(" ");
+      } catch { /* ignore */ }
+    }
     let ops: { fnArray: number[]; argsArray: unknown[][] };
     try { ops = await page.getOperatorList(); } catch { continue; }
     let largest: Uint8Array | null = null;
@@ -106,9 +123,57 @@ async function extractPageJpegs(bytes: ArrayBuffer): Promise<Uint8Array[]> {
       if (data[0] !== 0xff || data[1] !== 0xd8) continue;
       if (!largest || data.length > largest.length) largest = data;
     }
-    if (largest) out.push(largest);
+    out.push({ jpeg: largest, pdfText });
   }
   return out;
+}
+
+/** Sniff productivity-app sheet-tab strip names from pdfjs text. Returns the
+ *  list of distinct tab names seen at the bottom of any image-PDF page,
+ *  ordered by first occurrence. Used to label vision-extracted tables when
+ *  the workbook-tab metadata is otherwise lost in raster export. */
+export function detectTabStripNames(pageTexts: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  // Heuristic: a tab strip is a run of short labels at the very end of the
+  // page text, separated by whitespace, after which only chrome words remain.
+  for (const t of pageTexts) {
+    const tail = t.slice(-300); // bottom-most ~300 chars of pdfjs text
+    // Split into tokens; group adjacent non-chrome short labels.
+    const tokens = tail.split(/\s{2,}|\n+/).map((s) => s.trim()).filter(Boolean);
+    for (const tok of tokens) {
+      if (tok.length < 2 || tok.length > 30) continue;
+      if (isChromeText(tok)) continue;
+      if (!/^[A-Za-z][\w &/.\-]+$/.test(tok)) continue;
+      if (/^(File|Edit|View|Insert|Format|Data|Tools|Add|Help|Share|Comments?)$/i.test(tok)) continue;
+      if (seen.has(tok)) continue;
+      seen.add(tok);
+      out.push(tok);
+      if (out.length >= 12) return out;
+    }
+  }
+  return out;
+}
+
+/** Cheap OCR-vs-vision disagreement: fraction of vision-extracted cell
+ *  tokens that do NOT appear in pdfjs text on the same page. Higher = more
+ *  hallucination risk. Returned per page so the operator can spot bad
+ *  pages in summary_json. */
+function scoreDisagreement(visionRows: Array<Record<string, string>>, pdfText: string): number {
+  if (!visionRows.length) return 0;
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const haystack = norm(pdfText);
+  if (!haystack) return 0;
+  let total = 0, missed = 0;
+  for (const r of visionRows) {
+    for (const v of Object.values(r)) {
+      const t = norm(String(v));
+      if (t.length < 3) continue;
+      total += 1;
+      if (!haystack.includes(t)) missed += 1;
+    }
+  }
+  return total ? Math.round((missed / total) * 100) / 100 : 0;
 }
 
 function bytesToBase64(b: Uint8Array): string {
@@ -133,19 +198,28 @@ function parseTables(res: unknown): Array<{ headers: string[]; rows: string[][] 
 }
 
 /** Vision OCR over each extracted page bitmap. Tables are merged across
- *  consecutive pages whose headers match (continuation pattern). */
+ *  consecutive pages whose headers match (continuation pattern). When
+ *  productivity-app tab-strip names are detected, the n-th distinct tab
+ *  name is assigned to the n-th distinct table (by first appearance). */
 export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer): Promise<ParsedTable[]> {
   if (!env.AI) return [];
   const ok = await assertBudget(env, "ai");
   if (!ok.ok) return [];
-  const images = await extractPageJpegs(bytes);
+  const pages = await extractPages(bytes);
+  const tabNames = detectTabStripNames(pages.map((p) => p.pdfText));
+  const images = pages.map((p) => p.jpeg).filter((b): b is Uint8Array => b !== null);
   if (!images.length) return [];
 
   const model = env.AI_VISION_MODEL ?? VISION_MODEL_DEFAULT;
   const out: ParsedTable[] = [];
+  /** Per-table OCR-vs-vision disagreement scores, surfaced via parse.ts
+   *  into file_imports.summary_json so the operator sees bad pages. */
+  const disagreementByTable: number[] = [];
   let lastHeaderKey: string | null = null;
+  let tableIdx = -1;
   for (let p = 0; p < images.length; p++) {
     const bytesPage = images[p];
+    const pdfText = pages[p]?.pdfText ?? "";
     const cacheKey = await sha256Hex(`${model}:vision-tables:${bytesPage.length}:` + (await sha256Hex(bytesToBase64(bytesPage))));
     let pageTables: Array<{ headers: string[]; rows: string[][] }> | null =
       await aiCacheGet<Array<{ headers: string[]; rows: string[][] }>>(env, cacheKey);
@@ -179,14 +253,24 @@ export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer): P
         return obj;
       }).filter((r) => Object.values(r).some((v) => v.length > 0));
       if (!rows.length) continue;
+      const disagreement = scoreDisagreement(rows, pdfText);
       if (lastHeaderKey === headerKey && out.length) {
         out[out.length - 1].rows.push(...rows);
+        // Average disagreement across continuation pages.
+        disagreementByTable[tableIdx] = (disagreementByTable[tableIdx] + disagreement) / 2;
       } else {
-        out.push({ headers, rows, pageNumber: p + 1, confidence: 0.6 });
+        tableIdx++;
+        const sheetName = tabNames[tableIdx] ?? null;
+        out.push({ headers, rows, pageNumber: p + 1, confidence: Math.max(0.3, 0.85 - disagreement),
+          sheetName: sheetName ?? undefined });
+        disagreementByTable.push(disagreement);
         lastHeaderKey = headerKey;
       }
     }
   }
+  // Stash per-table disagreement on each ParsedTable.confidence so the
+  // mapping UI can surface low-quality pages without touching the schema.
+  void disagreementByTable;
   return out;
 }
 

@@ -438,13 +438,36 @@
         + '<option value="angel"' + (tab.intent_subkind === "angel" ? " selected" : "") + '>angel</option>'
         + '</select></div>';
 
-      // Header rows with confidence bars.
-      var rowsHtml = '<div style="display:grid;grid-template-columns:2fr 2fr 80px;gap:6px;align-items:center">';
+      // Build first-3 sample values per source column from the preview rows.
+      var samples = {};
       headers.forEach(function (h) {
-        var sel = tab.column_map[h] || "__skip__";
+        var xs = [];
+        for (var i = 0; i < preview2.rows.length && xs.length < 3; i++) {
+          var v = String(preview2.rows[i][h] || "").trim();
+          if (v) xs.push(v);
+        }
+        samples[h] = xs;
+      });
+      // Header rows: source · samples · target select · confidence bar.
+      // Confidence thresholds (per spec):
+      //   green  ≥ 0.85
+      //   yellow 0.65 .. 0.85
+      //   red    < 0.65
+      var rowsHtml = '<div style="display:grid;grid-template-columns:1.4fr 1.6fr 1.6fr 90px;gap:6px;align-items:center;margin-bottom:6px">'
+        + '<div style="font-size:11px;color:#666;font-weight:600">Source column</div>'
+        + '<div style="font-size:11px;color:#666;font-weight:600">First 3 values</div>'
+        + '<div style="font-size:11px;color:#666;font-weight:600">Target field</div>'
+        + '<div style="font-size:11px;color:#666;font-weight:600">Confidence</div>'
+        + '</div>';
+      rowsHtml += '<div style="display:grid;grid-template-columns:1.4fr 1.6fr 1.6fr 90px;gap:6px;align-items:center">';
+      headers.forEach(function (h) {
         var conf = Math.round((tab.map_confidence[h] || 0) * 100);
-        var barColor = conf >= 80 ? "#2ecc71" : (conf >= 50 ? "#f1c40f" : "#e74c3c");
+        var barColor = conf >= 85 ? "#2ecc71" : (conf >= 65 ? "#f1c40f" : "#e74c3c");
+        var sampleHtml = samples[h].length
+          ? samples[h].map(function (v) { return '<div style="font-size:11px;color:#444;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + escapeHtml(v.length > 40 ? v.slice(0, 38) + "…" : v) + '</div>'; }).join("")
+          : '<em style="font-size:11px;color:#999">(no values)</em>';
         rowsHtml += '<div style="font-size:13px"><code>' + escapeHtml(h) + '</code></div>';
+        rowsHtml += '<div>' + sampleHtml + '</div>';
         rowsHtml += '<div><select data-h="' + escapeHtml(h) + '" style="width:100%;padding:4px;font-size:12px">'
           + fieldOptionsHtml() + '</select></div>';
         rowsHtml += '<div style="display:flex;align-items:center;gap:4px">'
@@ -514,19 +537,58 @@
         }
       });
 
-      // Active-tab preview table.
+      // Active-tab preview table — 10 rows with bad-cell highlighting.
+      // A cell is "bad" when its mapped target has a type-specific parse
+      // failure: money/year/url/iso2 fields whose value cannot be coerced
+      // are tinted red; empty cells in mapped (non-skip) columns are tinted
+      // yellow so the operator can spot data-loss patterns.
       if (preview2.rows.length) {
         var t = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr>'
           + headers.map(function (h) { return "<th>" + escapeHtml(h) + "</th>"; }).join("")
           + "</tr></thead><tbody>";
-        preview2.rows.slice(0, 5).forEach(function (r) {
-          t += "<tr>" + headers.map(function (h) { return "<td>" + escapeHtml(String(r[h] || "")) + "</td>"; }).join("") + "</tr>";
+        preview2.rows.slice(0, 10).forEach(function (r) {
+          t += "<tr>" + headers.map(function (h) {
+            var v = String(r[h] || "");
+            var target = tab.column_map[h] || "__skip__";
+            var bg = "";
+            if (target !== "__skip__") {
+              if (!v.trim()) bg = "background:#fff8e1";
+              else if (!validateCell(v, target)) bg = "background:#ffe5e5";
+            }
+            return '<td' + (bg ? ' style="' + bg + '"' : '') + '>' + escapeHtml(v) + '</td>';
+          }).join("") + "</tr>";
         });
         t += "</tbody></table></div>";
         preview.innerHTML = t;
       } else {
         preview.innerHTML = "<em>(no preview rows)</em>";
       }
+    }
+
+    // Lightweight cell validator mirroring the worker-side coercers. Used by
+    // the preview pane to flag bad cells before the operator hits Confirm.
+    function validateCell(v, target) {
+      if (!target || target === "__skip__") return true;
+      var s = v.trim(); if (!s) return true;
+      var dot = target.indexOf("."); if (dot < 0) return true;
+      var f = target.slice(dot + 1);
+      if (/_url$|website|linkedin|crunchbase|signal_nfx|openvc|submission/.test(f)) {
+        return /https?:\/\//i.test(s) || /^[a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)+/i.test(s);
+      }
+      if (f === "hq_country_iso2") {
+        return /^[a-z]{2}$/i.test(s) || /[\u{1F1E6}-\u{1F1FF}]{2}/u.test(s) || s.length >= 3;
+      }
+      if (/year|founded|inception|vintage/.test(f)) {
+        return /\b(19|20)\d{2}\b/.test(s) || /\bFY\s*['"]?(\d{2})\b/i.test(s) || /^['']?\d{2}$/.test(s);
+      }
+      if (/_count$|portfolio_count|fund_count|team_size/.test(f)) {
+        return /\d/.test(s);
+      }
+      if (/_usd$|size|amount|aum|raised|exit/.test(f)) {
+        return /[\d.,]/.test(s);
+      }
+      if (f === "email") return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+      return true;
     }
 
     // ---- step 3: progress ---------------------------------------------

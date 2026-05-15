@@ -32,7 +32,7 @@ import { checkAndScrubDnc } from "../compliance/dnc";
 import { classifyUrl } from "./url_extract";
 import { detectFormat } from "./format_detect";
 import {
-  parseMoney, parseMoneyUsd, parseYear, parseStages,
+  parseMoney, parseMoneyUsd, parseMoneyRange, parseMoneyRangeUsd, parseYear, parseStages,
   parseCountryIso2, parseCountryIso2List, parseUrl, parseBool, isEmptyCell,
 } from "./coercers";
 import type { TabIntent } from "./tab_intent";
@@ -312,7 +312,7 @@ function projectAndCoerceRow(
   const numeric: Record<string, number> = {};
   const iso2List: Record<string, string[]> = {};
   const arrays: Record<string, string[]> = {};
-  const moneyJobs: Array<{ key: string; raw: string }> = [];
+  const moneyJobs: Array<{ key: string; raw: string; isMin: boolean; isMax: boolean }> = [];
   for (const [header, value] of Object.entries(raw)) {
     if (isEmptyCell(value)) continue;
     const m = map[header];
@@ -322,11 +322,24 @@ function projectAndCoerceRow(
     // Field-type-specific coercion. When ambiguous we still write the raw
     // string into `fields` so downstream code can re-parse if needed.
     if (/_usd$/.test(f) || /size|amount|aum|raised|exit/.test(f)) {
-      const parsed = parseMoney(v);
-      if (parsed.native != null) {
-        // Defer FX-rate fetching to the awaited() thunk.
-        moneyJobs.push({ key: f, raw: v });
-        if (parsed.currency === "USD" || !parsed.currency) numeric[f] = parsed.native;
+      // Range-aware: "50-100M EUR" → {min, max, typical_usd}. For min/max
+      // fields we pick the appropriate end so check_size_min_usd actually
+      // reflects min, not midpoint.
+      const isMin = /_min_usd$/.test(f);
+      const isMax = /_max_usd$/.test(f);
+      const range = parseMoneyRange(v);
+      if (range.typical_native != null) {
+        moneyJobs.push({ key: f, raw: v, isMin, isMax });
+        const native = isMin ? (range.min ?? range.typical_native)
+                     : isMax ? (range.max ?? range.typical_native)
+                     : range.typical_native;
+        if (range.currency === "USD" || !range.currency) numeric[f] = native;
+      } else {
+        const parsed = parseMoney(v);
+        if (parsed.native != null) {
+          moneyJobs.push({ key: f, raw: v, isMin: false, isMax: false });
+          if (parsed.currency === "USD" || !parsed.currency) numeric[f] = parsed.native;
+        }
       }
       fields[f] = v;
     } else if (/year|founded|inception|vintage/.test(f)) {
@@ -361,11 +374,29 @@ function projectAndCoerceRow(
   return {
     fields,
     awaited: async () => {
-      // Walk money jobs and resolve FX → USD.
+      // Walk money jobs and resolve FX → USD. Use range-aware path so
+      // "50-100M EUR" lands as a USD value derived from the appropriate
+      // endpoint (min/max/typical) for the target field.
       for (const j of moneyJobs) {
         if (numeric[j.key] != null) continue; // already USD
-        const m = await parseMoneyUsd(env, j.raw);
-        if (m.usd != null) numeric[j.key] = m.usd;
+        const r = await parseMoneyRangeUsd(env, j.raw);
+        if (r.typical_usd != null) {
+          if (j.isMin && r.min != null && r.currency) {
+            // Convert min specifically.
+            const single = await parseMoneyUsd(env, `${r.min} ${r.currency}`);
+            if (single.usd != null) numeric[j.key] = single.usd;
+            else numeric[j.key] = r.typical_usd;
+          } else if (j.isMax && r.max != null && r.currency) {
+            const single = await parseMoneyUsd(env, `${r.max} ${r.currency}`);
+            if (single.usd != null) numeric[j.key] = single.usd;
+            else numeric[j.key] = r.typical_usd;
+          } else {
+            numeric[j.key] = r.typical_usd;
+          }
+        } else {
+          const m = await parseMoneyUsd(env, j.raw);
+          if (m.usd != null) numeric[j.key] = m.usd;
+        }
       }
       return { fields, numeric, iso2List, arrays };
     },
