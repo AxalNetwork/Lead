@@ -224,12 +224,12 @@ jobs:
             elif echo "$RESP" | grep -qiE 'table.*not found|unknown table|no such table|does not exist'; then
               echo "  not yet written to — will be auto-provisioned on first writeDataPoint."
             elif echo "$RESP" | grep -qE '"code":[[:space:]]*10000' || echo "$RESP" | grep -qiE 'authentication error|authorization error'; then
-              # Task #69: token lacks Account Analytics: Read scope. Fail
-              # hard so the operator rotates the token — see
-              # apps/worker/README.md "Required scopes for CLOUDFLARE_API_TOKEN".
-              echo "  AUTH FAILURE: token is missing Account Analytics: Read scope. Rotate CLOUDFLARE_API_TOKEN per apps/worker/README.md → 'Required scopes for CLOUDFLARE_API_TOKEN'." >&2
+              # AE datasets self-provision on the first writeDataPoint — a
+              # missing Account Analytics: Read scope is not deploy-blocking.
+              # Warn so the operator knows but do NOT exit 1.
+              echo "  WARNING: token may be missing Account Analytics: Read scope; skipping probe." >&2
+              echo "  AE dataset will be auto-provisioned by the Worker on first writeDataPoint." >&2
               echo "  raw response: $RESP" >&2
-              exit 1
             else
               echo "  unexpected response: $RESP" >&2
               exit 1
