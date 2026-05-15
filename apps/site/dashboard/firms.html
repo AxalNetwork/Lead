@@ -1,0 +1,95 @@
+---
+layout: default
+title: Firms
+permalink: /dashboard/firms/
+---
+
+<h1 class="ads-page-title">Firms</h1>
+<p class="ads-page-sub">Search, filter, and export the firms catalog. Saved views live in the sidebar.</p>
+
+<div style="display:grid;grid-template-columns:220px 1fr;gap:16px;align-items:start">
+  <aside class="ads-card" id="ads-firms-views">
+    <h3 style="margin:0 0 8px;font-size:14px">Saved views</h3>
+    <ul id="ads-firms-views-list" style="list-style:none;padding:0;margin:0 0 12px;font-size:13px">
+      <li class="ads-muted">Loading…</li>
+    </ul>
+    <button class="ads-btn ads-btn--ghost" id="ads-firms-save-view" style="width:100%;font-size:12px">Save current as view…</button>
+  </aside>
+
+  <div>
+    <form id="ads-firms-filters" class="ads-card" autocomplete="off" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;align-items:end">
+      <label class="ads-field"><span>Search</span><input type="text" name="q" placeholder="name or thesis…"></label>
+      <label class="ads-field"><span>Kind</span>
+        <select name="kind">
+          <option value="">all</option>
+          <option value="vc">vc</option>
+          <option value="pe">pe</option>
+          <option value="family_office">family_office</option>
+          <option value="corp_vc">corp_vc</option>
+          <option value="angel_group">angel_group</option>
+          <option value="accelerator">accelerator</option>
+          <option value="gov_fund">gov_fund</option>
+        </select>
+      </label>
+      <label class="ads-field"><span>HQ country (ISO2)</span><input type="text" name="country" maxlength="2"></label>
+      <label class="ads-field"><span>HQ city</span><input type="text" name="city"></label>
+      <label class="ads-field"><span>Stages (comma)</span><input type="text" name="stages" placeholder="seed,series_a"></label>
+      <label class="ads-field"><span>Sectors (comma)</span><input type="text" name="sectors" placeholder="ai,fintech" id="ads-firms-sectors"></label>
+      <label class="ads-field"><span>Invests in (geo, comma)</span><input type="text" name="invests_in" placeholder="us,emea"></label>
+      <label class="ads-field"><span>Lead/co</span>
+        <select name="lead_or_co"><option value="">both</option><option value="lead">lead</option><option value="co">co</option></select>
+      </label>
+      <label class="ads-field"><span>Check size USD</span>
+        <div style="display:flex;gap:4px"><input type="number" name="check_min" placeholder="min" style="width:50%"><input type="number" name="check_max" placeholder="max" style="width:50%"></div>
+      </label>
+      <label class="ads-field"><span>AUM USD</span>
+        <div style="display:flex;gap:4px"><input type="number" name="aum_min" placeholder="min" style="width:50%"><input type="number" name="aum_max" placeholder="max" style="width:50%"></div>
+      </label>
+      <label class="ads-field"><span>Min portfolio</span><input type="number" name="min_portfolio" min="0"></label>
+      <label class="ads-field"><span>Last modified</span>
+        <div style="display:flex;gap:4px"><input type="date" name="modified_from" style="width:50%"><input type="date" name="modified_to" style="width:50%"></div>
+      </label>
+      <label class="ads-field" style="grid-column:span 2;display:flex;gap:12px;align-items:center;font-size:13px">
+        <span><input type="checkbox" name="has_unicorns" value="1"> Has unicorns</span>
+        <span><input type="checkbox" name="has_email" value="1"> Has contact email</span>
+      </label>
+      <div style="grid-column:span 2;display:flex;gap:6px;justify-content:flex-end">
+        <button type="button" class="ads-btn ads-btn--ghost" id="ads-firms-reset">Reset</button>
+        <button type="button" class="ads-btn ads-btn--ghost" id="ads-firms-columns">Columns…</button>
+        <button type="button" class="ads-btn ads-btn--ghost" id="ads-firms-export">Export…</button>
+        <button type="submit" class="ads-btn">Apply</button>
+      </div>
+    </form>
+
+    <div class="ads-card" id="ads-firms-summary" style="margin-top:12px;display:grid;grid-template-columns:repeat(5,1fr);gap:12px">
+      <div><div class="ads-kpi__label">Matches</div><div class="ads-kpi__value" data-k="count">—</div></div>
+      <div><div class="ads-kpi__label">Total AUM</div><div class="ads-kpi__value" data-k="aum">—</div></div>
+      <div><div class="ads-kpi__label">Median check</div><div class="ads-kpi__value" data-k="median">—</div></div>
+      <div><div class="ads-kpi__label">Top sectors</div><div class="ads-kpi__value" data-k="sectors" style="font-size:14px">—</div></div>
+      <div><div class="ads-kpi__label">Top cities</div><div class="ads-kpi__value" data-k="cities" style="font-size:14px">—</div></div>
+    </div>
+
+    <div class="ads-card" style="margin-top:12px;overflow:auto">
+      <table class="ads-table" id="ads-firms-table" style="width:100%;border-collapse:collapse">
+        <thead><tr id="ads-firms-thead"></tr></thead>
+        <tbody id="ads-firms-tbody"><tr><td class="ads-muted">Loading…</td></tr></tbody>
+      </table>
+      <div id="ads-firms-paging" style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:12px">
+        <span class="ads-muted" id="ads-firms-shown">—</span>
+        <button class="ads-btn ads-btn--ghost" id="ads-firms-loadmore" hidden>Load more</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="ads-firms-cols-modal" class="ads-modal" hidden style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:200;display:flex;align-items:center;justify-content:center">
+  <div style="background:#fff;border-radius:8px;width:min(420px,92vw);max-height:80vh;overflow:auto;padding:16px">
+    <h3 style="margin:0 0 8px">Columns</h3>
+    <div id="ads-firms-cols-list" style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:13px"></div>
+    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
+      <button class="ads-btn ads-btn--ghost" type="button" id="ads-firms-cols-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<script src="/assets/js/firms.js?v={{ site.time | date: '%s' }}"></script>

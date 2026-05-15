@@ -1,5 +1,6 @@
 import type { Env } from "../types";
 import { computeQuality } from "../scoring/quality";
+import { materializeFirmAnalytics } from "../routes/analytics_firms";
 
 function isoDay(d = new Date()): string { return d.toISOString().slice(0, 10); }
 
@@ -13,6 +14,7 @@ export async function runNightlyAggregator(env: Env): Promise<{
   leads_snapshotted: number;
   sources_aggregated: number;
   pipeline_day: string;
+  firm_analytics_wrote: number;
 }> {
   const day = isoDay();
   const since = new Date(Date.now() - 26 * 3600_000).toISOString(); // small overlap
@@ -234,5 +236,21 @@ export async function runNightlyAggregator(env: Env): Promise<{
     )
     .run();
 
-  return { leads_snapshotted: snapshotted, sources_aggregated: sourcesAgg, pipeline_day: yday };
+  // ----- 5. firm_analytics_daily (Task #20) -------------------------------
+  // Heatmap, geo, sector ROI, and connectedness ranks materialize so the
+  // analytics-firms page loads under 500ms. Failures are non-fatal.
+  let firmAnalyticsWrote = 0;
+  try {
+    const out = await materializeFirmAnalytics(env);
+    firmAnalyticsWrote = out.wrote;
+  } catch (e) {
+    console.warn("firm_analytics aggregator failed", (e as Error).message);
+  }
+
+  return {
+    leads_snapshotted: snapshotted,
+    sources_aggregated: sourcesAgg,
+    pipeline_day: yday,
+    firm_analytics_wrote: firmAnalyticsWrote,
+  };
 }

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "../types";
 import { backfillFirmsFromLeads } from "../scripts/backfill-firms-from-leads";
+import { parseFirmFilter, buildFirmWhere } from "./_firms_filter";
 
 export const firms = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
@@ -38,34 +39,19 @@ function intOrNull(v: string | undefined): number | null {
 }
 
 // --------- LIST ---------
+// Uses the shared filter parser/builder so /aggregate and analytics drilldowns
+// stay consistent with the search page. Cursor pagination is layered on top.
 firms.get("/", async (c) => {
-  const limit = Math.min(Number(c.req.query("limit") ?? "50"), 200);
-  const cursor = intOrNull(c.req.query("cursor") ?? undefined); // last seen id (descending)
-  const kind = c.req.query("kind");
-  const country = c.req.query("country");
-  const stage = c.req.query("stage");
-  const sector = c.req.query("sector");
-  const checkMin = intOrNull(c.req.query("check_min") ?? undefined);
-  const checkMax = intOrNull(c.req.query("check_max") ?? undefined);
-  const aumMin = intOrNull(c.req.query("aum_min") ?? undefined);
-  const q = (c.req.query("q") ?? "").trim();
-
-  const wheres: string[] = [];
-  const binds: unknown[] = [];
-  if (cursor != null) { wheres.push("id < ?"); binds.push(cursor); }
-  if (kind)    { wheres.push("kind = ?");           binds.push(kind); }
-  if (country) { wheres.push("hq_country_iso2 = ?"); binds.push(country.toUpperCase()); }
-  // Stages/sectors are JSON arrays; substring-match the slug between quotes.
-  if (stage)   { wheres.push("stages_json LIKE ?");  binds.push(`%"${stage}"%`); }
-  if (sector)  { wheres.push("sectors_json LIKE ?"); binds.push(`%"${sector}"%`); }
-  if (checkMin != null) { wheres.push("check_size_typical_usd >= ?"); binds.push(checkMin); }
-  if (checkMax != null) { wheres.push("check_size_typical_usd <= ?"); binds.push(checkMax); }
-  if (aumMin != null)   { wheres.push("aum_usd >= ?"); binds.push(aumMin); }
-  if (q) {
-    wheres.push("(name LIKE ? OR thesis LIKE ?)");
-    binds.push(`%${q}%`, `%${q}%`);
+  const url = new URL(c.req.url);
+  const limit = Math.min(Number(url.searchParams.get("limit") ?? "50"), 200);
+  const cursor = intOrNull(url.searchParams.get("cursor") ?? undefined);
+  const filter = parseFirmFilter(url.searchParams);
+  const { sql: whereCore, binds } = buildFirmWhere(filter);
+  let whereSql = whereCore;
+  if (cursor != null) {
+    whereSql = whereCore ? `${whereCore} AND id < ?` : "WHERE id < ?";
+    binds.push(cursor);
   }
-  const whereSql = wheres.length ? `WHERE ${wheres.join(" AND ")}` : "";
   const r = await c.env.DB
     .prepare(`SELECT * FROM firms ${whereSql} ORDER BY id DESC LIMIT ?`)
     .bind(...binds, limit + 1)
@@ -75,6 +61,57 @@ firms.get("/", async (c) => {
   const items = hasMore ? rows.slice(0, limit) : rows;
   const nextCursor = hasMore ? (items[items.length - 1].id as number) : null;
   return c.json({ items, nextCursor });
+});
+
+// --------- AGGREGATE (summary strip) ---------
+// Parameterized SQL — ignores cursor/limit. Median uses ROW_NUMBER over a
+// non-null window. Top-3 sectors come from the same JSON-substring trick the
+// list endpoint uses.
+firms.get("/aggregate", async (c) => {
+  const url = new URL(c.req.url);
+  const filter = parseFirmFilter(url.searchParams);
+  const { sql: whereSql, binds } = buildFirmWhere(filter);
+  const totalRow = await c.env.DB
+    .prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(aum_usd), 0) AS aum FROM firms ${whereSql}`)
+    .bind(...binds).first<{ n: number; aum: number }>();
+  // Median check size — D1 has no PERCENTILE_CONT, so emulate with ORDER+LIMIT.
+  const sizesR = await c.env.DB
+    .prepare(`SELECT check_size_typical_usd AS v FROM firms ${whereSql ? whereSql + " AND" : "WHERE"} check_size_typical_usd IS NOT NULL ORDER BY check_size_typical_usd`)
+    .bind(...binds).all<{ v: number }>();
+  const sizes = (sizesR.results ?? []).map((r) => r.v);
+  const median = sizes.length
+    ? (sizes.length % 2
+        ? sizes[(sizes.length - 1) >> 1]
+        : Math.round((sizes[sizes.length / 2 - 1] + sizes[sizes.length / 2]) / 2))
+    : 0;
+  const cityR = await c.env.DB
+    .prepare(`SELECT hq_city AS k, COUNT(*) AS n FROM firms ${whereSql ? whereSql + " AND" : "WHERE"} hq_city IS NOT NULL AND hq_city != '' GROUP BY hq_city ORDER BY n DESC LIMIT 3`)
+    .bind(...binds).all<{ k: string; n: number }>();
+  // Sectors: explode by counting LIKE-matches per known slug. We pull every
+  // sector_json once and reduce in-memory — scoped to the current filter set
+  // so this stays O(filtered rows) rather than O(all firms).
+  const allSecR = await c.env.DB
+    .prepare(`SELECT sectors_json FROM firms ${whereSql}`)
+    .bind(...binds).all<{ sectors_json: string | null }>();
+  const counts: Record<string, number> = {};
+  for (const row of allSecR.results ?? []) {
+    if (!row.sectors_json) continue;
+    try {
+      const arr = JSON.parse(row.sectors_json);
+      if (!Array.isArray(arr)) continue;
+      for (const s of arr) if (typeof s === "string") counts[s] = (counts[s] || 0) + 1;
+    } catch { /* skip malformed */ }
+  }
+  const topSectors = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([slug, n]) => ({ slug, count: n }));
+  return c.json({
+    count: totalRow?.n ?? 0,
+    total_aum_usd: totalRow?.aum ?? 0,
+    median_check_size_usd: median,
+    top_cities: cityR.results ?? [],
+    top_sectors: topSectors,
+  });
 });
 
 // --------- GET BY ID (with people[] + portfolio[]) ---------

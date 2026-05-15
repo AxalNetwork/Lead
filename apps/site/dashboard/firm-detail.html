@@ -1,0 +1,94 @@
+---
+layout: default
+title: Firm detail
+permalink: /dashboard/firm-detail/
+---
+
+<div id="ads-firm-detail" data-loading>
+  <div class="ads-card"><p class="ads-muted">Loading firm…</p></div>
+</div>
+
+<template id="ads-firm-tpl">
+  <div class="ads-card" style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px">
+    <div style="display:flex;gap:12px;align-items:center">
+      <img data-k="logo" alt="" style="width:48px;height:48px;border-radius:6px;object-fit:cover;background:#eef" hidden>
+      <div>
+        <h1 class="ads-page-title" data-k="name" style="margin:0">—</h1>
+        <p class="ads-muted" style="margin:2px 0 0;font-size:13px"><span data-k="kind"></span> · <span data-k="hq"></span> · founded <span data-k="founded"></span> · AUM <span data-k="aum"></span> · <span data-k="lead_or_co"></span> · <a data-k="website" target="_blank" rel="noopener"></a></p>
+      </div>
+    </div>
+    <div style="display:flex;gap:6px">
+      <button class="ads-btn ads-btn--ghost" data-act="enrich">Enrich</button>
+      <button class="ads-btn ads-btn--ghost" data-act="archive">Archive</button>
+      <button class="ads-btn ads-btn--ghost" data-act="export">Export</button>
+    </div>
+  </div>
+
+  <div class="ads-card" style="margin-top:12px">
+    <div class="ads-tabs" id="ads-firm-tabs">
+      <button class="ads-tab active" data-tab="overview">Overview</button>
+      <button class="ads-tab" data-tab="people">People</button>
+      <button class="ads-tab" data-tab="portfolio">Portfolio</button>
+      <button class="ads-tab" data-tab="relationships">Relationships</button>
+      <button class="ads-tab" data-tab="history">History</button>
+      <button class="ads-tab" data-tab="sources">Sources</button>
+    </div>
+
+    <section data-pane="overview">
+      <h3 style="margin:12px 0 4px;font-size:14px">Thesis</h3>
+      <p data-k="thesis" class="ads-muted">—</p>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:8px;font-size:13px">
+        <div><strong>Stages</strong><div data-k="stages">—</div></div>
+        <div><strong>Sectors</strong><div data-k="sectors">—</div></div>
+        <div><strong>Geo focus</strong><div data-k="geo_focus">—</div></div>
+        <div><strong>Check size (typ)</strong><div data-k="check_typical">—</div></div>
+        <div><strong>Check size range</strong><div data-k="check_range">—</div></div>
+        <div><strong>Contact email</strong><div data-k="contact_email">—</div></div>
+      </div>
+    </section>
+
+    <section data-pane="people" hidden>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0 4px">
+        <h3 style="margin:0;font-size:14px">Team</h3>
+        <div style="display:flex;gap:6px">
+          <button class="ads-btn ads-btn--ghost" data-act="find-team">Find Team</button>
+          <button class="ads-btn ads-btn--ghost" data-act="add-person">Add person…</button>
+        </div>
+      </div>
+      <table class="ads-table" style="width:100%;border-collapse:collapse">
+        <thead><tr><th>Name</th><th>Role</th><th>DM?</th><th>Email</th><th>LinkedIn</th><th>Country</th><th>Last enriched</th></tr></thead>
+        <tbody data-k="people-rows"></tbody>
+      </table>
+    </section>
+
+    <section data-pane="portfolio" hidden>
+      <h3 style="margin:12px 0 4px;font-size:14px">Portfolio</h3>
+      <table class="ads-table" style="width:100%;border-collapse:collapse">
+        <thead><tr><th>Company</th><th>Domain</th><th>Year</th><th>Stage</th><th>Amount</th><th>Lead?</th><th>Outcome</th><th>Exit value</th></tr></thead>
+        <tbody data-k="portfolio-rows"></tbody>
+      </table>
+    </section>
+
+    <section data-pane="relationships" hidden>
+      <p class="ads-muted" style="padding:12px">Relationship graph view is planned in a separate task.</p>
+    </section>
+
+    <section data-pane="history" hidden>
+      <h3 style="margin:12px 0 4px;font-size:14px">Audit history</h3>
+      <table class="ads-table" style="width:100%;border-collapse:collapse">
+        <thead><tr><th>When</th><th>Field</th><th>Old</th><th>New</th><th>Source</th><th>By</th></tr></thead>
+        <tbody data-k="history-rows"></tbody>
+      </table>
+    </section>
+
+    <section data-pane="sources" hidden>
+      <h3 style="margin:12px 0 4px;font-size:14px">Sources</h3>
+      <table class="ads-table" style="width:100%;border-collapse:collapse">
+        <thead><tr><th>URL</th><th>Tier</th><th>Status</th><th>Last fetched</th><th>Bytes</th></tr></thead>
+        <tbody data-k="sources-rows"><tr><td colspan="5" class="ads-muted">Loading…</td></tr></tbody>
+      </table>
+    </section>
+  </div>
+</template>
+
+<script src="/assets/js/firm-detail.js?v={{ site.time | date: '%s' }}"></script>
