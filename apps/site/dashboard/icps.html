@@ -21,8 +21,18 @@ permalink: /dashboard/icps/
     <input type="hidden" name="id">
     <label class="ads-field"><span>Name</span><input name="name" required></label>
     <label class="ads-field"><span>Description</span><input name="description"></label>
-    <label class="ads-field"><span>Sectors (comma-separated slugs)</span><input name="sectors"></label>
-    <label class="ads-field"><span>Geographies (comma-separated slugs or ISO2)</span><input name="geographies"></label>
+    <div class="ads-field">
+      <span>Sectors</span>
+      <div class="ads-picker" data-picker="sectors" data-placeholder="Search sectors by name, slug or alias…">
+        <input type="hidden" name="sectors">
+      </div>
+    </div>
+    <div class="ads-field">
+      <span>Geographies</span>
+      <div class="ads-picker" data-picker="geographies" data-placeholder="Search countries, regions, ISO codes…">
+        <input type="hidden" name="geographies">
+      </div>
+    </div>
     <label class="ads-field"><span>Personas</span><input name="personas" placeholder="partner, venture_partner, gov_official"></label>
     <label class="ads-field"><span>Seniority</span><input name="seniority" placeholder="c_level, founder, partner"></label>
     <label class="ads-field ads-field--inline"><span>Min AUM (USD)</span><input name="min_aum_usd" type="number" min="0" step="any"></label>

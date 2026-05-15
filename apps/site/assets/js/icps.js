@@ -8,6 +8,146 @@
   }
 
   var CURRENT_ID = null;
+  var TAX_CACHE = { sectors: null, geographies: null };
+  var PICKERS = {};
+
+  async function loadTaxonomy(kind) {
+    if (TAX_CACHE[kind]) return TAX_CACHE[kind];
+    var path = kind === "sectors" ? "/api/taxonomies/sectors" : "/api/taxonomies/geographies";
+    try {
+      var data = await api(path);
+      TAX_CACHE[kind] = (data && data.items) || [];
+    } catch (e) { TAX_CACHE[kind] = []; }
+    return TAX_CACHE[kind];
+  }
+
+  function buildPicker(host) {
+    var kind = host.getAttribute("data-picker");
+    var hidden = host.querySelector('input[type="hidden"]');
+    var placeholder = host.getAttribute("data-placeholder") || "Search…";
+    host.innerHTML = "";
+    host.appendChild(hidden);
+    var chips = document.createElement("div"); chips.className = "ads-picker__chips";
+    var input = document.createElement("input");
+    input.type = "text"; input.className = "ads-picker__input";
+    input.placeholder = placeholder; input.autocomplete = "off";
+    var dropdown = document.createElement("div"); dropdown.className = "ads-picker__dropdown"; dropdown.hidden = true;
+    chips.appendChild(input);
+    host.appendChild(chips);
+    host.appendChild(dropdown);
+
+    var state = { kind: kind, items: [], byslug: {}, selected: [], host: host, hidden: hidden, chips: chips, input: input, dropdown: dropdown, active: -1 };
+
+    function render() {
+      // Re-render chips before the input
+      Array.prototype.slice.call(chips.querySelectorAll(".ads-chip")).forEach(function (n) { n.remove(); });
+      state.selected.forEach(function (slug) {
+        var item = state.byslug[slug];
+        var label = item ? item.label : slug;
+        var chip = document.createElement("span"); chip.className = "ads-chip";
+        chip.innerHTML = '<span class="ads-chip__label"></span><button type="button" class="ads-chip__x" aria-label="Remove">×</button>';
+        chip.querySelector(".ads-chip__label").textContent = label + " ";
+        var code = document.createElement("code"); code.className = "ads-chip__slug"; code.textContent = slug;
+        chip.querySelector(".ads-chip__label").appendChild(code);
+        chip.querySelector(".ads-chip__x").addEventListener("click", function () { remove(slug); });
+        chips.insertBefore(chip, input);
+      });
+      hidden.value = state.selected.join(",");
+    }
+    function add(slug) {
+      if (!slug || state.selected.indexOf(slug) !== -1) return;
+      state.selected.push(slug); render();
+      input.value = ""; renderDropdown("");
+    }
+    function remove(slug) {
+      state.selected = state.selected.filter(function (s) { return s !== slug; });
+      render(); renderDropdown(input.value);
+    }
+    function matchesQuery(item, q) {
+      if (!q) return true;
+      q = q.toLowerCase();
+      if ((item.label || "").toLowerCase().indexOf(q) !== -1) return true;
+      if ((item.slug || "").toLowerCase().indexOf(q) !== -1) return true;
+      if (item.country_iso2 && item.country_iso2.toLowerCase().indexOf(q) !== -1) return true;
+      var aliases = item.aliases || [];
+      for (var i = 0; i < aliases.length; i++) {
+        if (String(aliases[i]).toLowerCase().indexOf(q) !== -1) return true;
+      }
+      return false;
+    }
+    function renderDropdown(q) {
+      var pool = state.items.filter(function (i) { return state.selected.indexOf(i.slug) === -1 && matchesQuery(i, q); });
+      pool = pool.slice(0, 50);
+      state.active = pool.length ? 0 : -1;
+      if (!pool.length) {
+        dropdown.innerHTML = '<div class="ads-picker__empty">No matches</div>';
+      } else {
+        var html = "";
+        pool.forEach(function (it, idx) {
+          var meta = it.country_iso2 ? it.country_iso2 : (it.kind || "");
+          html += '<div class="ads-picker__opt' + (idx === 0 ? ' active' : '') + '" data-slug="' + esc(it.slug) + '">' +
+            '<span class="ads-picker__opt-label">' + esc(it.label || it.slug) + '</span>' +
+            '<span class="ads-picker__opt-meta"><code>' + esc(it.slug) + '</code>' + (meta ? ' · ' + esc(meta) : '') + '</span>' +
+            '</div>';
+        });
+        dropdown.innerHTML = html;
+      }
+      dropdown.hidden = false;
+    }
+    function close() { dropdown.hidden = true; state.active = -1; }
+    function moveActive(delta) {
+      var opts = dropdown.querySelectorAll(".ads-picker__opt");
+      if (!opts.length) return;
+      state.active = (state.active + delta + opts.length) % opts.length;
+      opts.forEach(function (o, i) { o.classList.toggle("active", i === state.active); });
+      var el = opts[state.active]; if (el) el.scrollIntoView({ block: "nearest" });
+    }
+    function commitActive() {
+      var opts = dropdown.querySelectorAll(".ads-picker__opt");
+      var el = opts[state.active] || opts[0];
+      if (el) add(el.getAttribute("data-slug"));
+    }
+
+    input.addEventListener("focus", function () { renderDropdown(input.value); });
+    input.addEventListener("input", function () { renderDropdown(input.value); });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowDown") { e.preventDefault(); if (dropdown.hidden) renderDropdown(input.value); else moveActive(1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); moveActive(-1); }
+      else if (e.key === "Enter") {
+        if (!dropdown.hidden) { e.preventDefault(); commitActive(); }
+      } else if (e.key === "Escape") { close(); }
+      else if (e.key === "Backspace" && !input.value && state.selected.length) {
+        remove(state.selected[state.selected.length - 1]);
+      }
+    });
+    dropdown.addEventListener("mousedown", function (e) {
+      var opt = e.target.closest(".ads-picker__opt"); if (!opt) return;
+      e.preventDefault(); add(opt.getAttribute("data-slug"));
+    });
+    document.addEventListener("click", function (e) { if (!host.contains(e.target)) close(); });
+    chips.addEventListener("click", function (e) { if (e.target === chips) input.focus(); });
+
+    PICKERS[kind] = {
+      setSelected: function (slugs) { state.selected = (slugs || []).slice(); render(); },
+      getSelected: function () { return state.selected.slice(); },
+      setItems: function (items) {
+        state.items = items || [];
+        state.byslug = {};
+        state.items.forEach(function (i) { state.byslug[i.slug] = i; });
+        render();
+      },
+    };
+    return PICKERS[kind];
+  }
+
+  async function initPickers() {
+    var hosts = document.querySelectorAll(".ads-picker");
+    hosts.forEach(buildPicker);
+    var sectors = await loadTaxonomy("sectors");
+    if (PICKERS.sectors) PICKERS.sectors.setItems(sectors);
+    var geos = await loadTaxonomy("geographies");
+    if (PICKERS.geographies) PICKERS.geographies.setItems(geos);
+  }
 
   async function loadList() {
     var c = document.getElementById("ads-icp-list");
@@ -41,8 +181,12 @@
       form.elements["id"].value = icp.id;
       form.name.value = icp.name || "";
       form.description.value = icp.description || "";
-      form.sectors.value = (JSON.parse(icp.sectors_json || '[]')).join(", ");
-      form.geographies.value = (JSON.parse(icp.geographies_json || '[]')).join(", ");
+      var secs = JSON.parse(icp.sectors_json || '[]');
+      var geos = JSON.parse(icp.geographies_json || '[]');
+      form.sectors.value = secs.join(",");
+      form.geographies.value = geos.join(",");
+      if (PICKERS.sectors) PICKERS.sectors.setSelected(secs);
+      if (PICKERS.geographies) PICKERS.geographies.setSelected(geos);
       form.personas.value = (JSON.parse(icp.personas_json || '[]')).join(", ");
       form.seniority.value = (JSON.parse(icp.seniority_json || '[]')).join(", ");
       form.min_aum_usd.value = icp.min_aum_usd || "";
@@ -54,6 +198,8 @@
     } else {
       form.elements["id"].value = "";
       form.exclude_dnc.checked = true;
+      if (PICKERS.sectors) PICKERS.sectors.setSelected([]);
+      if (PICKERS.geographies) PICKERS.geographies.setSelected([]);
     }
     card.style.display = "block";
     card.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -132,6 +278,7 @@
   document.addEventListener("DOMContentLoaded", function () {
     if (!document.getElementById("ads-icp-list")) return;
     loadList();
+    initPickers();
     var form = document.getElementById("ads-icp-form");
     if (form) form.addEventListener("submit", saveIcp);
   });
