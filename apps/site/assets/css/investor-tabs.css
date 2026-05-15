@@ -1,0 +1,12 @@
+/* Task #24 — investor/company detail tabs. */
+.ads-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid #e5e7eb; margin-bottom: 16px; }
+.ads-tabs button {
+  background: transparent; border: 0; border-bottom: 2px solid transparent;
+  padding: 8px 12px; cursor: pointer; font-size: 14px; color: #475569;
+}
+.ads-tabs button[aria-selected="true"] { color: #0f172a; border-bottom-color: #2563eb; font-weight: 600; }
+.ads-tab-panel { display: none; }
+.ads-tab-panel[data-active="1"] { display: block; }
+.ads-detail-grid { display: grid; grid-template-columns: 1fr 280px; gap: 20px; align-items: start; }
+.ads-detail-side { position: sticky; top: 12px; }
+@media (max-width: 900px) { .ads-detail-grid { grid-template-columns: 1fr; } .ads-detail-side { position: static; } }

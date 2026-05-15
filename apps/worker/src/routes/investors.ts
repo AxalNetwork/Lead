@@ -302,23 +302,23 @@ investors.get("/:id/profile", async (c) => {
 });
 
 // ------------------------------------------------------------------ ENRICH
+// Investors are leads, so enrichment routes through the canonical
+// enrichment orchestrator (every configured provider, budget-aware,
+// 14d KV cached, lead_history-audited). The orchestrator's LeadsRepo
+// is constructed with the env so cache busting happens inside updateLead.
 investors.post("/:id/enrich", async (c) => {
   const id = c.req.param("id");
   const lead = await c.env.DB.prepare("SELECT id FROM leads WHERE id = ?").bind(id).first();
   if (!lead) return c.json({ error: "not_found" }, 404);
-  const jobId = crypto.randomUUID();
-  const now = new Date().toISOString();
-  await c.env.DB.prepare(
-    `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
-     VALUES (?, ?, 'investor_enrich', 'queued', 'profile_list', ?, ?, ?, ?)`,
-  ).bind(jobId, `investor_enrich:${id}`, id, JSON.stringify({ enrich_kind: "investor", lead_id: id }), now, now).run();
-  const msg: JobMessage = { jobId, kind: "profile_list", target: id, config: { enrich_kind: "investor", lead_id: id } };
-  await c.env.LEAD_QUEUE.send(msg);
-  // Bust the profile cache so callers re-fetch fresh data after enrichment.
+  const force = c.req.query("force") === "1";
+  const { enrichLead } = await import("../enrichment/orchestrator");
+  const outcome = await enrichLead(c.env, id, { forceRefresh: force });
   await c.env.SCRAPE_CACHE.delete(`profile:investor:${id}`);
-  return c.json({ jobId, status: "queued" });
+  return c.json({ status: "ok", outcome });
 });
 
+// Bulk enrich enqueues one job per id so the queue consumer can pace the
+// orchestrator (each invocation may call several rate-limited providers).
 investors.post("/enrich/bulk", async (c) => {
   const body = (await c.req.json().catch(() => null)) as { ids?: string[] } | null;
   const ids = (body?.ids ?? []).slice(0, 200);
@@ -332,7 +332,8 @@ investors.post("/enrich/bulk", async (c) => {
         `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
          VALUES (?, ?, 'investor_enrich', 'queued', 'profile_list', ?, ?, ?, ?)`,
       ).bind(jobId, `investor_enrich:${id}`, id, JSON.stringify({ enrich_kind: "investor", lead_id: id }), now, now).run();
-      await c.env.LEAD_QUEUE.send({ jobId, kind: "profile_list", target: id, config: { enrich_kind: "investor", lead_id: id } });
+      const msg: JobMessage = { jobId, kind: "profile_list", target: id, config: { enrich_kind: "investor", lead_id: id } };
+      await c.env.LEAD_QUEUE.send(msg);
       await c.env.SCRAPE_CACHE.delete(`profile:investor:${id}`);
       queued.push(jobId);
     } catch (e) {

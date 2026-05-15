@@ -27,8 +27,18 @@ const HISTORY_FIELDS: ReadonlyArray<keyof Lead> = [
   "sector_slug", "geo_slug", "do_not_contact",
 ];
 
+// Optional KV binding so updateLead() can bust the investor profile cache
+// (Task #24). Plain D1Database is still accepted to keep callers that don't
+// need cache invalidation simple.
+export interface LeadsRepoCacheEnv {
+  SCRAPE_CACHE?: KVNamespace;
+}
+
 export class LeadsRepo {
-  constructor(private db: D1Database) {}
+  private cacheKv: KVNamespace | null;
+  constructor(private db: D1Database, cacheEnv?: LeadsRepoCacheEnv) {
+    this.cacheKv = cacheEnv?.SCRAPE_CACHE ?? null;
+  }
 
   async getById(id: string): Promise<Lead | null> {
     const r = await this.db.prepare("SELECT * FROM leads WHERE id = ?").bind(id).first<Lead>();
@@ -106,6 +116,22 @@ export class LeadsRepo {
         ),
     );
     await this.db.batch(stmts);
+
+    // Task #24: deterministically bust the cached investor profile so the
+    // dashboard re-fetches fresh data after any audited mutation. We only
+    // bust when the lead is an investor (investor_kind set) to avoid the
+    // KV write on the much larger non-investor lead population.
+    if (this.cacheKv) {
+      const beforeRecForKind = before as unknown as Record<string, unknown>;
+      const afterKind = patchRec.investor_kind ?? beforeRecForKind.investor_kind;
+      if (afterKind) {
+        try {
+          await this.cacheKv.delete(`profile:investor:${id}`);
+        } catch (e) {
+          console.warn("profile cache bust failed", id, (e as Error).message);
+        }
+      }
+    }
     return changes.length;
   }
 

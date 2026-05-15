@@ -69,7 +69,7 @@ async function runOneProvider(
 }
 
 export async function enrichLead(env: Env, leadId: string, opts: EnrichOptions = {}): Promise<EnrichOutcome> {
-  const repo = new LeadsRepo(env.DB);
+  const repo = new LeadsRepo(env.DB, env);
   const lead = await repo.getById(leadId);
   if (!lead) {
     return {

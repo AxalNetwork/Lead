@@ -127,9 +127,8 @@
       .catch(function (e) { root.innerHTML = '<div class="ads-empty">Failed: ' + esc(e.message) + '</div>'; });
   };
 
-  function section(id, title, body) {
-    return '<details class="ads-card" open style="margin-bottom:12px"><summary style="font-weight:600;cursor:pointer">' + esc(title) + '</summary><div style="margin-top:12px" id="' + id + '">' + body + '</div></details>';
-  }
+  function tab(id, label, body) { return { id: id, label: label, body: body }; }
+  function empty(msg) { return '<div class="ads-empty">' + esc(msg) + '</div>'; }
 
   function renderProfile(p) {
     var loc = p.location || {};
@@ -137,121 +136,135 @@
     var profs = p.profiles || {};
     var cs = p.check_size || {};
     var n = p.counters || {};
-    var stages = (p.stage_focus || []).map(esc).join(", ");
-    var sectors = (p.sector_focus || []).map(esc).join(", ");
-    var geos = (p.geo_focus || []).map(esc).join(", ");
-
-    // 1) Header
-    var html = '<div class="ads-card" style="margin-bottom:12px">'
-      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px">'
-      + '<div><h1 style="margin:0">' + esc(p.name || "—") + '</h1>'
-      + '<div class="ads-muted">' + esc(p.investor_kind || "investor") + ' · ' + esc(p.title || "—") + ' @ ' + esc(p.org || "—") + '</div>'
-      + '<div class="ads-muted">' + esc([loc.city, loc.region, loc.country_iso2].filter(Boolean).join(", ") || "—") + '</div></div>'
-      + '<div><button class="ads-btn" id="ads-inv-enrich" data-id="' + esc(p.id) + '">Enrich now</button></div>'
-      + '</div></div>';
-
-    // 2) Thesis
-    html += section("inv-thesis", "Thesis", p.thesis ? '<p>' + esc(p.thesis) + '</p>' : '<div class="ads-empty">No thesis on file.</div>');
-
-    // 3) Check size & focus
-    html += section("inv-check", "Check size & focus",
-      '<table class="ads-table"><tbody>'
-      + '<tr><th>Sweet spot stage</th><td>' + esc(p.sweet_spot_stage || "—") + '</td></tr>'
-      + '<tr><th>Stages</th><td>' + (stages || "—") + '</td></tr>'
-      + '<tr><th>Sectors</th><td>' + (sectors || "—") + '</td></tr>'
-      + '<tr><th>Geos</th><td>' + (geos || "—") + '</td></tr>'
-      + '<tr><th>Min check</th><td>' + fmtUsd(cs.min_usd) + '</td></tr>'
-      + '<tr><th>Typical</th><td>' + fmtUsd(cs.typical_usd) + '</td></tr>'
-      + '<tr><th>Max</th><td>' + fmtUsd(cs.max_usd) + '</td></tr>'
-      + '</tbody></table>');
-
-    // 4) Counters
-    html += section("inv-counters", "Activity", '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">'
-      + kpi("Investments", fmtInt(n.investment_count))
-      + kpi("Unicorns", fmtInt(n.unicorn_count))
-      + kpi("Exits", fmtInt(n.exit_count))
-      + kpi("Avg check", fmtUsd(n.avg_check_usd))
-      + kpi("Total deployed", fmtUsd(n.total_deployed_usd))
-      + kpi("Board seats", fmtInt(n.board_seats_count))
-      + kpi("Media", fmtInt(n.media_count))
-      + kpi("Podcasts", fmtInt(n.podcast_count))
-      + '</div>');
-
-    // 5) Fund (current employer)
-    var f = p.fund;
-    html += section("inv-fund", "Current fund", f
-      ? ('<p><strong>' + esc(f.name) + '</strong> · ' + esc(f.kind || "") + ' · ' + esc(f.hq_city || "—") + '</p>'
-         + '<p>AUM: ' + fmtUsd(f.aum_usd) + ' · Current fund: ' + fmtUsd(f.current_fund_size_usd) + '</p>')
-      : '<div class="ads-empty">No fund linked.</div>');
-
-    // 6) Portfolio
-    html += section("inv-portfolio", "Portfolio (" + (p.portfolio || []).length + ")",
-      (p.portfolio || []).length
-        ? '<table class="ads-table"><thead><tr><th>Company</th><th>Stage</th><th>Amount</th><th>Lead?</th><th>Date</th></tr></thead><tbody>'
-          + p.portfolio.map(function (i) {
-              return '<tr><td>' + (i.company_id ? '<a href="/dashboard/companies/detail/?id=' + esc(i.company_id) + '">' + esc(i.company_name || "—") + '</a>' : esc(i.company_name || "—")) + '</td>'
-                + '<td>' + esc(i.stage || "—") + '</td>'
-                + '<td>' + fmtUsd(i.amount_usd) + '</td>'
-                + '<td>' + (i.is_lead ? "Y" : "N") + '</td>'
-                + '<td>' + esc(i.invested_at || "—") + '</td></tr>';
-            }).join("") + '</tbody></table>'
-        : '<div class="ads-empty">No portfolio rows yet.</div>');
-
-    // 7) Breakdowns
     var br = p.breakdowns || {};
-    html += section("inv-breakdowns", "Breakdowns", breakdownTable(br.stage, "Stage")
-      + breakdownTable(br.sector, "Sector") + breakdownTable(br.geography, "Geography"));
+    var f = p.fund;
 
-    // 8) Co-investors
-    html += section("inv-coinvestors", "Co-investors (" + (p.co_investors || []).length + ")",
-      (p.co_investors || []).length
-        ? '<ul>' + p.co_investors.map(function (ci) {
-            return '<li><a href="/dashboard/investors/detail/?id=' + esc(ci.investor_lead_id) + '">' + esc(ci.name || ci.investor_lead_id) + '</a> — ' + fmtInt(ci.shared) + ' shared</li>';
-          }).join("") + '</ul>'
-        : '<div class="ads-empty">No co-investors yet.</div>');
+    // 12 tabs in the order required by the spec.
+    var tabs = [
+      tab("about", "About",
+        '<div class="ads-card"><h2 style="margin:0 0 8px">' + esc(p.name || "—") + '</h2>'
+        + '<div class="ads-muted">' + esc(p.investor_kind || "investor") + ' · ' + esc(p.title || "—")
+        + (p.org ? ' @ ' + esc(p.org) : "") + '</div>'
+        + '<div class="ads-muted">' + esc([loc.city, loc.region, loc.country_iso2].filter(Boolean).join(", ") || "—") + '</div>'
+        + (p.thesis ? '<h3 style="margin-top:14px">Thesis</h3><p>' + esc(p.thesis) + '</p>' : '<p class="ads-empty" style="margin-top:14px">No thesis on file.</p>')
+        + '</div>'),
 
-    // 9) Boards & advisory
-    html += section("inv-boards", "Boards & advisory",
-      (p.boards || []).length
-        ? '<ul>' + p.boards.map(function (b) { return '<li>' + esc(b.company || b.org || JSON.stringify(b)) + (b.role ? ' — ' + esc(b.role) : "") + '</li>'; }).join("") + '</ul>'
-        : '<div class="ads-empty">No board seats on file.</div>');
+      tab("checks", "Check size",
+        '<table class="ads-table"><tbody>'
+        + '<tr><th>Sweet spot stage</th><td>' + esc(p.sweet_spot_stage || "—") + '</td></tr>'
+        + '<tr><th>Min check</th><td>' + fmtUsd(cs.min_usd) + '</td></tr>'
+        + '<tr><th>Typical</th><td>' + fmtUsd(cs.typical_usd) + '</td></tr>'
+        + '<tr><th>Max</th><td>' + fmtUsd(cs.max_usd) + '</td></tr>'
+        + '<tr><th>Avg actual</th><td>' + fmtUsd(n.avg_check_usd) + '</td></tr>'
+        + '<tr><th>Total deployed</th><td>' + fmtUsd(n.total_deployed_usd) + '</td></tr>'
+        + '</tbody></table>'),
 
-    // 10) Media
-    html += section("inv-media", "Recent media (portfolio)",
-      (p.media || []).length
-        ? '<ul>' + p.media.slice(0, 30).map(function (m) {
-            return '<li><a target="_blank" rel="noopener" href="' + esc(m.url) + '">' + esc(m.title || m.url) + '</a> <span class="ads-muted">— ' + esc(m.company_name || "") + ' · ' + esc(m.published_at || "") + '</span></li>';
-          }).join("") + '</ul>'
-        : '<div class="ads-empty">No media yet.</div>');
+      tab("activity", "Activity",
+        '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">'
+        + kpi("Investments", fmtInt(n.investment_count))
+        + kpi("Unicorns", fmtInt(n.unicorn_count))
+        + kpi("Exits", fmtInt(n.exit_count))
+        + kpi("Board seats", fmtInt(n.board_seats_count))
+        + kpi("Avg check", fmtUsd(n.avg_check_usd))
+        + kpi("Total deployed", fmtUsd(n.total_deployed_usd))
+        + kpi("Media", fmtInt(n.media_count))
+        + kpi("Podcasts", fmtInt(n.podcast_count))
+        + '</div>'),
 
-    // 11) Contact & profiles
-    html += section("inv-contact", "Contact & profiles",
-      '<table class="ads-table"><tbody>'
-      + linkRow("Email", c.email ? 'mailto:' + c.email : null, c.email)
-      + linkRow("LinkedIn", c.linkedin_url, c.linkedin_url)
-      + linkRow("Twitter", c.twitter_url, c.twitter_url)
-      + linkRow("GitHub", c.github_url, c.github_url)
-      + linkRow("Website", c.personal_url, c.personal_url)
-      + linkRow("Office hours", c.office_hours_url, c.office_hours_url)
-      + linkRow("Pitch form", c.pitch_form_url, c.pitch_form_url)
-      + linkRow("Calendly", c.calendly_url, c.calendly_url)
-      + linkRow("NFX Signal", profs.signal_nfx_url, profs.signal_nfx_url)
-      + linkRow("Crunchbase", profs.crunchbase_url, profs.crunchbase_url)
-      + linkRow("Wikipedia", profs.wikipedia_url, profs.wikipedia_url)
-      + '</tbody></table>');
+      tab("stage", "Stage",
+        Object.keys(br.stage || {}).length ? breakdownTable(br.stage, "Stage focus") : empty("No stage breakdown yet.")),
 
-    // 12) History
-    html += section("inv-history", "Change history (last 50)",
-      (p.history || []).length
-        ? '<table class="ads-table"><thead><tr><th>When</th><th>Field</th><th>Old → New</th><th>Source</th></tr></thead><tbody>'
-          + p.history.map(function (h) {
-              return '<tr><td>' + esc(h.changed_at) + '</td><td>' + esc(h.field) + '</td>'
-                + '<td><span class="ads-muted">' + esc(String(h.old_value || "")).slice(0, 40) + '</span> → ' + esc(String(h.new_value || "")).slice(0, 40) + '</td>'
-                + '<td>' + esc(h.source || "—") + (h.evidence_url ? ' · <a target="_blank" rel="noopener" href="' + esc(h.evidence_url) + '">evidence</a>' : "") + '</td></tr>';
-            }).join("") + '</tbody></table>'
-        : '<div class="ads-empty">No history yet.</div>');
+      tab("sector", "Sector",
+        Object.keys(br.sector || {}).length ? breakdownTable(br.sector, "Sector focus") : empty("No sector breakdown yet.")),
 
-    return html;
+      tab("geography", "Geography",
+        Object.keys(br.geography || {}).length ? breakdownTable(br.geography, "Geography focus") : empty("No geography breakdown yet.")),
+
+      tab("portfolio", "Portfolio",
+        (p.portfolio || []).length
+          ? '<table class="ads-table"><thead><tr><th>Company</th><th>Stage</th><th>Amount</th><th>Lead?</th><th>Date</th></tr></thead><tbody>'
+            + p.portfolio.map(function (i) {
+                return '<tr><td>' + (i.company_id ? '<a href="/dashboard/companies/detail/?id=' + esc(i.company_id) + '">' + esc(i.company_name || "—") + '</a>' : esc(i.company_name || "—")) + '</td>'
+                  + '<td>' + esc(i.stage || "—") + '</td><td>' + fmtUsd(i.amount_usd) + '</td>'
+                  + '<td>' + (i.is_lead ? "Y" : "N") + '</td><td>' + esc(i.invested_at || "—") + '</td></tr>';
+              }).join("") + '</tbody></table>'
+          : empty("No portfolio rows yet.")),
+
+      tab("network", "Network",
+        '<h3 style="margin-top:0">Co-investors</h3>'
+        + ((p.co_investors || []).length
+            ? '<ul>' + p.co_investors.map(function (ci) {
+                return '<li><a href="/dashboard/investors/detail/?id=' + esc(ci.investor_lead_id) + '">' + esc(ci.name || ci.investor_lead_id) + '</a> — ' + fmtInt(ci.shared) + ' shared</li>';
+              }).join("") + '</ul>'
+            : empty("No co-investors yet."))
+        + '<h3>Current fund</h3>'
+        + (f
+            ? '<p><strong>' + esc(f.name) + '</strong> · ' + esc(f.kind || "") + ' · ' + esc(f.hq_city || "—")
+              + '</p><p>AUM: ' + fmtUsd(f.aum_usd) + ' · Current fund: ' + fmtUsd(f.current_fund_size_usd) + '</p>'
+            : empty("No fund linked."))),
+
+      tab("path", "Path to this investor",
+        '<form id="ads-inv-path-form" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+        + '<label>From lead id <input name="from" required style="padding:6px;width:280px" placeholder="paste a lead id you control"></label>'
+        + '<button class="ads-btn" type="submit">Find path</button>'
+        + '</form>'
+        + '<div id="ads-inv-path-result" style="margin-top:12px"><div class="ads-muted">Enter a starting lead id (yours or a teammate\'s) to compute the shortest connection chain.</div></div>'),
+
+      tab("boards", "Boards",
+        (p.boards || []).length
+          ? '<ul>' + p.boards.map(function (b) { return '<li>' + esc(b.company || b.org || JSON.stringify(b)) + (b.role ? ' — ' + esc(b.role) : "") + '</li>'; }).join("") + '</ul>'
+          : empty("No board seats on file.")),
+
+      tab("media", "Media",
+        (p.media || []).length
+          ? '<ul>' + p.media.slice(0, 50).map(function (m) {
+              return '<li><a target="_blank" rel="noopener" href="' + esc(m.url) + '">' + esc(m.title || m.url) + '</a> <span class="ads-muted">— ' + esc(m.company_name || "") + ' · ' + esc(m.published_at || "") + '</span></li>';
+            }).join("") + '</ul>'
+          : empty("No media yet.")),
+
+      tab("contact", "Contact & history",
+        '<h3 style="margin-top:0">Contact & profiles</h3>'
+        + '<table class="ads-table"><tbody>'
+        + linkRow("Email", c.email ? 'mailto:' + c.email : null, c.email)
+        + linkRow("LinkedIn", c.linkedin_url, c.linkedin_url)
+        + linkRow("Twitter", c.twitter_url, c.twitter_url)
+        + linkRow("GitHub", c.github_url, c.github_url)
+        + linkRow("Website", c.personal_url, c.personal_url)
+        + linkRow("Office hours", c.office_hours_url, c.office_hours_url)
+        + linkRow("Pitch form", c.pitch_form_url, c.pitch_form_url)
+        + linkRow("Calendly", c.calendly_url, c.calendly_url)
+        + linkRow("NFX Signal", profs.signal_nfx_url, profs.signal_nfx_url)
+        + linkRow("Crunchbase", profs.crunchbase_url, profs.crunchbase_url)
+        + linkRow("Wikipedia", profs.wikipedia_url, profs.wikipedia_url)
+        + '</tbody></table>'
+        + '<h3 style="margin-top:16px">Change history (last 50)</h3>'
+        + ((p.history || []).length
+            ? '<table class="ads-table"><thead><tr><th>When</th><th>Field</th><th>Old → New</th><th>Source</th></tr></thead><tbody>'
+              + p.history.map(function (h) {
+                  return '<tr><td>' + esc(h.changed_at) + '</td><td>' + esc(h.field) + '</td>'
+                    + '<td><span class="ads-muted">' + esc(String(h.old_value || "")).slice(0, 40) + '</span> → ' + esc(String(h.new_value || "")).slice(0, 40) + '</td>'
+                    + '<td>' + esc(h.source || "—") + (h.evidence_url ? ' · <a target="_blank" rel="noopener" href="' + esc(h.evidence_url) + '">evidence</a>' : "") + '</td></tr>';
+                }).join("") + '</tbody></table>'
+            : empty("No history yet."))),
+    ];
+
+    var nav = '<div class="ads-tabs" role="tablist">' + tabs.map(function (t, i) {
+      return '<button role="tab" data-tab="' + t.id + '" aria-selected="' + (i === 0 ? "true" : "false") + '">' + esc(t.label) + '</button>';
+    }).join("") + '</div>';
+    var panels = tabs.map(function (t, i) {
+      return '<div class="ads-tab-panel" data-tab="' + t.id + '" data-active="' + (i === 0 ? "1" : "0") + '">' + t.body + '</div>';
+    }).join("");
+
+    var sidebar = '<aside class="ads-card ads-detail-side">'
+      + '<h3 style="margin-top:0">Actions</h3>'
+      + '<button class="ads-btn" id="ads-inv-enrich" data-id="' + esc(p.id) + '" style="width:100%;margin-bottom:6px">Enrich now</button>'
+      + (c.email ? '<a class="ads-btn ads-btn--ghost" style="display:block;text-align:center;margin-bottom:6px" href="mailto:' + esc(c.email) + '">Email</a>' : '')
+      + (c.linkedin_url ? '<a class="ads-btn ads-btn--ghost" style="display:block;text-align:center;margin-bottom:6px" target="_blank" rel="noopener" href="' + esc(c.linkedin_url) + '">LinkedIn</a>' : '')
+      + '<hr><div class="ads-muted" style="font-size:12px">Last enriched: ' + esc(p.last_enriched_at || "never") + '</div>'
+      + '<div class="ads-muted" style="font-size:12px">Lead id: <code>' + esc(p.id) + '</code></div>'
+      + '</aside>';
+
+    return '<div class="ads-detail-grid"><div>' + nav + panels + '</div>' + sidebar + '</div>';
   }
 
   function kpi(label, val) {
@@ -271,13 +284,56 @@
   }
 
   function wireProfileActions(p) {
-    var btn = document.getElementById("ads-inv-enrich");
-    if (!btn) return;
-    btn.addEventListener("click", function () {
-      btn.disabled = true; btn.textContent = "Queuing…";
-      api("/api/investors/" + encodeURIComponent(p.id) + "/enrich", { method: "POST" })
-        .then(function () { btn.textContent = "Queued ✓"; })
-        .catch(function (e) { btn.textContent = "Failed: " + e.message; btn.disabled = false; });
+    // Tab switching.
+    var tabBtns = document.querySelectorAll('#ads-investor-detail .ads-tabs button');
+    tabBtns.forEach(function (b) {
+      b.addEventListener("click", function () {
+        tabBtns.forEach(function (x) { x.setAttribute("aria-selected", "false"); });
+        b.setAttribute("aria-selected", "true");
+        var id = b.getAttribute("data-tab");
+        document.querySelectorAll('#ads-investor-detail .ads-tab-panel').forEach(function (panel) {
+          panel.setAttribute("data-active", panel.getAttribute("data-tab") === id ? "1" : "0");
+        });
+      });
     });
+
+    var btn = document.getElementById("ads-inv-enrich");
+    if (btn) {
+      btn.addEventListener("click", function () {
+        btn.disabled = true; btn.textContent = "Enriching…";
+        api("/api/investors/" + encodeURIComponent(p.id) + "/enrich", { method: "POST" })
+          .then(function () { btn.textContent = "Done ✓ (refresh to see)"; })
+          .catch(function (e) { btn.textContent = "Failed: " + e.message; btn.disabled = false; });
+      });
+    }
+
+    // "Path to this investor" form.
+    var form = document.getElementById("ads-inv-path-form");
+    if (form) {
+      form.addEventListener("submit", function (e) {
+        e.preventDefault();
+        var from = String(new FormData(form).get("from") || "").trim();
+        var resultEl = document.getElementById("ads-inv-path-result");
+        if (!from) { resultEl.innerHTML = empty("Enter a from lead id."); return; }
+        resultEl.innerHTML = '<div class="ads-loading">Searching…</div>';
+        api("/api/investors/" + encodeURIComponent(from) + "/path?to=" + encodeURIComponent(p.id))
+          .then(function (r) {
+            if (!r || (!r.path && !r.nodes)) { resultEl.innerHTML = empty("No path found within 4 hops."); return; }
+            // Format result whether it's a {nodes,edges,hops} (relationships) or {path:[...]} (legacy).
+            if (r.nodes && r.edges) {
+              if (r.hops < 0 || !r.nodes.length) { resultEl.innerHTML = empty("No path found within 4 hops."); return; }
+              resultEl.innerHTML = '<p><strong>' + r.hops + '-hop path:</strong></p>'
+                + '<ol>' + r.nodes.map(function (nd) { return '<li>' + esc(nd.name) + ' <span class="ads-muted">(' + esc(nd.kind) + ')</span></li>'; }).join("") + '</ol>';
+            } else if (Array.isArray(r.path)) {
+              resultEl.innerHTML = '<ol>' + r.path.map(function (link) {
+                return '<li>' + esc(link.from) + ' →[<em>' + esc(link.kind) + '</em>]→ ' + esc(link.to) + '</li>';
+              }).join("") + '</ol>';
+            } else {
+              resultEl.innerHTML = empty("No path found within 4 hops.");
+            }
+          })
+          .catch(function (e) { resultEl.innerHTML = empty("Search failed: " + e.message); });
+      });
+    }
   }
 })();
