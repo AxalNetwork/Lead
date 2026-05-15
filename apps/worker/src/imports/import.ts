@@ -56,7 +56,7 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
     const obj = await env.UPLOADS.get(row.r2_key);
     if (!obj) throw new Error("upload_object_missing");
     const bytes = await obj.arrayBuffer();
-    const tables = await parseByKind(bytes, extOf(row.filename), row.mime);
+    const tables = await parseByKind(bytes, extOf(row.filename), row.mime, env);
     if (!tables.length) throw new Error("no_table_found");
     tables.sort((a, b) => b.rows.length - a.rows.length);
     // Pick a primary table that is *not* portfolio-shaped if possible (so
@@ -423,9 +423,9 @@ function extOf(filename: string): string {
   return m ? m[1].toLowerCase() : "";
 }
 
-async function parseByKind(bytes: ArrayBuffer, ext: string, mime: string | null): Promise<ParsedTable[]> {
+async function parseByKind(bytes: ArrayBuffer, ext: string, mime: string | null, env: Env): Promise<ParsedTable[]> {
   const m = (mime || "").toLowerCase();
-  if (ext === "pdf" || m.includes("pdf")) return parsePdfTables(bytes);
+  if (ext === "pdf" || m.includes("pdf")) return parsePdfTables(bytes, env);
   if (ext === "csv" || m.includes("text/csv")) return [parseCsv(new TextDecoder().decode(bytes))];
   if (ext === "tsv") return [parseCsv(new TextDecoder().decode(bytes), "\t")];
   return [await parseSpreadsheet(bytes)];

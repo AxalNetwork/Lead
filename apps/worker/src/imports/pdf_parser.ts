@@ -1,15 +1,25 @@
 // PDF table extraction via pdfjs-dist. Strategy:
 //   1. Get text items per page with their {x, y, str}.
 //   2. Group items by similar Y (line) within each page; sort each line by X.
-//   3. Detect repeated column boundaries across the bulk of lines on a page.
-//   4. Score the candidate "table region" (length + column consistency).
-//   5. Merge cross-page continuations: when two consecutive pages have the
+//   3. Drop lines that match known UI chrome (Google Sheets / MS Excel
+//      "Print to PDF" toolbars, "Share" / "View only" banners). Without
+//      this filter, those rows form a fake header on page 1 and the
+//      detector never reaches the real data.
+//   4. Detect repeated column boundaries across the bulk of lines on a page.
+//   5. Score the candidate "table region" (length + column consistency).
+//   6. Merge cross-page continuations: when two consecutive pages have the
 //      same header line, treat the second as a continuation.
+//   7. If the heuristic finds zero tables AND an `env` with AI binding is
+//      provided, fall back to a Workers AI extraction over the raw page
+//      text — handles spreadsheet exports / loosely-aligned PDFs that
+//      defeat the column-snap heuristic.
 //
 // Returns one ParsedTable per detected table, ordered by page. We only return
 // tables with >=3 rows and >=2 columns to filter noisy paragraphs.
 
 import type { ParsedTable } from "./csv";
+import type { Env } from "../types";
+import { aiExtractTablesFromPdfPages } from "../ai/extract";
 
 interface PdfTextItem { str: string; x: number; y: number; w: number }
 
@@ -29,7 +39,31 @@ async function loadPdfjs(): Promise<PdfMod | null> {
   return cached;
 }
 
-export async function parsePdfTables(bytes: ArrayBuffer): Promise<ParsedTable[]> {
+// Lines whose joined text matches one of these patterns are productivity-app
+// UI chrome rendered into "Print to PDF" exports. Filter unconditionally
+// before table detection — they never carry data and they corrupt header
+// inference on page 1 of Google Sheets exports.
+const CHROME_LINE_PATTERNS: RegExp[] = [
+  // Google Sheets menu bar (in any locale-stable English ordering).
+  /^File\s+Edit\s+View\s+Insert\s+Format\s+Data\s+Tools/i,
+  // Google Sheets toolbar / read-only banner.
+  /^Menus\s+\d+%/i,
+  /\bView only\b/i,
+  // Microsoft Excel ribbon.
+  /^Home\s+Insert\s+(Page Layout|Draw)\s+(Page Layout\s+)?Formulas\s+Data\s+Review/i,
+  // Standalone toolbar buttons that float to their own line.
+  /^(Share|Comment|Comments|Editing|Suggesting|Viewing)$/i,
+  // Generic page-number footer.
+  /^Page\s+\d+(\s+of\s+\d+)?$/i,
+];
+
+function isChromeLine(line: PdfTextItem[]): boolean {
+  const text = line.map((it) => it.str).join(" ").replace(/\s+/g, " ").trim();
+  if (!text) return true;
+  return CHROME_LINE_PATTERNS.some((re) => re.test(text));
+}
+
+export async function parsePdfTables(bytes: ArrayBuffer, env?: Env): Promise<ParsedTable[]> {
   const mod = await loadPdfjs();
   if (!mod) return [];
   let doc: PdfDoc;
@@ -39,6 +73,9 @@ export async function parsePdfTables(bytes: ArrayBuffer): Promise<ParsedTable[]>
   const tables: ParsedTable[] = [];
   const pageCount = Math.min(doc.numPages, 100);
   let lastTableHeaderKey: string | null = null;
+  // Capture the per-page plain text in case we need to fall back to the
+  // AI extractor — pdfjs reads are async and we don't want to re-do them.
+  const pageTexts: string[] = [];
   for (let p = 1; p <= pageCount; p++) {
     const page = await doc.getPage(p);
     const content = await page.getTextContent();
@@ -54,7 +91,8 @@ export async function parsePdfTables(bytes: ArrayBuffer): Promise<ParsedTable[]>
       const w = typeof r.width === "number" ? r.width : 0;
       items.push({ str: s, x, y, w });
     }
-    const lines = groupByLine(items);
+    const lines = groupByLine(items).filter((ln) => !isChromeLine(ln));
+    pageTexts.push(lines.map((ln) => ln.map((it) => it.str).join(" ").replace(/\s+/g, " ").trim()).join("\n"));
     const pageTables = detectTables(lines);
     for (const t of pageTables) {
       const headerKey = t.headers.join("|").toLowerCase();
@@ -67,6 +105,11 @@ export async function parsePdfTables(bytes: ArrayBuffer): Promise<ParsedTable[]>
       }
     }
     if (!pageTables.length) lastTableHeaderKey = null;
+  }
+
+  if (tables.length === 0 && env && env.AI) {
+    const fallback = await aiExtractTablesFromPdfPages(env, pageTexts);
+    if (fallback.length) return fallback;
   }
   return tables;
 }

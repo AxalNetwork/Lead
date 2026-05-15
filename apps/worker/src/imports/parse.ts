@@ -27,7 +27,7 @@ export async function processParseFile(env: Env, importId: string): Promise<void
     if (!obj) throw new Error("upload_object_missing");
     const bytes = await obj.arrayBuffer();
     const ext = extOf(row.filename);
-    const tables = await parseByKind(bytes, ext, row.mime);
+    const tables = await parseByKind(bytes, ext, row.mime, env);
     if (!tables.length || !tables[0].headers.length) throw new Error("no_table_found");
     // Use the largest table when multiple are detected (PDFs).
     tables.sort((a, b) => b.rows.length - a.rows.length);
@@ -93,9 +93,9 @@ function extOf(filename: string): string {
   return m ? m[1].toLowerCase() : "";
 }
 
-async function parseByKind(bytes: ArrayBuffer, ext: string, mime: string | null): Promise<ParsedTable[]> {
+async function parseByKind(bytes: ArrayBuffer, ext: string, mime: string | null, env: Env): Promise<ParsedTable[]> {
   const m = (mime || "").toLowerCase();
-  if (ext === "pdf" || m.includes("pdf")) return parsePdfTables(bytes);
+  if (ext === "pdf" || m.includes("pdf")) return parsePdfTables(bytes, env);
   if (ext === "csv" || m.includes("text/csv")) {
     return [parseCsv(new TextDecoder().decode(bytes))];
   }

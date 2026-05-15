@@ -137,6 +137,117 @@ function estimateNeurons(chars: number): number {
   return Math.round(tokens * 0.011 * 1000) / 1000;
 }
 
+// ---- AI table extraction from PDF page text (Sheets/Excel print exports) --
+// Used by imports/pdf_parser.ts as a fallback when the column-snap heuristic
+// finds zero tables on a PDF. Each page's plain text is sent independently
+// (cheap and parallelizable on cache hits) and the model is asked to emit
+// {tables: [{headers, rows}]}. Empty pages return [] without an LLM call.
+
+interface AiExtractedTable {
+  headers: string[];
+  rows: string[][];
+}
+
+const TABLE_SCHEMA = {
+  type: "object",
+  properties: {
+    tables: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          headers: { type: "array", items: { type: "string" } },
+          rows: { type: "array", items: { type: "array", items: { type: "string" } } },
+        },
+        required: ["headers", "rows"],
+      },
+    },
+  },
+  required: ["tables"],
+} as const;
+
+const TABLE_PAGE_CHAR_CAP = 8000;
+const MAX_AI_PAGES = 12;
+
+export interface ParsedTableLike {
+  headers: string[];
+  rows: Array<Record<string, string>>;
+  pageNumber?: number;
+  confidence?: number;
+}
+
+export async function aiExtractTablesFromPdfPages(env: Env, pageTexts: string[]): Promise<ParsedTableLike[]> {
+  if (!env.AI || !pageTexts.length) return [];
+  const ok = await assertBudget(env, "ai");
+  if (!ok.ok) return [];
+
+  const model = env.AI_EXTRACT_MODEL ?? "@cf/meta/llama-3.1-8b-instruct-fast";
+  const out: ParsedTableLike[] = [];
+  let lastHeaderKey: string | null = null;
+  const pages = pageTexts.slice(0, MAX_AI_PAGES);
+
+  for (let p = 0; p < pages.length; p++) {
+    const raw = pages[p].trim();
+    if (raw.length < 40) continue;
+    const text = raw.length > TABLE_PAGE_CHAR_CAP ? raw.slice(0, TABLE_PAGE_CHAR_CAP) : raw;
+    const cacheKey = await sha256Hex(`${model}:pdf-tables:${text}`);
+    let pageTables: AiExtractedTable[] | null = await aiCacheGet<AiExtractedTable[]>(env, cacheKey);
+    if (pageTables) {
+      trackAi(env, { purpose: "extraction", model, cacheHit: true });
+    } else {
+      if (!(await limitAi(env))) continue;
+      const t0 = Date.now();
+      try {
+        const res = (await env.AI.run(model, {
+          messages: [
+            { role: "system", content: "You extract tabular data from a single PDF page. Return strict JSON {tables: [{headers, rows}]}. Skip page numbers, app chrome (File/Edit/View toolbars, sheet tab strips, Share buttons), and prose paragraphs. If the page has no table, return {tables: []}. Each row must have the same length as headers; pad with empty strings if needed." },
+            { role: "user", content: `PDF page text:\n${text}` },
+          ],
+          response_format: { type: "json_schema", json_schema: TABLE_SCHEMA },
+        })) as { response?: string; tables?: AiExtractedTable[] };
+        pageTables = parseTablesResponse(res);
+      } catch (e) {
+        console.warn("aiExtractTablesFromPdfPages failed", (e as Error).message);
+        pageTables = [];
+      }
+      trackAi(env, { purpose: "extraction", model, ms: Date.now() - t0, neurons: estimateNeurons(text.length) });
+      await aiCachePut(env, cacheKey, pageTables);
+    }
+
+    for (const t of pageTables) {
+      if (!Array.isArray(t.headers) || t.headers.length < 2) continue;
+      if (!Array.isArray(t.rows) || t.rows.length < 1) continue;
+      const headers = t.headers.map((h) => String(h || "").trim());
+      const headerKey = headers.join("|").toLowerCase();
+      const rows = t.rows.map((r) => {
+        const obj: Record<string, string> = {};
+        for (let c = 0; c < headers.length; c++) obj[headers[c] || `col_${c}`] = String(r?.[c] ?? "").trim();
+        return obj;
+      }).filter((r) => Object.values(r).some((v) => v.length > 0));
+      if (!rows.length) continue;
+      if (lastHeaderKey === headerKey && out.length) {
+        out[out.length - 1].rows.push(...rows);
+      } else {
+        out.push({ headers, rows, pageNumber: p + 1, confidence: 0.5 });
+        lastHeaderKey = headerKey;
+      }
+    }
+  }
+  return out;
+}
+
+function parseTablesResponse(res: unknown): AiExtractedTable[] {
+  const r = res as { response?: string; tables?: unknown };
+  if (Array.isArray(r?.tables)) return r.tables as AiExtractedTable[];
+  if (typeof r?.response === "string") {
+    try {
+      const j = JSON.parse(r.response) as { tables?: AiExtractedTable[] };
+      if (Array.isArray(j?.tables)) return j.tables;
+    } catch { /* fall through */ }
+  }
+  return [];
+}
+
 export async function aiEmbed(env: Env, text: string): Promise<number[] | null> {
   if (!env.AI) return null;
   const model = env.AI_EMBED_MODEL ?? "@cf/baai/bge-base-en-v1.5";
