@@ -45,7 +45,7 @@
       '<thead><tr><th align="left" style="padding:6px">Name</th><th align="left" style="padding:6px">Title</th><th align="left" style="padding:6px">Role</th><th align="left" style="padding:6px">Seniority</th><th align="right" style="padding:6px">Influence</th></tr></thead><tbody>' +
       d.buyers.map(function (b) {
         return "<tr>" +
-          '<td style="padding:6px">' + esc(b.name || "—") + (b.is_decision_maker ? ' <span class="ads-chip">DM</span>' : "") + (b.is_champion ? ' <span class="ads-chip">champion</span>' : "") + "</td>" +
+          '<td style="padding:6px"><a href="/dashboard/buyers/detail/?id=' + encodeURIComponent(b.id) + '">' + esc(b.name || "—") + '</a>' + (b.is_decision_maker ? ' <span class="ads-chip">DM</span>' : "") + (b.is_champion ? ' <span class="ads-chip">champion</span>' : "") + "</td>" +
           '<td style="padding:6px">' + esc(b.title || "—") + "</td>" +
           '<td style="padding:6px">' + esc(b.role_slug || "—") + "</td>" +
           '<td style="padding:6px">' + esc(b.seniority || "—") + "</td>" +
@@ -130,6 +130,57 @@
       "</div>";
   }
 
+  // Task #58 — Persona fit panel.
+  function renderPersonas(items) {
+    var pane = document.querySelector('#ads-acct-tab-body [data-pane="personas"]');
+    if (!pane) return;
+    if (!items || !items.length) {
+      pane.innerHTML = '<p class="ads-muted">No persona scored this account ≥ 50 yet. Edit personas or run a rescore.</p>';
+      return;
+    }
+    pane.innerHTML = '<ul class="ads-persona-fit" style="list-style:none;padding:0;margin:0">' +
+      items.map(function (m, i) {
+        var pid = "ads-pf-" + i;
+        var hasExplain = !!(m.explanation && String(m.explanation).trim());
+        return '<li style="border-bottom:1px solid #eef0f5;padding:10px 0">' +
+          '<div style="display:flex;align-items:center;gap:10px">' +
+            '<div style="min-width:140px">' + bar(m.fit_score) + '</div>' +
+            '<div style="flex:1">' +
+              '<a href="/dashboard/personas/edit/?id=' + encodeURIComponent(m.persona_id) + '" style="font-weight:600">' + esc(m.persona_name) + '</a>' +
+              ' <span class="ads-chip">' + esc(m.persona_kind) + '</span>' +
+              (m.hard_filter_pass ? '' : ' <span class="ads-chip" style="background:#fde2e2;color:#a33" title="One or more hard filters did not pass">hard-filter miss</span>') +
+              (m.persona_thesis ? '<div class="ads-muted" style="font-size:12px;margin-top:2px">' + esc(m.persona_thesis) + '</div>' : '') +
+            '</div>' +
+            (hasExplain
+              ? '<button type="button" class="ads-btn ads-btn--ghost" data-toggle="' + pid + '" style="font-size:12px">Why?</button>'
+              : '') +
+          '</div>' +
+          (hasExplain
+            ? '<div id="' + pid + '" hidden style="margin:8px 0 0 150px;padding:8px;background:#f7f9fc;border-radius:4px;white-space:pre-wrap;font-size:12px;line-height:1.45">' +
+                esc(m.explanation) +
+                (m.explanation_at ? '<div class="ads-muted" style="font-size:11px;margin-top:4px">Generated ' + esc(m.explanation_at) + '</div>' : '') +
+              '</div>'
+            : '') +
+        '</li>';
+      }).join("") + '</ul>';
+    pane.querySelectorAll('button[data-toggle]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var t = document.getElementById(btn.getAttribute('data-toggle'));
+        if (t) t.hidden = !t.hidden;
+      });
+    });
+  }
+  function loadPersonas() {
+    var i = id();
+    if (!i) return;
+    api("/api/accounts/" + encodeURIComponent(i) + "/personas").then(function (r) {
+      renderPersonas((r && r.items) || []);
+    }).catch(function (e) {
+      var pane = document.querySelector('#ads-acct-tab-body [data-pane="personas"]');
+      if (pane) pane.innerHTML = '<p class="ads-muted">Failed to load persona fit: ' + esc(e.message) + '</p>';
+    });
+  }
+
   function setStrip(d) {
     var strip = document.getElementById("ads-acct-strip");
     var a = d.account;
@@ -140,6 +191,7 @@
     document.getElementById("ads-acct-name").textContent = a.name;
     document.getElementById("ads-acct-sub").textContent = [a.industry, a.size_band, a.hq_city, a.hq_country_iso2].filter(Boolean).join(" · ") || "—";
   }
+  var personasLoaded = false;
   function bindTabs() {
     var tabs = document.querySelectorAll("#ads-acct-tabs .ads-tab");
     tabs.forEach(function (t) {
@@ -148,6 +200,10 @@
         t.classList.add("active");
         document.querySelectorAll("#ads-acct-tab-body [data-pane]").forEach(function (p) { p.hidden = true; });
         document.querySelector('#ads-acct-tab-body [data-pane="' + t.dataset.tab + '"]').hidden = false;
+        if (t.dataset.tab === "personas" && !personasLoaded) {
+          personasLoaded = true;
+          loadPersonas();
+        }
       });
     });
   }

@@ -24,6 +24,7 @@ import { indexEntity } from "../ai/search_sync";
 import { withEntityLock, ALLOWED_MERGE_FIELDS } from "../do/EntityLock";
 import { ensureRoleTaxonomySeeded } from "../prospects/seedRoles";
 import { rescoreEntity } from "../personas/rescore";
+import { listMatchesForEntityWithDetails } from "../personas/repo";
 
 function pickAllowed(table: "accounts" | "buyers", body: Record<string, unknown>): Record<string, unknown> {
   const allow = ALLOWED_MERGE_FIELDS[table];
@@ -173,6 +174,22 @@ accountsRoute.delete("/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+// Task #58: surface persona-fit on the account detail page. Returns
+// every active persona that scored this account >= 50, sorted desc,
+// with the cached AI explanation so the panel can render an
+// expand/collapse rationale next to each score.
+accountsRoute.get("/:id/personas", async (c) => {
+  const id = c.req.param("id");
+  const exists = await getAccount(c.env, id);
+  if (!exists) return c.json({ error: "not_found" }, 404);
+  const url = new URL(c.req.url);
+  const minScore = Number(url.searchParams.get("min_score"));
+  const items = await listMatchesForEntityWithDetails(c.env, "account", id, {
+    minScore: Number.isFinite(minScore) ? minScore : 50,
+  });
+  return c.json({ entity_kind: "account", entity_id: id, items });
+});
+
 accountsRoute.get("/:id/score", async (c) => {
   const id = c.req.param("id");
   const r = await recomputeAccountScore(c.env, id);
@@ -281,6 +298,21 @@ buyersRoute.get("/:id", async (c) => {
   const r = await getBuyer(c.env, c.req.param("id"));
   if (!r) return c.json({ error: "not_found" }, 404);
   return c.json({ buyer: r });
+});
+
+// Task #58: persona-fit panel for the buyer detail page. Same shape as
+// the account variant but scoped to buyer-kind personas via the
+// entity_kind filter on persona_matches.
+buyersRoute.get("/:id/personas", async (c) => {
+  const id = c.req.param("id");
+  const exists = await getBuyer(c.env, id);
+  if (!exists) return c.json({ error: "not_found" }, 404);
+  const url = new URL(c.req.url);
+  const minScore = Number(url.searchParams.get("min_score"));
+  const items = await listMatchesForEntityWithDetails(c.env, "buyer", id, {
+    minScore: Number.isFinite(minScore) ? minScore : 50,
+  });
+  return c.json({ entity_kind: "buyer", entity_id: id, items });
 });
 
 buyersRoute.post("/", async (c) => {

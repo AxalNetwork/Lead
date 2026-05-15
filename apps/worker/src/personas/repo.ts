@@ -247,6 +247,67 @@ export async function listMatchesForEntity(env: Env, entityKind: "account"|"buye
   return r.results ?? [];
 }
 
+// Task #58: surface persona-fit on the account/buyer detail pages.
+// Joins persona_matches with personas so the dashboard can render a
+// "Persona fit" panel without a second round-trip per row. Returns
+// rows above `minScore` (default 50, matching the explanation cache
+// floor in upsertMatch) sorted by score desc. Skips archived/deleted
+// personas — matches against an archived persona are stale evidence.
+export async function listMatchesForEntityWithDetails(
+  env: Env,
+  entityKind: "account" | "buyer",
+  entityId: string,
+  opts?: { minScore?: number; personaKind?: "account" | "buyer" },
+): Promise<Array<{
+  persona_id: string;
+  persona_name: string;
+  persona_kind: "account" | "buyer";
+  persona_status: string;
+  persona_thesis: string | null;
+  fit_score: number;
+  hard_filter_pass: number;
+  components: unknown;
+  explanation: string | null;
+  explanation_at: string | null;
+  computed_at: string;
+}>> {
+  const minScore = Math.max(0, opts?.minScore ?? 50);
+  const personaKind = opts?.personaKind ?? entityKind;
+  const r = await env.DB.prepare(
+    `SELECT pm.persona_id, pm.fit_score, pm.hard_filter_pass, pm.components_json,
+            pm.explanation, pm.explanation_at, pm.computed_at,
+            p.name AS persona_name, p.kind AS persona_kind,
+            p.status AS persona_status, p.thesis AS persona_thesis
+       FROM persona_matches pm
+       JOIN personas p ON p.id = pm.persona_id
+      WHERE pm.entity_kind = ? AND pm.entity_id = ?
+        AND pm.fit_score >= ?
+        AND p.deleted_at IS NULL
+        AND p.status = 'active'
+        AND p.kind = ?
+      ORDER BY pm.fit_score DESC`,
+  ).bind(entityKind, entityId, minScore, personaKind).all<{
+    persona_id: string; fit_score: number; hard_filter_pass: number;
+    components_json: string | null; explanation: string | null;
+    explanation_at: string | null; computed_at: string;
+    persona_name: string; persona_kind: "account" | "buyer";
+    persona_status: string; persona_thesis: string | null;
+  }>();
+  return (r.results ?? []).map((row) => ({
+    persona_id: row.persona_id,
+    persona_name: row.persona_name,
+    persona_kind: row.persona_kind,
+    persona_status: row.persona_status,
+    persona_thesis: row.persona_thesis,
+    fit_score: row.fit_score,
+    hard_filter_pass: row.hard_filter_pass,
+    components: row.components_json ? (() => { try { return JSON.parse(row.components_json!); } catch { return null; } })() : null,
+    explanation: row.explanation,
+    explanation_at: row.explanation_at,
+    computed_at: row.computed_at,
+  }));
+}
+
 // ----- entity fact loaders shared by scorer + workflow
 
 export async function loadAccountFacts(env: Env, accountId: string): Promise<{ name: string; facts: AccountFacts; last_modified: string | null } | null> {

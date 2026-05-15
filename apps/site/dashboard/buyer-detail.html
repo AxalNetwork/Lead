@@ -1,0 +1,36 @@
+---
+layout: default
+title: Buyer
+permalink: /dashboard/buyers/detail/
+---
+
+<h1 class="ads-page-title" id="ads-buyer-name">Buyer</h1>
+<p class="ads-page-sub" id="ads-buyer-sub">—</p>
+
+<div class="ads-card ads-strip-kpi ads-strip-kpi--4" id="ads-buyer-strip">
+  <div><div class="ads-kpi__label">Fit</div><div class="ads-kpi__value" data-k="fit_score">—</div></div>
+  <div><div class="ads-kpi__label">Influence</div><div class="ads-kpi__value" data-k="influence_score">—</div></div>
+  <div><div class="ads-kpi__label">Seniority</div><div class="ads-kpi__value" data-k="seniority">—</div></div>
+  <div><div class="ads-kpi__label">Decision-maker</div><div class="ads-kpi__value" data-k="is_decision_maker">—</div></div>
+</div>
+
+<div class="ads-card" style="margin-top:12px">
+  <div role="tablist" id="ads-buyer-tabs" class="ads-tabs" style="gap:4px;border-bottom:1px solid #dde3f0">
+    <button role="tab" class="ads-tab active" data-tab="overview">Overview</button>
+    <button role="tab" class="ads-tab" data-tab="personas">Persona fit</button>
+  </div>
+  <div id="ads-buyer-tab-body" style="padding:12px">
+    <div data-pane="overview"><p class="ads-muted">Loading…</p></div>
+    <div data-pane="personas" hidden><p class="ads-muted">Loading…</p></div>
+  </div>
+</div>
+
+<style>
+  .ads-tab { background:none; border:0; padding:8px 12px; font-size:13px; cursor:pointer; border-bottom:2px solid transparent; }
+  .ads-tab.active { border-bottom-color:#5b8cff; color:#5b8cff; font-weight:600; }
+  .ads-bar { display:inline-block; width:80px; height:6px; background:#dde3f0; border-radius:3px; overflow:hidden; vertical-align:middle; margin-right:6px; }
+  .ads-bar > span { display:block; height:100%; background:#5b8cff; }
+  .ads-chip { display:inline-block; padding:2px 6px; background:#eef2fb; border-radius:10px; font-size:11px; margin:0 2px 2px 0; }
+</style>
+
+<script src="/assets/js/buyer-detail.js?v={{ site.time | date: '%s' }}"></script>
