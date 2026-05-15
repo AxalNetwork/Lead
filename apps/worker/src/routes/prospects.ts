@@ -303,6 +303,11 @@ signalsRoute.post("/", async (c) => {
   return c.json({ signal: sig, score }, 201);
 });
 
+// IMPORTANT: register the static "/kinds" route BEFORE the "/:id" param
+// route. Hono matches in registration order; if "/:id" comes first it
+// captures "kinds" and the dashboard's signal-kind dropdown breaks.
+signalsRoute.get("/kinds", (c) => c.json({ kinds: SIGNAL_KINDS }));
+
 signalsRoute.get("/:id", async (c) => {
   const r = await getSignal(c.env, c.req.param("id"));
   if (!r) return c.json({ error: "not_found" }, 404);
@@ -336,8 +341,6 @@ signalsRoute.delete("/:id", async (c) => {
   if (sig) await recomputeAccountScore(c.env, sig.account_id);
   return c.json({ ok: true });
 });
-
-signalsRoute.get("/kinds", (c) => c.json({ kinds: SIGNAL_KINDS }));
 
 // ----------------------------------------------------------- ai sync helper
 //
