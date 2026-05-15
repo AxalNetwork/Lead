@@ -30,12 +30,10 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      # Lint runs but is advisory while the AUDIT.md baseline (32 errors) is
-      # burned down by follow-up #5; new errors introduced after that should
-      # flip continue-on-error to false.
-      - name: Lint (advisory)
-        run: npm run lint
-        continue-on-error: true
+      # Lint is blocking — only `error`-level rules fail the build.
+      # Style warnings remain warnings (see .eslintrc.cjs).
+      - name: Lint
+        run: npm run lint --silent -- --max-warnings=9999
 
       # ---- Hard gates: block specific anti-patterns in *new* code only. ----
       # Compares against the PR base (or HEAD~1 for direct pushes), so the

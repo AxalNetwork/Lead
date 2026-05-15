@@ -19,11 +19,12 @@
       $("ads-health-err-1h").textContent = j.errors?.last_1h ?? "—";
       $("ads-health-err-24h").textContent = j.errors?.last_24h ?? "—";
       const rows = (j.checks || []).map((c) => {
-        const dot = c.ok ? "#1f8a3a" : (c.required ? "#b3261e" : "#a48117");
+        const dotColor = c.status === "ok" ? "#1f8a3a" : c.status === "degraded" ? "#a48117" : "#b3261e";
+        const detail = c.error ? `error: ${c.error}` : (c.detail || "");
         return `<tr>
-          <td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${dot};margin-right:8px"></span>${esc(c.name)} ${c.required ? '<span class="ads-muted" style="font-size:10px">[required]</span>' : ""}</td>
-          <td style="text-align:right">${c.ms}ms</td>
-          <td class="ads-muted" style="font-size:12px">${esc(c.detail || "")}</td>
+          <td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${dotColor};margin-right:8px"></span>${esc(c.binding)} ${c.required ? '<span class="ads-muted" style="font-size:10px">[required]</span>' : ""} <span class="ads-muted" style="font-size:10px">${esc(c.status)}</span></td>
+          <td style="text-align:right">${c.latency_ms}ms</td>
+          <td class="ads-muted" style="font-size:12px">${esc(detail)}</td>
         </tr>`;
       }).join("");
       checksEl.innerHTML = `<table style="width:100%;font-size:13px;border-collapse:collapse">

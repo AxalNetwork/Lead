@@ -41,10 +41,10 @@ export type ErrCode =
   | "tos_blocked"
   | "rate_limited"
   | "budget_exhausted"
-  | "fetch_timeout"
-  | "fetch_error"
-  | "fetch_4xx"
-  | "fetch_5xx"
+  | "fetch.timeout"
+  | "fetch.error"
+  | "fetch.http_4xx"
+  | "fetch.http_5xx"
   | "parse_error"
   | "json_parse_error"
   | "queue_malformed"
@@ -291,10 +291,10 @@ export function classify(err: unknown): { code: ErrCode; kind: ErrorKind; retrya
 
   // Network / fetch.
   if (msg.includes("aborted") || msg.includes("timeout") || msg.includes("timed out")) {
-    return { code: "fetch_timeout", kind: "transient", retryable: true };
+    return { code: "fetch.timeout", kind: "transient", retryable: true };
   }
   if (msg.includes("network connection lost") || msg.includes("econnreset") || msg.includes("ehostunreach")) {
-    return { code: "fetch_error", kind: "transient", retryable: true };
+    return { code: "fetch.error", kind: "transient", retryable: true };
   }
 
   // HTTP status codes embedded in the message (e.g. "status_503").
@@ -302,8 +302,8 @@ export function classify(err: unknown): { code: ErrCode; kind: ErrorKind; retrya
   if (statusMatch) {
     const s = Number(statusMatch[1]);
     if (s === 429) return { code: "rate_limited", kind: "transient", retryable: true };
-    if (s >= 500) return { code: "fetch_5xx", kind: "transient", retryable: true };
-    if (s >= 400) return { code: "fetch_4xx", kind: "permanent", retryable: false };
+    if (s >= 500) return { code: "fetch.http_5xx", kind: "transient", retryable: true };
+    if (s >= 400) return { code: "fetch.http_4xx", kind: "permanent", retryable: false };
   }
 
   // D1 / Vectorize / Workers AI.

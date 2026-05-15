@@ -59,21 +59,83 @@ async function probe(
   }
 }
 
-const PROVIDER_KEYS: Array<{ name: string; envKey: keyof Env }> = [
-  { name: "provider:apollo",         envKey: "APOLLO_API_KEY" },
-  { name: "provider:hunter",         envKey: "HUNTER_API_KEY" },
-  { name: "provider:rocketreach",    envKey: "ROCKETREACH_API_KEY" },
-  { name: "provider:peopledatalabs", envKey: "PEOPLEDATALABS_API_KEY" },
-  { name: "provider:proxycurl",      envKey: "PROXYCURL_API_KEY" },
-  { name: "provider:crunchbase",     envKey: "CRUNCHBASE_API_KEY" },
-  { name: "provider:opencorporates", envKey: "OPENCORPORATES_API_KEY" },
-  { name: "provider:uk_ch",          envKey: "UK_CH_API_KEY" },
-  { name: "provider:whoisxml",       envKey: "WHOISXML_API_KEY" },
+// Per-provider live credential validity probe. Each probe issues ONE cheap
+// authenticated request with a strict 4-second AbortSignal timeout. We
+// classify HTTP responses as:
+//   2xx           -> ok           (key is valid, provider reachable)
+//   401/403       -> fail         (key is rejected — invalid / revoked)
+//   404           -> ok           (route not found but auth was accepted)
+//   429           -> degraded     (rate-limited, but key is valid)
+//   408/5xx       -> degraded     (provider transient outage)
+//   other         -> degraded
+// This satisfies the spec criterion that flipping a secret to an invalid
+// value must surface as `fail` on /api/health/deep.
+interface ProviderProbe {
+  name: string;
+  envKey: keyof Env;
+  build: (key: string) => { url: string; init?: RequestInit };
+}
+
+function classifyHttp(status: number): { status: "ok" | "degraded" | "fail"; detail: string } {
+  if (status >= 200 && status < 300) return { status: "ok", detail: `http_${status}` };
+  if (status === 404) return { status: "ok", detail: "http_404 (auth ok)" };
+  if (status === 401 || status === 403) return { status: "fail", detail: `http_${status} (auth rejected)` };
+  if (status === 429) return { status: "degraded", detail: "http_429 (rate limited)" };
+  if (status === 408 || status >= 500) return { status: "degraded", detail: `http_${status}` };
+  return { status: "degraded", detail: `http_${status}` };
+}
+
+const PROVIDER_PROBES: ProviderProbe[] = [
+  { name: "provider:apollo", envKey: "APOLLO_API_KEY", build: (k) => ({
+      url: "https://api.apollo.io/v1/auth/health", init: { method: "GET", headers: { "X-Api-Key": k } } }) },
+  { name: "provider:hunter", envKey: "HUNTER_API_KEY", build: (k) => ({
+      url: `https://api.hunter.io/v2/account?api_key=${encodeURIComponent(k)}`, init: { method: "GET" } }) },
+  { name: "provider:rocketreach", envKey: "ROCKETREACH_API_KEY", build: (k) => ({
+      url: "https://api.rocketreach.co/v2/api/account/", init: { method: "GET", headers: { "Api-Key": k } } }) },
+  { name: "provider:peopledatalabs", envKey: "PEOPLEDATALABS_API_KEY", build: (k) => ({
+      url: "https://api.peopledatalabs.com/v5/account", init: { method: "GET", headers: { "X-Api-Key": k } } }) },
+  { name: "provider:proxycurl", envKey: "PROXYCURL_API_KEY", build: (k) => ({
+      url: "https://nubela.co/proxycurl/api/credit-balance", init: { method: "GET", headers: { Authorization: `Bearer ${k}` } } }) },
+  { name: "provider:crunchbase", envKey: "CRUNCHBASE_API_KEY", build: (k) => ({
+      url: `https://api.crunchbase.com/api/v4/entities/organizations/crunchbase?card_ids=fields&user_key=${encodeURIComponent(k)}`, init: { method: "GET" } }) },
+  { name: "provider:opencorporates", envKey: "OPENCORPORATES_API_KEY", build: (k) => ({
+      url: `https://api.opencorporates.com/v0.4/account_status?api_token=${encodeURIComponent(k)}`, init: { method: "GET" } }) },
+  { name: "provider:uk_ch", envKey: "UK_CH_API_KEY", build: (k) => ({
+      url: "https://api.company-information.service.gov.uk/company/00000006",
+      init: { method: "GET", headers: { Authorization: "Basic " + btoa(`${k}:`) } } }) },
+  { name: "provider:whoisxml", envKey: "WHOISXML_API_KEY", build: (k) => ({
+      url: `https://www.whoisxmlapi.com/whoisserver/WhoisService?domainName=example.com&apiKey=${encodeURIComponent(k)}&outputFormat=json`, init: { method: "GET" } }) },
+  { name: "provider:builtwith", envKey: "BUILTWITH_API_KEY", build: (k) => ({
+      url: `https://api.builtwith.com/free1/api.json?KEY=${encodeURIComponent(k)}&LOOKUP=example.com`, init: { method: "GET" } }) },
+  { name: "provider:brave", envKey: "BRAVE_API_KEY", build: (k) => ({
+      url: "https://api.search.brave.com/res/v1/web/search?q=health&count=1",
+      init: { method: "GET", headers: { "X-Subscription-Token": k, Accept: "application/json" } } }) },
+  // Forbes signals + scraper_api don't have a public auth-check endpoint we
+  // can probe cheaply; fall back to key presence only.
+];
+
+const PROVIDER_KEY_ONLY: Array<{ name: string; envKey: keyof Env }> = [
   { name: "provider:forbes_signals", envKey: "FORBES_SIGNALS_KEY" },
-  { name: "provider:builtwith",      envKey: "BUILTWITH_API_KEY" },
-  { name: "provider:brave",          envKey: "BRAVE_API_KEY" },
   { name: "provider:scraper_api",    envKey: "SCRAPER_API_KEY" },
 ];
+
+async function probeProvider(env: Env, p: ProviderProbe): Promise<CheckResult> {
+  const t0 = Date.now();
+  const v = env[p.envKey];
+  if (!v || (typeof v === "string" && !v.trim())) {
+    return { binding: p.name, status: "degraded", latency_ms: 0, required: false, detail: "missing_key" };
+  }
+  const { url, init } = p.build(v as string);
+  try {
+    const r = await fetch(url, { ...(init ?? {}), signal: AbortSignal.timeout(4000) });
+    const cls = classifyHttp(r.status);
+    return { binding: p.name, status: cls.status, latency_ms: Date.now() - t0, required: false, detail: cls.detail };
+  } catch (e) {
+    const msg = (e as Error).message || "fetch_failed";
+    const isTimeout = msg.toLowerCase().includes("timeout") || msg.toLowerCase().includes("aborted");
+    return { binding: p.name, status: "degraded", latency_ms: Date.now() - t0, required: false, error: isTimeout ? "timeout" : msg };
+  }
+}
 
 health.get("/deep", async (c) => {
   const env = c.env;
@@ -124,10 +186,11 @@ health.get("/deep", async (c) => {
     probe("browser.BROWSER", false, async () => (env.BROWSER ? "bound" : (() => { throw new Error("not_bound"); })())),
     probe("analytics.ANALYTICS", false, async () => (env.ANALYTICS ? "bound" : (() => { throw new Error("not_bound"); })())),
     probe("do.ENTITY_LOCK", false, async () => (env.ENTITY_LOCK ? "bound" : (() => { throw new Error("not_bound"); })())),
-    ...PROVIDER_KEYS.map((p) => probe(p.name, false, async () => {
+    ...PROVIDER_PROBES.map((p) => probeProvider(env, p)),
+    ...PROVIDER_KEY_ONLY.map((p) => probe(p.name, false, async () => {
       const v = env[p.envKey];
       if (!v || (typeof v === "string" && !v.trim())) throw new Error("missing_key");
-      return { status: "ok" as const, detail: "key_present" };
+      return { status: "ok" as const, detail: "key_present (no probe endpoint)" };
     })),
   ]);
 
