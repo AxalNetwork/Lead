@@ -1,25 +1,0 @@
-Task 2 — Dashboard: "Start Scrape" + Linktree / source ingestion UI
-In apps/site/dashboard/index.html and apps/site/assets/js/dashboard.js, add a "Start Scrape" panel at the top of the dashboard, above the KPI cards.
-The panel has three input modes (tabs):
-1. Single URL — one text input + "Scrape" button. POSTs {kind:'url', target} to /api/jobs.
-2. Link tree / list page — text input + parser selector dropdown (linktree, beacons, conference_attendees, fund_team_page, generic_list). POSTs {kind:'linktree', target, config:{parser}}.
-3. Bulk paste — <textarea> accepting newline-separated URLs or LinkedIn/Twitter handles. POSTs one job per non-empty line, then shows counts (queued / rejected).
-Below the input, render a live "Active jobs" strip that polls GET /api/jobs?status=queued,running every 3s and shows name, kind, pages_fetched, leads_found, elapsed time, and a Cancel button calling POST /api/jobs/:id/cancel.
-Add a "Jobs" page at apps/site/dashboard/jobs.html showing the full job history with filters (status, source, date range) and a detail drawer that shows config_json, result_json, error, cost_ms, pages_blocked, captcha_hits.
-Keep all CSS in apps/site/assets/css/dashboard.css. Match the existing color tokens and KPI card styling — no new design language. Do not introduce a frontend framework; use the vanilla JS pattern already in dashboard.js. All fetches go through the existing apiFetch() helper so the Cloudflare Access cookie is sent.
-Acceptance criteria:
-* Pasting a URL and clicking Scrape causes a row to appear in the "Active jobs" strip within 3s and disappear once status='completed'.
-* Bulk paste of 5 URLs creates 5 jobs.
-* Jobs page loads without errors and the detail drawer renders all fields.  Task 2 — Dashboard: "Start Scrape" + Linktree / source ingestion UI
-* In apps/site/dashboard/index.html and apps/site/assets/js/dashboard.js, add a "Start Scrape" panel at the top of the dashboard, above the KPI cards.
-* The panel has three input modes (tabs):
-* Single URL — one text input + "Scrape" button. POSTs {kind:'url', target} to /api/jobs.
-* Link tree / list page — text input + parser selector dropdown (linktree, beacons, conference_attendees, fund_team_page, generic_list). POSTs {kind:'linktree', target, config:{parser}}.
-* Bulk paste — <textarea> accepting newline-separated URLs or LinkedIn/Twitter handles. POSTs one job per non-empty line, then shows counts (queued / rejected).
-* Below the input, render a live "Active jobs" strip that polls GET /api/jobs?status=queued,running every 3s and shows name, kind, pages_fetched, leads_found, elapsed time, and a Cancel button calling POST /api/jobs/:id/cancel.
-* Add a "Jobs" page at apps/site/dashboard/jobs.html showing the full job history with filters (status, source, date range) and a detail drawer that shows config_json, result_json, error, cost_ms, pages_blocked, captcha_hits.
-* Keep all CSS in apps/site/assets/css/dashboard.css. Match the existing color tokens and KPI card styling — no new design language. Do not introduce a frontend framework; use the vanilla JS pattern already in dashboard.js. All fetches go through the existing apiFetch() helper so the Cloudflare Access cookie is sent.
-* Acceptance criteria:
-* Pasting a URL and clicking Scrape causes a row to appear in the "Active jobs" strip within 3s and disappear once status='completed'.
-* Bulk paste of 5 URLs creates 5 jobs.
-* Jobs page loads without errors and the detail drawer renders all fields.
