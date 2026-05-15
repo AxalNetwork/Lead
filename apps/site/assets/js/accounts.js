@@ -41,12 +41,26 @@
   function renderRows(items) {
     var tbody = document.getElementById("ads-accounts-tbody");
     if (!items.length && state.offset === 0) {
-      tbody.innerHTML = '<tr><td class="ads-muted" colspan="7">No accounts. Create one via POST /api/accounts or use bulk import.</td></tr>';
+      tbody.innerHTML = '<tr><td class="ads-muted" colspan="8">No accounts. Create one via POST /api/accounts or use bulk import.</td></tr>';
       return;
+    }
+    function logoCell(a) {
+      // Prefer Cloudflare Images logo_id, fall back to Google's favicon
+      // service keyed by domain so the column is never empty when a
+      // domain exists. Initial-letter chip when neither is available.
+      if (a.logo_id) {
+        return '<img src="https://imagedelivery.net/' + esc(a.logo_id) + '/thumbnail" alt="" width="28" height="28" style="border-radius:6px;object-fit:cover" loading="lazy" />';
+      }
+      if (a.domain) {
+        return '<img src="https://www.google.com/s2/favicons?sz=64&domain=' + esc(a.domain) + '" alt="" width="24" height="24" style="border-radius:4px" loading="lazy" />';
+      }
+      var letter = (a.name || "?").trim().charAt(0).toUpperCase();
+      return '<span style="display:inline-flex;width:28px;height:28px;align-items:center;justify-content:center;background:#eef;border-radius:6px;font-weight:600;font-size:12px">' + esc(letter) + "</span>";
     }
     var html = items.map(function (a) {
       var top = (a.intent_breakdown && a.intent_breakdown.by_kind) || [];
       return "<tr>" +
+        '<td style="padding:8px;vertical-align:middle">' + logoCell(a) + "</td>" +
         '<td style="padding:8px"><a href="/dashboard/accounts/detail/?id=' + esc(a.id) + '">' + esc(a.name) + "</a>" +
           (a.domain ? '<div class="ads-muted" style="font-size:11px">' + esc(a.domain) + "</div>" : "") + "</td>" +
         '<td style="padding:8px">' + esc(a.industry || "—") + "</td>" +
