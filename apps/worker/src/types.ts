@@ -5,6 +5,7 @@ export interface VectorizeIndex {
   query(vector: number[], options?: { topK?: number; returnMetadata?: "all" | "none" | "indexed"; namespace?: string }): Promise<{ matches: Array<{ id: string; score: number; metadata?: Record<string, unknown> }> }>;
   upsert(vectors: Array<{ id: string; values: number[]; metadata?: Record<string, unknown> }>): Promise<{ count: number }>;
   deleteByIds(ids: string[]): Promise<{ count: number }>;
+  getByIds(ids: string[]): Promise<Array<{ id: string; values?: number[]; metadata?: Record<string, unknown> }>>;
 }
 export interface AnalyticsEngineDataset {
   writeDataPoint(point: { blobs?: string[]; doubles?: number[]; indexes?: string[] }): void;

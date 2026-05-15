@@ -11,7 +11,7 @@ import {
 } from "./repo";
 import { scoreEntity } from "./score";
 import { explainFit } from "./explain";
-import { topMatchesForPersona } from "./embed";
+import { cosinesForEntities } from "./embed";
 import { aiEmbed } from "../ai/extract";
 import { buildEmbeddingText } from "./score";
 
@@ -89,9 +89,12 @@ async function writeBackEntityFit(env: Env, entityKind: "account" | "buyer", ent
   ).bind(entityKind, entityId).first<{ m: number | null }>();
   const max = r?.m ?? 0;
   if (entityKind === "account") {
-    const now = new Date().toISOString();
-    await env.DB.prepare(`UPDATE accounts SET fit_score = ?, account_score = ROUND((0.6 * intent_score) + (0.4 * ?), 2), updated_at = ? WHERE id = ?`)
-      .bind(max, max, now, entityId).run();
+    // Don't bump accounts.updated_at — that column reflects real
+    // entity edits and is used as a cache key for explanation R2 +
+    // recency_boost. Persona-derived fit changes get their own
+    // timestamp via persona_matches.computed_at.
+    await env.DB.prepare(`UPDATE accounts SET fit_score = ?, account_score = ROUND((0.6 * intent_score) + (0.4 * ?), 2) WHERE id = ?`)
+      .bind(max, max, entityId).run();
   }
   // buyers table doesn't have a fit_score column; the matches table
   // is the source of truth.
@@ -114,12 +117,14 @@ export async function rescorePersonaFull(
   if (!row) return { scored: 0 };
   const spec = rowToSpec(row);
 
-  // Pre-compute semantic cosines for accounts via Vectorize topK query
-  // (one query covers up to 1k accounts — enough for v1).
-  let semMap = new Map<string, number>();
+  // Compute the persona vector once; per-batch we'll fetch the entity
+  // vectors from VEC_ACCOUNTS via getByIds and compute cosines locally
+  // (every entity gets a real semantic_fit, not just the top-K of a
+  // single Vectorize.query — that would have left the long tail at the
+  // synthetic 50 default).
+  let personaVector: number[] | null = null;
   if (spec.kind === "account") {
-    const vec = await aiEmbed(env, buildEmbeddingText({ ...spec, name: row.name, thesis: row.thesis }));
-    if (vec) semMap = await topMatchesForPersona(env, vec, { kind: "account", topK: 1000 });
+    personaVector = await aiEmbed(env, buildEmbeddingText({ ...spec, name: row.name, thesis: row.thesis }));
   }
 
   const tableSql = spec.kind === "account"
@@ -134,6 +139,11 @@ export async function rescorePersonaFull(
     const r = await env.DB.prepare(tableSql).bind(batchSize, offset).all<{ id: string }>();
     const ids = (r.results ?? []).map((x) => x.id);
     if (!ids.length) break;
+    // Per-batch cosine map: covers EVERY id in this page, not just
+    // those in a global top-K window.
+    const semMap = (spec.kind === "account" && personaVector)
+      ? await cosinesForEntities(env, personaVector, { kind: "account", ids })
+      : new Map<string, number>();
     for (const id of ids) {
       const facts = spec.kind === "account" ? await loadAccountFacts(env, id) : await loadBuyerFacts(env, id);
       if (!facts) continue;

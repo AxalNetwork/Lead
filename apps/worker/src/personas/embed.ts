@@ -46,3 +46,44 @@ export async function topMatchesForPersona(env: Env, vector: number[], opts: { k
   }
   return out;
 }
+
+// Cosine similarity between two equal-length vectors. We assume both
+// embeddings come from the same model (bge-base-en-v1.5, dim=768) so
+// they live on the same unit sphere; we still normalize defensively.
+function cosine(a: number[], b: number[]): number {
+  if (a.length !== b.length || !a.length) return 0;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  if (!na || !nb) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+// Fetch the existing entity vectors from VEC_ACCOUNTS (or VEC_BUYERS
+// when wired) for `ids` and return { id -> cosine vs persona vector }.
+// Used by the full-rescore loop so EVERY entity gets a real semantic_fit
+// (not just the top-K of a single Vectorize.query call).
+export async function cosinesForEntities(
+  env: Env,
+  personaVector: number[],
+  opts: { kind: "account" | "buyer"; ids: string[] },
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (!opts.ids.length) return out;
+  const idx = opts.kind === "account" ? env.VEC_ACCOUNTS : undefined;
+  if (!idx) return out;
+  // Vectorize getByIds caps at 100 ids per call.
+  const CHUNK = 100;
+  for (let i = 0; i < opts.ids.length; i += CHUNK) {
+    const chunk = opts.ids.slice(i, i + CHUNK);
+    try {
+      const rows = await idx.getByIds(chunk);
+      for (const v of rows ?? []) {
+        const values = (v as { values?: number[] }).values;
+        if (Array.isArray(values) && values.length) out.set(v.id, cosine(personaVector, values));
+      }
+    } catch (e) {
+      console.warn("VEC_ACCOUNTS.getByIds failed", (e as Error).message);
+    }
+  }
+  return out;
+}

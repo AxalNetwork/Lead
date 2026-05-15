@@ -30,6 +30,13 @@ import { ensurePersonasSeeded } from "../personas/seed";
 
 export const personasRoute = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
+function constantTimeEquals(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
 const PATCHABLE_KEYS = new Set([
   "name","kind","status","thesis","hard_filters_json",
   "size_min","size_max","size_bands_json","geos_json","industries_json",
@@ -291,7 +298,16 @@ personasRoute.post("/:id/analyze", async (c) => {
 // dashboard or by an authenticated user. Production callers should use
 // POST /:id/rescore-all (workflow-dispatched) instead.
 personasRoute.post("/:id/_rescore-now", async (c) => {
-  if (c.req.header("x-rescore-secret") !== c.env.PERSONA_RESCORE_SECRET) {
+  // Fail closed: when PERSONA_RESCORE_SECRET is unset (dev or
+  // misconfigured prod) the endpoint refuses every request rather than
+  // silently allowing access. Constant-time compare avoids timing
+  // oracles on the secret.
+  const expected = c.env.PERSONA_RESCORE_SECRET;
+  const supplied = c.req.header("x-rescore-secret") ?? "";
+  if (!expected || typeof expected !== "string" || expected.length < 16) {
+    return c.json({ error: "forbidden:secret_unset" }, 403);
+  }
+  if (!constantTimeEquals(supplied, expected)) {
     return c.json({ error: "forbidden" }, 403);
   }
   const row = await getPersona(c.env, c.req.param("id"));
