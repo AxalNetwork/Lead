@@ -88,7 +88,9 @@ specific scope. Mint the token in the Cloudflare dashboard (account
 account-scoped permissions, scoped to "Include → All accounts" (or
 this account specifically):
 
-**Required to deploy** — without these the workflow will fail hard:
+All of the following scopes are **mandatory** — the deploy workflow
+fails hard on any missing scope (auth errors return `code:10000`,
+which the affected step surfaces with a pointer back to this section):
 
 | Scope                          | Used by                                                              |
 | ------------------------------ | -------------------------------------------------------------------- |
@@ -96,36 +98,16 @@ this account specifically):
 | **Workers KV Storage: Edit**   | `Ensure KV namespaces exist` step + KV writes during deploy          |
 | **Workers R2 Storage: Edit**   | `Ensure R2 buckets exist` step + R2 binding validation               |
 | **D1: Edit**                   | `Apply D1 migrations (remote)` step + D1 binding validation          |
+| **Vectorize: Edit**            | `Ensure Vectorize indexes exist` step + Vectorize drift detection    |
 | **Queues: Edit**               | `Ensure Queues exist` step + queue producer/consumer binding         |
 | **Workers AI: Read**           | runtime AI binding validation                                        |
+| **Account Analytics: Read**    | `Ensure Analytics Engine datasets are reachable` step (AE SQL probe) |
 
-**Required for full drift diagnostics without warnings** — the deploy
-still goes green without these (the affected steps emit a GHA
-`::warning::` and continue), but you give up orphan detection and
-Vectorize-shape drift detection until they're granted:
-
-| Scope                          | Used by                                                                                         |
-| ------------------------------ | ----------------------------------------------------------------------------------------------- |
-| **Vectorize: Edit**            | `Ensure Vectorize indexes exist` step + Vectorize read in `Detect Cloudflare resource drift`    |
-| **Account Analytics: Read**    | `Ensure Analytics Engine datasets are reachable` step (AE SQL probe)                            |
-
-(`R2: Read` and `Queues: Read` are needed for the orphan portion of
-drift detection but are normally implied by their `Edit` counterparts;
-verify in the dashboard if the drift step skips R2/Queue reads.)
-
-The `Ensure Vectorize indexes exist`, `Ensure Analytics Engine datasets
-are reachable`, and `Detect Cloudflare resource drift` steps **tolerate**
-`code:10000 / Authentication error` responses by emitting a GitHub
-Actions `::warning::` annotation (and, for drift detection, a final
-prominent `Drift detection ran blind for N endpoint(s)` summary line)
-and continuing — these steps are defensive convenience checks, and a
-true missing-binding failure will still surface in the actual
-`wrangler deploy` step. This is so a partial-scope token doesn't
-completely block production deploys; the warnings make the missing
-scope obvious in the run summary so it gets fixed on the next rotation.
-**If you ignore the drift-skipped warning, you can ship a Vectorize
-index whose live `dimensions`/`metric` doesn't match `wrangler.toml` —
-queries against a mismatched index silently corrupt results.**
+Symptoms of a missing scope: the affected workflow step exits 1 with
+`AUTH FAILURE: token is missing <Scope>` and the raw Cloudflare API
+response (`{"success":false,"errors":[{"code":10000,"message":"Authentication error"}],…}`).
+The fix is always to mint a new token with the full set above and
+rotate the secret — see the rotation procedure below.
 
 To rotate without downtime: mint the new token first, paste it into
 the `CLOUDFLARE_API_TOKEN` repo secret (Settings → Secrets and
