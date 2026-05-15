@@ -1,8 +1,8 @@
-// Task #47: AI pitch-angle generator + intro-path lookup.
+// Task #47: AI pitch-angle + explanation generator and intro-path lookup.
 //
-// Cache key includes project version + entity version so an edit on
-// either side invalidates. We only call AI for top-K candidates and
-// only when fit_score >= 50.
+// Cache key includes project.last_modified + entity.last_modified so an
+// edit on either side invalidates. We only call AI for top-K candidates
+// and only when fit_score >= 50.
 
 import type { Env } from "../types";
 import { aiCacheGet, aiCachePut, sha256Hex } from "../ai/cache";
@@ -11,46 +11,79 @@ import { limitAi } from "../scraper/rateLimit";
 import { trackAi } from "../analytics/events";
 import type { Audience, AudienceMatchResult, ProjectSpec } from "./score";
 
+export interface PitchAndExplanation {
+  pitch: string | null;
+  explanation: string | null;
+}
+
+export async function generatePitchAndExplanation(
+  env: Env,
+  project: ProjectSpec,
+  audience: Audience,
+  match: AudienceMatchResult,
+  projectLastModified: string,
+): Promise<PitchAndExplanation> {
+  if (match.fit_score < 50) return { pitch: null, explanation: null };
+  if (!env.AI) return { pitch: null, explanation: null };
+
+  const model = env.AI_EXTRACT_MODEL ?? "@cf/meta/llama-3.1-8b-instruct-fast";
+  const entVer = String((match.components as Record<string, unknown>).last_modified ?? "");
+  const cacheKey = await sha256Hex(
+    `${model}:project-pitch-v2:${project.id}:${projectLastModified}:${audience}:${match.entity_kind}:${match.entity_id}:${entVer}`,
+  );
+  const cached = await aiCacheGet<PitchAndExplanation>(env, cacheKey);
+  if (cached) {
+    trackAi(env, { purpose: "pitch", model, cacheHit: true });
+    return cached;
+  }
+
+  const ok = await assertBudget(env, "ai");
+  if (!ok.ok) return { pitch: null, explanation: null };
+  if (!(await limitAi(env))) return { pitch: null, explanation: null };
+
+  const factSummary = JSON.stringify(match.components).slice(0, 1200);
+  const t0 = Date.now();
+  let pitch: string | null = null;
+  let explanation: string | null = null;
+  try {
+    const res = (await env.AI.run(model, {
+      messages: [
+        { role: "system", content: 'Return strict JSON: {"pitch": <2-sentence outbound hook>, "explanation": <2-3 sentence reason this is a great fit>}. No prose, no markdown.' },
+        { role: "user", content: `Project: ${project.name}\nOne-liner: ${project.one_liner ?? ""}\nAudience: ${audience}\nTarget facts: ${factSummary}\nWhy this is a great fit and the best opening hook.` },
+      ],
+    })) as { response?: string };
+    const raw = (res?.response ?? "").trim();
+    try {
+      const m = raw.match(/\{[\s\S]*\}/);
+      const obj = m ? JSON.parse(m[0]) : null;
+      if (obj && typeof obj === "object") {
+        pitch = typeof obj.pitch === "string" ? obj.pitch.slice(0, 600) : null;
+        explanation = typeof obj.explanation === "string" ? obj.explanation.slice(0, 800) : null;
+      }
+    } catch {
+      // Treat the raw response as the pitch if JSON parse fails.
+      pitch = raw.slice(0, 600);
+    }
+  } catch (e) {
+    console.warn("generatePitchAndExplanation failed", (e as Error).message);
+    return { pitch: null, explanation: null };
+  }
+  trackAi(env, { purpose: "pitch", model, ms: Date.now() - t0 });
+  const out: PitchAndExplanation = { pitch, explanation };
+  if (pitch || explanation) await aiCachePut(env, cacheKey, out);
+  return out;
+}
+
+// Backward-compat wrapper — returns just the pitch string.
 export async function generatePitchAngle(
   env: Env,
   project: ProjectSpec,
   audience: Audience,
   match: AudienceMatchResult,
+  projectLastModified: string,
 ): Promise<string | null> {
-  if (match.fit_score < 50) return null;
-  if (!env.AI) return null;
-
-  const model = env.AI_EXTRACT_MODEL ?? "@cf/meta/llama-3.1-8b-instruct-fast";
-  const entVer = (match.components as Record<string, unknown>).last_modified ?? "";
-  const cacheKey = await sha256Hex(`${model}:project-pitch:${project.id}:${audience}:${match.entity_kind}:${match.entity_id}:${entVer}`);
-  const cached = await aiCacheGet<{ text: string }>(env, cacheKey);
-  if (cached) {
-    trackAi(env, { purpose: "pitch", model, cacheHit: true });
-    return cached.text;
-  }
-
-  const ok = await assertBudget(env, "ai");
-  if (!ok.ok) return null;
-  if (!(await limitAi(env))) return null;
-
-  const factSummary = JSON.stringify(match.components).slice(0, 1200);
-  const t0 = Date.now();
-  let text = "";
-  try {
-    const res = (await env.AI.run(model, {
-      messages: [
-        { role: "system", content: "You write concise outbound pitch angles. Two sentences max. Specific to the target. No fluff." },
-        { role: "user", content: `Project: ${project.name}\nOne-liner: ${project.one_liner ?? ""}\nAudience: ${audience}\nTarget facts: ${factSummary}\nWhy this is a great fit and the best opening hook.` },
-      ],
-    })) as { response?: string };
-    text = (res?.response ?? "").trim().slice(0, 600);
-  } catch (e) {
-    console.warn("generatePitchAngle failed", (e as Error).message);
-    return null;
-  }
-  trackAi(env, { purpose: "pitch", model, ms: Date.now() - t0 });
-  if (text) await aiCachePut(env, cacheKey, { text });
-  return text || null;
+  const r = await generatePitchAndExplanation(env, project, audience, match, projectLastModified);
+  return r.pitch;
 }
 
 // Shortest intro path between the user (anchored on their email) and
@@ -62,11 +95,9 @@ export async function shortestIntroPath(env: Env, match: AudienceMatchResult): P
   try {
     const me = env.ALLOWED_EMAIL?.toLowerCase();
     if (!me) return null;
-    // Resolve me → lead node (best-effort).
     const meRow = await env.DB.prepare(`SELECT id FROM leads WHERE lower(email) = ? LIMIT 1`).bind(me).first<{ id: string }>();
     if (!meRow?.id) return null;
     const targetId = `${match.entity_kind}:${match.entity_id}`;
-    // BFS depth 4. Cap visited at 2000 to keep this bounded.
     const start = `lead:${meRow.id}`;
     if (start === targetId) return [start];
     const queue: Array<{ node: string; path: string[] }> = [{ node: start, path: [start] }];
@@ -141,4 +172,38 @@ export async function suggestFromDeckText(env: Env, text: string): Promise<Recor
     console.warn("suggestFromDeckText failed", (e as Error).message);
     return null;
   }
+}
+
+// Best-effort text extraction for an uploaded deck buffer. Pure JS, no
+// external libraries — the goal is "good enough to feed the LLM" not
+// perfect PDF parsing.
+//   - text/* and common text extensions: decoded as UTF-8.
+//   - application/pdf: regex-strip text-stream literals between BT/ET
+//     blocks. Works on most decks generated by Keynote, Google Slides,
+//     and PowerPoint export-to-PDF.
+//   - everything else: best-effort UTF-8 decode, then strip non-printable.
+export async function extractTextFromUpload(buf: ArrayBuffer, mime: string, filename: string): Promise<string> {
+  const lower = (filename || "").toLowerCase();
+  const isText = mime.startsWith("text/") || lower.endsWith(".txt") || lower.endsWith(".md") || lower.endsWith(".html");
+  const isPdf = mime === "application/pdf" || lower.endsWith(".pdf");
+  const dec = new TextDecoder("utf-8");
+  if (isText) return dec.decode(buf).slice(0, 100_000);
+  if (isPdf) {
+    const raw = dec.decode(buf);
+    const out: string[] = [];
+    // (literal-string) Tj  and  [(literal) ...] TJ — both common in PDF text streams.
+    const tj = raw.match(/\(([^)\\]{2,})\)\s*T[jJ]/g) ?? [];
+    for (const m of tj) {
+      const inner = m.match(/\(([^)\\]+)\)/);
+      if (inner) out.push(inner[1]);
+    }
+    const joined = out.join(" ").replace(/\s+/g, " ").trim();
+    if (joined.length >= 80) return joined.slice(0, 100_000);
+    // Fallback: return raw printable ASCII run >= 4 chars.
+    const ascii = raw.replace(/[^\x20-\x7E\n]+/g, " ").replace(/\s+/g, " ").trim();
+    return ascii.slice(0, 100_000);
+  }
+  // Generic best-effort.
+  const text = dec.decode(buf).replace(/[^\x20-\x7E\n]+/g, " ").replace(/\s+/g, " ").trim();
+  return text.slice(0, 100_000);
 }

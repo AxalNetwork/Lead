@@ -167,6 +167,36 @@ export async function deleteMatchesForProjectAudience(env: Env, id: string, audi
   await env.DB.prepare(`DELETE FROM project_matches WHERE project_id = ? AND audience = ?`).bind(id, audience).run();
 }
 
+// Recompute helper: after a fresh upsert we want stale "new"-status rows
+// (i.e., the user never touched them) that did NOT make the new top-N
+// to fall out of the workspace view. We do that by setting their rank
+// to 0 and dropping their fit_score; rows the user moved to
+// shortlisted/contacted/etc. are preserved untouched so their history
+// and notes survive recomputes.
+export async function demoteStaleNewMatches(
+  env: Env, projectId: string, audience: string,
+  keep: Array<{ entity_kind: string; entity_id: string }>,
+): Promise<void> {
+  if (!keep.length) {
+    // Recompute yielded zero ranked candidates — demote every untouched
+    // 'new' row so the workspace doesn't show stale results.
+    await env.DB.prepare(
+      `UPDATE project_matches SET rank = 0, fit_score = 0
+         WHERE project_id = ? AND audience = ? AND status = 'new'`,
+    ).bind(projectId, audience).run();
+    return;
+  }
+  // SQLite has a 999-bind limit; chunk if we ever exceed it. 200*2 = 400, safe.
+  const placeholders = keep.map(() => "(?,?)").join(",");
+  const binds: unknown[] = [];
+  for (const k of keep) binds.push(k.entity_kind, k.entity_id);
+  await env.DB.prepare(
+    `UPDATE project_matches SET rank = 0, fit_score = 0
+       WHERE project_id = ? AND audience = ? AND status = 'new'
+         AND (entity_kind, entity_id) NOT IN (VALUES ${placeholders})`,
+  ).bind(projectId, audience, ...binds).run();
+}
+
 export interface ProjectMatchRow {
   project_id: string;
   audience: string;
@@ -186,17 +216,23 @@ export interface ProjectMatchRow {
   computed_at: string;
 }
 
-export async function listProjectMatches(env: Env, projectId: string, audience: string, opts: { limit?: number; offset?: number; status?: string; fit_min?: number } = {}): Promise<{ rows: ProjectMatchRow[]; total: number }> {
-  const limit = Math.min(Math.max(1, opts.limit ?? 50), 200);
+export async function listProjectMatches(env: Env, projectId: string, audience: string, opts: { limit?: number; offset?: number; status?: string; fit_min?: number; include_demoted?: boolean } = {}): Promise<{ rows: ProjectMatchRow[]; total: number }> {
+  const limit = Math.min(Math.max(1, opts.limit ?? 50), 1000);
   const offset = Math.max(0, opts.offset ?? 0);
   const where: string[] = ["project_id = ?", "audience = ?"];
   const binds: unknown[] = [projectId, audience];
   if (opts.status) { where.push("status = ?"); binds.push(opts.status); }
   if (typeof opts.fit_min === "number") { where.push("fit_score >= ?"); binds.push(opts.fit_min); }
+  // Demoted rows (rank=0, status='new') fall out of the workspace by
+  // default; pass include_demoted=true to surface them (e.g., for an
+  // archive view).
+  if (!opts.include_demoted) where.push("(rank > 0 OR status != 'new')");
   const w = where.join(" AND ");
   const totalRow = await env.DB.prepare(`SELECT COUNT(*) AS n FROM project_matches WHERE ${w}`).bind(...binds).first<{ n: number }>();
   const r = await env.DB.prepare(
-    `SELECT * FROM project_matches WHERE ${w} ORDER BY rank ASC LIMIT ? OFFSET ?`,
+    `SELECT * FROM project_matches WHERE ${w}
+       ORDER BY (CASE WHEN rank = 0 THEN 999999 ELSE rank END) ASC, fit_score DESC
+       LIMIT ? OFFSET ?`,
   ).bind(...binds, limit, offset).all<ProjectMatchRow>();
   return { rows: r.results ?? [], total: totalRow?.n ?? 0 };
 }

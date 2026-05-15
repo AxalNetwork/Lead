@@ -19,10 +19,12 @@ permalink: /dashboard/projects/workspace/
   // Pages live at /dashboard/projects/{id}/ — Jekyll renders this template
   // via a permalink redirect; for now we read the id from the URL or the
   // ?id= query string (workaround until we add per-id pages).
-  const id = (location.pathname.match(/\/projects\/([^\/]+)\/?$/) || [])[1] || new URLSearchParams(location.search).get('id');
+  // Project id is passed as ?id=… so a single Jekyll page serves every
+  // project without needing per-id static files.
+  const id = new URLSearchParams(location.search).get('id') || (location.pathname.match(/\/projects\/([^\/]+)\/?$/) || [])[1];
   const root = document.getElementById('ads-project-root');
   if (!id || id === 'workspace') {
-    root.innerHTML = '<div class="ads-muted">No project id in URL. Use /dashboard/projects/{id}/.</div>';
+    root.innerHTML = '<div class="ads-muted">No project id in URL. Use /dashboard/projects/workspace/?id={id}.</div>';
     return;
   }
   const AUD = ['customer','investor','partner','hire','design_partner'];
@@ -69,27 +71,37 @@ permalink: /dashboard/projects/workspace/
     if (!matches.length) { body.innerHTML = '<div class="ads-muted">No matches yet — give the matcher a minute and refresh.</div>'; return; }
     const exportHref = 'https://api.aidatasignal.com/api/projects/' + id + '/export?audience=' + audience + '&format=csv';
     body.innerHTML = `
-      <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:13px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:13px;align-items:center;gap:8px">
         <div class="ads-muted">${matches.length} of ${total}</div>
-        <a class="ads-btn ads-btn--ghost" href="${exportHref}">Export CSV</a>
+        <div style="display:flex;gap:6px">
+          <a class="ads-btn ads-btn--ghost" href="${exportHref}">Export CSV</a>
+          <a class="ads-btn ads-btn--ghost" href="${exportHref.replace('format=csv','format=lemlist')}">Lemlist</a>
+          <a class="ads-btn ads-btn--ghost" href="${exportHref.replace('format=csv','format=hubspot')}">HubSpot</a>
+        </div>
       </div>
       <table class="ads-table" style="width:100%;border-collapse:collapse;font-size:13px">
-        <thead><tr><th style="text-align:left">#</th><th style="text-align:left">Entity</th><th>Fit</th><th style="text-align:left">Components</th><th style="text-align:left">Pitch angle</th><th>Status</th></tr></thead>
+        <thead><tr><th style="text-align:left">#</th><th style="text-align:left">Entity</th><th>Fit</th><th style="text-align:left">Components</th><th style="text-align:left">Why + pitch</th><th>Status</th></tr></thead>
         <tbody>
-          ${matches.map((m) => `
+          ${matches.map((m) => {
+            let comp = {}; try { comp = JSON.parse(m.components_json || '{}'); } catch {}
+            const explanation = comp && comp.explanation ? String(comp.explanation) : '';
+            return `
             <tr style="border-top:1px solid #eef1f6">
               <td>${m.rank}</td>
               <td>${m.entity_kind} <code style="font-size:11px">${m.entity_id}</code></td>
               <td><span class="ads-fitbar"><span style="width:${m.fit_score.toFixed(0)}%"></span></span> ${m.fit_score.toFixed(0)}</td>
               <td style="font-size:11px">P:${m.persona_score.toFixed(0)} S:${m.semantic_score.toFixed(0)} O:${m.overlay_score.toFixed(0)}</td>
-              <td style="font-size:12px;max-width:340px">${m.pitch_angle ? m.pitch_angle.replace(/</g,'&lt;') : '<span class="ads-muted">—</span>'}</td>
+              <td style="font-size:12px;max-width:380px">
+                ${explanation ? `<div style="color:#3b4654;margin-bottom:4px"><b>Why:</b> ${explanation.replace(/</g,'&lt;')}</div>` : ''}
+                ${m.pitch_angle ? `<div><b>Pitch:</b> ${m.pitch_angle.replace(/</g,'&lt;')}</div>` : (explanation ? '' : '<span class="ads-muted">—</span>')}
+              </td>
               <td>
                 <select data-kind="${m.entity_kind}" data-eid="${m.entity_id}" class="ads-status">
                   ${['new','shortlisted','contacted','replied','qualified','won','lost','snoozed'].map((s) => `<option value="${s}" ${s===m.status?'selected':''}>${s}</option>`).join('')}
                 </select>
               </td>
             </tr>
-          `).join('')}
+          `;}).join('')}
         </tbody>
       </table>
     `;

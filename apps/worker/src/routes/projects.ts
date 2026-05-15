@@ -24,7 +24,7 @@ import {
 } from "../projects/repo";
 import { embedProject } from "../projects/embed";
 import { matchProject } from "../projects/match";
-import { suggestFromDeckText } from "../projects/pitch";
+import { suggestFromDeckText, extractTextFromUpload } from "../projects/pitch";
 import { AUDIENCES } from "../projects/score";
 
 export const projectsRoute = new Hono<{ Bindings: Env; Variables: { email: string } }>();
@@ -158,10 +158,69 @@ projectsRoute.post("/:id/recompute", async (c) => {
   return c.json({ ok: true, dispatched: true });
 });
 
-// ---- audience-filtered export. Drift: delegates to a minimal CSV
-// emitter inline; the existing /api/exports builder takes a different
-// shape (entity-centric + custom columns) and a deeper integration is
-// deferred to a follow-up.
+// ---- audience-filtered export. Hydrates the matched entity rows
+// (lead/account/firm/company) and emits CSV in one of three column
+// templates: `csv` (internal/full), `lemlist`
+// (email/first_name/last_name/company_name/picture/icebreaker), or
+// `hubspot` (Email/First Name/Last Name/Company/Job Title/HubSpot
+// Owner). Lemlist's `icebreaker` column is filled from pitch_angle.
+async function hydrateForExport(
+  env: Env,
+  rows: Array<{ entity_kind: string; entity_id: string; pitch_angle: string | null; fit_score: number; rank: number; status: string }>,
+): Promise<Array<Record<string, string>>> {
+  const byKind = new Map<string, string[]>();
+  for (const r of rows) {
+    const arr = byKind.get(r.entity_kind) ?? [];
+    arr.push(r.entity_id);
+    byKind.set(r.entity_kind, arr);
+  }
+  const facts = new Map<string, Record<string, unknown>>();
+  for (const [kind, ids] of byKind) {
+    if (!ids.length) continue;
+    const ph = ids.map(() => "?").join(",");
+    let q = "";
+    if (kind === "lead") q = `SELECT id, name, email, org, title FROM leads WHERE id IN (${ph})`;
+    else if (kind === "account") q = `SELECT id, name, domain, NULL AS email, NULL AS title FROM accounts WHERE id IN (${ph})`;
+    else if (kind === "firm") q = `SELECT id, name, NULL AS domain, NULL AS email, NULL AS title FROM firms WHERE id IN (${ph})`;
+    else if (kind === "company") q = `SELECT id, name, domain, NULL AS email, NULL AS title FROM companies WHERE id IN (${ph})`;
+    else continue;
+    try {
+      const r = await env.DB.prepare(q).bind(...ids).all<Record<string, unknown>>();
+      for (const row of r.results ?? []) facts.set(`${kind}:${row.id}`, row);
+    } catch (e) { console.warn("export hydrate failed", kind, (e as Error).message); }
+  }
+  const splitName = (full: string) => {
+    const parts = String(full ?? "").trim().split(/\s+/);
+    if (parts.length <= 1) return { first: parts[0] ?? "", last: "" };
+    return { first: parts[0], last: parts.slice(1).join(" ") };
+  };
+  const out: Array<Record<string, string>> = [];
+  for (const r of rows) {
+    const f = facts.get(`${r.entity_kind}:${r.entity_id}`) ?? {};
+    const name = String(f.name ?? "");
+    const { first, last } = splitName(name);
+    const email = String(f.email ?? "");
+    const company = r.entity_kind === "lead" ? String(f.org ?? "") : name;
+    const title = String(f.title ?? "");
+    out.push({
+      entity_kind: r.entity_kind, entity_id: r.entity_id,
+      name, email, first_name: first, last_name: last,
+      company_name: company, title,
+      rank: String(r.rank), fit_score: r.fit_score.toFixed(2),
+      status: r.status, pitch_angle: r.pitch_angle ?? "",
+    });
+  }
+  return out;
+}
+
+function emitCsv(headers: string[], data: Array<Record<string, string>>, headerMap?: Record<string, string>): string {
+  const esc = (v: string) => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+  const headerRow = headers.map((h) => esc(headerMap?.[h] ?? h)).join(",");
+  const lines = [headerRow];
+  for (const row of data) lines.push(headers.map((h) => esc(row[h] ?? "")).join(","));
+  return lines.join("\n");
+}
+
 projectsRoute.get("/:id/export", async (c) => {
   const id = c.req.param("id");
   const audience = c.req.query("audience") ?? "customer";
@@ -169,22 +228,30 @@ projectsRoute.get("/:id/export", async (c) => {
   const format = (c.req.query("format") ?? "csv").toLowerCase();
   const fitMin = c.req.query("fit_min") ? Number(c.req.query("fit_min")) : undefined;
   const status = c.req.query("status") ?? undefined;
-  const { rows } = await listProjectMatches(c.env, id, audience, { limit: 500, offset: 0, status, fit_min: fitMin });
-  const headers = ["entity_kind","entity_id","rank","fit_score","persona_score","semantic_score","overlay_score","status","pitch_angle"];
-  const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
-  const lines = [headers.join(",")];
-  for (const r of rows) {
-    lines.push([
-      r.entity_kind, r.entity_id, String(r.rank),
-      r.fit_score.toFixed(2), r.persona_score.toFixed(2), r.semantic_score.toFixed(2), r.overlay_score.toFixed(2),
-      r.status, esc(r.pitch_angle ?? ""),
-    ].join(","));
+  const { rows } = await listProjectMatches(c.env, id, audience, { limit: 1000, offset: 0, status, fit_min: fitMin });
+  const data = await hydrateForExport(c.env, rows);
+
+  let body = "";
+  let mime = "text/csv; charset=utf-8";
+  let ext = "csv";
+  if (format === "lemlist") {
+    body = emitCsv(["email","first_name","last_name","company_name","title","pitch_angle"], data, { pitch_angle: "icebreaker" });
+  } else if (format === "hubspot") {
+    body = emitCsv(["email","first_name","last_name","company_name","title","pitch_angle"], data, {
+      email: "Email", first_name: "First Name", last_name: "Last Name",
+      company_name: "Company", title: "Job Title", pitch_angle: "Notes",
+    });
+  } else if (format === "tsv") {
+    const headers = ["entity_kind","entity_id","rank","fit_score","status","name","email","title","company_name","pitch_angle"];
+    body = headers.join("\t") + "\n" + data.map((r) => headers.map((h) => String(r[h] ?? "").replace(/\t|\n/g, " ")).join("\t")).join("\n");
+    mime = "text/tab-separated-values; charset=utf-8"; ext = "tsv";
+  } else {
+    body = emitCsv(["entity_kind","entity_id","rank","fit_score","status","name","email","title","company_name","pitch_angle"], data);
   }
-  const body = lines.join("\n");
-  const filename = `project-${id}-${audience}.${format === "tsv" ? "tsv" : "csv"}`;
+  const filename = `project-${id}-${audience}-${format}.${ext}`;
   return new Response(body, {
     headers: {
-      "Content-Type": format === "tsv" ? "text/tab-separated-values; charset=utf-8" : "text/csv; charset=utf-8",
+      "Content-Type": mime,
       "Content-Disposition": `attachment; filename="${filename}"`,
     },
   });
@@ -213,10 +280,14 @@ projectsRoute.post("/:id/materials", async (c) => {
 
   let suggestions: Record<string, unknown> | null = null;
   if (form.get("suggest") === "1") {
-    // Drift: real PDF extraction goes through the AI OCR model + a
-    // PDF→text step; we accept either a `text` form field as a
-    // shortcut or ask the caller to POST /:id/suggest after converting.
-    const text = String(form.get("text") ?? "");
+    // Prefer caller-provided extracted text (faster, no parsing risk).
+    // Otherwise extract from the uploaded buffer (PDF text-stream parse,
+    // text/* decode, or printable-ASCII fallback) and feed to the LLM.
+    let text = String(form.get("text") ?? "");
+    if (!text.trim()) {
+      try { text = await extractTextFromUpload(buf, mime, filename); }
+      catch (e) { console.warn("extractTextFromUpload failed", (e as Error).message); }
+    }
     if (text.trim()) {
       suggestions = await suggestFromDeckText(c.env, text);
       if (suggestions) {

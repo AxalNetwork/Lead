@@ -152,7 +152,12 @@ export function scoreCandidate(audience: Audience, p: ProjectSpec, c: AudienceCa
     persona_score: personaS,
     semantic_score: semanticS,
     overlay_score: ov.score,
-    components: { ...ov.sub, persona: personaS, semantic: semanticS, overlay: ov.score },
+    components: {
+      ...ov.sub, persona: personaS, semantic: semanticS, overlay: ov.score,
+      // Forward the entity's last_modified so the pitch cache key can
+      // invalidate when the underlying entity changes.
+      last_modified: (c.facts as Record<string, unknown>)?.last_modified ?? null,
+    },
   };
 }
 

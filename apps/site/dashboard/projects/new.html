@@ -87,7 +87,7 @@ document.getElementById('ads-new-project').addEventListener('submit', async func
     });
     if (!r.ok) throw new Error('http ' + r.status);
     const { project } = await r.json();
-    location.href = '/dashboard/projects/' + project.id + '/';
+    location.href = '/dashboard/projects/workspace/?id=' + encodeURIComponent(project.id);
   } catch (err) {
     status.textContent = 'Failed: ' + err.message;
   }

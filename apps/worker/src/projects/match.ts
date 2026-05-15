@@ -4,13 +4,13 @@
 
 import type { Env } from "../types";
 import {
-  getProject, rowToSpec, setMatchCounts, deleteMatchesForProjectAudience,
+  getProject, rowToSpec, setMatchCounts, demoteStaleNewMatches,
   loadPersonaFitMap, loadAccountFactsBulk, loadFirmFactsBulk,
   loadCompanyFactsBulk, loadLeadFactsBulk, bulkUpsertMatches,
 } from "./repo";
 import { embedProject, semanticCandidatesForAudience, type SemanticHit } from "./embed";
 import { AUDIENCES, AUDIENCE_KINDS, scoreCandidate, type Audience, type AudienceCandidate, type AudienceMatchResult, type ProjectSpec } from "./score";
-import { generatePitchAngle, shortestIntroPath } from "./pitch";
+import { generatePitchAndExplanation, shortestIntroPath } from "./pitch";
 import { trackAi } from "../analytics/events";
 
 const TOP_N_PER_AUDIENCE = 200;
@@ -121,25 +121,37 @@ export async function matchProject(env: Env, projectId: string): Promise<{ ok: t
     const pitchTop = ranked.slice(0, PITCH_TOP);
     const introTop = pitchTop;
     const enriched: Array<Parameters<typeof bulkUpsertMatches>[4][number]> = [];
+    const keepKeys: Array<{ entity_kind: string; entity_id: string }> = [];
     for (let i = 0; i < ranked.length; i += 1) {
       const r = ranked[i];
       let pitch: string | null = null;
+      let explanation: string | null = null;
       let intro: unknown[] | null = null;
       if (i < pitchTop.length) {
-        pitch = await generatePitchAngle(env, spec, audience, r).catch(() => null);
+        const pe = await generatePitchAndExplanation(env, spec, audience, r, row.last_modified).catch(() => null);
+        if (pe) { pitch = pe.pitch; explanation = pe.explanation; }
       }
       if (i < introTop.length) {
         intro = await shortestIntroPath(env, r).catch(() => null);
       }
+      // Fold explanation into components_json so the API response carries
+      // it without a schema migration.
+      const components = { ...r.components, explanation } as Record<string, unknown>;
       enriched.push({
         entity_kind: r.entity_kind, entity_id: r.entity_id,
         rank: i + 1, fit_score: r.fit_score,
         persona_score: r.persona_score, semantic_score: r.semantic_score, overlay_score: r.overlay_score,
-        components: r.components, pitch_angle: pitch, intro_path: intro,
+        components, pitch_angle: pitch, intro_path: intro,
+        entity_modified_at: (r.components as Record<string, unknown>).last_modified as string | null,
       });
+      keepKeys.push({ entity_kind: r.entity_kind, entity_id: r.entity_id });
     }
-    await deleteMatchesForProjectAudience(env, projectId, audience);
+    // True upsert — preserves status/notes via ON CONFLICT in
+    // bulkUpsertMatches. Then demote rank=0 for stale rows whose status
+    // is still "new" (untouched by user) so the workspace doesn't show
+    // them in the top list while keeping shortlisted/contacted history.
     await bulkUpsertMatches(env, projectId, audience, row.last_modified, enriched);
+    await demoteStaleNewMatches(env, projectId, audience, keepKeys);
     counts[audience] = enriched.length;
     out.push({ audience, count: enriched.length });
   }
