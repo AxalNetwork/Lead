@@ -206,9 +206,28 @@ personasRoute.post("/:id/score-entity", async (c) => {
   const facts = kind === "account" ? await loadAccountFacts(c.env, body.entity_id) : await loadBuyerFacts(c.env, body.entity_id);
   if (!facts) return c.json({ error: "entity_not_found" }, 404);
   const spec = rowToSpec(row);
+  // Compute semantic cosine for parity with rescore: pull the persona
+  // and entity vectors from Vectorize and dot-product them locally.
+  let semCos: number | null = null;
+  if (kind === "account" && c.env.VEC_ACCOUNTS && c.env.VEC_PERSONAS) {
+    try {
+      const [pv, ev] = await Promise.all([
+        c.env.VEC_PERSONAS.getByIds([row.id]),
+        c.env.VEC_ACCOUNTS.getByIds([body.entity_id]),
+      ]);
+      const a = (pv ?? [])[0]?.values;
+      const b = (ev ?? [])[0]?.values;
+      if (Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.length) {
+        let dot = 0, na = 0, nb = 0;
+        for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+        if (na && nb) semCos = dot / (Math.sqrt(na) * Math.sqrt(nb));
+      }
+    } catch (e) { console.warn("score-entity cosine fetch failed", (e as Error).message); }
+  }
   const result = scoreEntity(spec, {
     account: kind === "account" ? (facts.facts as never) : null,
     buyer: kind === "buyer" ? (facts.facts as never) : null,
+    semanticCosine: semCos,
   });
   return c.json({ persona_id: row.id, entity_kind: kind, entity_id: body.entity_id, ...result });
 });
