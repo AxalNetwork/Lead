@@ -26,8 +26,9 @@ import { investors } from "./routes/investors";
 import { companies } from "./routes/companies";
 import { search } from "./routes/search";
 import { aiAnalytics } from "./routes/analytics_ae";
+import { accountsRoute, buyersRoute, signalsRoute } from "./routes/prospects";
 export { EntityLock } from "./do/EntityLock";
-export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow } from "./ai/workflows";
+export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow } from "./ai/workflows";
 import { piiAuditOnLeadGet } from "./middleware/pii_audit";
 import { accessGuard } from "./middleware/access";
 import { runJob } from "./scraper/pipeline";
@@ -90,6 +91,10 @@ api.route("/api/investors", investors);
 api.route("/api/companies", companies);
 api.route("/api/search", search);
 api.route("/api/analytics/ae", aiAnalytics);
+// Task #44: prospect database (accounts/buyers/signals).
+api.route("/api/accounts", accountsRoute);
+api.route("/api/buyers", buyersRoute);
+api.route("/api/signals", signalsRoute);
 // /api/leads/:id/enrich, /api/leads/enrich/bulk, /:id/dnc, /:id/campaigns
 api.route("/api/leads", leadsEnrichActions);
 api.route("/api/leads", leadsDncActions);

@@ -1,0 +1,86 @@
+---
+layout: default
+title: Accounts
+permalink: /dashboard/accounts/
+---
+
+<h1 class="ads-page-title">Accounts</h1>
+<p class="ads-page-sub">Customer-discovery prospects, sorted by blended account score (0.6·intent + 0.4·fit). Use the filters to narrow by industry, size, signal kind, or owner.</p>
+
+<div class="ads-card">
+  <form id="ads-accounts-filters" autocomplete="off" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;align-items:end">
+    <label>Search<input name="q" placeholder="name or domain" style="width:100%;padding:6px"></label>
+    <label>Status
+      <select name="status" style="width:100%;padding:6px">
+        <option value="">all</option>
+        <option value="active">active</option>
+        <option value="won">won</option>
+        <option value="lost">lost</option>
+        <option value="paused">paused</option>
+        <option value="disqualified">disqualified</option>
+      </select>
+    </label>
+    <label>Industry<input name="industry" placeholder="ai, fintech…" style="width:100%;padding:6px"></label>
+    <label>Size
+      <select name="size_band" style="width:100%;padding:6px">
+        <option value="">all</option>
+        <option>1-10</option><option>11-50</option><option>51-200</option>
+        <option>201-500</option><option>501-1000</option><option>1001-5000</option><option>5001+</option>
+      </select>
+    </label>
+    <label>Country (ISO2)<input name="country" maxlength="2" style="width:100%;padding:6px;text-transform:uppercase"></label>
+    <label>Owner email<input name="owner_email" type="email" style="width:100%;padding:6px"></label>
+    <label>Has signal kind
+      <select name="has_signal_kind" id="ads-accts-signal-kind" style="width:100%;padding:6px">
+        <option value="">any</option>
+      </select>
+    </label>
+    <label>Signal in last (days)<input name="signal_within_days" type="number" min="0" max="365" style="width:100%;padding:6px"></label>
+    <label>Min intent<input name="min_intent" type="number" min="0" max="100" step="1" style="width:100%;padding:6px"></label>
+    <label>Min fit<input name="min_fit" type="number" min="0" max="100" step="1" style="width:100%;padding:6px"></label>
+    <label>Min account score<input name="min_account_score" type="number" min="0" max="100" step="1" style="width:100%;padding:6px"></label>
+    <label>Sort by
+      <select name="sort" style="width:100%;padding:6px">
+        <option value="account_score">account score</option>
+        <option value="intent_score">intent score</option>
+        <option value="fit_score">fit score</option>
+        <option value="updated_at">updated</option>
+        <option value="name">name</option>
+      </select>
+    </label>
+    <div style="grid-column:1/-1;display:flex;gap:8px">
+      <button class="ads-btn" type="submit">Apply</button>
+      <button class="ads-btn ads-btn--ghost" type="reset">Reset</button>
+      <span class="ads-form-msg" id="ads-accounts-msg"></span>
+    </div>
+  </form>
+</div>
+
+<div class="ads-card" style="margin-top:12px;display:grid;grid-template-columns:repeat(5,1fr);gap:12px" id="ads-accounts-strip">
+  <div><div class="ads-kpi__label">Matches</div><div class="ads-kpi__value" data-k="total">—</div></div>
+  <div><div class="ads-kpi__label">Avg account</div><div class="ads-kpi__value" data-k="avg_account_score">—</div></div>
+  <div><div class="ads-kpi__label">Avg intent</div><div class="ads-kpi__value" data-k="avg_intent_score">—</div></div>
+  <div><div class="ads-kpi__label">Avg fit</div><div class="ads-kpi__value" data-k="avg_fit_score">—</div></div>
+  <div><div class="ads-kpi__label">Top industries</div><div class="ads-kpi__value" data-k="industries" style="font-size:14px">—</div></div>
+</div>
+
+<div class="ads-card" style="margin-top:12px;overflow:auto">
+  <table class="ads-table" style="width:100%;border-collapse:collapse">
+    <thead><tr>
+      <th style="text-align:left;padding:8px">Account</th>
+      <th style="text-align:left;padding:8px">Industry</th>
+      <th style="text-align:left;padding:8px">Size</th>
+      <th style="text-align:left;padding:8px">Top signals</th>
+      <th style="text-align:right;padding:8px">Intent</th>
+      <th style="text-align:right;padding:8px">Fit</th>
+      <th style="text-align:right;padding:8px">Score</th>
+    </tr></thead>
+    <tbody id="ads-accounts-tbody"><tr><td class="ads-muted" colspan="7">Loading…</td></tr></tbody>
+  </table>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:12px">
+    <span class="ads-muted" id="ads-accounts-shown">—</span>
+    <button class="ads-btn ads-btn--ghost" id="ads-accounts-loadmore" hidden>Load more</button>
+  </div>
+</div>
+
+<script src="/assets/js/accounts.js?v={{ site.time | date: '%s' }}"></script>

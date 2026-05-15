@@ -36,6 +36,7 @@ export interface Env {
   VEC_LEADS?: VectorizeIndex;
   VEC_FIRMS?: VectorizeIndex;
   VEC_COMPANIES?: VectorizeIndex;
+  VEC_ACCOUNTS?: VectorizeIndex;
   ENTITY_LOCK?: DurableObjectNamespace;
   ANALYTICS?: AnalyticsEngineDataset;
   RL_HOST?: RateLimiter;
@@ -44,6 +45,7 @@ export interface Env {
   WF_ENRICH_LEAD?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   WF_ENRICH_FIRM?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   WF_INGEST_PAGE?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+  WF_ENRICH_ACCOUNT?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   AI_DAILY_NEURONS_CAP?: string;
   VECTORIZE_DAILY_QUERIES_CAP?: string;
   AI_SEARCH_NAMESPACE?: string;

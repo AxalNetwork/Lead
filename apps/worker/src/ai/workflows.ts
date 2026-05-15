@@ -54,6 +54,20 @@ export class EnrichFirmWorkflow {
   }
 }
 
+// Task #44: account enrichment (skeleton). The route handler dispatches
+// this on /api/accounts/:id/enrich; the per-source crawler chain ships
+// in the buyer-signal-crawlers follow-up task.
+export class EnrichAccountWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ accountId: string }>, step: WorkflowStep): Promise<{ ok: true; accountId: string }> {
+    const { accountId } = event.payload;
+    await step.do("kick", { retries: { limit: 3, backoff: "exponential" } }, async () => ({ accountId }));
+    return { ok: true, accountId };
+  }
+}
+
 export class IngestPageWorkflow {
   env: Env;
   ctx: ExecutionContext;

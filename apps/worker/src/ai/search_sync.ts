@@ -10,7 +10,7 @@ import type { Env } from "../types";
 
 export interface SearchDoc {
   id: string;
-  type: "lead" | "firm" | "company";
+  type: "lead" | "firm" | "company" | "account";
   title: string;
   body: string;
   url?: string;

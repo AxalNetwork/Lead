@@ -3,6 +3,8 @@ import { enrichLead } from "./enrichment/orchestrator";
 import { runNightlyAggregator } from "./services/analytics_v2.aggregator";
 import { runRelationshipDerivation } from "./scraper/relationships/derive";
 import { runInvestorStats } from "./services/investor_stats";
+import { recomputeAccountScore } from "./prospects/repo";
+import { ensureRoleTaxonomySeeded } from "./prospects/seedRoles";
 
 interface SourceRow {
   id: string;
@@ -37,6 +39,31 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         .then((r) => console.log("relationship derivation done", JSON.stringify(r)))
         .catch((e) => console.error("relationship derivation failed", (e as Error).message)),
     );
+    return;
+  }
+  // Cron 20 3 * * * → Task #44 nightly account-score refresh. Re-decays
+  // intent for stale rows (score_recomputed_at NULL or > 24h old) and
+  // ensures the role_taxonomy seed has been applied at least once.
+  if (event && (event as ScheduledEvent).cron === "20 3 * * *") {
+    ctx.waitUntil((async () => {
+      try {
+        await ensureRoleTaxonomySeeded(env);
+        const r = await env.DB.prepare(
+          `SELECT id FROM accounts
+            WHERE status NOT IN ('lost','disqualified')
+              AND (score_recomputed_at IS NULL OR datetime(score_recomputed_at) < datetime('now','-1 day'))
+            ORDER BY score_recomputed_at IS NULL DESC, score_recomputed_at ASC
+            LIMIT 1000`,
+        ).all<{ id: string }>();
+        let n = 0;
+        for (const row of r.results ?? []) {
+          try { await recomputeAccountScore(env, row.id); n += 1; } catch (e) { console.warn("nightly account score failed", row.id, (e as Error).message); }
+        }
+        console.log("nightly account scores done", n);
+      } catch (e) {
+        console.error("nightly account scores failed", (e as Error).message);
+      }
+    })());
     return;
   }
   // Cron 30 3 * * * → recompute investor counters + snapshot daily stats

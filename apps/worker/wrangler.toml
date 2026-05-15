@@ -88,6 +88,11 @@ index_name = "axal-firms-768"
 binding = "VEC_COMPANIES"
 index_name = "axal-companies-768"
 
+# Task #44: prospect accounts vector index.
+[[vectorize]]
+binding = "VEC_ACCOUNTS"
+index_name = "axal-accounts-768"
+
 # Task #25: Durable Object for serialized merge locks (per-entity).
 [[durable_objects.bindings]]
 name = "ENTITY_LOCK"
@@ -135,6 +140,12 @@ binding = "WF_INGEST_PAGE"
 name = "ingest-page"
 class_name = "IngestPageWorkflow"
 
+# Task #44: prospect-account enrichment workflow.
+[[workflows]]
+binding = "WF_ENRICH_ACCOUNT"
+name = "enrich-account"
+class_name = "EnrichAccountWorkflow"
+
 [[queues.producers]]
 binding = "LEAD_QUEUE"
 queue = "aidatasignal-lead-jobs"
@@ -152,4 +163,4 @@ custom_domain = true
 # Every 6 hours: re-scrape stale sources + re-enrich stale leads.
 # 03:15 UTC nightly: roll up lead_quality_snapshots, source_kpis_daily,
 # pipeline_kpis_daily, and dashboard_snapshots.
-crons = ["0 */6 * * *", "15 3 * * *", "30 3 * * *", "45 3 * * *"]
+crons = ["0 */6 * * *", "15 3 * * *", "20 3 * * *", "30 3 * * *", "45 3 * * *"]

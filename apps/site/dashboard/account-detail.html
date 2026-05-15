@@ -1,0 +1,59 @@
+---
+layout: default
+title: Account
+permalink: /dashboard/accounts/detail/
+---
+
+<h1 class="ads-page-title" id="ads-acct-name">Account</h1>
+<p class="ads-page-sub" id="ads-acct-sub">—</p>
+
+<div class="ads-card" id="ads-acct-strip" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+  <div><div class="ads-kpi__label">Account score</div><div class="ads-kpi__value" data-k="account_score">—</div></div>
+  <div><div class="ads-kpi__label">Intent</div><div class="ads-kpi__value" data-k="intent_score">—</div></div>
+  <div><div class="ads-kpi__label">Fit</div><div class="ads-kpi__value" data-k="fit_score">—</div></div>
+  <div><div class="ads-kpi__label">Status</div><div class="ads-kpi__value" data-k="status">—</div></div>
+</div>
+
+<div class="ads-card" style="margin-top:12px">
+  <div role="tablist" id="ads-acct-tabs" style="display:flex;gap:4px;border-bottom:1px solid #dde3f0">
+    <button role="tab" class="ads-tab active" data-tab="overview">Overview</button>
+    <button role="tab" class="ads-tab" data-tab="buyers">Buyers</button>
+    <button role="tab" class="ads-tab" data-tab="signals">Signals</button>
+    <button role="tab" class="ads-tab" data-tab="tech">Tech stack</button>
+    <button role="tab" class="ads-tab" data-tab="history">History</button>
+    <button role="tab" class="ads-tab" data-tab="score">Score breakdown</button>
+  </div>
+  <div id="ads-acct-tab-body" style="padding:12px">
+    <div data-pane="overview"><p class="ads-muted">Loading…</p></div>
+    <div data-pane="buyers" hidden></div>
+    <div data-pane="signals" hidden></div>
+    <div data-pane="tech" hidden></div>
+    <div data-pane="history" hidden></div>
+    <div data-pane="score" hidden></div>
+  </div>
+</div>
+
+<div class="ads-card" style="margin-top:12px">
+  <h3 style="margin:0 0 8px;font-size:14px">Add manual signal</h3>
+  <form id="ads-acct-add-signal" autocomplete="off" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;align-items:end">
+    <label>Kind<select name="kind" id="ads-acct-signal-kind" style="width:100%;padding:6px"></select></label>
+    <label>Weight (1-10)<input name="weight" type="number" min="1" max="10" step="0.5" style="width:100%;padding:6px"></label>
+    <label>Confidence (0-1)<input name="confidence" type="number" min="0" max="1" step="0.05" value="1" style="width:100%;padding:6px"></label>
+    <label>Evidence URL<input name="evidence_url" type="url" style="width:100%;padding:6px"></label>
+    <div style="grid-column:1/-1;display:flex;gap:8px">
+      <button class="ads-btn" type="submit">Add signal</button>
+      <button class="ads-btn ads-btn--ghost" type="button" id="ads-acct-enrich">Run enrichment</button>
+      <span class="ads-form-msg" id="ads-acct-msg"></span>
+    </div>
+  </form>
+</div>
+
+<style>
+  .ads-tab { background:none; border:0; padding:8px 12px; font-size:13px; cursor:pointer; border-bottom:2px solid transparent; }
+  .ads-tab.active { border-bottom-color:#5b8cff; color:#5b8cff; font-weight:600; }
+  .ads-bar { display:inline-block; width:80px; height:6px; background:#dde3f0; border-radius:3px; overflow:hidden; vertical-align:middle; margin-right:6px; }
+  .ads-bar > span { display:block; height:100%; background:#5b8cff; }
+  .ads-chip { display:inline-block; padding:2px 6px; background:#eef2fb; border-radius:10px; font-size:11px; margin:0 2px 2px 0; }
+</style>
+
+<script src="/assets/js/account-detail.js?v={{ site.time | date: '%s' }}"></script>
