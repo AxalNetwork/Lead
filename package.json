@@ -2,9 +2,9 @@
   "name": "aidatasignal",
   "version": "0.1.0",
   "private": true,
-  "description": "Root package so Cloudflare Workers Builds can install worker dependencies and run `wrangler deploy` from the repo root. The actual worker source lives in apps/worker/.",
+  "description": "Root package so Cloudflare Workers Builds can install worker dependencies. The Worker (and its single-source-of-truth wrangler.toml) lives in apps/worker/.",
   "scripts": {
-    "deploy": "wrangler deploy",
+    "deploy": "cd apps/worker && npx wrangler deploy",
     "typecheck": "cd apps/worker && npm run typecheck"
   },
   "dependencies": {

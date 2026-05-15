@@ -155,19 +155,35 @@ uses Node 20 + wrangler 3.99.0 and is fine on either.
 
 ## Adding a new runtime dependency
 
-Cloudflare Pages Builds run `npm clean-install` from the **repo root**
-and then `npx wrangler deploy` against the **root** `wrangler.toml`
-(which points `main` at `apps/worker/src/index.ts`). Until this repo
-moves to npm/pnpm workspaces, every runtime dep added to
-`apps/worker/package.json` MUST also be mirrored verbatim (same version
-specifier, including tarball URLs) in the root `package.json`. Refresh
-the root `package-lock.json` (`npm install` at the repo root) and
-commit both files. Otherwise `esbuild` will fail the Pages bundle with
-`Could not resolve "<module>"`.
+Until this repo moves to npm/pnpm workspaces, every runtime dep added
+to `apps/worker/package.json` MUST also be mirrored verbatim (same
+version specifier, including tarball URLs) in the root `package.json`
+so `npm ci` at the repo root resolves the same tree the GitHub Actions
+deploy job sees. Refresh the root `package-lock.json` (`npm install`
+at the repo root) and commit both files.
 
 ## Adding a new binding
 
-1. Add the binding stanza to `wrangler.toml`.
+`apps/worker/wrangler.toml` is the **single source of truth** for
+every Worker binding, var, route, cron, and Workflow class. There is
+no longer a root-level `wrangler.toml` — Task #73 deleted it after a
+manual `wrangler deploy` from the repo root silently shipped a Worker
+missing `UPLOADS`/`AI`/`AI_CACHE`/Vectorize/Workflow bindings (the
+root file had drifted to a stale subset). Every deploy path now goes
+through `apps/worker/`:
+
+- GitHub Actions (`Deploy Cloudflare Worker (lead)`) sets
+  `working-directory: apps/worker` and the `cloudflare/wrangler-action`
+  step pins `workingDirectory: apps/worker`.
+- The repo-root `npm run deploy` script `cd`s into `apps/worker`
+  before invoking `wrangler deploy`.
+- Manual deploys must also `cd apps/worker` first; running
+  `wrangler deploy` from the repo root will now fail loudly with
+  "no config file found", which is the intended behaviour.
+
+To add a binding:
+
+1. Add the binding stanza to `apps/worker/wrangler.toml` only.
 2. If it's a new R2 bucket, Vectorize index, Queue, KV namespace, or
    Analytics Engine dataset, the deploy workflow handles provisioning
    automatically. For KV, paste the new id from the workflow output
