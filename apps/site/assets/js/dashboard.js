@@ -559,9 +559,21 @@
           });
           if (!res.ok) throw new Error(await res.text());
           var j = await res.json();
+          var ratioPct = Math.round((j.domain_exist_ratio || 0) * 100);
+          var thresholdPct = Math.round((j.threshold || 0.8) * 100);
+          var eligibleNote = j.eligible
+            ? '<div style="margin-top:4px;color:#1e8449">Eligible: '
+                + ratioPct + '% of rows with a domain already exist '
+                + '(≥ ' + thresholdPct + '% threshold).</div>'
+            : '<div style="margin-top:4px;color:#a04000">Not eligible: only '
+                + ratioPct + '% of rows with a domain already exist '
+                + '(need ≥ ' + thresholdPct + '%). Diff is shown for reference only.</div>';
           var html = '<div style="padding:8px;border:1px solid #ddd;border-radius:4px;background:#fafafa">'
             + '<div><strong>Would create:</strong> ' + (j.would_create_count || 0)
-            + ' &nbsp; <strong>Would update:</strong> ' + (j.would_update_count || 0) + '</div>';
+            + ' &nbsp; <strong>Would update:</strong> ' + (j.would_update_count || 0)
+            + ' &nbsp; <span style="color:#666">(' + (j.rows_existing_by_domain || 0)
+            + '/' + (j.rows_with_domain || 0) + ' rows matched by domain)</span></div>'
+            + eligibleNote;
           if ((j.sample_diffs || []).length) {
             html += '<table class="ads-table" style="margin-top:6px;font-size:11px"><thead><tr>'
               + '<th>Tab</th><th>Key</th><th>Field</th><th>Old</th><th>New</th></tr></thead><tbody>';
@@ -1271,11 +1283,7 @@
     });
   }
 
-  function escapeHtml(s) {
-    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
-      return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
-    });
-  }
+  // (escapeHtml is defined once above near other render helpers.)
 
   // Pause polling when the tab is hidden to save quota.
   document.addEventListener("visibilitychange", function () {
