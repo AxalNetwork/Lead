@@ -14,6 +14,7 @@ import type { Env } from "../types";
 import {
   listAccounts, getAccount, insertAccount, updateAccount, deleteAccount,
   listBuyers, getBuyer, insertBuyer, updateBuyer, deleteBuyer,
+  backfillBuyerRoles, countUnmatchedBuyerTitles,
   insertSignal, listSignals, getSignal, updateSignal, deleteSignal,
   listTech, listHistory, recomputeAccountScore,
   type AccountRow, type BuyerRow, type AccountListFilters,
@@ -265,6 +266,17 @@ buyersRoute.get("/", async (c) => {
   return c.json({ items: await listBuyers(c.env, accountId) });
 });
 
+// Task #52: peek at unclassified titles so an operator can see how many
+// buyer rows still need either an alias added to the taxonomy or a
+// manual role_slug pinning. Registered before `/:id` so Hono doesn't
+// route `_unmatched-titles` into the param matcher.
+buyersRoute.get("/_unmatched-titles", async (c) => {
+  const url = new URL(c.req.url);
+  const limit = Math.min(Math.max(1, Number(url.searchParams.get("limit") ?? "5000")), 10_000);
+  const r = await countUnmatchedBuyerTitles(c.env, limit);
+  return c.json(r);
+});
+
 buyersRoute.get("/:id", async (c) => {
   const r = await getBuyer(c.env, c.req.param("id"));
   if (!r) return c.json({ error: "not_found" }, 404);
@@ -323,6 +335,17 @@ buyersRoute.delete("/:id", async (c) => {
     } catch (e) { console.warn("persona cleanup (buyer delete) failed", (e as Error).message); }
   })());
   return c.json({ ok: true });
+});
+
+// Task #52: one-shot backfill of buyer.role_slug / seniority / department /
+// is_decision_maker for legacy rows whose `title` predates the classifier.
+// Idempotent; pass ?force=1 to reclassify rows that already have role_slug.
+buyersRoute.post("/_backfill-roles", async (c) => {
+  const url = new URL(c.req.url);
+  const limit = Math.min(Math.max(1, Number(url.searchParams.get("limit") ?? "1000")), 10_000);
+  const force = url.searchParams.get("force") === "1";
+  const r = await backfillBuyerRoles(c.env, { limit, force });
+  return c.json({ ok: true, ...r });
 });
 
 // ---------------------------------------------------------------- signals

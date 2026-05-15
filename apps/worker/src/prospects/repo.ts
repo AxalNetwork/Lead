@@ -8,6 +8,7 @@ import type { Env } from "../types";
 import { assertSignalKind, DEFAULT_WEIGHT, type SignalKind } from "./signalKinds";
 import { blendAccountScore, computeIntent, type IntentResult } from "./score";
 import { computeFit, DEFAULT_ICP, type FitResult, type RoleTaxonomyRow } from "./fit";
+import { classifyTitle, loadRoleTaxonomyMap } from "./classifyTitle";
 
 export interface AccountRow {
   id: string;
@@ -293,13 +294,23 @@ export async function getBuyer(env: Env, id: string): Promise<BuyerRow | null> {
 export async function insertBuyer(env: Env, input: Partial<BuyerRow> & { account_id: string }): Promise<BuyerRow> {
   const id = input.id ?? crypto.randomUUID();
   const now = new Date().toISOString();
+  // Task #52: classify the title against the seeded role taxonomy when
+  // the caller didn't already pin role_slug. Caller-supplied values
+  // always win so manual edits aren't clobbered by a fuzzy match.
+  const enriched = await applyTitleClassification(env, {
+    title: input.title ?? null,
+    role_slug: input.role_slug ?? null,
+    seniority: input.seniority ?? null,
+    department: input.department ?? null,
+    is_decision_maker: input.is_decision_maker ?? null,
+  });
   await env.DB.prepare(`INSERT INTO buyers (id, account_id, name, email, title, role_slug, seniority, department,
       linkedin_url, twitter_url, phone, is_decision_maker, is_champion, influence_score, last_seen_at, meta_json, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .bind(id, input.account_id, input.name ?? null, input.email ?? null, input.title ?? null,
-          input.role_slug ?? null, input.seniority ?? null, input.department ?? null,
+          enriched.role_slug, enriched.seniority, enriched.department,
           input.linkedin_url ?? null, input.twitter_url ?? null, input.phone ?? null,
-          input.is_decision_maker ?? 0, input.is_champion ?? 0, input.influence_score ?? 0,
+          enriched.is_decision_maker ?? 0, input.is_champion ?? 0, input.influence_score ?? 0,
           input.last_seen_at ?? null, input.meta_json ?? null, now, now)
     .run();
   return (await getBuyer(env, id))!;
@@ -309,9 +320,33 @@ export async function updateBuyer(env: Env, id: string, patch: Partial<BuyerRow>
   const cur = await getBuyer(env, id);
   if (!cur) return null;
   const allowed = new Set(["name","email","title","role_slug","seniority","department","linkedin_url","twitter_url","phone","is_decision_maker","is_champion","influence_score","last_seen_at","meta_json"]);
+  // Task #52: when the title is being changed (or set for the first
+  // time) and the caller didn't also pin role_slug in the same patch,
+  // re-classify so role_slug/seniority/department/is_decision_maker
+  // stay in sync. Explicit caller values still win.
+  let effectivePatch: Partial<BuyerRow> = patch;
+  const titleChanging = Object.prototype.hasOwnProperty.call(patch, "title") && patch.title !== cur.title;
+  const roleSlugProvided = Object.prototype.hasOwnProperty.call(patch, "role_slug");
+  if (titleChanging && !roleSlugProvided) {
+    const enriched = await applyTitleClassification(env, {
+      title: (patch.title ?? null) as string | null,
+      role_slug: null,
+      seniority: Object.prototype.hasOwnProperty.call(patch, "seniority") ? (patch.seniority ?? null) : null,
+      department: Object.prototype.hasOwnProperty.call(patch, "department") ? (patch.department ?? null) : null,
+      is_decision_maker: Object.prototype.hasOwnProperty.call(patch, "is_decision_maker") ? (patch.is_decision_maker ?? null) : null,
+    });
+    effectivePatch = {
+      ...patch,
+      role_slug: enriched.role_slug,
+      // Only set seniority/department/is_decision_maker when caller didn't.
+      ...(Object.prototype.hasOwnProperty.call(patch, "seniority") ? {} : { seniority: enriched.seniority }),
+      ...(Object.prototype.hasOwnProperty.call(patch, "department") ? {} : { department: enriched.department }),
+      ...(Object.prototype.hasOwnProperty.call(patch, "is_decision_maker") ? {} : { is_decision_maker: enriched.is_decision_maker ?? 0 }),
+    };
+  }
   const sets: string[] = [];
   const binds: unknown[] = [];
-  for (const [k, v] of Object.entries(patch)) {
+  for (const [k, v] of Object.entries(effectivePatch)) {
     if (!allowed.has(k)) continue;
     sets.push(`${k} = ?`);
     binds.push(v);
@@ -320,6 +355,116 @@ export async function updateBuyer(env: Env, id: string, patch: Partial<BuyerRow>
   binds.push(new Date().toISOString(), id);
   await env.DB.prepare(`UPDATE buyers SET ${sets.join(", ")}, updated_at = ? WHERE id = ?`).bind(...binds).run();
   return await getBuyer(env, id);
+}
+
+// Task #52: shared title-classification helper used by insert/update and
+// the one-shot backfill endpoint. Returns the four normalized fields
+// with caller-supplied values preserved when present.
+interface ClassifyInputs {
+  title: string | null;
+  role_slug: string | null;
+  seniority: string | null;
+  department: string | null;
+  is_decision_maker: number | null;
+}
+interface ClassifyOutputs {
+  role_slug: string | null;
+  seniority: string | null;
+  department: string | null;
+  is_decision_maker: number | null;
+}
+let _taxonomyCache: Map<string, RoleTaxonomyRow> | null = null;
+let _taxonomyCacheAt = 0;
+async function getTaxonomyCached(env: Env): Promise<Map<string, RoleTaxonomyRow>> {
+  const now = Date.now();
+  if (_taxonomyCache && now - _taxonomyCacheAt < 60_000) return _taxonomyCache;
+  _taxonomyCache = await loadRoleTaxonomyMap(env);
+  _taxonomyCacheAt = now;
+  return _taxonomyCache;
+}
+export async function applyTitleClassification(env: Env, inputs: ClassifyInputs): Promise<ClassifyOutputs> {
+  const out: ClassifyOutputs = {
+    role_slug: inputs.role_slug,
+    seniority: inputs.seniority,
+    department: inputs.department,
+    is_decision_maker: inputs.is_decision_maker,
+  };
+  if (!inputs.title || inputs.role_slug) return out;
+  try {
+    const tax = await getTaxonomyCached(env);
+    const hit = classifyTitle(inputs.title, tax);
+    if (!hit) return out;
+    out.role_slug = hit.role_slug;
+    if (out.seniority == null) out.seniority = hit.seniority;
+    if (out.department == null) out.department = hit.department;
+    if (out.is_decision_maker == null) out.is_decision_maker = hit.is_decision_maker;
+  } catch (e) {
+    console.warn("applyTitleClassification failed", (e as Error).message);
+  }
+  return out;
+}
+
+// Task #52: one-shot backfill of legacy buyer rows that have a `title`
+// but no `role_slug`. Returns counts so the operator can audit coverage.
+export async function backfillBuyerRoles(env: Env, opts?: { limit?: number; force?: boolean }): Promise<{
+  scanned: number; matched: number; unmatched: number; updated: number;
+}> {
+  const limit = Math.min(Math.max(1, opts?.limit ?? 1000), 10_000);
+  const where = opts?.force
+    ? `title IS NOT NULL AND length(trim(title)) > 0`
+    : `title IS NOT NULL AND length(trim(title)) > 0 AND (role_slug IS NULL OR role_slug = '')`;
+  const r = await env.DB.prepare(
+    `SELECT id, title, role_slug, seniority, department, is_decision_maker FROM buyers WHERE ${where} LIMIT ?`,
+  ).bind(limit).all<{ id: string; title: string | null; role_slug: string | null; seniority: string | null; department: string | null; is_decision_maker: number }>();
+  const rows = r.results ?? [];
+  const tax = await getTaxonomyCached(env);
+  let matched = 0; let unmatched = 0; let updated = 0;
+  const now = new Date().toISOString();
+  const force = !!opts?.force;
+  for (const row of rows) {
+    const hit = classifyTitle(row.title, tax);
+    if (!hit) { unmatched += 1; continue; }
+    matched += 1;
+    // When force=true the classifier is the source of truth and
+    // overwrites all four fields (including downgrading is_decision_maker
+    // 1 -> 0 if the new role isn't a decision maker). Without force we
+    // only fill in nulls so manual edits aren't clobbered.
+    const newRoleSlug = force ? hit.role_slug : (row.role_slug || hit.role_slug);
+    const newSeniority = force ? hit.seniority : (row.seniority ?? hit.seniority);
+    const newDepartment = force ? hit.department : (row.department ?? hit.department);
+    const newDM = force ? hit.is_decision_maker : (row.is_decision_maker || hit.is_decision_maker);
+    if (
+      newRoleSlug !== row.role_slug ||
+      newSeniority !== row.seniority ||
+      newDepartment !== row.department ||
+      newDM !== row.is_decision_maker
+    ) {
+      await env.DB.prepare(
+        `UPDATE buyers SET role_slug = ?, seniority = ?, department = ?, is_decision_maker = ?, updated_at = ? WHERE id = ?`,
+      ).bind(newRoleSlug, newSeniority, newDepartment, newDM, now, row.id).run();
+      updated += 1;
+    }
+  }
+  return { scanned: rows.length, matched, unmatched, updated };
+}
+
+// Task #52: count buyers whose title couldn't be classified, so the
+// dashboard can surface a "needs review" badge. Cheap but bounded.
+export async function countUnmatchedBuyerTitles(env: Env, limit = 5000): Promise<{ unmatched: number; sample: Array<{ id: string; title: string }> }> {
+  const r = await env.DB.prepare(
+    `SELECT id, title FROM buyers WHERE title IS NOT NULL AND length(trim(title)) > 0 AND (role_slug IS NULL OR role_slug = '') LIMIT ?`,
+  ).bind(Math.min(Math.max(1, limit), 10_000)).all<{ id: string; title: string }>();
+  const rows = r.results ?? [];
+  const tax = await getTaxonomyCached(env);
+  const sample: Array<{ id: string; title: string }> = [];
+  let unmatched = 0;
+  for (const row of rows) {
+    if (!classifyTitle(row.title, tax)) {
+      unmatched += 1;
+      if (sample.length < 25) sample.push({ id: row.id, title: row.title });
+    }
+  }
+  return { unmatched, sample };
 }
 
 export async function deleteBuyer(env: Env, id: string): Promise<boolean> {
