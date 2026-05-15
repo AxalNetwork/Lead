@@ -16,8 +16,11 @@
 
 import { DEFAULT_WEIGHT, type SignalKind } from "./signalKinds";
 
+// Decay model uses simple exponential `exp(-age/HALF_LIFE_DAYS)` (matches
+// the dashboard "Score breakdown" UI text and the deterministic acceptance
+// numbers — NOT a true half-life). With HALF_LIFE_DAYS = 30, an 8-point
+// signal is worth 8 today, ~5.4 at 10d, ~2.94 at 30d, ~1.08 at 60d.
 export const HALF_LIFE_DAYS = 30;
-const LN2 = Math.log(2);    // true half-life: exp(-ln2 * age / HL)
 const SCALE = 25;            // tuned so ~25 weighted units ⇒ ~63
 const INTENT_BLEND = 0.6;
 const FIT_BLEND = 0.4;
@@ -63,7 +66,7 @@ export function computeIntent(signals: ScoreSignal[], asOf: Date = new Date()): 
     const w = (typeof s.weight === "number" && s.weight > 0) ? s.weight : defaultWeight(s.kind);
     const c = (typeof s.confidence === "number" && s.confidence >= 0 && s.confidence <= 1) ? s.confidence : 1;
     const age = ageDays(s.occurred_at, asOf);
-    const contrib = w * c * Math.exp(-LN2 * age / HALF_LIFE_DAYS);
+    const contrib = w * c * Math.exp(-age / HALF_LIFE_DAYS);
     rawSum += contrib;
     const slot = byKind.get(s.kind) ?? { count: 0, raw: 0 };
     slot.count += 1;

@@ -367,6 +367,28 @@ export async function insertSignal(env: Env, input: InsertSignalInput): Promise<
   return row!;
 }
 
+export async function getSignal(env: Env, id: string): Promise<SignalRow | null> {
+  const r = await env.DB.prepare(`SELECT * FROM signals WHERE id = ?`).bind(id).first<SignalRow>();
+  return r ?? null;
+}
+
+export async function updateSignal(env: Env, id: string, patch: Record<string, unknown>): Promise<SignalRow | null> {
+  const cur = await getSignal(env, id);
+  if (!cur) return null;
+  const allowed = new Set(["weight","confidence","payload_json","evidence_url","occurred_at","expires_at","source"]);
+  const sets: string[] = [];
+  const binds: unknown[] = [];
+  for (const [k, v] of Object.entries(patch)) {
+    if (!allowed.has(k)) continue;
+    sets.push(`${k} = ?`);
+    binds.push(v);
+  }
+  if (!sets.length) return cur;
+  binds.push(id);
+  await env.DB.prepare(`UPDATE signals SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
+  return await getSignal(env, id);
+}
+
 export async function listSignals(env: Env, accountId: string, opts?: { limit?: number; kind?: string }): Promise<SignalRow[]> {
   const limit = Math.min(Math.max(1, opts?.limit ?? 100), 500);
   if (opts?.kind) {

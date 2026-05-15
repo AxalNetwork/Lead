@@ -97,7 +97,7 @@
     pane.innerHTML =
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">' +
         "<div><h4>Intent</h4><p>" + bar(s.intent_score != null ? s.intent_score : d.account.intent_score) + "</p>" +
-          "<p class=\"ads-muted\">Formula: 100 · (1 − exp(−Σ(weight·confidence·exp(−age/30d)) ÷ 25))</p>" +
+          "<p class=\"ads-muted\">Formula: 100 · (1 − exp(−Σ(weight·confidence·exp(−age_days/30)) ÷ 25))</p>" +
           (byKind.length
             ? '<table style="width:100%;border-collapse:collapse"><thead><tr><th align="left" style="padding:4px">Kind</th><th align="right" style="padding:4px">Count</th><th align="right" style="padding:4px">Contribution</th></tr></thead><tbody>' +
               byKind.map(function (k) { return "<tr><td style=\"padding:4px\">" + esc(k.kind) + "</td><td style=\"padding:4px;text-align:right\">" + esc(k.count) + "</td><td style=\"padding:4px;text-align:right\">" + esc(k.raw_contribution) + "</td></tr>"; }).join("") +

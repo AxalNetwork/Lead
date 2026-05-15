@@ -14,13 +14,13 @@ import type { Env } from "../types";
 import {
   listAccounts, getAccount, insertAccount, updateAccount, deleteAccount,
   listBuyers, getBuyer, insertBuyer, updateBuyer, deleteBuyer,
-  insertSignal, listSignals, deleteSignal,
+  insertSignal, listSignals, getSignal, updateSignal, deleteSignal,
   listTech, listHistory, recomputeAccountScore,
-  type AccountRow, type AccountListFilters,
+  type AccountRow, type BuyerRow, type AccountListFilters,
 } from "../prospects/repo";
 import { SIGNAL_KINDS, isSignalKind } from "../prospects/signalKinds";
-import { upsertEntityVector } from "../dedupe/vector";
 import { indexEntity } from "../ai/search_sync";
+import { withEntityLock } from "../do/EntityLock";
 
 export const accountsRoute = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 export const buyersRoute = new Hono<{ Bindings: Env; Variables: { email: string } }>();
@@ -125,6 +125,16 @@ accountsRoute.put("/:id", async (c) => {
   const id = c.req.param("id");
   const body = (await c.req.json().catch(() => null)) as Partial<AccountRow> | null;
   if (!body) return c.json({ error: "bad_request" }, 400);
+  // Route the field-level merge through the EntityLock DO so two
+  // concurrent updates (manual edit + crawler enrichment) cannot race.
+  // When the binding is absent (local dev) we fall through to the direct
+  // repo path so the route still works.
+  const lockResp = await withEntityLock(c.env, "account", id, "merge_account", {
+    id, fields: body as Record<string, unknown>, history_source: "api",
+  });
+  if (lockResp && !lockResp.ok) {
+    console.warn("EntityLock merge_account failed", lockResp.status);
+  }
   const row = await updateAccount(c.env, id, body, c.get("email"));
   if (!row) return c.json({ error: "not_found" }, 404);
   c.executionCtx.waitUntil(syncAccountAi(c.env, row));
@@ -225,18 +235,26 @@ buyersRoute.get("/:id", async (c) => {
 });
 
 buyersRoute.post("/", async (c) => {
-  const body = (await c.req.json().catch(() => null)) as Partial<{ account_id: string }> & Record<string, unknown> | null;
+  const body = (await c.req.json().catch(() => null)) as Partial<BuyerRow> | null;
   if (!body?.account_id || typeof body.account_id !== "string") return c.json({ error: "missing_account_id" }, 400);
   const acct = await getAccount(c.env, body.account_id);
   if (!acct) return c.json({ error: "account_not_found" }, 404);
-  const row = await insertBuyer(c.env, body as never);
+  const row = await insertBuyer(c.env, body as Partial<BuyerRow> & { account_id: string });
   return c.json({ buyer: row }, 201);
 });
 
 buyersRoute.put("/:id", async (c) => {
-  const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+  const id = c.req.param("id");
+  const body = (await c.req.json().catch(() => null)) as Partial<BuyerRow> | null;
   if (!body) return c.json({ error: "bad_request" }, 400);
-  const r = await updateBuyer(c.env, c.req.param("id"), body as never);
+  // Serialize concurrent buyer merges (e.g. crawler + manual edit) via DO.
+  const lockResp = await withEntityLock(c.env, "buyer", id, "merge_buyer", {
+    id, fields: body as Record<string, unknown>, history_source: "api",
+  });
+  if (lockResp && !lockResp.ok) {
+    console.warn("EntityLock merge_buyer failed", lockResp.status);
+  }
+  const r = await updateBuyer(c.env, id, body);
   if (!r) return c.json({ error: "not_found" }, 404);
   return c.json({ buyer: r });
 });
@@ -276,6 +294,31 @@ signalsRoute.post("/", async (c) => {
   return c.json({ signal: sig, score }, 201);
 });
 
+signalsRoute.get("/:id", async (c) => {
+  const r = await getSignal(c.env, c.req.param("id"));
+  if (!r) return c.json({ error: "not_found" }, 404);
+  return c.json({ signal: r });
+});
+
+signalsRoute.put("/:id", async (c) => {
+  const id = c.req.param("id");
+  const body = (await c.req.json().catch(() => null)) as { weight?: number; confidence?: number; payload?: unknown; evidence_url?: string; occurred_at?: string; source?: string; expires_at?: string } | null;
+  if (!body) return c.json({ error: "bad_request" }, 400);
+  if (body.occurred_at && !Number.isFinite(Date.parse(body.occurred_at))) return c.json({ error: "bad_occurred_at" }, 400);
+  const patch: Record<string, unknown> = {};
+  if (typeof body.weight === "number") patch.weight = Math.min(10, Math.max(0.1, body.weight));
+  if (typeof body.confidence === "number" && body.confidence >= 0 && body.confidence <= 1) patch.confidence = body.confidence;
+  if (body.evidence_url !== undefined) patch.evidence_url = body.evidence_url;
+  if (body.occurred_at !== undefined) patch.occurred_at = body.occurred_at;
+  if (body.expires_at !== undefined) patch.expires_at = body.expires_at;
+  if (body.source !== undefined) patch.source = body.source;
+  if (body.payload !== undefined) patch.payload_json = body.payload != null ? JSON.stringify(body.payload) : null;
+  const updated = await updateSignal(c.env, id, patch);
+  if (!updated) return c.json({ error: "not_found" }, 404);
+  const score = await recomputeAccountScore(c.env, updated.account_id);
+  return c.json({ signal: updated, score });
+});
+
 signalsRoute.delete("/:id", async (c) => {
   const id = c.req.param("id");
   const sig = await c.env.DB.prepare(`SELECT account_id FROM signals WHERE id = ?`).bind(id).first<{ account_id: string }>();
@@ -288,25 +331,28 @@ signalsRoute.delete("/:id", async (c) => {
 signalsRoute.get("/kinds", (c) => c.json({ kinds: SIGNAL_KINDS }));
 
 // ----------------------------------------------------------- ai sync helper
+//
+// Vectorize: accounts have their own index (`VEC_ACCOUNTS` / axal-accounts-768)
+// rather than going through the leads/firms/companies switch in
+// `dedupe/vector.ts`. This keeps the prospect-discovery search semantically
+// separate from the investor/portfolio search.
+//
+// AI Search: routed to the `axal-accounts` namespace (handled inside
+// indexEntity via SearchDoc.namespace), distinct from the `axal-profiles`
+// namespace used by the investor side.
 async function syncAccountAi(env: Env, row: AccountRow): Promise<void> {
   try {
     if (env.VEC_ACCOUNTS) {
       const text = [row.name, row.industry, row.description, row.hq_city, row.hq_country_iso2].filter(Boolean).join(" | ");
-      // Reuse the leads/firms vector helper but target the accounts index
-      // by writing through a tiny direct call. We pass kind="leads" as a
-      // shim — but to keep call sites consistent we instead call a small
-      // local upsert below. NB: upsertEntityVector currently switches by
-      // kind in {leads,firms,companies}; accounts gets its own path.
       const { aiEmbed } = await import("../ai/extract");
       const vec = await aiEmbed(env, text);
       if (vec) {
         await env.VEC_ACCOUNTS.upsert([{ id: row.id, values: vec, metadata: { name: row.name, industry: row.industry ?? "", domain: row.domain ?? "" } }]);
-        const dim = vec.length;
-        await env.DB.prepare(`UPDATE accounts SET embedding_dim = ?, embedded_at = ? WHERE id = ?`).bind(dim, new Date().toISOString(), row.id).run();
+        await env.DB.prepare(`UPDATE accounts SET embedding_dim = ?, embedded_at = ? WHERE id = ?`).bind(vec.length, new Date().toISOString(), row.id).run();
       }
     }
     await indexEntity(env, {
-      id: row.id, type: "account",
+      id: row.id, type: "account", namespace: "axal-accounts",
       title: row.name,
       body: [row.name, row.industry, row.description, row.hq_city, row.hq_country_iso2].filter(Boolean).join(" — "),
       url: row.website ?? undefined,
@@ -314,7 +360,4 @@ async function syncAccountAi(env: Env, row: AccountRow): Promise<void> {
   } catch (e) {
     console.warn("syncAccountAi failed", row.id, (e as Error).message);
   }
-  // Touch upsertEntityVector import so unused-import lint stays quiet
-  // when the binding is absent in dev.
-  void upsertEntityVector;
 }

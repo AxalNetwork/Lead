@@ -14,10 +14,20 @@ export interface SearchDoc {
   title: string;
   body: string;
   url?: string;
+  /**
+   * Override the AI Search namespace for this single doc. Accounts (Task #44)
+   * route to `axal-accounts` so prospect search doesn't blend with the
+   * investor/firm/company `axal-profiles` namespace.
+   */
+  namespace?: string;
 }
 
+const TYPE_NAMESPACE: Partial<Record<SearchDoc["type"], string>> = {
+  account: "axal-accounts",
+};
+
 export async function indexEntity(env: Env, doc: SearchDoc): Promise<void> {
-  const ns = env.AI_SEARCH_NAMESPACE ?? "axal-profiles";
+  const ns = doc.namespace ?? TYPE_NAMESPACE[doc.type] ?? env.AI_SEARCH_NAMESPACE ?? "axal-profiles";
   if (env.AI_SEARCH) {
     try {
       await env.AI_SEARCH.fetch(`https://ai-search/${encodeURIComponent(ns)}/documents`, {

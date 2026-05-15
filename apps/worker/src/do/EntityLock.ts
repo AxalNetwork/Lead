@@ -24,6 +24,9 @@ interface MergeRequest {
   history_source?: string;
 }
 
+type LockKind = "lead" | "firm" | "company" | "account" | "buyer";
+type LockOp = "merge_lead" | "merge_firm" | "merge_company" | "merge_account" | "merge_buyer";
+
 export class EntityLock {
   state: DurableObjectState;
   env: Env;
@@ -48,6 +51,8 @@ export class EntityLock {
           case "merge_lead":    return Response.json(await this.mergeLead(body));
           case "merge_firm":    return Response.json(await this.mergeFirm(body));
           case "merge_company": return Response.json(await this.mergeCompany(body));
+          case "merge_account": return Response.json(await this.mergeAccount(body));
+          case "merge_buyer":   return Response.json(await this.mergeBuyer(body));
         }
         return new Response("unknown_op", { status: 404 });
       } catch (e) {
@@ -116,9 +121,31 @@ export class EntityLock {
     });
     return { ok: true, id: body.id, updated };
   }
+
+  // Task #44: account merge. Indexes into the `axal-accounts` AI Search
+  // namespace so prospect-account text search stays isolated from the
+  // investor/firm/company `axal-profiles` namespace.
+  private async mergeAccount(body: MergeRequest): Promise<{ ok: true; id: string; updated: number }> {
+    const updated = await applyMerge(this.env, "accounts", body);
+    const name = String(body.fields.name ?? "");
+    await indexEntity(this.env, {
+      id: body.id, type: "account", namespace: "axal-accounts",
+      title: name || body.id,
+      body: [name, body.fields.industry, body.fields.description, body.fields.hq_city, body.fields.hq_country_iso2].filter(Boolean).join(" — "),
+      url: typeof body.fields.website === "string" ? body.fields.website : undefined,
+    });
+    return { ok: true, id: body.id, updated };
+  }
+
+  // Task #44: buyer merge. No vectorize index for buyers yet; AI Search
+  // is also skipped (we surface buyers under their account doc instead).
+  private async mergeBuyer(body: MergeRequest): Promise<{ ok: true; id: string; updated: number }> {
+    const updated = await applyMerge(this.env, "buyers", body);
+    return { ok: true, id: body.id, updated };
+  }
 }
 
-async function applyMerge(env: Env, table: "leads" | "firms" | "companies", body: MergeRequest): Promise<number> {
+async function applyMerge(env: Env, table: "leads" | "firms" | "companies" | "accounts" | "buyers", body: MergeRequest): Promise<number> {
   const fields = Object.entries(body.fields).filter(([, v]) => v != null && v !== "");
   if (!fields.length) return 0;
   const sets = fields.map(([k]) => `${k} = ?`).join(", ");
@@ -134,9 +161,9 @@ async function applyMerge(env: Env, table: "leads" | "firms" | "companies", body
 // Helper for the rest of the worker.
 export async function withEntityLock(
   env: Env,
-  kind: "lead" | "firm" | "company",
+  kind: LockKind,
   id: string,
-  op: "merge_lead" | "merge_firm" | "merge_company",
+  op: LockOp,
   body: MergeRequest,
 ): Promise<Response | null> {
   if (!env.ENTITY_LOCK) return null;
@@ -146,4 +173,10 @@ export async function withEntityLock(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+// Stable key helper so callers and tests can compute the lock id without
+// allocating a stub. Mirrors the naming used inside `withEntityLock`.
+export function entityLockKey(kind: LockKind, id: string): string {
+  return `${kind}:${id}`;
 }
