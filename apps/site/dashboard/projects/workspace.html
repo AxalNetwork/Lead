@@ -337,6 +337,7 @@ permalink: /dashboard/projects/workspace/
         <div class="ads-edit-grid">
           <label>One-liner<input id="ads-s-ol" value="${esc(s.one_liner || '')}"></label>
           <label>Stage<input id="ads-s-stage" value="${esc(s.stage || '')}"></label>
+          <label class="full">Description<textarea id="ads-s-desc" rows="3">${esc(s.description || '')}</textarea></label>
           <label class="full">Problems<textarea id="ads-s-prob" rows="2">${esc(s.problems_solved || '')}</textarea></label>
           <label class="full">Unique value<textarea id="ads-s-uv" rows="2">${esc(s.unique_value || '')}</textarea></label>
           <label>Industries<input id="ads-s-ind" value="${esc((s.target_industries || []).join(', '))}"></label>
@@ -350,6 +351,7 @@ permalink: /dashboard/projects/workspace/
       const payload = {
         one_liner: document.getElementById('ads-s-ol').value,
         stage: document.getElementById('ads-s-stage').value,
+        description: document.getElementById('ads-s-desc').value,
         problems_solved: document.getElementById('ads-s-prob').value,
         unique_value: document.getElementById('ads-s-uv').value,
         target_industries: document.getElementById('ads-s-ind').value.split(',').map((x) => x.trim()).filter(Boolean),
