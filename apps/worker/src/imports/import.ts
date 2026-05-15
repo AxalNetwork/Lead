@@ -30,6 +30,7 @@ import { findMatch } from "../dedupe/match";
 import type { Lead } from "../db/leads.types";
 import { checkAndScrubDnc } from "../compliance/dnc";
 import { classifyUrl } from "./url_extract";
+import { tosBlockedReason } from "../scraper/tos";
 import { detectFormat } from "./format_detect";
 import {
   parseMoney, parseMoneyUsd, parseMoneyRange, parseMoneyRangeUsd, parseYear, parseStages,
@@ -714,8 +715,16 @@ function decodeJsonBlobBytes(bytes: ArrayBuffer): ParsedTable[] | null {
 // ---- URL → scrape job enqueue (unchanged from v1) ------------------------
 
 async function enqueueScrapeJob(env: Env, url: string, importId: string): Promise<boolean> {
+  // Pre-enqueue ToS gate: skip queueing entirely for blocked hosts so the
+  // queue stays clean and operators see no spurious jobs in the dashboard.
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (tosBlockedReason(host) !== null) return false;
+  } catch { return false; }
   const klass = classifyUrl(url);
-  const kind: JobKind = klass === "firmlist" ? "firmlist" : klass === "profile" ? "profile_list" : "url";
+  // Single profile URLs route to the "url" dispatcher (processProfileUrl
+  // path); only multi-profile pages use "profile_list".
+  const kind: JobKind = klass === "firmlist" ? "firmlist" : "url";
   const jobId = crypto.randomUUID();
   const now = new Date().toISOString();
   try {
