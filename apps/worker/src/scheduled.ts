@@ -69,6 +69,26 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
   // Cron 30 3 * * * → recompute investor counters + snapshot daily stats
   // (Task #24). Runs between the analytics aggregator (15) and relationship
   // derivation (45) so today's snapshot is fresh when downstream jobs read.
+  // Cron 0 * * * * → Task #45 hourly buyer-signal crawl. Dispatches the
+  // CrawlSignalsWorkflow when bound; otherwise runs the source registry
+  // directly so dev environments without workflows still produce signals.
+  if (event && (event as ScheduledEvent).cron === "0 * * * *") {
+    ctx.waitUntil((async () => {
+      try {
+        if (env.WF_CRAWL_SIGNALS) {
+          await env.WF_CRAWL_SIGNALS.create({ params: {} });
+          console.log("crawl-signals workflow dispatched");
+        } else {
+          const { MODULES } = await import("./prospects/sources/registry");
+          const { runSource } = await import("./prospects/runCrawl");
+          for (const mod of MODULES) await runSource(env, mod).catch((e) => console.warn("hourly runSource failed", mod.slug, (e as Error).message));
+        }
+      } catch (e) {
+        console.error("hourly crawl-signals failed", (e as Error).message);
+      }
+    })());
+    return;
+  }
   if (event && (event as ScheduledEvent).cron === "30 3 * * *") {
     ctx.waitUntil(
       runInvestorStats(env)

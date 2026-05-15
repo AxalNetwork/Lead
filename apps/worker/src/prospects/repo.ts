@@ -339,6 +339,10 @@ export interface InsertSignalInput {
   occurred_at?: string | null;
   expires_at?: string | null;
   created_by?: string | null;
+  // Task #45: persisted on the same INSERT so the runner doesn't need a
+  // race-prone follow-up UPDATE to attach R2 archive + snippet.
+  r2_key?: string | null;
+  evidence_snippet?: string | null;
 }
 
 export async function insertSignal(env: Env, input: InsertSignalInput): Promise<SignalRow> {
@@ -362,11 +366,13 @@ export async function insertSignal(env: Env, input: InsertSignalInput): Promise<
   }
   await env.DB.prepare(
     `INSERT INTO signals (id, account_id, buyer_id, kind, source, weight, confidence,
-       payload_json, evidence_url, occurred_at, observed_at, expires_at, created_by, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       payload_json, evidence_url, occurred_at, observed_at, expires_at, created_by, created_at,
+       r2_key, evidence_snippet)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(id, input.account_id, input.buyer_id ?? null, kind, input.source ?? null, weight, confidence,
          input.payload_json ?? null, input.evidence_url ?? null, occurred, now,
-         input.expires_at ?? null, input.created_by ?? null, now).run();
+         input.expires_at ?? null, input.created_by ?? null, now,
+         input.r2_key ?? null, input.evidence_snippet ?? null).run();
   const row = await env.DB.prepare(`SELECT * FROM signals WHERE id = ?`).bind(id).first<SignalRow>();
   return row!;
 }

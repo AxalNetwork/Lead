@@ -1,0 +1,119 @@
+---
+layout: default
+title: Crawlers
+permalink: /dashboard/crawlers/
+---
+
+<section class="ads-section">
+  <h1 class="ads-h1">Buyer-signal crawlers</h1>
+  <p class="ads-sub">Source modules that emit signals against accounts. Hourly cron dispatches the workflow; flip a toggle or kick a source manually below.</p>
+
+  <div class="ads-card">
+    <table class="ads-table" id="ads-crawlers-table">
+      <thead>
+        <tr>
+          <th>Source</th>
+          <th>Schedule</th>
+          <th>Enabled</th>
+          <th>Env</th>
+          <th>Last run</th>
+          <th>Inserted / Skipped</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody><tr><td colspan="8">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <h2 class="ads-h2">Recent runs</h2>
+  <div class="ads-card">
+    <table class="ads-table" id="ads-crawler-runs">
+      <thead>
+        <tr>
+          <th>Started</th>
+          <th>Source</th>
+          <th>Status</th>
+          <th>Emitted</th>
+          <th>Inserted</th>
+          <th>Skipped</th>
+          <th>Accts ↑</th>
+          <th>Error</th>
+        </tr>
+      </thead>
+      <tbody><tr><td colspan="8">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+(async function () {
+  const tbody = document.querySelector("#ads-crawlers-table tbody");
+  const runsBody = document.querySelector("#ads-crawler-runs tbody");
+  function fmt(s) { return s ? new Date(s).toLocaleString() : "—"; }
+  async function refresh() {
+    try {
+      const r = await fetch("https://api.aidatasignal.com/api/crawlers", { credentials: "include" });
+      const j = await r.json();
+      tbody.innerHTML = (j.modules || []).map(m => `
+        <tr>
+          <td><strong>${m.label}</strong><br><code class="ads-mono">${m.slug}</code></td>
+          <td>${m.schedule}</td>
+          <td><label class="ads-switch"><input type="checkbox" data-toggle="${m.slug}" ${m.enabled ? "checked" : ""}><span></span></label></td>
+          <td>${m.envReady ? "<span class='ads-pill ads-pill--ok'>ready</span>" : `<span class='ads-pill ads-pill--warn'>missing ${m.requiresEnv || "env"}</span>`}${m.bravePoweredOnly ? " <span class='ads-pill'>Brave only</span>" : ""}</td>
+          <td>${fmt(m.lastRun?.started_at)}</td>
+          <td>${m.lastRun ? `${m.lastRun.signals_inserted} / ${m.lastRun.signals_skipped}` : "—"}</td>
+          <td>${m.lastRun ? `<span class='ads-pill ads-pill--${m.lastRun.status}'>${m.lastRun.status}</span>` : "—"}</td>
+          <td><button class="ads-btn" data-run="${m.slug}">Run now</button></td>
+        </tr>
+      `).join("");
+    } catch (e) {
+      tbody.innerHTML = `<tr><td colspan="8">Failed to load: ${e.message}</td></tr>`;
+    }
+    try {
+      const r = await fetch("https://api.aidatasignal.com/api/crawlers/runs?limit=50", { credentials: "include" });
+      const j = await r.json();
+      runsBody.innerHTML = (j.items || []).map(x => `
+        <tr>
+          <td>${fmt(x.started_at)}</td>
+          <td><code class="ads-mono">${x.source}</code></td>
+          <td><span class="ads-pill ads-pill--${x.status}">${x.status}</span></td>
+          <td>${x.events_emitted}</td>
+          <td>${x.signals_inserted}</td>
+          <td>${x.signals_skipped}</td>
+          <td>+${x.accounts_created} / ${x.accounts_resolved}</td>
+          <td>${x.error || ""}</td>
+        </tr>
+      `).join("");
+    } catch (e) {
+      runsBody.innerHTML = `<tr><td colspan="8">Failed to load: ${e.message}</td></tr>`;
+    }
+  }
+  document.addEventListener("change", async (e) => {
+    const t = e.target;
+    if (t && t.matches("input[data-toggle]")) {
+      const slug = t.getAttribute("data-toggle");
+      await fetch(`https://api.aidatasignal.com/api/crawlers/${slug}/toggle`, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: t.checked }),
+      });
+    }
+  });
+  document.addEventListener("click", async (e) => {
+    const t = e.target;
+    if (t && t.matches("button[data-run]")) {
+      const slug = t.getAttribute("data-run");
+      t.disabled = true; t.textContent = "Running…";
+      try {
+        const r = await fetch(`https://api.aidatasignal.com/api/crawlers/${slug}/run`, { method: "POST", credentials: "include" });
+        const j = await r.json();
+        t.textContent = j.outcome ? `+${j.outcome.signals_inserted}` : "kicked";
+      } catch (err) { t.textContent = "error"; }
+      setTimeout(refresh, 1500);
+    }
+  });
+  refresh();
+  setInterval(refresh, 30000);
+})();
+</script>

@@ -68,6 +68,31 @@ export class EnrichAccountWorkflow {
   }
 }
 
+// Task #45: hourly buyer-signal crawl. The hourly cron dispatches this
+// workflow; it fans out to every enabled source module via runSource().
+// Kept lean inside the workflow itself so the durable steps remain
+// idempotent — heavy lifting lives in prospects/runCrawl.ts.
+export class CrawlSignalsWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ slug?: string }>, step: WorkflowStep): Promise<{ ok: true; ran: number }> {
+    const slug = event.payload?.slug;
+    const { MODULES, getModule } = await import("../prospects/sources/registry");
+    const { runSource } = await import("../prospects/runCrawl");
+    const targets = slug ? [getModule(slug)].filter(Boolean) : MODULES;
+    let ran = 0;
+    for (const mod of targets) {
+      if (!mod) continue;
+      await step.do(`run:${mod.slug}`, { retries: { limit: 2, backoff: "exponential" } }, async () => {
+        await runSource(this.env, mod);
+      });
+      ran += 1;
+    }
+    return { ok: true, ran };
+  }
+}
+
 export class IngestPageWorkflow {
   env: Env;
   ctx: ExecutionContext;
