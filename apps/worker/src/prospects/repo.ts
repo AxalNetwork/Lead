@@ -238,8 +238,12 @@ export async function insertAccount(env: Env, input: Partial<AccountRow> & { nam
   return (await getAccount(env, id))!;
 }
 
-export async function updateAccount(env: Env, id: string, patch: Partial<AccountRow>, by?: string): Promise<AccountRow | null> {
-  const cur = await getAccount(env, id);
+export async function updateAccount(env: Env, id: string, patch: Partial<AccountRow>, by?: string, prevSnapshot?: AccountRow | null): Promise<AccountRow | null> {
+  // `prevSnapshot` lets callers (route handlers that run a DO merge before
+  // calling us) pass a pre-merge view of the row so the change-history diff
+  // captures real before/after values. Without it we'd be diffing against
+  // the post-merge row and silently dropping every history entry.
+  const cur = prevSnapshot !== undefined ? prevSnapshot : await getAccount(env, id);
   if (!cur) return null;
   const allowed = new Set(ACCOUNT_INSERT_FIELDS as string[]);
   const sets: string[] = [];

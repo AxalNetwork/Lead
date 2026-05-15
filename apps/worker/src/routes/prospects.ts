@@ -21,6 +21,7 @@ import {
 import { SIGNAL_KINDS, isSignalKind } from "../prospects/signalKinds";
 import { indexEntity } from "../ai/search_sync";
 import { withEntityLock, ALLOWED_MERGE_FIELDS } from "../do/EntityLock";
+import { ensureRoleTaxonomySeeded } from "../prospects/seedRoles";
 
 function pickAllowed(table: "accounts" | "buyers", body: Record<string, unknown>): Record<string, unknown> {
   const allow = ALLOWED_MERGE_FIELDS[table];
@@ -137,13 +138,19 @@ accountsRoute.put("/:id", async (c) => {
   // When the binding is absent (local dev) we fall through to the direct
   // repo path so the route still works.
   const safeFields = pickAllowed("accounts", body as Record<string, unknown>);
+  // Snapshot BEFORE the DO merge so updateAccount() can diff against the
+  // real pre-merge values when writing account_history rows. Without this
+  // snapshot, the DO merge writes new values first and the history diff
+  // would silently see no changes.
+  const snapshot = await getAccount(c.env, id);
+  if (!snapshot) return c.json({ error: "not_found" }, 404);
   const lockResp = await withEntityLock(c.env, "account", id, "merge_account", {
     id, fields: safeFields, history_source: "api",
   });
   if (lockResp && !lockResp.ok) {
     console.warn("EntityLock merge_account failed", lockResp.status);
   }
-  const row = await updateAccount(c.env, id, safeFields as Partial<AccountRow>, c.get("email"));
+  const row = await updateAccount(c.env, id, safeFields as Partial<AccountRow>, c.get("email"), snapshot);
   if (!row) return c.json({ error: "not_found" }, 404);
   c.executionCtx.waitUntil(syncAccountAi(c.env, row));
   return c.json({ account: row });
@@ -210,6 +217,16 @@ accountsRoute.post("/:id/enrich", async (c) => {
 
 // Bulk import (mirrors the firms importer shape): { rows: [{ name, domain, ... }] }.
 // Returns counts only; per-row errors are logged.
+// Admin one-shot trigger so first-run / fresh environments can populate
+// the role taxonomy immediately instead of waiting for the nightly cron's
+// "ensure" check. Idempotent: ensureRoleTaxonomySeeded only inserts rows
+// for slugs not already present.
+accountsRoute.post("/_seed-roles", async (c) => {
+  await ensureRoleTaxonomySeeded(c.env);
+  const row = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM role_taxonomy`).first<{ n: number }>();
+  return c.json({ ok: true, total: row?.n ?? 0 });
+});
+
 accountsRoute.post("/import", async (c) => {
   const body = (await c.req.json().catch(() => null)) as { rows?: Array<Partial<AccountRow>> } | null;
   const rows = (body?.rows ?? []).filter((r) => r && typeof r.name === "string" && r.name.trim());
