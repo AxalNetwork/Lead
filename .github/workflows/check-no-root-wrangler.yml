@@ -21,19 +21,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Reject root wrangler.toml
         run: |
-          if [ ! -e wrangler.toml ]; then
-            echo "OK: no root wrangler.toml."
-            exit 0
+          if [ -e wrangler.toml ]; then
+            echo "::error::Root wrangler.toml exists. apps/worker/wrangler.toml is the single source of truth — see apps/worker/README.md → 'Adding a new binding'." >&2
+            exit 1
           fi
-          # Allowlist: the CF Workers Builds shim (deploys a no-op Worker
-          # under name 'aidatasignal-cf-builds-shim' so CF's hosted Builds
-          # pipeline doesn't fall back to framework auto-detection on the
-          # repo root). The real `lead` Worker config still lives at
-          # apps/worker/wrangler.toml and is deployed by GitHub Actions.
-          if grep -q '^name = "aidatasignal-cf-builds-shim"' wrangler.toml \
-             && grep -q '^main = "cf-builds-shim.js"' wrangler.toml; then
-            echo "OK: root wrangler.toml is the allowlisted CF Builds shim."
-            exit 0
-          fi
-          echo "::error::Root wrangler.toml exists and is not the allowlisted CF Builds shim. apps/worker/wrangler.toml is the single source of truth — see apps/worker/README.md → 'Adding a new binding'." >&2
-          exit 1
+          echo "OK: no root wrangler.toml."
