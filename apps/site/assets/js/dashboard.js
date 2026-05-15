@@ -410,12 +410,23 @@
       pillsHtml += '</div>';
 
       // Save-template button on the right.
-      pillsHtml += '<div style="margin-bottom:10px;display:flex;gap:8px;align-items:center">'
+      pillsHtml += '<div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
         + '<button type="button" id="ads-upload-save-template" '
         + 'style="padding:4px 10px;border:1px solid #ccc;background:#fafafa;border-radius:4px;font-size:12px;cursor:pointer">'
         + 'Save as template</button>'
+        // Re-run pass without re-invoking the vision model (uses cached AI
+        // results in KV so we don't burn neurons just to re-classify).
+        + '<button type="button" id="ads-upload-rerun-skip-ocr" '
+        + 'style="padding:4px 10px;border:1px solid #ccc;background:#fafafa;border-radius:4px;font-size:12px;cursor:pointer">'
+        + 'Re-run (skip OCR)</button>'
+        // Dry-run that surfaces would-create / would-update counts and a
+        // sample of column-level diffs against existing firms.
+        + '<button type="button" id="ads-upload-diff-preview" '
+        + 'style="padding:4px 10px;border:1px solid #ccc;background:#fafafa;border-radius:4px;font-size:12px;cursor:pointer">'
+        + 'Update existing firms — diff preview</button>'
         + '<span id="ads-upload-template-msg" style="font-size:12px;color:#666"></span>'
-        + '</div>';
+        + '</div>'
+        + '<div id="ads-upload-diff-out" style="margin-bottom:10px;font-size:12px"></div>';
 
       // Active tab content.
       var tab = current.tabs[current.activeTab];
@@ -504,6 +515,62 @@
           current.tabs[current.activeTab].column_map[h] = s.value;
         });
       });
+      // Re-run (skip OCR) button — re-classifies & re-maps using cached
+      // vision results, so it never re-invokes the vision model.
+      var rerunBtn = mapPanel.querySelector("#ads-upload-rerun-skip-ocr");
+      var rerunMsg = mapPanel.querySelector("#ads-upload-template-msg");
+      rerunBtn.addEventListener("click", async function () {
+        rerunMsg.textContent = "Re-running…"; rerunMsg.style.color = "#666";
+        try {
+          var res = await fetch(API_BASE + "/api/uploads/" + current.id + "/rerun", {
+            method: "POST", credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ skip_ocr: true }),
+          });
+          if (!res.ok) throw new Error(await res.text());
+          rerunMsg.textContent = "Re-run queued — refresh in a few seconds.";
+          rerunMsg.style.color = "#2ecc71";
+        } catch (err) {
+          rerunMsg.textContent = "Re-run failed: " + err.message;
+          rerunMsg.style.color = "#e74c3c";
+        }
+      });
+      // Diff-preview button — shows would-create / would-update counts and
+      // a sample of column diffs without writing anything.
+      var diffBtn = mapPanel.querySelector("#ads-upload-diff-preview");
+      var diffOut = mapPanel.querySelector("#ads-upload-diff-out");
+      diffBtn.addEventListener("click", async function () {
+        diffOut.innerHTML = '<em style="color:#666">Computing…</em>';
+        try {
+          var res = await fetch(API_BASE + "/api/uploads/" + current.id + "/diff-preview", {
+            method: "POST", credentials: "include",
+            headers: { "Content-Type": "application/json" }, body: "{}",
+          });
+          if (!res.ok) throw new Error(await res.text());
+          var j = await res.json();
+          var html = '<div style="padding:8px;border:1px solid #ddd;border-radius:4px;background:#fafafa">'
+            + '<div><strong>Would create:</strong> ' + (j.would_create_count || 0)
+            + ' &nbsp; <strong>Would update:</strong> ' + (j.would_update_count || 0) + '</div>';
+          if ((j.sample_diffs || []).length) {
+            html += '<table class="ads-table" style="margin-top:6px;font-size:11px"><thead><tr>'
+              + '<th>Tab</th><th>Key</th><th>Field</th><th>Old</th><th>New</th></tr></thead><tbody>';
+            j.sample_diffs.forEach(function (d) {
+              html += '<tr><td>' + d.tab + '</td><td>' + escapeHtml(d.key || '')
+                + '</td><td><code>' + escapeHtml(d.field) + '</code></td>'
+                + '<td>' + escapeHtml(String(d.old || '')) + '</td>'
+                + '<td>' + escapeHtml(String(d.new || '')) + '</td></tr>';
+            });
+            html += '</tbody></table>';
+          } else {
+            html += '<div style="margin-top:6px;color:#666"><em>No column-level diffs sampled.</em></div>';
+          }
+          html += '</div>';
+          diffOut.innerHTML = html;
+        } catch (err) {
+          diffOut.innerHTML = '<span style="color:#e74c3c">Diff failed: ' + escapeHtml(err.message) + '</span>';
+        }
+      });
+
       // Save template button.
       var saveBtn = mapPanel.querySelector("#ads-upload-save-template");
       var saveMsg = mapPanel.querySelector("#ads-upload-template-msg");

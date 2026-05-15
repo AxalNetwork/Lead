@@ -301,6 +301,8 @@ uploads.post("/:id/templates/:tplId/apply", async (c) => {
 
 uploads.post("/:id/rerun", async (c) => {
   const id = c.req.param("id");
+  const body = await c.req.json<{ skip_ocr?: boolean }>().catch(() => ({} as { skip_ocr?: boolean }));
+  const skipOcr = body?.skip_ocr === true;
   const row = await c.env.DB.prepare("SELECT id, filename FROM file_imports WHERE id = ?").bind(id).first<{ id: string; filename: string }>();
   if (!row) return c.json({ error: "not_found" }, 404);
   await c.env.DB
@@ -309,13 +311,57 @@ uploads.post("/:id/rerun", async (c) => {
     .run();
   const jobId = crypto.randomUUID();
   const now = new Date().toISOString();
+  // skip_ocr=true tells parse.ts to honor cached vision results only —
+  // it never re-invokes the vision model. Useful when the operator just
+  // wants to re-classify or re-map without burning AI budget.
+  const cfg = { importId: id, rerun: true, skip_ocr: skipOcr };
   await c.env.DB.prepare(
     `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
      VALUES (?, ?, ?, 'queued', 'parse_file', ?, ?, ?, ?)`,
-  ).bind(jobId, `parse_file:${row.filename}`, "upload", id, JSON.stringify({ importId: id, rerun: true }), now, now).run();
-  const msg: JobMessage = { jobId, kind: "parse_file", target: id, config: { importId: id, rerun: true } };
+  ).bind(jobId, `parse_file:${row.filename}`, "upload", id, JSON.stringify(cfg), now, now).run();
+  const msg: JobMessage = { jobId, kind: "parse_file", target: id, config: cfg };
   await c.env.LEAD_QUEUE.send(msg);
-  return c.json({ ok: true, jobId }, 202);
+  return c.json({ ok: true, jobId, skip_ocr: skipOcr }, 202);
+});
+
+/** Dry-run import: enumerate rows that would be created vs. updated and
+ *  return a small sample of column-level diffs so the operator can sanity-
+ *  check a high-overlap upload before committing. Only inspects firms-
+ *  intent tabs (the only entity with stable upsert keys). */
+uploads.post("/:id/diff-preview", async (c) => {
+  const id = c.req.param("id");
+  const row = await c.env.DB.prepare(
+    "SELECT id, summary_json FROM file_imports WHERE id = ?",
+  ).bind(id).first<{ id: string; summary_json: string | null }>();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  const rowsRaw = await c.env.SCRAPE_CACHE.get(`upload_rows:${id}`);
+  const tabRows: Record<string, Array<Record<string, string>>> =
+    rowsRaw ? JSON.parse(rowsRaw) : {};
+  const summary = row.summary_json ? JSON.parse(row.summary_json) as { tabs?: Array<{ index: number; intent: string }> } : { tabs: [] };
+  let wouldCreate = 0, wouldUpdate = 0;
+  const samples: Array<{ tab: number; key: string; field: string; old: string | null; new: string }> = [];
+  for (const t of summary.tabs ?? []) {
+    if (t.intent !== "firms") continue;
+    const rows = tabRows[String(t.index)] ?? [];
+    for (const r of rows) {
+      const url = (r["website"] || r["url"] || r["domain"] || "").toLowerCase().replace(/^https?:\/\//, "").replace(/\/$/, "");
+      const name = (r["name"] || r["firm"] || r["fund"] || "").trim();
+      if (!url && !name) continue;
+      const existing = await c.env.DB.prepare(
+        "SELECT id, name, website, hq_country FROM firms WHERE (website LIKE ? OR name = ?) LIMIT 1",
+      ).bind(`%${url}%`, name).first<{ id: string; name: string | null; website: string | null; hq_country: string | null }>();
+      if (!existing) { wouldCreate++; continue; }
+      wouldUpdate++;
+      for (const [field, dbField] of [["name", "name"], ["website", "website"], ["hq_country", "hq_country"]] as const) {
+        const newVal = (r[field] ?? "").trim();
+        const oldVal = (existing as Record<string, string | null>)[dbField];
+        if (newVal && newVal !== (oldVal ?? "") && samples.length < 10) {
+          samples.push({ tab: t.index, key: name || url, field, old: oldVal, new: newVal });
+        }
+      }
+    }
+  }
+  return c.json({ would_create_count: wouldCreate, would_update_count: wouldUpdate, sample_diffs: samples });
 });
 
 uploads.delete("/:id", async (c) => {

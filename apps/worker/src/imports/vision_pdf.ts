@@ -27,6 +27,12 @@ import { isChromeText } from "./chrome_filter";
 
 const VISION_MODEL_DEFAULT = "@cf/meta/llama-3.2-11b-vision-instruct";
 const MAX_VISION_PAGES = 10;
+/** Vision tab-strip detection: the model returns the labels visible in any
+ *  productivity-app sheet-tab strip rendered on the page. We merge these
+ *  with pdfjs-text-derived names below — vision wins when both fire. */
+const VISION_TAB_STRIP_PROMPT =
+  " If a row of sheet tabs is visible at the bottom of the page (Excel/Google Sheets/Numbers), include them as `tab_strip` array of strings, in left-to-right order. Otherwise omit `tab_strip`.";
+
 const VISION_TABLE_SCHEMA = {
   type: "object",
   properties: {
@@ -41,6 +47,10 @@ const VISION_TABLE_SCHEMA = {
         required: ["headers", "rows"],
       },
     },
+    // Sheet-tab strip labels detected at the bottom of the page (Excel /
+    // Google Sheets / Numbers). Used to recover workbook tab names that
+    // pdfjs text extraction can miss for image-only PDFs.
+    tab_strip: { type: "array", items: { type: "string" } },
   },
   required: ["tables"],
 } as const;
@@ -233,16 +243,25 @@ function bytesToBase64(b: Uint8Array): string {
   return btoa(s);
 }
 
-function parseTables(res: unknown): Array<{ headers: string[]; rows: string[][] }> {
-  const r = res as { response?: string; tables?: unknown };
-  if (Array.isArray(r?.tables)) return r.tables as Array<{ headers: string[]; rows: string[][] }>;
-  if (typeof r?.response === "string") {
+interface VisionParse {
+  tables: Array<{ headers: string[]; rows: string[][] }>;
+  tabStrip: string[];
+}
+
+function parseTables(res: unknown): VisionParse {
+  const r = res as { response?: string; tables?: unknown; tab_strip?: unknown };
+  let tables: Array<{ headers: string[]; rows: string[][] }> = [];
+  let tabStrip: string[] = [];
+  if (Array.isArray(r?.tables)) tables = r.tables as typeof tables;
+  if (Array.isArray(r?.tab_strip)) tabStrip = (r.tab_strip as unknown[]).map((s) => String(s)).filter(Boolean);
+  if ((!tables.length || !tabStrip.length) && typeof r?.response === "string") {
     try {
-      const j = JSON.parse(r.response) as { tables?: Array<{ headers: string[]; rows: string[][] }> };
-      if (Array.isArray(j?.tables)) return j.tables;
+      const j = JSON.parse(r.response) as { tables?: typeof tables; tab_strip?: string[] };
+      if (!tables.length && Array.isArray(j?.tables)) tables = j.tables!;
+      if (!tabStrip.length && Array.isArray(j?.tab_strip)) tabStrip = j.tab_strip!.map(String).filter(Boolean);
     } catch { /* fall through */ }
   }
-  return [];
+  return { tables, tabStrip };
 }
 
 /** Vision OCR over each extracted page bitmap. Tables are merged across
@@ -254,7 +273,10 @@ export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer): P
   const ok = await assertBudget(env, "ai");
   if (!ok.ok) return [];
   const pages = await extractPages(bytes);
-  const tabNames = detectTabStripNames(pages.map((p) => p.pdfText));
+  // Tab names from pdfjs text first; vision-detected names below take
+  // priority when both fire (image-only PDFs have no recoverable text).
+  const pdfTabNames = detectTabStripNames(pages.map((p) => p.pdfText));
+  const visionTabNames: string[] = [];
   const images = pages.map((p) => p.jpeg).filter((b): b is Uint8Array => b !== null);
   if (!images.length) return [];
 
@@ -265,10 +287,9 @@ export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer): P
   for (let p = 0; p < images.length; p++) {
     const bytesPage = images[p];
     const pdfText = pages[p]?.pdfText ?? "";
-    const cacheKey = await sha256Hex(`${model}:vision-tables:${bytesPage.length}:` + (await sha256Hex(bytesToBase64(bytesPage))));
-    let pageTables: Array<{ headers: string[]; rows: string[][] }> | null =
-      await aiCacheGet<Array<{ headers: string[]; rows: string[][] }>>(env, cacheKey);
-    if (pageTables) {
+    const cacheKey = await sha256Hex(`${model}:vision-tables-v2:${bytesPage.length}:` + (await sha256Hex(bytesToBase64(bytesPage))));
+    let parsed: VisionParse | null = await aiCacheGet<VisionParse>(env, cacheKey);
+    if (parsed) {
       trackAi(env, { purpose: "extraction", model, cacheHit: true });
     } else {
       if (!(await limitAi(env))) continue;
@@ -276,17 +297,20 @@ export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer): P
       try {
         const res = (await env.AI.run(model, {
           image: Array.from(bytesPage),
-          prompt: "Extract every tabular row visible on this page. Return strict JSON {tables:[{headers,rows}]} where rows are arrays aligned to headers. Skip page numbers, watermarks, app chrome (toolbars, sheet tabs, Share buttons), and prose. If the page has no table, return {tables:[]}.",
+          prompt: "Extract every tabular row visible on this page. Return strict JSON {tables:[{headers,rows}], tab_strip:[...]} where rows are arrays aligned to headers. Skip page numbers, watermarks, app chrome (toolbars, Share buttons), and prose. If the page has no table, return {tables:[]}." + VISION_TAB_STRIP_PROMPT,
           max_tokens: 2048,
           response_format: { type: "json_schema", json_schema: VISION_TABLE_SCHEMA },
-        })) as { response?: string; tables?: Array<{ headers: string[]; rows: string[][] }> };
-        pageTables = parseTables(res);
+        })) as { response?: string; tables?: Array<{ headers: string[]; rows: string[][] }>; tab_strip?: string[] };
+        parsed = parseTables(res);
       } catch {
-        pageTables = [];
+        parsed = { tables: [], tabStrip: [] };
       }
       trackAi(env, { purpose: "extraction", model, ms: Date.now() - t0, neurons: Math.round(bytesPage.length / 1024) });
-      await aiCachePut(env, cacheKey, pageTables);
+      await aiCachePut(env, cacheKey, parsed);
     }
+    // Merge vision-detected tab strip (deduped, order preserved).
+    for (const n of parsed.tabStrip) if (!visionTabNames.includes(n)) visionTabNames.push(n);
+    const pageTables = parsed.tables;
     for (const t of pageTables) {
       if (!Array.isArray(t.headers) || t.headers.length < 2) continue;
       if (!Array.isArray(t.rows) || t.rows.length < 1) continue;
@@ -309,7 +333,8 @@ export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer): P
         ).slice(0, 25);
       } else {
         tableIdx++;
-        const sheetName = tabNames[tableIdx] ?? null;
+        // Vision wins; fall back to pdfjs-text-derived names.
+        const sheetName = visionTabNames[tableIdx] ?? pdfTabNames[tableIdx] ?? null;
         out.push({
           headers, rows, pageNumber: p + 1,
           confidence: Math.max(0.3, 0.95 - dis.score),
@@ -342,7 +367,7 @@ export async function extractTablesFromImage(env: Env, bytes: ArrayBuffer): Prom
         max_tokens: 2048,
         response_format: { type: "json_schema", json_schema: VISION_TABLE_SCHEMA },
       })) as { response?: string; tables?: Array<{ headers: string[]; rows: string[][] }> };
-      pageTables = parseTables(res);
+      pageTables = parseTables(res).tables;
     } catch { pageTables = []; }
     await aiCachePut(env, cacheKey, pageTables);
   }

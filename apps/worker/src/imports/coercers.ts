@@ -8,17 +8,44 @@ import { COUNTRY_NAME_TO_ISO2 } from "./country_iso2";
 
 // ---- money ---------------------------------------------------------------
 
-const MONEY_RE = /([€£¥$]|US\$|USD|EUR|GBP|JPY|CAD|AUD|CHF|HKD|SGD|INR|CNY|RMB|KRW|BRL|MXN)?\s*([\d.,'\u00a0\u202f\u2009 ]+)\s*(k|m|mm|mn|b|bn|t|tn|trillion|billion|million|thousand|k\+|m\+|b\+)?/i;
+// ISO-4217 codes recognized as either prefix or suffix tokens. RMB is
+// folded into CNY downstream.
+const CURRENCY_CODES =
+  "USD|EUR|GBP|JPY|CAD|AUD|CHF|HKD|SGD|INR|CNY|RMB|KRW|BRL|MXN|" +
+  "NOK|SEK|DKK|ISK|PLN|CZK|HUF|RON|BGN|HRK|RUB|UAH|TRY|" +
+  "ZAR|EGP|NGN|KES|MAD|AED|SAR|QAR|KWD|BHD|OMR|ILS|" +
+  "NZD|TWD|THB|MYR|IDR|PHP|VND|PKR|BDT|LKR|" +
+  "ARS|CLP|COP|PEN|UYU";
+const SYMBOL_CHARS = "€£¥$₹₩₪₺₽฿";
+// Prefix form: optional symbol/code, number, optional scale.
+const MONEY_RE = new RegExp(
+  `([${SYMBOL_CHARS}]|US\\$|${CURRENCY_CODES})?\\s*([\\d.,'\\u00a0\\u202f\\u2009 ]+)\\s*(k|m|mm|mn|b|bn|t|tn|trillion|billion|million|thousand|k\\+|m\\+|b\\+)?`,
+  "i",
+);
+// Suffix form: number, optional scale, currency code at end. Catches
+// "50M EUR", "250m NOK", "1.2 bn USD".
+const MONEY_SUFFIX_RE = new RegExp(
+  `([\\d.,'\\u00a0\\u202f\\u2009 ]+)\\s*(k|m|mm|mn|b|bn|t|tn|trillion|billion|million|thousand|k\\+|m\\+|b\\+)?\\s*(${CURRENCY_CODES})\\b`,
+  "i",
+);
 
-const CURRENCY_SYMBOL: Record<string, string> = {
-  "$": "USD", "US$": "USD", "USD": "USD",
-  "€": "EUR", "EUR": "EUR",
-  "£": "GBP", "GBP": "GBP",
-  "¥": "JPY", "JPY": "JPY",
-  "CAD": "CAD", "AUD": "AUD", "CHF": "CHF", "HKD": "HKD",
-  "SGD": "SGD", "INR": "INR", "CNY": "CNY", "RMB": "CNY",
-  "KRW": "KRW", "BRL": "BRL", "MXN": "MXN",
-};
+const CURRENCY_SYMBOL: Record<string, string> = (() => {
+  const d: Record<string, string> = {
+    "$": "USD", "US$": "USD",
+    "€": "EUR",
+    "£": "GBP",
+    "¥": "JPY",
+    "₹": "INR",
+    "₩": "KRW",
+    "₪": "ILS",
+    "₺": "TRY",
+    "₽": "RUB",
+    "฿": "THB",
+    "RMB": "CNY",
+  };
+  for (const c of CURRENCY_CODES.split("|")) d[c] = c === "RMB" ? "CNY" : c;
+  return d;
+})();
 
 const SCALE_MULT: Record<string, number> = {
   k: 1e3, "k+": 1e3, thousand: 1e3,
@@ -38,18 +65,32 @@ export interface MoneyParse {
   scale: string | null;
 }
 
-/** Parse "$1.2M", "€500K", "1,200,000 USD", "USD 2.5bn". Returns nulls on failure. */
+/** Parse "$1.2M", "€500K", "1,200,000 USD", "USD 2.5bn", "NOK 250m",
+ *  "50M EUR". Returns nulls on failure. Suffix form takes priority since
+ *  prefix MONEY_RE is greedy on bare numbers. */
 export function parseMoney(raw: string | null | undefined): MoneyParse {
   const empty: MoneyParse = { usd: null, currency: null, native: null, scale: null };
   if (raw == null) return empty;
   const s = String(raw).trim();
   if (!s || /^(n\/?a|tbd|undisclosed|unknown|—|-)$/i.test(s)) return empty;
+  // Try suffix form first ("50M EUR", "250m NOK").
+  const sm = MONEY_SUFFIX_RE.exec(s);
+  if (sm) {
+    const numRaw = (sm[1] || "").trim();
+    const scale = (sm[2] || "").trim().toLowerCase();
+    const code = (sm[3] || "").trim().toUpperCase();
+    const num = normalizeNumber(numRaw);
+    if (num != null) {
+      const native = num * (SCALE_MULT[scale] ?? 1);
+      const currency = CURRENCY_SYMBOL[code] ?? code ?? null;
+      return { usd: null, currency, native: Math.round(native * 100) / 100, scale: scale || null };
+    }
+  }
   const m = MONEY_RE.exec(s);
   if (!m) return empty;
   const sym = (m[1] || "").trim();
   const numRaw = (m[2] || "").trim();
   const scale = (m[3] || "").trim().toLowerCase();
-  // Normalize 1,200.50 / 1.200,50 / 1 200,50.
   const num = normalizeNumber(numRaw);
   if (num == null) return empty;
   const mult = SCALE_MULT[scale] ?? 1;

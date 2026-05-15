@@ -30,8 +30,12 @@ interface Rule {
 }
 
 const RULES: Rule[] = [
-  // Sources / changelog → discard.
-  { intent: "discard", conf: 0.95, name: /^(sources?|changelog|methodology|legend|notes?|about|read\s*me)$/i },
+  // README / instructions / signup tabs → notes (preserved as free text,
+  // not imported as data).
+  { intent: "notes", conf: 0.95,
+    name: /^(read\s*me|read|readme|instructions?|how\s*to|getting\s*started|signup|sign[\s_-]*up|register|tos|terms|privacy|disclaimer|intro|introduction|welcome|cover\s*page?)$/i },
+  // Sources / changelog / methodology → discard.
+  { intent: "discard", conf: 0.95, name: /^(sources?|changelog|methodology|legend|notes?|about)$/i },
   // People / contacts / leads tabs.
   { intent: "leads", conf: 0.92,
     name: /\b(leads?|contacts?|people|persons?|team|partners?|members?|staff|roster|directory\s*\(people\))\b/i },
@@ -75,6 +79,12 @@ export function classifyTab(sheetName: string | null | undefined, headers: strin
   if (/\b(firm|fund|investor|name|website|url)\b/.test(hjoined) &&
       /\b(stage|sector|geo|check|aum|founded|hq|country|city)/.test(hjoined)) {
     return { intent: "firms", confidence: 0.78 };
+  }
+  // Low-row prose fallback: a tab with very few headers (≤2) and any
+  // header looking like prose ("description", "text", "instructions") →
+  // notes, since data tabs almost always carry ≥3 columns.
+  if (headers.length <= 2 && /\b(description|text|instructions?|notes?|content|paragraph|details?)\b/.test(hjoined)) {
+    return { intent: "notes", confidence: 0.7 };
   }
   // Default: assume firms with low confidence so the operator can correct.
   return { intent: "firms", confidence: 0.4 };
