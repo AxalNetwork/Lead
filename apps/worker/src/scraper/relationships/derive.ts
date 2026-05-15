@@ -244,7 +244,7 @@ export async function runRelationshipDerivation(env: Env): Promise<DeriveResult>
     if (b.end && a.start && b.end < a.start) return false;
     return true;
   }
-  for (const [, members] of byFirm.entries()) {
+  for (const [firmId, members] of byFirm.entries()) {
     for (let i = 0; i < members.length; i++) {
       for (let j = i + 1; j < members.length; j++) {
         if (members[i].leadId === members[j].leadId) continue;
@@ -252,8 +252,12 @@ export async function runRelationshipDerivation(env: Env): Promise<DeriveResult>
         const a = lookup("leads", members[i].leadId);
         const b = lookup("leads", members[j].leadId);
         if (!a || !b) continue;
-        colleagueEdges.push({ src: a, dst: b, kind: "colleague_of", source: "derive:firm_people" });
-        colleagueEdges.push({ src: b, dst: a, kind: "colleague_of", source: "derive:firm_people" });
+        // Encode firm id in `source` so each shared firm becomes a distinct
+        // row under UNIQUE(src,dst,kind,source). /colleagues COUNT(*) then
+        // gives accurate `shared_firms` rather than collapsing to 1.
+        const src = `derive:firm_people:${firmId}`;
+        colleagueEdges.push({ src: a, dst: b, kind: "colleague_of", source: src });
+        colleagueEdges.push({ src: b, dst: a, kind: "colleague_of", source: src });
       }
     }
   }
