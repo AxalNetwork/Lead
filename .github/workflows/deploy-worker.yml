@@ -34,11 +34,17 @@ jobs:
       - name: Reject root wrangler.toml
         working-directory: ${{ github.workspace }}
         run: |
-          if [ -e wrangler.toml ]; then
-            echo "::error::Root wrangler.toml exists. apps/worker/wrangler.toml is the single source of truth — see apps/worker/README.md → 'Adding a new binding'." >&2
-            exit 1
+          if [ ! -e wrangler.toml ]; then
+            echo "OK: no root wrangler.toml."
+            exit 0
           fi
-          echo "OK: no root wrangler.toml."
+          if grep -q '^name = "aidatasignal-cf-builds-shim"' wrangler.toml \
+             && grep -q '^main = "cf-builds-shim.js"' wrangler.toml; then
+            echo "OK: root wrangler.toml is the allowlisted CF Builds shim."
+            exit 0
+          fi
+          echo "::error::Root wrangler.toml exists and is not the allowlisted CF Builds shim. apps/worker/wrangler.toml is the single source of truth — see apps/worker/README.md → 'Adding a new binding'." >&2
+          exit 1
 
       - uses: actions/setup-node@v4
         with:
