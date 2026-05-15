@@ -51,7 +51,7 @@ jobs:
           CF_ACCOUNT_ID: 30c9362191318777b71647145decda48
         run: |
           set -euo pipefail
-          BUCKETS=$(grep -E '^bucket_name' wrangler.toml | sed -E 's/.*"([^"]+)".*/\1/' | sort -u)
+          BUCKETS=$(grep -E '^[[:space:]]*bucket_name[[:space:]]*=' wrangler.toml | sed -E 's/.*"([^"]+)".*/\1/' | sort -u)
           if [ -z "$BUCKETS" ]; then
             echo "No R2 buckets declared in wrangler.toml; skipping."
             exit 0

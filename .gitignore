@@ -4,3 +4,6 @@
 !.dev.vars.example
 .env*
 !.env.example
+
+# Replit-uploaded user attachments — not part of the source tree
+attached_assets/
