@@ -249,6 +249,21 @@ jobs:
             fi
           done
 
+      # Task #40: Apply pending D1 migrations BEFORE the Worker deploy.
+      # `wrangler d1 migrations apply` is idempotent — already-applied
+      # migrations are tracked in the d1_migrations table and skipped on
+      # subsequent runs. Running this before the deploy means the schema
+      # is always at-or-ahead of the code that's about to ship, which
+      # eliminates the "no such table" production crashes that happened
+      # when migrations shipped in the repo but were never applied.
+      # `set -e` (default) + the action's non-zero exit on failed
+      # migrations halts the workflow before `wrangler deploy` runs.
+      - name: Apply D1 migrations (remote)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 30c9362191318777b71647145decda48
+        run: npx --yes wrangler@3.99.0 d1 migrations apply DB --remote
+
       - name: Deploy via wrangler
         uses: cloudflare/wrangler-action@v3
         with:

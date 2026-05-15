@@ -63,7 +63,16 @@ Set via `wrangler secret put NAME` (or in the CF dashboard):
 
 ## Remote D1 migrations
 
-Run from `apps/worker`:
+Migrations are **applied automatically on every push to `main`** by the
+`Deploy Cloudflare Worker (lead)` GitHub Action — the workflow runs
+`wrangler d1 migrations apply DB --remote` immediately before
+`wrangler deploy`, so the schema is always at-or-ahead of the code
+that's about to ship. The step is idempotent (D1 tracks applied
+migrations in the `d1_migrations` table) and a failed migration halts
+the deploy.
+
+To apply manually from `apps/worker` (e.g. for an out-of-band
+hotfix):
 
 ```sh
 CLOUDFLARE_API_TOKEN=… npx wrangler d1 migrations apply DB --remote
@@ -74,8 +83,8 @@ older migrations were applied manually before the migration tracker
 existed), reconcile by inserting the already-applied migration names
 into `d1_migrations` (`INSERT OR IGNORE INTO d1_migrations (name)
 VALUES (...)`) before re-running `apply --remote`. As of 2026-05-15
-all migrations through `150_ai_stack.sql` are applied to the remote
-D1 (`ecd7272e-533d-4e01-81ba-e1b98bce6e1c`).
+all migrations through `162_accounts_domain_unique.sql` are applied to
+the remote D1 (`ecd7272e-533d-4e01-81ba-e1b98bce6e1c`).
 
 ## Local dev
 
