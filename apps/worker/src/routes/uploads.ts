@@ -348,11 +348,20 @@ uploads.post("/:id/diff-preview", async (c) => {
     catch { mapByIdx.set(r.tab_index, {}); }
   }
   let wouldCreate = 0, wouldUpdate = 0;
+  let rowsConsidered = 0, rowsWithDomain = 0, rowsExistingByDomain = 0;
   const samples: Array<{ tab: number; key: string; field: string; old: string | null; new: string }> = [];
+  // Normalize a website/domain into a canonical host (no protocol, no path,
+  // no port, no leading "www."). Returns "" when input cannot be normalized.
+  const canonDomain = (raw: string): string => {
+    const s = String(raw || "").trim().toLowerCase();
+    if (!s) return "";
+    const noProto = s.replace(/^https?:\/\//, "");
+    const host = noProto.split(/[/?#]/, 1)[0].split(":", 1)[0];
+    return host.replace(/^www\./, "");
+  };
   for (const t of summary.tabs ?? []) {
     if (t.intent !== "firms") continue;
     const colMap = mapByIdx.get(t.index) ?? {};
-    // Invert: firms.field → source header.
     const fieldToHeader: Record<string, string> = {};
     for (const [hdr, target] of Object.entries(colMap)) {
       if (!target || target === "__skip__") continue;
@@ -365,24 +374,53 @@ uploads.post("/:id/diff-preview", async (c) => {
       for (const [field, hdr] of Object.entries(fieldToHeader)) {
         proj[field] = String(r[hdr] ?? "").trim();
       }
-      const url = (proj["website"] || proj["domain"] || "").toLowerCase().replace(/^https?:\/\//, "").replace(/\/$/, "");
+      const domain = canonDomain(proj["website"] || proj["domain"] || "");
       const name = (proj["name"] || "").trim();
-      if (!url && !name) continue;
-      const existing = await c.env.DB.prepare(
-        "SELECT id, name, website, hq_country_iso2 FROM firms WHERE (website LIKE ? OR name = ?) LIMIT 1",
-      ).bind(`%${url}%`, name).first<{ id: string; name: string | null; website: string | null; hq_country_iso2: string | null }>();
+      if (!domain && !name) continue;
+      rowsConsidered++;
+      // Domain-driven matching ONLY when a domain is present. Anchored host
+      // patterns avoid `LIKE '%%'` and substring false-positives.
+      let existing: { id: string; name: string | null; website: string | null; hq_country_iso2: string | null } | null = null;
+      if (domain) {
+        rowsWithDomain++;
+        existing = await c.env.DB.prepare(
+          "SELECT id, name, website, hq_country_iso2 FROM firms " +
+          "WHERE LOWER(website) LIKE ? OR LOWER(website) LIKE ? OR LOWER(website) LIKE ? OR LOWER(website) = ? LIMIT 1",
+        ).bind(
+          `%//${domain}/%`, `%//${domain}`, `%//www.${domain}%`, domain,
+        ).first<{ id: string; name: string | null; website: string | null; hq_country_iso2: string | null }>();
+        if (existing) rowsExistingByDomain++;
+      } else if (name) {
+        existing = await c.env.DB.prepare(
+          "SELECT id, name, website, hq_country_iso2 FROM firms WHERE LOWER(name) = LOWER(?) LIMIT 1",
+        ).bind(name).first<{ id: string; name: string | null; website: string | null; hq_country_iso2: string | null }>();
+      }
       if (!existing) { wouldCreate++; continue; }
       wouldUpdate++;
       for (const field of ["name", "website", "hq_country_iso2"] as const) {
         const newVal = (proj[field] ?? "").trim();
         const oldVal = (existing as Record<string, string | null>)[field];
         if (newVal && newVal !== (oldVal ?? "") && samples.length < 10) {
-          samples.push({ tab: t.index, key: name || url, field, old: oldVal, new: newVal });
+          samples.push({ tab: t.index, key: name || domain, field, old: oldVal, new: newVal });
         }
       }
     }
   }
-  return c.json({ would_create_count: wouldCreate, would_update_count: wouldUpdate, sample_diffs: samples });
+  // Acceptance: surface diff preview only when ≥80% of domain-bearing rows
+  // already exist by domain. Eligibility flag lets the UI gate the action.
+  const domainExistRatio = rowsWithDomain > 0 ? rowsExistingByDomain / rowsWithDomain : 0;
+  const eligible = rowsWithDomain > 0 && domainExistRatio >= 0.8;
+  return c.json({
+    would_create_count: wouldCreate,
+    would_update_count: wouldUpdate,
+    sample_diffs: samples,
+    rows_considered: rowsConsidered,
+    rows_with_domain: rowsWithDomain,
+    rows_existing_by_domain: rowsExistingByDomain,
+    domain_exist_ratio: Number(domainExistRatio.toFixed(3)),
+    threshold: 0.8,
+    eligible,
+  });
 });
 
 uploads.delete("/:id", async (c) => {
