@@ -23,7 +23,7 @@ buckets; everything else has to be created out-of-band.
 | Workers AI       | `AI`                       | enabled per-account in CF dashboard                                           |
 | Vectorize × 3    | `axal-{leads,firms,companies}-768` (768d, cosine) | `wrangler vectorize create axal-leads-768 --dimensions=768 --metric=cosine`   |
 | Durable Object   | `EntityLock` (binding `ENTITY_LOCK`) | created on first deploy via the `[[migrations]]` block                        |
-| Analytics Engine | dataset `axal_events`      | enable Analytics Engine for the account in the CF dashboard before deploying  |
+| Analytics Engine | dataset `axal_events`      | **must be enabled in the dashboard before any deploy** — visit https://dash.cloudflare.com/30c9362191318777b71647145decda48/workers/analytics-engine and click Enable. Without this, `wrangler deploy` fails with `code 10089`. |
 | Images           | `IMAGES`                   | enable Cloudflare Images for the account                                      |
 | Rate Limiter × 2 | `RL_HOST` (ns 1001), `RL_AI` (ns 1002) | declared as `[[unsafe.bindings]]` — created on first deploy                   |
 | Workflows × 3    | `enrich-lead`, `enrich-firm`, `ingest-page` | created on first deploy via `[[workflows]]` blocks                            |
@@ -39,6 +39,22 @@ Set via `wrangler secret put NAME` (or in the CF dashboard):
   `ROCKETREACH_API_KEY`, `PEOPLEDATALABS_API_KEY`, `PROXYCURL_API_KEY`,
   `CRUNCHBASE_API_KEY`, `WHOISXML_API_KEY`, `BRAVE_API_KEY`,
   `SCRAPING_API_KEY`, `PROXY_URL` (optional).
+
+## Remote D1 migrations
+
+Run from `apps/worker`:
+
+```sh
+CLOUDFLARE_API_TOKEN=… npx wrangler d1 migrations apply DB --remote
+```
+
+If `d1_migrations` ever falls out of sync with the actual schema (e.g.
+older migrations were applied manually before the migration tracker
+existed), reconcile by inserting the already-applied migration names
+into `d1_migrations` (`INSERT OR IGNORE INTO d1_migrations (name)
+VALUES (...)`) before re-running `apply --remote`. As of 2026-05-15
+all migrations through `150_ai_stack.sql` are applied to the remote
+D1 (`ecd7272e-533d-4e01-81ba-e1b98bce6e1c`).
 
 ## Local dev
 
