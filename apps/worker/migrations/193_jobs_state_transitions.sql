@@ -18,6 +18,9 @@
 --       the only allowed write is NEW.status = 'dead_letter'.
 
 UPDATE jobs SET status = 'dead_letter' WHERE status = 'blocked';
+-- Migrate any rows still on the legacy 'completed'/'success' aliases to the
+-- canonical 'succeeded' so the strict transition trigger below applies cleanly.
+UPDATE jobs SET status = 'succeeded' WHERE status IN ('completed','success');
 
 -- Make sure the v2 CHECK column also accepts the legacy aliases so the
 -- mirror UPDATE in pipeline.markCompleted() doesn't trip migration 192's
@@ -39,7 +42,7 @@ FOR EACH ROW
 WHEN OLD.status != NEW.status
   AND NOT (
     (OLD.status = 'queued'      AND NEW.status IN ('running','cancelled','dead_letter'))
- OR (OLD.status = 'running'     AND NEW.status IN ('succeeded','completed','success','failed','cancelled','timed_out','dead_letter'))
+ OR (OLD.status = 'running'     AND NEW.status IN ('succeeded','failed','cancelled','timed_out','dead_letter'))
  OR (OLD.status = 'failed'      AND NEW.status IN ('running','dead_letter'))
  OR (OLD.status = 'timed_out'   AND NEW.status IN ('running','dead_letter'))
   )

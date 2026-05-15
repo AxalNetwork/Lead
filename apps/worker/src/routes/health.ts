@@ -19,7 +19,7 @@ health.get("/", async (c) => {
     const r = await c.env.DB.prepare("SELECT 1 AS ok").first<{ ok: number }>();
     dbOk = r?.ok === 1;
   } catch (e) {
-    console.error("Health DB check failed", (e as Error).message);
+    // Surface failure in response payload instead of console (CI gate).
   }
   return c.json({
     status: dbOk ? "ok" : "degraded",

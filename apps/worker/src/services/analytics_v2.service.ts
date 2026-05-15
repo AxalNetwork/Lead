@@ -218,7 +218,7 @@ export class AnalyticsV2Service {
         `SELECT AVG((julianday(finished_at) - julianday(started_at)) * 86400) AS avg_seconds,
                 COUNT(*) AS n
            FROM jobs
-          WHERE finished_at IS NOT NULL AND started_at >= ? AND status='completed'`,
+          WHERE finished_at IS NOT NULL AND started_at >= ? AND status IN ('succeeded','completed')`,
       )
       .bind(since)
       .first<{ avg_seconds: number | null; n: number }>();

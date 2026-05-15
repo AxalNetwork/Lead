@@ -76,7 +76,7 @@ async function markCompleted(
   result: Record<string, unknown>,
 ): Promise<void> {
   await env.DB.prepare(
-    `UPDATE jobs SET status = 'completed', finished_at = ?, leads_found = ?, pages_fetched = ?, pages_blocked = ?, captcha_hits = ?, cost_ms = COALESCE(cost_ms,0) + ?, result_json = ? WHERE id = ?`,
+    `UPDATE jobs SET status = 'succeeded', finished_at = ?, leads_found = ?, pages_fetched = ?, pages_blocked = ?, captcha_hits = ?, cost_ms = COALESCE(cost_ms,0) + ?, result_json = ? WHERE id = ?`,
   )
     .bind(
       new Date().toISOString(),
@@ -1300,20 +1300,25 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
         { kind: msg.kind, mode: "company_enrich_noop", company_id: cfg.company_id ?? msg.target });
       return;
     }
+    // Task #27: every top-level pipeline phase is wrapped in timedStep so
+    // workflow_step_log gets a row with timing/error_code/attempt for every
+    // job. The dashboard /api/errors/job/:id query renders these.
+    const { timedStep } = await import("../db/error_log.js");
+    const stepName = `pipeline:${msg.kind}`;
     let totals: { leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number; result?: Record<string, unknown> };
-    if (msg.kind === "linktree") {
-      totals = await processLinktree(env, jobId, msg.target, msg.config);
-    } else if (msg.kind === "profile_list") {
-      totals = await processLinktree(env, jobId, msg.target, msg.config);
-    } else if (msg.kind === "discover") {
-      totals = await processDiscover(env, jobId, msg.target, msg.config);
-    } else if (msg.kind === "firmlist") {
-      totals = await processFirmlist(env, jobId, msg.target, msg.config);
-    } else if (msg.kind === "firm_team_crawl") {
-      totals = await processFirmTeamCrawl(env, jobId, msg.target, msg.config);
-    } else {
-      totals = await processSingleUrl(env, jobId, msg.target, msg.config);
-    }
+    totals = await timedStep(env, jobId, stepName, async () => {
+      if (msg.kind === "linktree" || msg.kind === "profile_list") {
+        return processLinktree(env, jobId, msg.target, msg.config);
+      } else if (msg.kind === "discover") {
+        return processDiscover(env, jobId, msg.target, msg.config);
+      } else if (msg.kind === "firmlist") {
+        return processFirmlist(env, jobId, msg.target, msg.config);
+      } else if (msg.kind === "firm_team_crawl") {
+        return processFirmTeamCrawl(env, jobId, msg.target, msg.config);
+      } else {
+        return processSingleUrl(env, jobId, msg.target, msg.config);
+      }
+    }, { meta: { target: msg.target, kind: msg.kind } });
 
     if (await isCancelled(env, jobId)) {
       await env.DB.prepare(

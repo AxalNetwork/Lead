@@ -225,6 +225,21 @@
         </dl>
         <details open style="margin-top:10px"><summary>Context</summary><pre style="background:#f6f6f6;padding:10px;border-radius:4px;overflow:auto;font-size:12px">${esc(ctxStr)}</pre></details>
         ${r.cause_stack ? `<details style="margin-top:10px"><summary>Cause stack</summary><pre style="background:#f6f6f6;padding:10px;border-radius:4px;overflow:auto;font-size:11px">${esc(r.cause_stack)}</pre></details>` : ""}
+        ${(r.cluster_recent && r.cluster_recent.length) ? `
+          <div style="margin-top:14px">
+            <div style="font-weight:600;font-size:13px;margin-bottom:6px">Last ${r.cluster_recent.length} same <code>{${esc(r.code)}, ${esc(r.host || "—")}}</code></div>
+            <table style="width:100%;font-size:12px;border-collapse:collapse">
+              <thead><tr style="text-align:left;border-bottom:1px solid #eee"><th>When</th><th>Job</th><th>Retries</th><th>Message</th><th>State</th></tr></thead>
+              <tbody>${r.cluster_recent.map((x) => `
+                <tr style="border-bottom:1px solid #f4f4f4">
+                  <td>${fmtTime(x.occurred_at)}</td>
+                  <td><code>${esc((x.job_id || "").slice(0,8))}</code></td>
+                  <td>${x.retry_count ?? 0}</td>
+                  <td>${esc((x.message || "").slice(0,120))}</td>
+                  <td>${x.resolved ? '<span style="color:#1f6e3f">resolved</span>' : '<span style="color:#b3261e">open</span>'}</td>
+                </tr>`).join("")}</tbody>
+            </table>
+          </div>` : ""}
       `;
       resolveBtn.hidden = !!r.resolved;
       resolveBtn.dataset.errId = r.id;

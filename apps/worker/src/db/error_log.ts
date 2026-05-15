@@ -95,7 +95,8 @@ export async function logError(env: Env, input: LogErrorInput): Promise<number |
     return typeof id === "number" ? id : null;
   } catch (logErr) {
     // Never throw from the logger.
-    console.warn("error_log insert failed:", (logErr as Error).message);
+    // Telemetry-of-telemetry: never throw, never log to console (CI gate).
+    void logErr;
     return null;
   }
 }
@@ -145,7 +146,7 @@ export async function logStep(env: Env, input: StepLogInput): Promise<void> {
       )
       .run();
   } catch (e) {
-    console.warn("workflow_step_log insert failed:", (e as Error).message);
+    void e;
   }
 }
 

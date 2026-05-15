@@ -146,7 +146,25 @@ errors.get("/:id{[0-9]+}", async (c) => {
     `SELECT * FROM error_log WHERE id = ?`,
   ).bind(id).first<ErrorRow>();
   if (!row) return c.json({ error: "not_found" }, 404);
-  return c.json({ ...row, retryable: !!row.retryable, resolved: !!row.resolved_at, context: parseContext(row) });
+  // Spec: detail drawer shows the last 5 occurrences in the same {code,host}
+  // cluster so the operator sees if this error is a one-off or a wave.
+  const cluster = await c.env.DB.prepare(
+    `SELECT id, occurred_at, job_id, message, retry_count, resolved_at
+       FROM error_log
+      WHERE code = ? AND COALESCE(host,'') = COALESCE(?,'') AND id != ?
+      ORDER BY occurred_at DESC
+      LIMIT 5`,
+  ).bind(row.code, row.host ?? "", id).all();
+  return c.json({
+    ...row,
+    retryable: !!row.retryable,
+    resolved: !!row.resolved_at,
+    context: parseContext(row),
+    cluster_recent: (cluster.results ?? []).map((r: Record<string, unknown>) => ({
+      ...r,
+      resolved: !!r["resolved_at"],
+    })),
+  });
 });
 
 errors.get("/job/:jobId", async (c) => {
