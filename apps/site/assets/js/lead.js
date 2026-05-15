@@ -75,26 +75,25 @@
     var search = await api("/api/relationships/search?q=" + encodeURIComponent(name || id.slice(0, 8)));
     var match = ((search && search.items) || []).find(function (e) { return e.ref_table === "leads" && e.ref_id === id; });
     if (!match) { host.innerHTML = "<p class='ads-muted'>No graph entity yet — derivation runs nightly at 03:45 UTC.</p>"; relMounted = true; return; }
-    window.ADSRelGraph.mount(host, { entityId: match.id, depth: 1, limit: 100, height: 480 });
-    // Possible intros: shortest path from caller (resolved server-side from
-    // their email) to this lead via /intros, plus top colleagues as
-    // additional warm-intro candidates.
+    // Lead detail is the one place admins can see family_of edges; pass the
+    // opt-in. Server still gates on caller email so non-admins are unaffected.
+    window.ADSRelGraph.mount(host, { entityId: match.id, depth: 1, limit: 100, height: 480, kinds: null, includeFamily: true });
+    // "Top 5 people two hops away" — server ranks by intermediary count.
     var introsBox = document.getElementById("ads-lead-intros");
-    var intros = await api("/api/relationships/intros?to=" + encodeURIComponent(id));
-    var coll = await api("/api/relationships/colleagues/" + encodeURIComponent(id) + "?limit=5");
+    var cand = await api("/api/relationships/intros/candidates?to=" + encodeURIComponent(id) + "&limit=5");
+    var items = (cand && cand.items) || [];
     var html = "";
-    if (intros && intros.nodes && intros.nodes.length && intros.hops > 0) {
-      html += "<div style='margin-bottom:6px'><strong>" + intros.hops + "-hop intro path:</strong> " +
-        intros.nodes.map(function (n) { return "<span style='padding:1px 5px;background:#eef;border-radius:3px;margin-right:2px'>" + esc(n.name) + "</span>"; }).join(" → ") + "</div>";
-    } else {
-      html += "<p class='ads-muted' style='margin:0 0 6px'>No direct intro path from your account.</p>";
-    }
-    var items = (coll && coll.items) || [];
     if (items.length) {
-      html += "<div><strong>Top colleagues (warm intros):</strong></div>" +
-        "<ul style='margin:4px 0 0;padding-left:18px'>" +
-        items.slice(0, 5).map(function (c) { return "<li><a href='/dashboard/lead/?id=" + encodeURIComponent(c.lead_id) + "'>" + esc(c.name) + "</a> · " + c.shared_firms + " shared firm" + (c.shared_firms === 1 ? "" : "s") + "</li>"; }).join("") +
-        "</ul>";
+      html = "<ol style='margin:0;padding-left:18px'>" + items.map(function (it) {
+        var link = it.ref_table === "leads"
+          ? "/dashboard/lead/?id=" + encodeURIComponent(it.ref_id)
+          : (it.ref_table === "firms" ? "/dashboard/firms/detail/?id=" + encodeURIComponent(it.ref_id) : null);
+        var name = link ? "<a href='" + link + "'>" + esc(it.name) + "</a>" : esc(it.name);
+        var via = it.via_names ? " · via " + esc(it.via_names) : "";
+        return "<li>" + name + " <span class='ads-muted'>(" + it.via_count + " shared connection" + (it.via_count === 1 ? "" : "s") + ")</span>" + via + "</li>";
+      }).join("") + "</ol>";
+    } else {
+      html = "<p class='ads-muted' style='margin:0'>No two-hop introductions found.</p>";
     }
     introsBox.innerHTML = html;
     relMounted = true;

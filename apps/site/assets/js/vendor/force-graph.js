@@ -62,7 +62,7 @@
     });
     var idIx = {}; nodes.forEach(function (n, i) { idIx[n.id] = i; });
     var edges = data.edges.filter(function (e) { return idIx[e.src] != null && idIx[e.dst] != null; }).map(function (e) {
-      return { s: nodes[idIx[e.src]], t: nodes[idIx[e.dst]], kind: e.kind, color: e.color || edgeColor(e.kind), label: e.label, ref: e };
+      return { s: nodes[idIx[e.src]], t: nodes[idIx[e.dst]], kind: e.kind, color: e.color || edgeColor(e.kind), label: e.label, strength: Number(e.strength) || 1, ref: e };
     });
 
     // Highlight a single node (used to mark the "anchor" of the subgraph).
@@ -133,7 +133,11 @@
       for (var i = 0; i < edges.length; i++) {
         var e = edges[i];
         ctx.strokeStyle = rgb(e.color);
-        ctx.lineWidth = 1.2;
+        // Edge width scales by strength (1..6 → 1.0..3.6 px). Stronger
+        // co-investment / mention overlaps render thicker so hub
+        // relationships are visually distinguishable.
+        var s = Math.max(1, Math.min(6, e.strength || 1));
+        ctx.lineWidth = 0.8 + s * 0.45;
         ctx.beginPath(); ctx.moveTo(e.s.x, e.s.y); ctx.lineTo(e.t.x, e.t.y); ctx.stroke();
       }
       // Nodes.
@@ -253,7 +257,7 @@
         });
         (extra.edges || []).forEach(function (e) {
           if (idIx[e.src] == null || idIx[e.dst] == null) return;
-          edges.push({ s: nodes[idIx[e.src]], t: nodes[idIx[e.dst]], kind: e.kind, color: edgeColor(e.kind), label: e.label, ref: e });
+          edges.push({ s: nodes[idIx[e.src]], t: nodes[idIx[e.dst]], kind: e.kind, color: edgeColor(e.kind), label: e.label, strength: Number(e.strength) || 1, ref: e });
         });
         if (added) { stopped = false; requestAnimationFrame(step); }
       },

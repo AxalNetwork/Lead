@@ -77,11 +77,15 @@
     var clickBound = false;
     function load() {
       loading.hidden = false;
-      var qs = "?depth=" + depth + "&limit=" + limit + (activeKinds && activeKinds.length ? "&kinds=" + encodeURIComponent(activeKinds.join(",")) : "");
+      var qs = "?depth=" + depth + "&limit=" + limit
+        + (activeKinds && activeKinds.length ? "&kinds=" + encodeURIComponent(activeKinds.join(",")) : "")
+        + (opts.includeFamily ? "&include_family=1" : "");
       api("/api/relationships/entity/" + encodeURIComponent(entityId) + qs).then(function (j) {
         loading.hidden = true;
-        var nodes = (j.nodes || []).map(function (n) { return { id: n.id, label: n.name, kind: n.kind, ref: n }; });
-        var edges = (j.edges || []).map(function (e) { return { src: e.src, dst: e.dst, kind: e.kind, ref: e }; });
+        // Flatten ref_table/ref_id onto the node so initial click payloads
+        // match expand/collapse payloads (deeplinks need them at top level).
+        var nodes = (j.nodes || []).map(function (n) { return { id: n.id, label: n.name, name: n.name, kind: n.kind, ref_table: n.ref_table, ref_id: n.ref_id, ref: n }; });
+        var edges = (j.edges || []).map(function (e) { return { src: e.src, dst: e.dst, kind: e.kind, strength: e.strength, ref: e }; });
         if (graph) graph.stop();
         graph = window.ADSForceGraph(canvas, { nodes: nodes, edges: edges }, { anchorId: entityId, height: opts.height });
         if (clickBound) return; clickBound = true;
@@ -112,11 +116,13 @@
     }
     function expandNode(id) {
       if (!graph || expanded[id]) return;
-      var qs = "?depth=1&limit=80" + (activeKinds && activeKinds.length ? "&kinds=" + encodeURIComponent(activeKinds.join(",")) : "");
+      var qs = "?depth=1&limit=80"
+        + (activeKinds && activeKinds.length ? "&kinds=" + encodeURIComponent(activeKinds.join(",")) : "")
+        + (opts.includeFamily ? "&include_family=1" : "");
       api("/api/relationships/entity/" + encodeURIComponent(id) + qs).then(function (j) {
         graph.addData({
-          nodes: (j.nodes || []).map(function (n) { return { id: n.id, label: n.name, kind: n.kind, ref_table: n.ref_table, ref_id: n.ref_id }; }),
-          edges: (j.edges || []).map(function (e) { return { src: e.src, dst: e.dst, kind: e.kind }; }),
+          nodes: (j.nodes || []).map(function (n) { return { id: n.id, label: n.name, name: n.name, kind: n.kind, ref_table: n.ref_table, ref_id: n.ref_id }; }),
+          edges: (j.edges || []).map(function (e) { return { src: e.src, dst: e.dst, kind: e.kind, strength: e.strength }; }),
         });
         expanded[id] = (j.nodes || []).map(function (n) { return n.id; }).filter(function (nid) { return nid !== id && nid !== entityId; });
       });

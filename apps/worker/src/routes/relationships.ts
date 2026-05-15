@@ -322,6 +322,52 @@ relationships.get("/intros", async (c) => {
   return c.json({ ...path, channels });
 });
 
+// ---------------------------------------------------------- intro candidates
+// "Top 5 people two hops away from a target lead." For each candidate person,
+// we count the distinct intermediaries that link them to the target via
+// professional kinds (works_at/partner_at/school_with/colleague_of/
+// co_invested_with). Excludes the target itself, direct (1-hop) neighbors,
+// and family_of by default.
+relationships.get("/intros/candidates", async (c) => {
+  const toRaw = (c.req.query("to") ?? "").trim();
+  const limit = Math.min(20, Math.max(1, Number(c.req.query("limit") ?? "5")));
+  if (!toRaw) return c.json({ error: "bad_request" }, 400);
+  // Resolve target to an entity id (lead UUID or numeric entity id).
+  let targetEnt: number | null = null;
+  if (/^-?\d+$/.test(toRaw)) {
+    const e = await c.env.DB.prepare("SELECT id FROM entities WHERE id=?").bind(Number(toRaw)).first<{ id: number }>();
+    if (e) targetEnt = e.id;
+  }
+  if (targetEnt == null) {
+    const l = await c.env.DB.prepare("SELECT id FROM entities WHERE ref_table='leads' AND ref_id=?").bind(toRaw).first<{ id: number }>();
+    if (l) targetEnt = l.id;
+  }
+  if (targetEnt == null) return c.json({ error: "target_not_found" }, 404);
+  const PRO = "('works_at','partner_at','school_with','colleague_of','co_invested_with','referred')";
+  const r = await c.env.DB.prepare(
+    `WITH neigh AS (
+       SELECT CASE WHEN src = ?1 THEN dst ELSE src END AS via
+       FROM relationships
+       WHERE (src = ?1 OR dst = ?1) AND kind IN ${PRO}
+     )
+     SELECT e.id AS entity_id, e.name, e.ref_table, e.ref_id,
+            COUNT(DISTINCT n.via) AS via_count,
+            GROUP_CONCAT(DISTINCT ve.name) AS via_names
+     FROM relationships r2
+     JOIN neigh n ON (r2.src = n.via OR r2.dst = n.via)
+     JOIN entities e ON e.id = CASE WHEN r2.src = n.via THEN r2.dst ELSE r2.src END
+     LEFT JOIN entities ve ON ve.id = n.via
+     WHERE e.kind = 'person'
+       AND e.id != ?1
+       AND e.id NOT IN (SELECT via FROM neigh)
+       AND r2.kind IN ${PRO}
+     GROUP BY e.id
+     ORDER BY via_count DESC, e.name ASC
+     LIMIT ?2`,
+  ).bind(targetEnt, limit).all<{ entity_id: number; name: string; ref_table: string; ref_id: string; via_count: number; via_names: string }>();
+  return c.json({ items: r.results ?? [] });
+});
+
 // ---------------------------------------------------------- entity search
 relationships.get("/search", async (c) => {
   const q = (c.req.query("q") ?? "").trim();

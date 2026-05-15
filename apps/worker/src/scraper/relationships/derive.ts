@@ -307,14 +307,27 @@ export async function runRelationshipDerivation(env: Env): Promise<DeriveResult>
     const e = lookup("firms", String(f.id)); if (!e) continue;
     firmNameIx.push({ name: f.name.toLowerCase(), entE: e });
   }
-  const mentionEdges: UpsertRow[] = [];
+  // Aggregate occurrence counts per (person, firm) so strength reflects how
+  // often a firm is mentioned in a person's bio (case-insensitive substring
+  // count). One row per pair → strength = count, with a stable source so
+  // re-runs upsert in place rather than appending duplicates.
+  const mentionAgg = new Map<string, { src: number; dst: number; count: number }>();
   for (const row of bios.results ?? []) {
     const personE = lookup("leads", row.id); if (!personE) continue;
     const lower = row.bio.toLowerCase();
     for (const f of firmNameIx) {
-      if (!lower.includes(f.name)) continue;
-      mentionEdges.push({ src: personE, dst: f.entE, kind: "mentions", source: "derive:leads.bio" });
+      let pos = 0, count = 0;
+      while ((pos = lower.indexOf(f.name, pos)) !== -1) { count++; pos += f.name.length; if (count >= 8) break; }
+      if (!count) continue;
+      const k = personE + ":" + f.entE;
+      const prev = mentionAgg.get(k);
+      if (prev) prev.count += count;
+      else mentionAgg.set(k, { src: personE, dst: f.entE, count });
     }
+  }
+  const mentionEdges: UpsertRow[] = [];
+  for (const m of mentionAgg.values()) {
+    mentionEdges.push({ src: m.src, dst: m.dst, kind: "mentions", source: "derive:leads.bio:agg", strength: m.count });
   }
   result.by_kind.mentions = await upsertEdges(env, mentionEdges);
 
