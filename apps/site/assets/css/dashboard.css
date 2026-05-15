@@ -7,12 +7,21 @@
 html,body.ads-body{background:var(--ads-bg);color:var(--ads-text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;margin:0;min-height:100vh}
 a{color:var(--ads-accent);text-decoration:none}
 .ads-topbar{background:#070b1c;border-bottom:1px solid var(--ads-border);position:sticky;top:0;z-index:50}
-.ads-topbar__inner{max-width:1400px;margin:0 auto;padding:14px 24px;display:flex;align-items:center;gap:32px}
+.ads-topbar__inner{max-width:1400px;margin:0 auto;padding:14px 24px;display:flex;align-items:center;gap:18px;position:relative}
+.ads-topbar__spacer{flex:1}
 .ads-brand{font-weight:700;font-size:18px;color:#fff;letter-spacing:.4px}
-.ads-nav{display:flex;gap:6px;flex:1}
-.ads-nav a{padding:8px 14px;border-radius:8px;color:var(--ads-muted);font-weight:500;font-size:14px}
-.ads-nav a:hover{color:#fff;background:var(--ads-panel)}
-.ads-nav a.active{color:#fff;background:var(--ads-panel-2)}
+.ads-nav-toggle{display:inline-flex;flex-direction:column;justify-content:center;gap:4px;width:40px;height:40px;padding:10px 9px;background:transparent;border:1px solid var(--ads-border);border-radius:8px;cursor:pointer}
+.ads-nav-toggle:hover{background:var(--ads-panel)}
+.ads-nav-toggle:focus-visible{outline:2px solid var(--ads-accent);outline-offset:2px}
+.ads-nav-toggle__bar{display:block;height:2px;background:#fff;border-radius:2px;transition:transform .15s,opacity .15s}
+.ads-nav-toggle[aria-expanded="true"] .ads-nav-toggle__bar:nth-child(1){transform:translateY(6px) rotate(45deg)}
+.ads-nav-toggle[aria-expanded="true"] .ads-nav-toggle__bar:nth-child(2){opacity:0}
+.ads-nav-toggle[aria-expanded="true"] .ads-nav-toggle__bar:nth-child(3){transform:translateY(-6px) rotate(-45deg)}
+.ads-nav-panel{position:absolute;top:calc(100% + 8px);right:24px;min-width:240px;background:var(--ads-panel);border:1px solid var(--ads-border);border-radius:var(--ads-radius);box-shadow:0 12px 32px rgba(0,0,0,.4);padding:8px;display:flex;flex-direction:column;gap:2px;z-index:60}
+.ads-nav-panel[hidden]{display:none}
+.ads-nav-panel a{padding:10px 14px;border-radius:8px;color:var(--ads-muted);font-weight:500;font-size:14px}
+.ads-nav-panel a:hover,.ads-nav-panel a:focus-visible{color:#fff;background:var(--ads-panel-2);outline:none}
+.ads-nav-panel a.active{color:#fff;background:var(--ads-panel-2)}
 .ads-user{display:flex;align-items:center;gap:14px;font-size:13px;color:var(--ads-muted)}
 .ads-user__logout{color:var(--ads-muted)}
 .ads-user__logout:hover{color:var(--ads-danger)}

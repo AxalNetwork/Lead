@@ -15,7 +15,25 @@
   <header class="ads-topbar">
     <div class="ads-topbar__inner">
       <a href="/dashboard/" class="ads-brand">AI Data Signal</a>
-      <nav class="ads-nav">
+      <div class="ads-topbar__spacer"></div>
+      <div class="ads-user">
+        <span id="ads-user-email" class="ads-user__email">…</span>
+        <a href="https://axalnetwork.cloudflareaccess.com/cdn-cgi/access/logout" class="ads-user__logout">Sign out</a>
+      </div>
+      <button type="button"
+              id="ads-nav-toggle"
+              class="ads-nav-toggle"
+              aria-label="Open navigation menu"
+              aria-expanded="false"
+              aria-controls="ads-nav-panel">
+        <span class="ads-nav-toggle__bar"></span>
+        <span class="ads-nav-toggle__bar"></span>
+        <span class="ads-nav-toggle__bar"></span>
+      </button>
+      <nav id="ads-nav-panel"
+           class="ads-nav-panel"
+           aria-labelledby="ads-nav-toggle"
+           hidden>
         <a href="/dashboard/" class="{% if page.url == '/dashboard/' %}active{% endif %}">Dashboard</a>
         <a href="/dashboard/jobs/" class="{% if page.url == '/dashboard/jobs/' %}active{% endif %}">Jobs</a>
         <a href="/dashboard/review/" class="{% if page.url == '/dashboard/review/' %}active{% endif %}">Review</a>
@@ -30,16 +48,13 @@
         <a href="/dashboard/compliance/" class="{% if page.url == '/dashboard/compliance/' %}active{% endif %}">Compliance</a>
         <a href="/">Home</a>
       </nav>
-      <div class="ads-user">
-        <span id="ads-user-email" class="ads-user__email">…</span>
-        <a href="https://axalnetwork.cloudflareaccess.com/cdn-cgi/access/logout" class="ads-user__logout">Sign out</a>
-      </div>
     </div>
   </header>
   <main class="ads-main">
     {{ content }}
   </main>
   <script src="/assets/js/jquery.min.js"></script>
+  <script src="/assets/js/nav.js"></script>
   <script src="/assets/js/dashboard.js"></script>
   <script src="/assets/js/charts.js"></script>
   <script src="/assets/js/dashboard_charts.js"></script>
