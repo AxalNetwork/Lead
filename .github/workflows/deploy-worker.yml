@@ -141,7 +141,7 @@ jobs:
               --data "{\"name\":\"${I}\",\"config\":{\"dimensions\":${DIM},\"metric\":\"${METRIC}\"}}")
             if echo "$RESP" | grep -qE '"success":[[:space:]]*true'; then
               echo "  created."
-            elif echo "$RESP" | grep -qE '"code":[[:space:]]*3149' || echo "$RESP" | grep -qi 'already exists'; then
+            elif echo "$RESP" | grep -qE '"code":[[:space:]]*(3149|3002)' || echo "$RESP" | grep -qiE 'already exists|duplicate_name|duplicate name'; then
               echo "  already exists — ok."
             elif echo "$RESP" | grep -qE '"code":[[:space:]]*10000' || echo "$RESP" | grep -qi 'authentication error'; then
               # Task #69: code:10000 here means the CLOUDFLARE_API_TOKEN is
