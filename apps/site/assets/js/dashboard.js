@@ -208,38 +208,234 @@
       }
     });
   }
-  // Inline upload form on the dashboard. Reuses /assets/js/uploads.js when
-  // it's loaded; falls back to a minimal client otherwise.
+  // 3-step inline upload flow on the dashboard:
+  //   pick (drag/drop) -> map (auto-mapped headers + URL list) -> progress.
   function setupUploadForm() {
-    var f = document.getElementById("ads-form-upload");
-    if (!f) return;
-    f.addEventListener("submit", async function (ev) {
-      ev.preventDefault();
-      var msg = f.querySelector("[data-msg]");
-      var resultEl = document.getElementById("ads-upload-result");
-      var input = f.querySelector('input[type="file"]');
-      if (!input || !input.files || !input.files[0]) { showMsg(f, "Pick a file first.", "err"); return; }
-      var file = input.files[0];
+    var root = document.getElementById("ads-upload-flow");
+    if (!root) return;
+    var msgEl = document.getElementById("ads-upload-msg");
+    var dropZone = document.getElementById("ads-upload-drop");
+    var fileInput = document.getElementById("ads-upload-input");
+    var pickPane = root.querySelector('[data-step-pane="pick"]');
+    var mapPane = root.querySelector('[data-step-pane="map"]');
+    var progPane = root.querySelector('[data-step-pane="progress"]');
+    var summary = document.getElementById("ads-upload-summary");
+    var mapPanel = document.getElementById("ads-upload-map-panel");
+    var preview = document.getElementById("ads-upload-preview");
+    var urlsBox = document.getElementById("ads-upload-urls");
+    var urlsSum = document.getElementById("ads-upload-urls-summary");
+    var confirmBtn = document.getElementById("ads-upload-confirm-inline");
+    var backBtn = document.getElementById("ads-upload-back");
+    var newBtn = document.getElementById("ads-upload-new");
+    var scrapeChk = document.getElementById("ads-upload-scrape-urls");
+    var bar = document.getElementById("ads-upload-progress-bar");
+    var counts = document.getElementById("ads-upload-progress-counts");
+    var progMeta = document.getElementById("ads-upload-progress-meta");
+
+    var current = { id: null, headers: [], map: {}, totalRows: 0, pollHandle: null };
+
+    function setStep(name) {
+      root.setAttribute("data-step", name);
+      pickPane.hidden = name !== "pick";
+      mapPane.hidden = name !== "map";
+      progPane.hidden = name !== "progress";
+    }
+    function tellMsg(s, kind) {
+      if (!msgEl) return;
+      msgEl.textContent = s || "";
+      msgEl.className = "ads-form-msg" + (kind ? " ads-form-msg--" + kind : "");
+    }
+    function resetFlow() {
+      stopPoll();
+      current = { id: null, headers: [], map: {}, totalRows: 0, pollHandle: null };
+      if (fileInput) fileInput.value = "";
+      tellMsg("");
+      setStep("pick");
+    }
+    function stopPoll() {
+      if (current.pollHandle) { clearTimeout(current.pollHandle); current.pollHandle = null; }
+    }
+
+    // ---- step 1: pick / drop -------------------------------------------
+    function pickFile() { if (fileInput) fileInput.click(); }
+    dropZone.addEventListener("click", pickFile);
+    dropZone.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pickFile(); }
+    });
+    ["dragenter", "dragover"].forEach(function (ev) {
+      dropZone.addEventListener(ev, function (e) {
+        e.preventDefault(); e.stopPropagation();
+        dropZone.style.background = "#eef5ff";
+        dropZone.style.borderColor = "#2c7be5";
+      });
+    });
+    ["dragleave", "drop"].forEach(function (ev) {
+      dropZone.addEventListener(ev, function (e) {
+        e.preventDefault(); e.stopPropagation();
+        dropZone.style.background = "#fafafa";
+        dropZone.style.borderColor = "#bbb";
+      });
+    });
+    dropZone.addEventListener("drop", function (e) {
+      var dt = e.dataTransfer;
+      if (dt && dt.files && dt.files[0]) startUpload(dt.files[0]);
+    });
+    fileInput.addEventListener("change", function () {
+      if (fileInput.files && fileInput.files[0]) startUpload(fileInput.files[0]);
+    });
+
+    async function startUpload(file) {
+      if (file.size > 52428800) { tellMsg("File exceeds 50 MB.", "err"); return; }
+      tellMsg("Uploading " + file.name + " (" + Math.round(file.size / 1024) + " KB)…", "warn");
+      var fd = new FormData(); fd.append("file", file);
       try {
-        showMsg(f, "Uploading " + file.name + "…", "warn");
-        var fd = new FormData(); fd.append("file", file);
         var res = await fetch(API_BASE + "/api/uploads", { method: "POST", credentials: "include", body: fd });
-        if (!res.ok) {
-          var t = await res.text();
-          throw new Error(t || ("HTTP " + res.status));
-        }
+        if (!res.ok) throw new Error(await res.text() || ("HTTP " + res.status));
         var row = await res.json();
-        showMsg(f, "Uploaded. Parsing…", "ok");
-        if (resultEl) {
-          resultEl.innerHTML = '<p>Upload <code>' + escapeHtml(row.id) + '</code> created. ' +
-            '<a class="ads-btn ads-btn--ghost ads-btn--sm" href="/dashboard/uploads/">Review &amp; map &rarr;</a></p>';
-        }
-        f.reset();
+        current.id = row.id;
+        tellMsg("Parsing…", "warn");
+        await pollUntilMapped();
       } catch (err) {
-        showMsg(f, "Failed: " + err.message, "err");
+        tellMsg("Failed: " + err.message, "err");
+      }
+    }
+
+    // ---- step 2: map ---------------------------------------------------
+    async function pollUntilMapped() {
+      var tries = 0;
+      var loop = async function () {
+        tries += 1;
+        try {
+          var res = await fetch(API_BASE + "/api/uploads/" + current.id, { credentials: "include" });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          var data = await res.json();
+          if (data.status === "mapped") return showMapping(data);
+          if (data.status === "error") throw new Error(data.error || "parse failed");
+          if (tries > 60) throw new Error("parse timed out");
+          current.pollHandle = setTimeout(loop, 1500);
+        } catch (err) { tellMsg("Failed: " + err.message, "err"); }
+      };
+      loop();
+    }
+
+    var FIELD_OPTIONS = {
+      firms: ["name","website","domain","kind","thesis","stages","sectors","geo_focus","hq_city","hq_region","hq_country_iso2","check_size_typical_usd","check_size_min_usd","check_size_max_usd","aum_usd","current_fund_size_usd","current_fund_name","fund_count","portfolio_count","notable_investments","founded_year","team_size","linkedin_url","crunchbase_url","twitter_handle","signal_nfx_url","openvc_url","legal_name","submission_url"],
+      leads: ["name","email","phone","org","title","linkedin_url","twitter_url"],
+    };
+    function showMapping(data) {
+      stopPoll();
+      var entity = data.entity || "firms";
+      var headers = (data.preview && data.preview.headers) || [];
+      var rows = (data.preview && data.preview.rows) || [];
+      var urls = data.urls || [];
+      current.headers = headers;
+      current.map = {};
+      // seed with auto-detected map
+      var seed = data.column_map || {};
+      var opts = ['<option value="__skip__">— skip —</option>'];
+      ["firms","leads"].forEach(function (ent) {
+        opts.push('<optgroup label="' + ent + '">');
+        FIELD_OPTIONS[ent].forEach(function (f) {
+          opts.push('<option value="' + ent + '.' + f + '">' + ent + '.' + f + '</option>');
+        });
+        opts.push("</optgroup>");
+      });
+      var html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;align-items:center">';
+      headers.forEach(function (h, i) {
+        var sel = seed[h] || "__skip__";
+        current.map[h] = sel;
+        html += '<div style="font-size:13px"><code>' + escapeHtml(h) + '</code></div>';
+        html += '<div><select data-h="' + escapeHtml(h) + '" style="width:100%;padding:4px;font-size:12px">' + opts.join("") + "</select></div>";
+        // mark seed selection after render
+        void i;
+      });
+      html += "</div>";
+      mapPanel.innerHTML = html;
+      // wire selects
+      mapPanel.querySelectorAll("select[data-h]").forEach(function (s) {
+        var h = s.getAttribute("data-h");
+        s.value = current.map[h] || "__skip__";
+        s.addEventListener("change", function () { current.map[h] = s.value; });
+      });
+
+      summary.textContent = (data.row_count || rows.length) + " rows · " + headers.length + " columns · entity: " + entity + (data.tables_found > 1 ? " · " + data.tables_found + " tables (extras → portfolio)" : "");
+      // preview
+      if (rows.length) {
+        var t = '<table class="ads-table"><thead><tr>' + headers.map(function (h) { return "<th>" + escapeHtml(h) + "</th>"; }).join("") + "</tr></thead><tbody>";
+        rows.slice(0, 5).forEach(function (r) {
+          t += "<tr>" + headers.map(function (h) { return "<td>" + escapeHtml(String(r[h] || "")) + "</td>"; }).join("") + "</tr>";
+        });
+        t += "</tbody></table>";
+        preview.innerHTML = t;
+      } else { preview.innerHTML = "<em>(no rows)</em>"; }
+      // urls
+      urlsSum.textContent = "URLs found (" + urls.length + ")";
+      urlsBox.innerHTML = urls.length
+        ? urls.slice(0, 200).map(function (u) { return escapeHtml(u); }).join("<br>")
+        : "<em>(none)</em>";
+      current.totalRows = data.row_count || rows.length;
+
+      tellMsg("Parsed. Confirm the column map.", "ok");
+      setStep("map");
+    }
+
+    // ---- step 3: progress ---------------------------------------------
+    confirmBtn.addEventListener("click", async function () {
+      try {
+        confirmBtn.disabled = true;
+        var body = { column_map: current.map, scrape_urls: scrapeChk.checked ? 1 : 0 };
+        var res = await fetch(API_BASE + "/api/uploads/" + current.id + "/confirm-map", {
+          method: "POST", credentials: "include",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(await res.text() || ("HTTP " + res.status));
+        setStep("progress");
+        progMeta.textContent = "Importing " + current.totalRows + " rows…";
+        bar.style.width = "0%";
+        counts.innerHTML = "";
+        pollProgress();
+      } catch (err) {
+        tellMsg("Confirm failed: " + err.message, "err");
+        confirmBtn.disabled = false;
       }
     });
+
+    function pollProgress() {
+      stopPoll();
+      var loop = async function () {
+        try {
+          var res = await fetch(API_BASE + "/api/uploads/" + current.id, { credentials: "include" });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          var d = await res.json();
+          var imported = d.rows_imported || 0;
+          var total = d.row_count || current.totalRows || 1;
+          bar.style.width = Math.min(100, Math.round((imported / Math.max(1, total)) * 100)) + "%";
+          counts.innerHTML =
+            "<div>Rows imported: <strong>" + imported + " / " + total + "</strong></div>" +
+            "<div>Firms: " + (d.firms_created || 0) + " new, " + (d.firms_updated || 0) + " updated</div>" +
+            "<div>Leads: " + (d.leads_created || 0) + " new, " + (d.leads_updated || 0) + " updated</div>" +
+            "<div>Scrape jobs queued: " + (d.queued_jobs || 0) + "</div>";
+          if (d.status === "done") {
+            progMeta.textContent = "Done.";
+            return;
+          }
+          if (d.status === "error") {
+            progMeta.textContent = "Failed: " + (d.error || "unknown");
+            return;
+          }
+          current.pollHandle = setTimeout(loop, 1500);
+        } catch (err) {
+          progMeta.textContent = "Polling failed: " + err.message;
+        }
+      };
+      loop();
+    }
+
+    backBtn.addEventListener("click", resetFlow);
+    newBtn.addEventListener("click", resetFlow);
   }
+  // suppress lint complaints for the legacy inline showMsg helper used elsewhere
+  void showMsg;
 
   function setupBulkForm() {
     var f = document.getElementById("ads-form-bulk");

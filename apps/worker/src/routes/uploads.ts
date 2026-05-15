@@ -105,20 +105,34 @@ uploads.post("/:id/confirm-map", async (c) => {
   const map = body?.column_map ?? {};
   const entity = body?.entity === "leads" ? "leads" : "firms";
   const scrape = body?.scrape_urls === false ? 0 : 1;
+  // Persist the confirmed map first but leave status as 'mapped' until the
+  // queue actually accepts the message. If the send fails we roll the row
+  // back to 'mapped' (with an error string) so the user can retry instead
+  // of being stuck in 'importing'.
   await c.env.DB.prepare(
     `UPDATE file_imports
-       SET column_map_json = ?, entity = ?, scrape_urls = ?, status = 'importing', updated_at = ?
+       SET column_map_json = ?, entity = ?, scrape_urls = ?, error = NULL, updated_at = ?
      WHERE id = ?`,
   ).bind(JSON.stringify(map), entity, scrape, new Date().toISOString(), id).run();
 
   const jobId = crypto.randomUUID();
   const now = new Date().toISOString();
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
+       VALUES (?, ?, ?, 'queued', 'import_file', ?, ?, ?, ?)`,
+    ).bind(jobId, `import_file:${id}`, "upload", id, JSON.stringify({ importId: id }), now, now).run();
+    const msg: JobMessage = { jobId, kind: "import_file", target: id, config: { importId: id } };
+    await c.env.LEAD_QUEUE.send(msg);
+  } catch (e) {
+    await c.env.DB.prepare(
+      "UPDATE file_imports SET status = 'mapped', error = ?, updated_at = ? WHERE id = ?",
+    ).bind(`enqueue_failed: ${(e as Error).message}`.slice(0, 500), new Date().toISOString(), id).run();
+    return c.json({ error: "enqueue_failed", message: (e as Error).message }, 502);
+  }
   await c.env.DB.prepare(
-    `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
-     VALUES (?, ?, ?, 'queued', 'import_file', ?, ?, ?, ?)`,
-  ).bind(jobId, `import_file:${id}`, "upload", id, JSON.stringify({ importId: id }), now, now).run();
-  const msg: JobMessage = { jobId, kind: "import_file", target: id, config: { importId: id } };
-  await c.env.LEAD_QUEUE.send(msg);
+    "UPDATE file_imports SET status = 'importing', updated_at = ? WHERE id = ?",
+  ).bind(new Date().toISOString(), id).run();
   return c.json({ ok: true, jobId }, 202);
 });
 

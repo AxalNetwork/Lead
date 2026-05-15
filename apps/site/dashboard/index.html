@@ -118,19 +118,62 @@ permalink: /dashboard/
     </div>
   </form>
 
-  <form class="ads-tab-panel" data-tab="upload" id="ads-form-upload" autocomplete="off" enctype="multipart/form-data">
-    <p class="ads-muted" style="margin-top:0">Upload a spreadsheet (CSV, TSV, XLSX, XLS, ODS) or a PDF report. Headers are auto-mapped; you confirm the mapping before import. URLs in the file are auto-queued as scrape jobs.</p>
-    <label class="ads-field">
-      <span>File (max 50 MB)</span>
-      <input type="file" name="file" accept=".csv,.tsv,.xlsx,.xls,.ods,.pdf" required>
-    </label>
-    <div class="ads-form-actions">
-      <button type="submit" class="ads-btn">Upload & parse</button>
-      <a class="ads-btn ads-btn--ghost" href="/dashboard/uploads/">Manage uploads &rarr;</a>
-      <span class="ads-form-msg" data-msg></span>
+  <div class="ads-tab-panel" data-tab="upload" id="ads-upload-flow" data-step="pick">
+    <p class="ads-muted" style="margin-top:0">Spreadsheet (CSV, TSV, XLSX, XLS, ODS) or PDF report. Headers auto-mapped; you confirm before import. URLs found in the file are auto-queued as scrape jobs. PDF tables that look like a portfolio are written to <code>firm_portfolio</code>.</p>
+
+    <!-- Step 1: pick / drop -->
+    <div data-step-pane="pick">
+      <div id="ads-upload-drop" tabindex="0" role="button" aria-label="Drop a file or click to choose"
+           style="border:2px dashed #bbb;border-radius:8px;padding:32px;text-align:center;background:#fafafa;cursor:pointer">
+        <div style="font-size:14px;font-weight:600;margin-bottom:4px">Drop a file here or click to choose</div>
+        <div class="ads-muted" style="font-size:12px">CSV, TSV, XLSX, XLS, ODS, PDF — up to 50 MB</div>
+        <input type="file" id="ads-upload-input" accept=".csv,.tsv,.xlsx,.xls,.ods,.pdf" hidden>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px">
+        <input type="checkbox" id="ads-upload-scrape-urls" checked>
+        Auto-queue scrape jobs for URLs found in the file
+      </label>
+      <div class="ads-form-actions" style="margin-top:8px">
+        <a class="ads-btn ads-btn--ghost ads-btn--sm" href="/dashboard/uploads/">Manage past uploads &rarr;</a>
+        <span class="ads-form-msg" id="ads-upload-msg"></span>
+      </div>
     </div>
-    <div id="ads-upload-result" style="margin-top:12px"></div>
-  </form>
+
+    <!-- Step 2: mapping (revealed after parse) -->
+    <div data-step-pane="map" hidden style="margin-top:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <strong>Confirm column map</strong>
+        <button type="button" class="ads-btn ads-btn--ghost ads-btn--sm" id="ads-upload-back">&larr; Choose another file</button>
+      </div>
+      <div id="ads-upload-summary" class="ads-muted" style="font-size:12px;margin-bottom:8px"></div>
+      <div id="ads-upload-map-panel" style="border:1px solid #eee;border-radius:6px;padding:12px;background:#fff"></div>
+      <details style="margin-top:8px">
+        <summary>Preview rows</summary>
+        <div id="ads-upload-preview" style="overflow:auto;margin-top:8px"></div>
+      </details>
+      <details style="margin-top:8px">
+        <summary id="ads-upload-urls-summary">URLs found</summary>
+        <div id="ads-upload-urls" style="margin-top:8px;max-height:160px;overflow:auto;font-family:monospace;font-size:12px"></div>
+      </details>
+      <div class="ads-form-actions" style="margin-top:12px">
+        <button type="button" class="ads-btn" id="ads-upload-confirm-inline">Confirm &amp; import</button>
+      </div>
+    </div>
+
+    <!-- Step 3: progress (revealed after confirm) -->
+    <div data-step-pane="progress" hidden style="margin-top:8px">
+      <strong>Importing…</strong>
+      <div class="ads-muted" id="ads-upload-progress-meta" style="font-size:12px;margin:4px 0"></div>
+      <div style="background:#f1f1f1;border-radius:4px;height:8px;overflow:hidden;margin:8px 0">
+        <div id="ads-upload-progress-bar" style="height:100%;width:0%;background:#2c7be5;transition:width .3s"></div>
+      </div>
+      <div id="ads-upload-progress-counts" style="font-size:13px"></div>
+      <div class="ads-form-actions" style="margin-top:12px">
+        <button type="button" class="ads-btn ads-btn--ghost" id="ads-upload-new">Upload another file</button>
+        <a class="ads-btn ads-btn--ghost" href="/dashboard/uploads/">Manage uploads &rarr;</a>
+      </div>
+    </div>
+  </div>
 
   <form class="ads-tab-panel" data-tab="bulk" id="ads-form-bulk" autocomplete="off">
     <label class="ads-field">

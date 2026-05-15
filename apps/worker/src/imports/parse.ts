@@ -46,12 +46,10 @@ export async function processParseFile(env: Env, importId: string): Promise<void
     await env.SCRAPE_CACHE.put(`upload_urls:${importId}`, JSON.stringify(urls), {
       expirationTtl: 60 * 60 * 24 * 7,
     });
-    // Stash full parsed rows for the import phase so it doesn't need to
-    // re-parse the file. 7d TTL covers any reasonable confirm-map delay.
-    await env.SCRAPE_CACHE.put(`upload_rows:${importId}`, JSON.stringify({
-      headers: primary.headers,
-      rows: primary.rows,
-    }), { expirationTtl: 60 * 60 * 24 * 7 });
+    // NOTE: We deliberately do NOT cache the full parsed rows here. KV values
+    // are capped at 25 MB and a 10k-row sheet can easily exceed that. The
+    // import phase re-loads bytes from R2 and re-parses, which is bounded
+    // memory and survives worker restarts.
 
     await env.DB.prepare(
       `UPDATE file_imports

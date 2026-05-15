@@ -9,9 +9,11 @@
 // duplicated (Task #15 contract).
 
 import type { Env, JobMessage, JobKind } from "../types";
-import type { ParsedTable } from "./csv";
+import { parseCsv, type ParsedTable } from "./csv";
+import { parseSpreadsheet } from "./xlsx_parser";
+import { parsePdfTables } from "./pdf_parser";
 import type { Entity, MappedField } from "./auto_map";
-import { rowToCandidate, parseUsdAmount, parseUsdRange, parseStages, parseList, parseLocation, deriveDomain } from "../scraper/parsers/firmlists/_helpers";
+import { rowToCandidate } from "../scraper/parsers/firmlists/_helpers";
 import { upsertFirm } from "../scraper/firms_upsert";
 import type { FirmCandidate } from "../scraper/parsers/firmlists/types";
 import { resolveIncoming, buildCanonicalKeys } from "../dedupe";
@@ -28,6 +30,8 @@ const BATCH_SIZE = 200;
 interface FileImportRow {
   id: string;
   filename: string;
+  mime: string | null;
+  r2_key: string;
   entity: Entity | null;
   scrape_urls: number;
   column_map_json: string | null;
@@ -36,7 +40,7 @@ interface FileImportRow {
 
 export async function processImportFile(env: Env, importId: string): Promise<void> {
   const row = await env.DB
-    .prepare("SELECT id, filename, entity, scrape_urls, column_map_json, created_by FROM file_imports WHERE id = ?")
+    .prepare("SELECT id, filename, mime, r2_key, entity, scrape_urls, column_map_json, created_by FROM file_imports WHERE id = ?")
     .bind(importId)
     .first<FileImportRow>();
   if (!row) throw new Error(`file_import_not_found:${importId}`);
@@ -47,28 +51,44 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
     .run();
 
   try {
-    const cached = await env.SCRAPE_CACHE.get(`upload_rows:${importId}`);
-    if (!cached) throw new Error("rows_cache_expired");
-    const parsed = JSON.parse(cached) as ParsedTable;
+    // Re-parse straight from R2 (no full-row KV cache — KV values are capped
+    // at 25 MB and a 10k-row sheet routinely exceeds that. R2 streaming +
+    // re-parse keeps memory bounded and lets us resume after a worker swap).
+    const obj = await env.UPLOADS.get(row.r2_key);
+    if (!obj) throw new Error("upload_object_missing");
+    const bytes = await obj.arrayBuffer();
+    const tables = await parseByKind(bytes, extOf(row.filename), row.mime);
+    if (!tables.length) throw new Error("no_table_found");
+    tables.sort((a, b) => b.rows.length - a.rows.length);
+    const parsed = tables[0];
+    const portfolioTables = entity_isFirms(row.entity)
+      ? tables.slice(1).filter(isPortfolioTable)
+      : [];
+
     const map = parseMap(row.column_map_json);
     const entity: Entity = row.entity === "leads" ? "leads" : "firms";
 
     let firmsCreated = 0, firmsUpdated = 0, leadsCreated = 0, leadsUpdated = 0;
+    let portfolioCreated = 0;
     const errors: string[] = [];
     const sourceUrl = `upload://${importId}/${row.filename}`;
     const importedFrom = `upload:${entity}`;
+    /** Unique firm ids we touched so PDF portfolio tables can be attached
+     *  even when many rows resolve to the same firm. */
+    const firmIdsTouched = new Set<number>();
 
     // Stream in batches so we don't OOM and so progress is visible if the
-    // worker restarts mid-import. Each batch updates counts at the end.
+    // worker restarts mid-import. Each batch persists progress at the end.
     for (let off = 0; off < parsed.rows.length; off += BATCH_SIZE) {
       const slice = parsed.rows.slice(off, off + BATCH_SIZE);
       for (const raw of slice) {
         const projected = projectRow(raw, map);
         if (entity === "firms") {
           const r = await tryUpsertFirm(env, projected, sourceUrl, importedFrom);
-          if (r === "created") firmsCreated += 1;
-          else if (r === "updated") firmsUpdated += 1;
-          else if (r === "error") errors.push(`firm:${projected.name ?? "?"}`);
+          if (r.action === "created") firmsCreated += 1;
+          else if (r.action === "updated") firmsUpdated += 1;
+          else if (r.action === "error") errors.push(`firm:${projected.name ?? "?"}`);
+          if (r.firmId != null) firmIdsTouched.add(r.firmId);
         } else {
           const r = await tryInsertLead(env, projected, importId, importedFrom, sourceUrl);
           if (r === "created") leadsCreated += 1;
@@ -90,6 +110,15 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
       ).run();
     }
 
+    // ---- PDF portfolio attribution. When the PDF contained per-firm
+    // portfolio tables and exactly one firm was upserted, attach every
+    // portfolio row to it via firm_portfolio. Uses D1 batch() so the
+    // entire portfolio for a firm goes in as one atomic transaction.
+    if (portfolioTables.length && firmIdsTouched.size === 1) {
+      const firmId = firmIdsTouched.values().next().value as number;
+      portfolioCreated = await insertPortfolioRows(env, firmId, portfolioTables, sourceUrl);
+    }
+
     // Enqueue scrape jobs for every extracted URL (when toggled on).
     let queuedJobs = 0;
     if (row.scrape_urls) {
@@ -105,11 +134,13 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
       `UPDATE file_imports
          SET status = 'done',
              queued_jobs = ?,
+             portfolio_created = ?,
              error = CASE WHEN ? = '' THEN NULL ELSE ? END,
              updated_at = ?
        WHERE id = ?`,
     ).bind(
       queuedJobs,
+      portfolioCreated,
       errors.length ? errors.slice(0, 20).join("; ") : "",
       errors.length ? errors.slice(0, 20).join("; ") : "",
       new Date().toISOString(),
@@ -151,14 +182,16 @@ function projectRow(raw: Record<string, string>, map: Record<string, MappedField
   return out;
 }
 
+interface FirmUpsertResult { action: "created" | "updated" | "unchanged" | "error" | "skip"; firmId: number | null }
+
 async function tryUpsertFirm(
   env: Env,
   fields: Record<string, string>,
   sourceUrl: string,
   importedFrom: string,
-): Promise<"created" | "updated" | "unchanged" | "error" | "skip"> {
+): Promise<FirmUpsertResult> {
   const name = (fields.name ?? "").trim();
-  if (!name) return "skip";
+  if (!name) return { action: "skip", firmId: null };
   // Re-use the existing rowToCandidate parser by aliasing field names back
   // to header form. Cheaper than duplicating the type-coercion logic.
   const headerForm: Record<string, string> = { Name: name };
@@ -192,20 +225,17 @@ async function tryUpsertFirm(
   if (fields.submission_url) headerForm.Submission = fields.submission_url;
 
   const built = rowToCandidate(headerForm, sourceUrl);
-  if (!built) return "skip";
+  if (!built) return { action: "skip", firmId: null };
   const candidate: FirmCandidate = built.candidate;
   // Fill website from domain when missing — upsertFirm requires at least one.
   if (!candidate.website && candidate.domain) candidate.website = `https://${candidate.domain}`;
-  if (!candidate.website && !candidate.domain) return "skip";
+  if (!candidate.website && !candidate.domain) return { action: "skip", firmId: null };
   try {
     const r = await upsertFirm(env, candidate, importedFrom);
-    return r.action;
+    return { action: r.action, firmId: r.firmId };
   } catch {
-    return "error";
+    return { action: "error", firmId: null };
   }
-  // Unused helpers (kept imported so they stay typed and ready for future
-  // single-field shortcuts in the lead branch).
-  void parseUsdAmount; void parseUsdRange; void parseStages; void parseList; void parseLocation; void deriveDomain;
 }
 
 async function tryInsertLead(
@@ -250,8 +280,8 @@ async function tryInsertLead(
     if (decision.action === "merged") return "merged";
     // For file imports we treat borderline matches as a merge to guarantee
     // idempotency on re-upload (the user explicitly opted in by confirming
-    // the column map). The match is still surfaced as a dedupe_review row
-    // so an admin can inspect it later.
+    // the column map). No dedupe_review row is recorded for this path —
+    // the merge already preserves the prior lead and adds new evidence.
     if (decision.action === "needs_review") {
       const match = await findMatch(env.DB, {
         email: incoming.email, phone: incoming.phone, linkedin_url: incoming.linkedin_url,
@@ -315,6 +345,117 @@ async function tryInsertLead(
   } catch {
     return "error";
   }
+}
+
+function entity_isFirms(e: string | null | undefined): boolean {
+  return e === "firms" || e == null;
+}
+
+function extOf(filename: string): string {
+  const m = /\.([a-z0-9]+)$/i.exec(filename);
+  return m ? m[1].toLowerCase() : "";
+}
+
+async function parseByKind(bytes: ArrayBuffer, ext: string, mime: string | null): Promise<ParsedTable[]> {
+  const m = (mime || "").toLowerCase();
+  if (ext === "pdf" || m.includes("pdf")) return parsePdfTables(bytes);
+  if (ext === "csv" || m.includes("text/csv")) return [parseCsv(new TextDecoder().decode(bytes))];
+  if (ext === "tsv") return [parseCsv(new TextDecoder().decode(bytes), "\t")];
+  return [await parseSpreadsheet(bytes)];
+}
+
+/** Heuristic: a secondary table is a firm portfolio table when its headers
+ *  include a company-name column plus at least one investment-shape column
+ *  (year, stage, amount, round, lead, exit). */
+function isPortfolioTable(t: ParsedTable): boolean {
+  const hs = t.headers.map((h) => h.toLowerCase().trim());
+  const hasCompany = hs.some((h) => /\b(company|portfolio|investment|name)\b/.test(h));
+  const hasShape = hs.some((h) => /\b(year|stage|amount|round|raised|exit|lead)\b/.test(h));
+  return hasCompany && hasShape && t.rows.length >= 1;
+}
+
+interface PortfolioCols {
+  company: string | null; domain: string | null; url: string | null;
+  year: string | null; stage: string | null; amount: string | null;
+  isLead: string | null; outcome: string | null; exit: string | null;
+}
+
+function detectPortfolioCols(headers: string[]): PortfolioCols {
+  const find = (re: RegExp): string | null => headers.find((h) => re.test(h.toLowerCase())) ?? null;
+  return {
+    company: find(/\b(company|portfolio|investment|name)\b/),
+    domain:  find(/\b(domain|website|url|site)\b/),
+    url:     find(/\b(url|link|profile)\b/),
+    year:    find(/\b(year|date|invested|since)\b/),
+    stage:   find(/\b(stage|round|series)\b/),
+    amount:  find(/\b(amount|check|raised|invested|usd|ticket)\b/),
+    isLead:  find(/\blead\b/),
+    outcome: find(/\b(outcome|status|result)\b/),
+    exit:    find(/\b(exit|valuation|acqui|ipo)\b/),
+  };
+}
+
+function parseYearMaybe(v: string | undefined | null): number | null {
+  if (!v) return null;
+  const m = /\b(19|20)\d{2}\b/.exec(String(v));
+  return m ? parseInt(m[0], 10) : null;
+}
+
+function parseUsdMaybe(v: string | undefined | null): number | null {
+  if (!v) return null;
+  const s = String(v).toLowerCase().replace(/[, ]+/g, "");
+  const m = /([\d.]+)\s*([kmb])?/.exec(s);
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  if (!isFinite(n)) return null;
+  const mult = m[2] === "b" ? 1e9 : m[2] === "m" ? 1e6 : m[2] === "k" ? 1e3 : 1;
+  return Math.round(n * mult);
+}
+
+/** Insert all portfolio rows from PDF secondary tables for `firmId`, one
+ *  D1.batch() per source table so each table is atomic. */
+async function insertPortfolioRows(
+  env: Env,
+  firmId: number,
+  tables: ParsedTable[],
+  sourceUrl: string,
+): Promise<number> {
+  let created = 0;
+  for (const t of tables) {
+    const cols = detectPortfolioCols(t.headers);
+    if (!cols.company) continue;
+    const stmts: D1PreparedStatement[] = [];
+    const stmt = env.DB.prepare(
+      `INSERT INTO firm_portfolio
+        (firm_id, company_name, company_domain, company_url, investment_year,
+         stage, amount_usd, is_lead, outcome, exit_value_usd, source_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const row of t.rows) {
+      const company = (row[cols.company] ?? "").trim();
+      if (!company) continue;
+      stmts.push(stmt.bind(
+        firmId,
+        company,
+        cols.domain ? (row[cols.domain] || null) : null,
+        cols.url ? (row[cols.url] || null) : null,
+        parseYearMaybe(cols.year ? row[cols.year] : null),
+        cols.stage ? (row[cols.stage] || null) : null,
+        parseUsdMaybe(cols.amount ? row[cols.amount] : null),
+        cols.isLead && /\b(lead|y|yes|true|1)\b/i.test(row[cols.isLead] ?? "") ? 1 : 0,
+        cols.outcome ? (row[cols.outcome] || null) : null,
+        parseUsdMaybe(cols.exit ? row[cols.exit] : null),
+        sourceUrl,
+      ));
+    }
+    if (!stmts.length) continue;
+    // D1 batch caps at ~100 statements per call. Chunk if larger.
+    for (let i = 0; i < stmts.length; i += 100) {
+      const chunk = stmts.slice(i, i + 100);
+      try { await env.DB.batch(chunk); created += chunk.length; } catch { /* ignore portfolio insert failures */ }
+    }
+  }
+  return created;
 }
 
 async function enqueueScrapeJob(env: Env, url: string, parentImportId: string): Promise<boolean> {
