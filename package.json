@@ -5,6 +5,7 @@
   "description": "Root package so Cloudflare Workers Builds can install worker dependencies. The Worker (and its single-source-of-truth wrangler.toml) lives in apps/worker/.",
   "scripts": {
     "deploy": "cd apps/worker && npx wrangler deploy",
+    "deploy:dry-run": "cd apps/worker && npx wrangler deploy --dry-run",
     "typecheck": "cd apps/worker && npm run typecheck"
   },
   "dependencies": {

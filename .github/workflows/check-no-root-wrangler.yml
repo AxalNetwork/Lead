@@ -1,0 +1,28 @@
+name: Reject root wrangler.toml
+
+# Standalone guard (Task #73): apps/worker/wrangler.toml is the single
+# source of truth for every Worker binding. A stray root wrangler.toml
+# previously caused a manual `wrangler deploy` from the repo root to
+# silently ship a Worker missing UPLOADS / AI / Vectorize / Workflow
+# bindings. This job runs on every push and PR — independently of the
+# deploy-worker path filter — so the offending file can never sneak
+# back in unnoticed.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject root wrangler.toml
+        run: |
+          if [ -e wrangler.toml ]; then
+            echo "::error::Root wrangler.toml exists. apps/worker/wrangler.toml is the single source of truth — see apps/worker/README.md → 'Adding a new binding'." >&2
+            exit 1
+          fi
+          echo "OK: no root wrangler.toml."
