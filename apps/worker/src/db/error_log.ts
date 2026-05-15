@@ -109,6 +109,12 @@ export interface StepLogInput {
   count_out?: number | undefined;
   error_id?: number | null | undefined;
   meta?: Record<string, unknown> | undefined;
+  /** Cloudflare Workflows run id (or queue batch id). */
+  workflow_run_id?: string | undefined;
+  /** 1-based attempt counter for the step (defaults to 1). */
+  attempt?: number | undefined;
+  /** Denormalized ErrCode for fast cluster queries when status='error'. */
+  error_code?: string | undefined;
 }
 
 export async function logStep(env: Env, input: StepLogInput): Promise<void> {
@@ -119,11 +125,12 @@ export async function logStep(env: Env, input: StepLogInput): Promise<void> {
   try {
     await env.DB.prepare(
       `INSERT INTO workflow_step_log
-        (job_id, step, status, finished_at, duration_ms, count_in, count_out, error_id, meta_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (job_id, step, step_name, status, finished_at, duration_ms, count_in, count_out, error_id, meta_json, workflow_run_id, attempt, error_code)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
       .bind(
         input.job_id,
+        input.step,
         input.step,
         input.status,
         finishedAt,
@@ -132,6 +139,9 @@ export async function logStep(env: Env, input: StepLogInput): Promise<void> {
         input.count_out ?? null,
         input.error_id ?? null,
         metaJson,
+        input.workflow_run_id ?? null,
+        input.attempt ?? 1,
+        input.error_code ?? null,
       )
       .run();
   } catch (e) {
@@ -145,18 +155,21 @@ export async function timedStep<T>(
   job_id: string,
   step: string,
   fn: () => Promise<T>,
-  opts: { count_in?: number; meta?: Record<string, unknown> } = {},
+  opts: { count_in?: number; meta?: Record<string, unknown>; workflow_run_id?: string; attempt?: number } = {},
 ): Promise<T> {
   const t0 = Date.now();
-  await logStep(env, { job_id, step, status: "started", count_in: opts.count_in, meta: opts.meta });
+  const { workflow_run_id, attempt } = opts;
+  await logStep(env, { job_id, step, status: "started", count_in: opts.count_in, meta: opts.meta, workflow_run_id, attempt });
   try {
     const out = await fn();
     const count_out = Array.isArray(out) ? out.length : undefined;
-    await logStep(env, { job_id, step, status: "ok", duration_ms: Date.now() - t0, count_in: opts.count_in, count_out, meta: opts.meta });
+    await logStep(env, { job_id, step, status: "ok", duration_ms: Date.now() - t0, count_in: opts.count_in, count_out, meta: opts.meta, workflow_run_id, attempt });
     return out;
   } catch (e) {
     const error_id = await logError(env, { err: e, job_id, step });
-    await logStep(env, { job_id, step, status: "error", duration_ms: Date.now() - t0, count_in: opts.count_in, error_id, meta: opts.meta });
+    const { classify } = await import("../errors.js");
+    const cls = classify(e);
+    await logStep(env, { job_id, step, status: "error", duration_ms: Date.now() - t0, count_in: opts.count_in, error_id, meta: opts.meta, workflow_run_id, attempt, error_code: cls?.code });
     throw e;
   }
 }

@@ -297,8 +297,9 @@ export function classify(err: unknown): { code: ErrCode; kind: ErrorKind; retrya
     return { code: "fetch.error", kind: "transient", retryable: true };
   }
 
-  // HTTP status codes embedded in the message (e.g. "status_503").
-  const statusMatch = msg.match(/status[_ ](\d{3})/);
+  // HTTP status codes embedded in the message (e.g. "status_503", "status=404",
+  // "status: 502", or a bare " 404 " token).
+  const statusMatch = msg.match(/status[_=: ]\s*(\d{3})/) ?? msg.match(/\b(4\d{2}|5\d{2})\b/);
   if (statusMatch) {
     const s = Number(statusMatch[1]);
     if (s === 429) return { code: "rate_limited", kind: "transient", retryable: true };
