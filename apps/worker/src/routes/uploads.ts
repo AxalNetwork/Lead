@@ -95,7 +95,7 @@ uploads.get("/:id", async (c) => {
 uploads.post("/:id/confirm-map", async (c) => {
   const id = c.req.param("id");
   const body = (await c.req.json().catch(() => null)) as
-    | { column_map?: Record<string, string>; entity?: "firms" | "leads"; scrape_urls?: boolean }
+    | { column_map?: Record<string, string>; entity?: "firms" | "leads"; scrape_urls?: boolean | number }
     | null;
   const row = await c.env.DB.prepare("SELECT id, status FROM file_imports WHERE id = ?").bind(id).first<{ id: string; status: string }>();
   if (!row) return c.json({ error: "not_found" }, 404);
@@ -104,7 +104,9 @@ uploads.post("/:id/confirm-map", async (c) => {
   }
   const map = body?.column_map ?? {};
   const entity = body?.entity === "leads" ? "leads" : "firms";
-  const scrape = body?.scrape_urls === false ? 0 : 1;
+  // Accept boolean OR 0/1 from clients. Treat undefined as enabled (default on).
+  const su = body?.scrape_urls;
+  const scrape = (su === false || su === 0) ? 0 : 1;
   // Persist the confirmed map first but leave status as 'mapped' until the
   // queue actually accepts the message. If the send fails we roll the row
   // back to 'mapped' (with an error string) so the user can retry instead

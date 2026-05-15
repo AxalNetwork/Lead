@@ -35,7 +35,11 @@ export async function processParseFile(env: Env, importId: string): Promise<void
 
     const map = autoMapHeaders(primary.headers);
     const entity = inferEntity(map);
-    const urls = extractUrlsFromRows(primary.rows);
+    // Pull URLs from EVERY parsed table (not just the primary one) so that
+    // PDFs/workbooks with multiple sheets/tables surface every link.
+    const urlSet = new Set<string>();
+    for (const t of tables) for (const u of extractUrlsFromRows(t.rows)) urlSet.add(u);
+    const urls = Array.from(urlSet);
     const preview = primary.rows.slice(0, 5);
 
     await env.SCRAPE_CACHE.put(`upload_preview:${importId}`, JSON.stringify({

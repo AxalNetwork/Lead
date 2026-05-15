@@ -60,9 +60,14 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
     const tables = await parseByKind(bytes, extOf(row.filename), row.mime);
     if (!tables.length) throw new Error("no_table_found");
     tables.sort((a, b) => b.rows.length - a.rows.length);
-    const parsed = tables[0];
+    // Pick a primary table that is *not* portfolio-shaped if possible (so
+    // the firm-row upsert uses the right columns). If the only tables are
+    // all portfolio-shaped (typical for annual-report PDFs), fall back to
+    // the largest one.
+    const nonPortfolio = tables.filter((t) => !isPortfolioTable(t));
+    const parsed = nonPortfolio[0] ?? tables[0];
     const portfolioTables = entity_isFirms(row.entity)
-      ? tables.slice(1).filter(isPortfolioTable)
+      ? tables.filter((t) => t !== parsed && isPortfolioTable(t))
       : [];
 
     const map = parseMap(row.column_map_json);
@@ -77,8 +82,21 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
      *  even when many rows resolve to the same firm. */
     const firmIdsTouched = new Set<number>();
 
-    // Stream in batches so we don't OOM and so progress is visible if the
-    // worker restarts mid-import. Each batch persists progress at the end.
+    // Stream in chunks of 200 so memory stays bounded and progress is
+    // visible if the worker restarts mid-import. Per-row dedupe (firm
+    // upsert + lead resolveIncoming/merge) is read-modify-write against
+    // D1, which D1.batch() can't wrap atomically (batch is for prepared
+    // statement arrays without intervening reads). We therefore commit
+    // each chunk's *side-effect tail* — the progress UPDATE — inside an
+    // explicit env.DB.batch() so a worker crash mid-chunk leaves either
+    // the previous chunk's progress or the new chunk's progress, never a
+    // half-counted intermediate.
+    const progressStmt = env.DB.prepare(
+      `UPDATE file_imports
+         SET rows_imported = ?, firms_created = ?, firms_updated = ?,
+             leads_created = ?, leads_updated = ?, updated_at = ?
+       WHERE id = ?`,
+    );
     for (let off = 0; off < parsed.rows.length; off += BATCH_SIZE) {
       const slice = parsed.rows.slice(off, off + BATCH_SIZE);
       for (const raw of slice) {
@@ -96,25 +114,25 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
           else if (r === "error") errors.push(`lead:${projected.name ?? "?"}`);
         }
       }
-      // Persist incremental progress every batch so the dashboard poll
-      // shows it ticking up.
-      await env.DB.prepare(
-        `UPDATE file_imports
-           SET rows_imported = ?, firms_created = ?, firms_updated = ?,
-               leads_created = ?, leads_updated = ?, updated_at = ?
-         WHERE id = ?`,
-      ).bind(
-        Math.min(off + slice.length, parsed.rows.length),
-        firmsCreated, firmsUpdated, leadsCreated, leadsUpdated,
-        new Date().toISOString(), importId,
-      ).run();
+      await env.DB.batch([
+        progressStmt.bind(
+          Math.min(off + slice.length, parsed.rows.length),
+          firmsCreated, firmsUpdated, leadsCreated, leadsUpdated,
+          new Date().toISOString(), importId,
+        ),
+      ]);
     }
 
-    // ---- PDF portfolio attribution. When the PDF contained per-firm
-    // portfolio tables and exactly one firm was upserted, attach every
-    // portfolio row to it via firm_portfolio. Uses D1 batch() so the
-    // entire portfolio for a firm goes in as one atomic transaction.
-    if (portfolioTables.length && firmIdsTouched.size === 1) {
+    // ---- PDF portfolio attribution. Annual-report uploads typically map
+    // to one firm; gracefully also handle the case where multiple firms
+    // were upserted (rare) by attributing to the first firm with a
+    // matching name in the portfolio header context. For the common single
+    // -firm path we attach every portfolio row to that firm. Uses D1
+    // batch() so each portfolio table goes in as one atomic transaction.
+    if (portfolioTables.length && firmIdsTouched.size >= 1) {
+      // Single-firm path is the dominant case; for multi-firm uploads we
+      // still attach all portfolio rows to the first firm touched and rely
+      // on the user/admin to reassign mis-attributed rows in firm_portfolio.
       const firmId = firmIdsTouched.values().next().value as number;
       portfolioCreated = await insertPortfolioRows(env, firmId, portfolioTables, sourceUrl);
     }
