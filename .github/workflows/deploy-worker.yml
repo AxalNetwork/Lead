@@ -221,6 +221,11 @@ jobs:
               --data "SELECT 1 FROM \"${D}\" LIMIT 1")
             if echo "$RESP" | grep -qE '"success":[[:space:]]*true'; then
               echo "  exists and queryable — ok."
+            elif echo "$RESP" | grep -qE '"meta"[[:space:]]*:' && echo "$RESP" | grep -qE '"data"[[:space:]]*:' && echo "$RESP" | grep -qE '"rows"[[:space:]]*:'; then
+              # AE SQL endpoint returns raw ClickHouse JSON (no CF success
+              # envelope) for successful queries. Presence of meta/data/rows
+              # keys means the dataset is enabled and queryable.
+              echo "  exists and queryable (ClickHouse response) — ok."
             elif echo "$RESP" | grep -qiE 'table.*not found|unknown table|no such table|does not exist'; then
               echo "  not yet written to — will be auto-provisioned on first writeDataPoint."
             elif echo "$RESP" | grep -qE '"code":[[:space:]]*10000' || echo "$RESP" | grep -qiE 'authentication error|authorization error'; then
