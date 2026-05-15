@@ -50,7 +50,10 @@ function parseContext(row: ErrorRow): Record<string, unknown> | null {
 errors.get("/", async (c) => {
   const limit = Math.min(Number(c.req.query("limit") ?? "100"), 500);
   const kind = c.req.query("kind");
-  const code = c.req.query("code");
+  // `code` accepts comma-separated values for true multi-code filtering, e.g.
+  // ?code=fetch.http_4xx,fetch.timeout — matched with SQL `IN (?,?,...)`.
+  const codeParam = c.req.query("code");
+  const codes = codeParam ? codeParam.split(",").map((s) => s.trim()).filter(Boolean) : [];
   const jobId = c.req.query("job_id");
   const host = c.req.query("host");
   const q = c.req.query("q");
@@ -60,7 +63,8 @@ errors.get("/", async (c) => {
   const wheres: string[] = [];
   const binds: unknown[] = [];
   if (kind)  { wheres.push("kind = ?");   binds.push(kind); }
-  if (code)  { wheres.push("code = ?");   binds.push(code); }
+  if (codes.length === 1) { wheres.push("code = ?"); binds.push(codes[0]); }
+  else if (codes.length > 1) { wheres.push(`code IN (${codes.map(() => "?").join(",")})`); binds.push(...codes); }
   if (jobId) { wheres.push("job_id = ?"); binds.push(jobId); }
   if (host)  { wheres.push("host = ?");   binds.push(host); }
   if (since) { wheres.push("occurred_at >= ?"); binds.push(since); }
