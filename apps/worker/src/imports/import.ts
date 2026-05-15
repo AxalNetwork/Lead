@@ -245,16 +245,14 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
       rows_seen?: number; rows_imported?: number; rows_updated?: number;
       rows_rejected?: number; low_confidence_cells?: number; ocr_disagreements?: number };
     const parseTabs: ParseTab[] = Array.isArray(merged.tabs) ? (merged.tabs as ParseTab[]) : [];
-    type SumLike = { tab_index?: number; rows_imported?: number;
-      firms_updated?: number; rows_skipped?: number; errors?: string[] };
-    const byIdx = new Map<number, SumLike>();
-    for (const s of summaries as unknown as SumLike[]) {
-      if (typeof s.tab_index === "number") byIdx.set(s.tab_index, s);
-    }
+    // TabSummary uses `index` (not `tab_index`) — must match the parse-time
+    // tabs[].index so per-tab counters land correctly.
+    const byIdx = new Map<number, TabSummary>();
+    for (const s of summaries) byIdx.set(s.index, s);
     for (const t of parseTabs) {
       const s = byIdx.get(t.index);
       t.rows_imported = s?.rows_imported ?? 0;
-      t.rows_updated = s?.firms_updated ?? 0;
+      t.rows_updated = (s?.firms_updated ?? 0) + (s?.leads_updated ?? 0);
       t.rows_rejected = s?.rows_skipped ?? 0;
       t.rows_seen = t.rows_seen ?? 0;
       t.low_confidence_cells = t.low_confidence_cells ?? 0;

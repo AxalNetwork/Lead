@@ -62,25 +62,40 @@ export function extractTabs(html: string): GsTab[] {
   return out;
 }
 
-/** Download each tab as CSV and parse. Tabs that fail are skipped silently
- *  but counted via summary. */
+/** Fetch a single tab via the export endpoint in a given format. */
+async function fetchTabAs(docId: string, gid: string, format: "csv" | "tsv"): Promise<string | null> {
+  const url = `https://docs.google.com/spreadsheets/d/${docId}/export?format=${format}&gid=${gid}`;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 15000);
+  try {
+    const res = await fetch(url, { signal: ctl.signal, headers: { "User-Agent": "Mozilla/5.0 AIDataSignalBot/1.0" } });
+    if (!res.ok) return null;
+    return await res.text();
+  } catch { return null; }
+  finally { clearTimeout(timer); }
+}
+
+/** Download each tab and parse. Tries CSV first, then falls back to TSV
+ *  when the CSV parse looks degenerate (≤1 column or single mega-row),
+ *  which is the typical signature of comma-heavy data. */
 export async function fetchAllTabs(docId: string, tabs: GsTab[]): Promise<ParsedTable[]> {
   const out: ParsedTable[] = [];
   for (const t of tabs) {
-    const url = `https://docs.google.com/spreadsheets/d/${docId}/export?format=csv&gid=${t.gid}`;
-    const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 15000);
-    try {
-      const res = await fetch(url, {
-        signal: ctl.signal,
-        headers: { "User-Agent": "Mozilla/5.0 AIDataSignalBot/1.0" },
-      });
-      if (!res.ok) continue;
-      const csv = await res.text();
-      const tbl = parseCsv(csv);
-      if (tbl.headers.length) out.push({ ...tbl, sheetName: t.name });
-    } catch { /* skip tab */ }
-    finally { clearTimeout(timer); }
+    const csv = await fetchTabAs(docId, t.gid, "csv");
+    if (csv == null) continue;
+    let tbl = parseCsv(csv);
+    // Quality check: CSV parses with ≤1 column or one giant row almost always
+    // indicates embedded commas defeating delimiter sniffing. Re-fetch as
+    // TSV — Google Sheets exports tabs as field separators reliably.
+    const looksDegenerate = tbl.headers.length <= 1 || (tbl.rows.length <= 1 && csv.length > 200);
+    if (looksDegenerate) {
+      const tsv = await fetchTabAs(docId, t.gid, "tsv");
+      if (tsv) {
+        const tsvTbl = parseCsv(tsv, "\t");
+        if (tsvTbl.headers.length > tbl.headers.length) tbl = tsvTbl;
+      }
+    }
+    if (tbl.headers.length) out.push({ ...tbl, sheetName: t.name });
   }
   return out;
 }

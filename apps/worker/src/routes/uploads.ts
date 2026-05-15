@@ -324,10 +324,10 @@ uploads.post("/:id/rerun", async (c) => {
   return c.json({ ok: true, jobId, skip_ocr: skipOcr }, 202);
 });
 
-/** Dry-run import: enumerate rows that would be created vs. updated and
- *  return a small sample of column-level diffs so the operator can sanity-
- *  check a high-overlap upload before committing. Only inspects firms-
- *  intent tabs (the only entity with stable upsert keys). */
+/** Dry-run import: project each tab's rows through its saved column_map
+ *  (header → "firms.field"), then enumerate rows that would be created
+ *  vs. updated and return a small sample of column-level diffs. Only
+ *  inspects firms-intent tabs (the only entity with stable upsert keys). */
 uploads.post("/:id/diff-preview", async (c) => {
   const id = c.req.param("id");
   const row = await c.env.DB.prepare(
@@ -338,24 +338,44 @@ uploads.post("/:id/diff-preview", async (c) => {
   const tabRows: Record<string, Array<Record<string, string>>> =
     rowsRaw ? JSON.parse(rowsRaw) : {};
   const summary = row.summary_json ? JSON.parse(row.summary_json) as { tabs?: Array<{ index: number; intent: string }> } : { tabs: [] };
+  // Pull saved column_map per tab so source headers map to firms.* fields.
+  const tabMaps = await c.env.DB.prepare(
+    "SELECT tab_index, intent, column_map_json FROM file_import_tabs WHERE import_id = ?",
+  ).bind(id).all<{ tab_index: number; intent: string; column_map_json: string | null }>();
+  const mapByIdx = new Map<number, Record<string, string>>();
+  for (const r of tabMaps.results ?? []) {
+    try { mapByIdx.set(r.tab_index, r.column_map_json ? JSON.parse(r.column_map_json) as Record<string, string> : {}); }
+    catch { mapByIdx.set(r.tab_index, {}); }
+  }
   let wouldCreate = 0, wouldUpdate = 0;
   const samples: Array<{ tab: number; key: string; field: string; old: string | null; new: string }> = [];
   for (const t of summary.tabs ?? []) {
     if (t.intent !== "firms") continue;
+    const colMap = mapByIdx.get(t.index) ?? {};
+    // Invert: firms.field → source header.
+    const fieldToHeader: Record<string, string> = {};
+    for (const [hdr, target] of Object.entries(colMap)) {
+      if (!target || target === "__skip__") continue;
+      const m = /^firms\.(.+)$/.exec(target);
+      if (m && !fieldToHeader[m[1]]) fieldToHeader[m[1]] = hdr;
+    }
     const rows = tabRows[String(t.index)] ?? [];
     for (const r of rows) {
-      const url = (r["website"] || r["url"] || r["domain"] || "").toLowerCase().replace(/^https?:\/\//, "").replace(/\/$/, "");
-      const name = (r["name"] || r["firm"] || r["fund"] || "").trim();
+      const proj: Record<string, string> = {};
+      for (const [field, hdr] of Object.entries(fieldToHeader)) {
+        proj[field] = String(r[hdr] ?? "").trim();
+      }
+      const url = (proj["website"] || proj["domain"] || "").toLowerCase().replace(/^https?:\/\//, "").replace(/\/$/, "");
+      const name = (proj["name"] || "").trim();
       if (!url && !name) continue;
-      // firms schema column is hq_country_iso2 (see migration 090).
       const existing = await c.env.DB.prepare(
         "SELECT id, name, website, hq_country_iso2 FROM firms WHERE (website LIKE ? OR name = ?) LIMIT 1",
       ).bind(`%${url}%`, name).first<{ id: string; name: string | null; website: string | null; hq_country_iso2: string | null }>();
       if (!existing) { wouldCreate++; continue; }
       wouldUpdate++;
-      for (const [field, dbField] of [["name", "name"], ["website", "website"], ["hq_country_iso2", "hq_country_iso2"]] as const) {
-        const newVal = (r[field] ?? "").trim();
-        const oldVal = (existing as Record<string, string | null>)[dbField];
+      for (const field of ["name", "website", "hq_country_iso2"] as const) {
+        const newVal = (proj[field] ?? "").trim();
+        const oldVal = (existing as Record<string, string | null>)[field];
         if (newVal && newVal !== (oldVal ?? "") && samples.length < 10) {
           samples.push({ tab: t.index, key: name || url, field, old: oldVal, new: newVal });
         }
