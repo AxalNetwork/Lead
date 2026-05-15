@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { cors } from "hono/cors";
 import type { Env, JobMessage } from "./types";
 import { health } from "./routes/health";
@@ -34,12 +35,18 @@ export { EntityLock } from "./do/EntityLock";
 export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, MatchProjectWorkflow } from "./ai/workflows";
 import { piiAuditOnLeadGet } from "./middleware/pii_audit";
 import { accessGuard } from "./middleware/access";
+import { requestId } from "./middleware/request_id";
 import { runJob } from "./scraper/pipeline";
 import { scheduled as scheduledHandler } from "./scheduled";
+import { errors as errorsRoute } from "./routes/errors";
+import { AppError, wrapUnknown } from "./errors";
+import { logError } from "./db/error_log";
 
 const API_HOST = "api.aidatasignal.com";
 
-const api = new Hono<{ Bindings: Env; Variables: { email: string } }>();
+const api = new Hono<{ Bindings: Env; Variables: { email: string; request_id: string } }>();
+
+api.use("*", requestId);
 
 api.use(
   "*",
@@ -58,11 +65,15 @@ api.use(
   }),
 );
 
+// Public liveness only — `/health` returns the cheap DB ping (no binding
+// inventory). The deep readiness probe (`/api/health/deep`) is mounted
+// after `accessGuard` below so its operational telemetry is not exposed.
 api.route("/health", health);
 // Public webhook (HMAC-signed) — must be mounted *before* accessGuard so
 // marketing tools can post events without a Cloudflare Access cookie.
 api.route("/api/campaigns", campaignsWebhook);
 api.use("/api/*", accessGuard);
+api.route("/api/health", health);
 // PII access audit — runs after the lead-detail handler.
 api.use("/api/leads/:id", piiAuditOnLeadGet);
 api.route("/api/auth", auth);
@@ -108,11 +119,27 @@ api.route("/api/projects", projectsRoute);
 api.route("/api/leads", leadsEnrichActions);
 api.route("/api/leads", leadsDncActions);
 api.route("/api/leads", leadsCampaignActions);
+api.route("/api/errors", errorsRoute);
 
-api.notFound((c) => c.json({ error: "not_found" }, 404));
+api.notFound((c) => c.json({ error: "not_found", request_id: c.var.request_id }, 404));
 api.onError((err, c) => {
-  console.error("Worker error", err);
-  return c.json({ error: "internal_error", message: err.message }, 500);
+  const appErr = err instanceof AppError ? err : wrapUnknown(err, "internal_error");
+  const requestIdVal = c.var.request_id;
+  // Fire-and-forget log; never block the response on logging.
+  c.executionCtx.waitUntil(
+    logError(c.env, {
+      err: appErr,
+      request_id: requestIdVal,
+      url: c.req.url,
+      method: c.req.method,
+    }).then(() => undefined).catch(() => undefined),
+  );
+  if (appErr.kind === "internal" || appErr.status >= 500) {
+    console.error("Worker error", appErr.code, appErr.message, appErr.cause?.stack ?? "");
+  } else {
+    console.warn("Worker error", appErr.code, appErr.message);
+  }
+  return c.json(appErr.toJSON(requestIdVal), appErr.status as ContentfulStatusCode);
 });
 
 export default {
@@ -125,20 +152,24 @@ export default {
 
   async queue(batch: MessageBatch<JobMessage>, env: Env): Promise<void> {
     for (const msg of batch.messages) {
+      const body = msg.body as JobMessage | undefined;
+      const jobId = body && typeof body === "object" && "jobId" in body ? String((body as { jobId: unknown }).jobId) : null;
       try {
-        const body = msg.body;
         if (!body || typeof body !== "object" || !("jobId" in body) || !("kind" in body) || !("target" in body)) {
           console.warn("Skipping malformed queue message", msg.id);
+          await logError(env, {
+            err: new AppError({ code: "queue_malformed", kind: "validation", message: "malformed queue message", context: { msgId: msg.id } }),
+          });
           msg.ack();
           continue;
         }
-        await runJob(body as JobMessage, env);
+        await runJob(body, env);
         msg.ack();
       } catch (e) {
-        const message = (e as Error).message ?? "";
-        // Permanent failures already wrote status='failed' on the job row;
-        // only retry on transient signals so we don't loop on dead URLs.
-        const transient =
+        const appErr = e instanceof AppError ? e : wrapUnknown(e, "queue_run_failed", { msgId: msg.id, jobId });
+        await logError(env, { err: appErr, job_id: jobId, step: "queue.runJob" });
+        const message = appErr.message ?? "";
+        const transient = appErr.retryable ||
           message.includes("status_429") ||
           message.includes("status_503") ||
           message.includes("status_502") ||
@@ -146,11 +177,18 @@ export default {
           message.includes("fetch_error") ||
           message.includes("D1_ERROR") ||
           message.includes("Network connection lost");
-        if (transient) {
-          console.warn("Queue retry (transient)", msg.id, message);
-          msg.retry({ delaySeconds: 30 });
+        if (transient && msg.attempts < 5) {
+          console.warn("Queue retry (transient)", msg.id, appErr.code, message);
+          msg.retry({ delaySeconds: Math.min(30 * Math.pow(2, msg.attempts), 600) });
         } else {
-          console.error("Queue ack (permanent)", msg.id, message);
+          console.error("Queue ack (permanent)", msg.id, appErr.code, message);
+          if (jobId) {
+            try {
+              await env.DB.prepare(
+                `UPDATE jobs SET status='failed', last_error_code=?, last_error_at=?, finished_at=COALESCE(finished_at, ?) WHERE id=?`,
+              ).bind(appErr.code, new Date().toISOString(), new Date().toISOString(), jobId).run();
+            } catch { /* ignore */ }
+          }
           msg.ack();
         }
       }

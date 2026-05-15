@@ -1,0 +1,44 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  worker:
+    name: Worker (typecheck + lint + test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/worker/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      # Lint is advisory until the audit follow-ups (AUDIT.md) are burned
+      # down; flip `continue-on-error` to `false` once the baseline is clean.
+      - run: npm run lint
+        continue-on-error: true
+      - run: npm test
+
+  site:
+    name: Site (build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/site
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+          working-directory: apps/site
+      - run: bundle exec jekyll build --destination /tmp/site-build

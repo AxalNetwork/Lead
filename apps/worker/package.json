@@ -6,6 +6,8 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint 'src/**/*.ts'",
+    "lint:fix": "eslint 'src/**/*.ts' --fix",
     "test": "tsc -p tsconfig.test.json && node --test test/profile.test.mjs"
   },
   "dependencies": {
@@ -17,6 +19,9 @@
   "devDependencies": {
     "@cloudflare/puppeteer": "^1.1.0",
     "@cloudflare/workers-types": "^4.20250109.0",
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0",
+    "eslint": "^8.57.1",
     "typescript": "^5.7.2",
     "wrangler": "^4.91.0"
   }

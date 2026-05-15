@@ -88,6 +88,28 @@ jobs.get("/:id", async (c) => {
   return c.json(r);
 });
 
+jobs.post("/:id/replay", async (c) => {
+  const id = c.req.param("id");
+  const job = await c.env.DB.prepare(
+    `SELECT id, name, source, kind, target, config_json FROM jobs WHERE id = ?`,
+  ).bind(id).first<{ id: string; name: string; source: string; kind: JobKind; target: string; config_json: string | null }>();
+  if (!job) return c.json({ error: "not_found" }, 404);
+  let config: Record<string, unknown> = {};
+  if (job.config_json) { try { config = JSON.parse(job.config_json) as Record<string, unknown>; } catch { /* ignore */ } }
+  const newId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await c.env.DB.prepare(
+    `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at, replay_of)
+     VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
+  ).bind(newId, `${job.name} (replay)`, job.source, job.kind, job.target, JSON.stringify(config), now, now, job.id).run();
+  await c.env.DB.prepare(
+    `INSERT INTO job_state_transitions (job_id, from_state, to_state, reason, changed_by) VALUES (?, NULL, 'queued', ?, ?)`,
+  ).bind(newId, `manual replay of ${job.id}`, c.var.email ?? "system").run();
+  const msg: JobMessage = { jobId: newId, kind: job.kind, target: job.target, config };
+  await c.env.LEAD_QUEUE.send(msg);
+  return c.json({ ok: true, replay_job_id: newId, replay_of: job.id }, 201);
+});
+
 jobs.post("/:id/cancel", async (c) => {
   const id = c.req.param("id");
   const now = new Date().toISOString();

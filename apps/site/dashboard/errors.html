@@ -1,0 +1,52 @@
+---
+layout: default
+title: Errors
+permalink: /dashboard/errors/
+---
+
+<h1 class="ads-page-title">Errors</h1>
+<p class="ads-page-sub">Centralized failure log. Filter by code/kind, drill into context, or replay a failed job.</p>
+
+<div class="ads-card" style="margin-bottom:12px">
+  <div class="ads-filter-grid ads-filter-grid--3">
+    <label class="ads-field"><span>Search</span><input id="ads-err-q" placeholder="message / url / cause"></label>
+    <label class="ads-field"><span>Kind</span>
+      <select id="ads-err-kind">
+        <option value="">all</option>
+        <option>transient</option><option>permanent</option><option>config</option>
+        <option>auth</option><option>validation</option><option>upstream</option><option>internal</option>
+      </select>
+    </label>
+    <label class="ads-field"><span>Code</span><input id="ads-err-code" placeholder="e.g. scrape_blocked"></label>
+    <label class="ads-field"><span>Job id</span><input id="ads-err-job" placeholder="optional"></label>
+    <label class="ads-field"><span>Since</span><input type="datetime-local" id="ads-err-since"></label>
+    <button class="ads-btn" id="ads-err-refresh">Refresh</button>
+  </div>
+</div>
+
+<div class="ads-card" style="margin-bottom:12px">
+  <h3>Last 24h — top error codes</h3>
+  <div id="ads-err-summary"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<div class="ads-card">
+  <h3>Recent errors</h3>
+  <div id="ads-err-list"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<div id="ads-err-modal" class="ads-modal" hidden style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:200;display:flex;align-items:center;justify-content:center">
+  <div class="ads-modal__panel" style="background:#fff;border-radius:8px;width:min(900px,94vw);max-height:90vh;overflow:auto;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,.2)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h3 id="ads-err-modal-title" style="margin:0">Error</h3>
+      <button class="ads-btn ads-btn--ghost" id="ads-err-modal-close" type="button">&times;</button>
+    </div>
+    <div id="ads-err-modal-body"></div>
+    <div class="ads-form-actions" style="margin-top:14px">
+      <button class="ads-btn" id="ads-err-modal-replay" type="button" hidden>Replay job</button>
+      <a class="ads-btn ads-btn--ghost" id="ads-err-modal-job-link" href="#" hidden>Open job &rarr;</a>
+      <span class="ads-form-msg" id="ads-err-modal-msg"></span>
+    </div>
+  </div>
+</div>
+
+<script src="/assets/js/errors.js?v={{ site.time | date: '%s' }}"></script>
