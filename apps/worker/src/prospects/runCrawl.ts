@@ -31,7 +31,7 @@ export interface RunOutcome {
 
 const MAX_EVENTS_PER_RUN = 500;
 
-export async function runSource(env: Env, mod: SourceModule, opts?: { force?: boolean }): Promise<RunOutcome> {
+export async function runSource(env: Env, mod: SourceModule, opts?: { force?: boolean; accountId?: string }): Promise<RunOutcome> {
   const runId = crypto.randomUUID();
   const startedAt = new Date().toISOString();
   const enabled = opts?.force ? true : await isEnabled(env, mod.slug, mod.enabledByDefault);
@@ -52,7 +52,7 @@ export async function runSource(env: Env, mod: SourceModule, opts?: { force?: bo
   let nextCursor: string | null | undefined = cursor;
   let crawlError: string | undefined;
   try {
-    const r = await mod.crawl({ env, cursor, maxEvents: MAX_EVENTS_PER_RUN });
+    const r = await mod.crawl({ env, cursor, maxEvents: MAX_EVENTS_PER_RUN, accountId: opts?.accountId });
     drafts = (r.events ?? []).slice(0, MAX_EVENTS_PER_RUN);
     nextCursor = r.cursor === undefined ? cursor : r.cursor;
   } catch (e) {
@@ -98,13 +98,20 @@ export async function runSource(env: Env, mod: SourceModule, opts?: { force?: bo
             (d.buyer!.linkedin_url && b.linkedin_url && b.linkedin_url === d.buyer!.linkedin_url),
           );
           if (!match) {
-            await insertBuyer(env, {
+            const created = await insertBuyer(env, {
               account_id: acct.id,
               name: d.buyer.name ?? null,
               email: d.buyer.email ?? null,
               title: d.buyer.title ?? null,
               linkedin_url: d.buyer.linkedin_url ?? null,
             });
+            // Hand off to the existing lead-enrichment workflow so the
+            // new buyer goes through the same hydration path as a
+            // form-captured lead (Hunter, Proxycurl, fit scoring, …).
+            if (env.WF_ENRICH_LEAD) {
+              env.WF_ENRICH_LEAD.create({ params: { buyerId: created.id, accountId: acct.id, source: mod.slug } })
+                .catch((e) => console.warn("WF_ENRICH_LEAD enqueue failed", created.id, (e as Error).message));
+            }
           }
         } catch (e) { console.warn("buyer upsert failed", acct.id, (e as Error).message); }
       }

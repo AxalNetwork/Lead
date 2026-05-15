@@ -25,11 +25,13 @@ const mod: SourceModule = {
     const key = (ctx.env as unknown as Record<string, string | undefined>).BUILTWITH_API_KEY;
     if (!key) return { events, cursor: ctx.cursor };
 
-    const rows = await ctx.env.DB.prepare(
-      `SELECT id, domain, name FROM accounts
-        WHERE domain IS NOT NULL AND status NOT IN ('lost','disqualified')
-        ORDER BY account_score DESC LIMIT 20`,
-    ).all<AccountRow>();
+    const rows = ctx.accountId
+      ? await ctx.env.DB.prepare(`SELECT id, domain, name FROM accounts WHERE id = ? AND domain IS NOT NULL`).bind(ctx.accountId).all<AccountRow>()
+      : await ctx.env.DB.prepare(
+          `SELECT id, domain, name FROM accounts
+            WHERE domain IS NOT NULL AND status NOT IN ('lost','disqualified')
+            ORDER BY account_score DESC LIMIT 20`,
+        ).all<AccountRow>();
 
     for (const r of rows.results ?? []) {
       const url = `https://api.builtwith.com/v21/api.json?KEY=${encodeURIComponent(key)}&LOOKUP=${encodeURIComponent(r.domain ?? "")}`;

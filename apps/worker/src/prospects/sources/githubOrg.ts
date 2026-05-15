@@ -18,9 +18,11 @@ const mod: SourceModule = {
   async crawl(ctx: SourceContext): Promise<CrawlResult> {
     const cursorMap: Record<string, string> = (() => { try { return ctx.cursor ? JSON.parse(ctx.cursor) as Record<string, string> : {}; } catch { return {}; } })();
     const events: SignalEventDraft[] = [];
-    const rows = await ctx.env.DB.prepare(
-      `SELECT id, domain, github_org, name FROM accounts WHERE github_org IS NOT NULL LIMIT 30`,
-    ).all<AccountRow>();
+    const rows = ctx.accountId
+      ? await ctx.env.DB.prepare(`SELECT id, domain, github_org, name FROM accounts WHERE id = ? AND github_org IS NOT NULL`).bind(ctx.accountId).all<AccountRow>()
+      : await ctx.env.DB.prepare(
+          `SELECT id, domain, github_org, name FROM accounts WHERE github_org IS NOT NULL LIMIT 30`,
+        ).all<AccountRow>();
     for (const r of rows.results ?? []) {
       const org = (r.github_org ?? "").trim();
       if (!org) continue;

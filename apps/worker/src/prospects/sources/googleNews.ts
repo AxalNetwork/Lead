@@ -18,13 +18,15 @@ const mod: SourceModule = {
     const since = ctx.cursor ? Date.parse(ctx.cursor) : Date.now() - 6 * 3600 * 1000;
     let newest = since;
     const events: SignalEventDraft[] = [];
-    const rows = await ctx.env.DB.prepare(
-      `SELECT id, domain, name FROM accounts
-        WHERE status NOT IN ('lost','disqualified')
-          AND domain IS NOT NULL
-        ORDER BY account_score DESC
-        LIMIT 25`,
-    ).all<AccountRow>();
+    const rows = ctx.accountId
+      ? await ctx.env.DB.prepare(`SELECT id, domain, name FROM accounts WHERE id = ?`).bind(ctx.accountId).all<AccountRow>()
+      : await ctx.env.DB.prepare(
+          `SELECT id, domain, name FROM accounts
+            WHERE status NOT IN ('lost','disqualified')
+              AND domain IS NOT NULL
+            ORDER BY account_score DESC
+            LIMIT 25`,
+        ).all<AccountRow>();
     for (const r of rows.results ?? []) {
       const q = encodeURIComponent(`"${r.name}"`);
       const url = `https://news.google.com/rss/search?q=${q}&hl=en-US&gl=US&ceid=US:en`;

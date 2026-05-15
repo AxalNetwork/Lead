@@ -68,19 +68,24 @@ export class EnrichAccountWorkflow {
     const { MODULES } = await import("../prospects/sources/registry");
     const { runSource } = await import("../prospects/runCrawl");
     const { recomputeAccountScore } = await import("../prospects/repo");
+    const { syncAccountAiById } = await import("../prospects/aiSync");
     const ran: string[] = [];
-    // Run only the per-account-scoped sources synchronously. The full
-    // hourly crawl picks up the rest. We pass force:true so the run
-    // bypasses the enabled toggle for this account.
+    // Per-account scoped sources: each module honours ctx.accountId and
+    // restricts its DB query / API call to that single account.
     const perAccount = MODULES.filter((m) => ["builtwith", "github_org", "google_news"].includes(m.slug));
     for (const mod of perAccount) {
       await step.do(`enrich:${mod.slug}`, { retries: { limit: 2, backoff: "exponential" } }, async () => {
-        await runSource(this.env, mod, { force: true });
+        await runSource(this.env, mod, { force: true, accountId });
         ran.push(mod.slug);
       });
     }
     await step.do("recompute_score", { retries: { limit: 2, backoff: "exponential" } }, async () => {
       await recomputeAccountScore(this.env, accountId);
+    });
+    // Re-embed + reindex so vector search and AI Search reflect the
+    // freshly enriched account immediately.
+    await step.do("ai_resync", { retries: { limit: 2, backoff: "exponential" } }, async () => {
+      await syncAccountAiById(this.env, accountId);
     });
     return { ok: true, accountId, ran };
   }

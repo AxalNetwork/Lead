@@ -14,6 +14,12 @@ export interface SourceContext {
   cursor: string | null;
   /** Optional override for the per-run hard cap on emitted events. */
   maxEvents?: number;
+  /**
+   * When set, the module MUST restrict its work to this single account
+   * (used by EnrichAccountWorkflow). Modules that have no per-account
+   * scoping skip themselves when this is provided.
+   */
+  accountId?: string;
   logger?: (msg: string) => void;
 }
 
