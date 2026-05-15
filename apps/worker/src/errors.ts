@@ -4,12 +4,12 @@
 //   1. an `AppError` subclass thrown explicitly, OR
 //   2. caught and re-thrown via `wrapUnknown(e, code, ctx)` so the global
 //      onError handler in `index.ts` can serialize it to JSON, log it to
-//      `error_log`, and (where applicable) attach a request_id.
+//      `error_log`, mirror it to Analytics Engine, and attach a request_id.
 //
 // All AppErrors carry:
-//   - code:   stable machine string (snake_case, e.g. "scrape_blocked").
+//   - code:   stable machine string from the ErrCode union below.
 //   - status: HTTP status to return when surfaced via API.
-//   - kind:   high-level category for UI grouping ("transient"|"permanent"|"config"|"auth"|"validation"|"upstream"|"internal").
+//   - kind:   high-level category for UI grouping.
 //   - retryable: hint to the queue/retry layer.
 //   - context: free-form structured context (job_id, url, host, provider…).
 
@@ -22,9 +22,67 @@ export type ErrorKind =
   | "upstream"
   | "internal";
 
+// Closed enumeration of error codes the worker emits. New code paths must add
+// to this union (the linter + reviewer flag string-literal codes that drift).
+export type ErrCode =
+  | "internal_error"
+  | "not_found"
+  | "validation_failed"
+  | "bad_request"
+  | "no_access_jwt"
+  | "unauthorized"
+  | "forbidden"
+  | "no_email_claim"
+  | "bad_aud"
+  | "bad_iss"
+  | "expired"
+  | "scrape_blocked"
+  | "robots_disallowed"
+  | "tos_blocked"
+  | "rate_limited"
+  | "budget_exhausted"
+  | "fetch_timeout"
+  | "fetch_error"
+  | "fetch_4xx"
+  | "fetch_5xx"
+  | "parse_error"
+  | "json_parse_error"
+  | "queue_malformed"
+  | "queue_run_failed"
+  | "queue_dead_letter"
+  | "db_error"
+  | "vectorize_error"
+  | "ai_error"
+  | "ai_budget_exhausted"
+  | "workflow_failed"
+  | "workflow_step_failed"
+  | "config_missing"
+  | "upstream_apollo"
+  | "upstream_hunter"
+  | "upstream_rocketreach"
+  | "upstream_peopledatalabs"
+  | "upstream_proxycurl"
+  | "upstream_crunchbase"
+  | "upstream_opencorporates"
+  | "upstream_uk_ch"
+  | "upstream_whoisxml"
+  | "upstream_sec_edgar"
+  | "upstream_brave"
+  | "upstream_searx"
+  | "upstream_browser"
+  | "upstream_other";
+
+/**
+ * Runtime escape hatch for *constructed* codes (e.g. `upstream_${provider}`)
+ * that aren't statically known. Use only at the boundary; prefer ErrCode
+ * everywhere a literal can be used so the closed enum is enforceable by
+ * tsc + eslint.
+ */
+export type RuntimeErrCode = ErrCode | (string & {});
+
 export interface AppErrorJSON {
-  error: string;
-  code: string;
+  error: ErrCode;
+  code: ErrCode;
   kind: ErrorKind;
   status: number;
   message: string;
@@ -35,15 +93,15 @@ export interface AppErrorJSON {
 }
 
 export class AppError extends Error {
-  readonly code: string;
+  readonly code: ErrCode;
   readonly kind: ErrorKind;
   readonly status: number;
   readonly retryable: boolean;
   readonly context: Record<string, unknown>;
-  readonly cause?: Error;
+  override readonly cause?: Error;
 
   constructor(opts: {
-    code: string;
+    code: ErrCode;
     kind: ErrorKind;
     status?: number;
     message?: string;
@@ -73,11 +131,12 @@ export class AppError extends Error {
     if (Object.keys(this.context).length) out.context = this.context;
     if (requestId) out.request_id = requestId;
     if (this.cause) {
-      out.cause = {
+      const c: { name: string; message: string; stack?: string } = {
         name: this.cause.name,
         message: this.cause.message,
-        stack: this.cause.stack,
       };
+      if (this.cause.stack) c.stack = this.cause.stack;
+      out.cause = c;
     }
     return out;
   }
@@ -103,8 +162,8 @@ function defaultRetryableForKind(kind: ErrorKind): boolean {
 // ---- Common subclasses (sugar; AppError directly is also fine) ----------
 
 export class ValidationError extends AppError {
-  constructor(code: string, message: string, context?: Record<string, unknown>) {
-    super({ code, kind: "validation", status: 400, message, retryable: false, context });
+  constructor(code: ErrCode, message: string, context?: Record<string, unknown>) {
+    super({ code, kind: "validation", status: 400, message, retryable: false, ...(context ? { context } : {}) });
     this.name = "ValidationError";
   }
 }
@@ -131,7 +190,7 @@ export class AuthError extends AppError {
       status: code === "forbidden" ? 403 : 401,
       message: message ?? code,
       retryable: false,
-      context,
+      ...(context ? { context } : {}),
     });
     this.name = "AuthError";
   }
@@ -139,8 +198,11 @@ export class AuthError extends AppError {
 
 export class UpstreamError extends AppError {
   constructor(provider: string, message: string, context?: Record<string, unknown>) {
+    // Constructed at runtime; the closed ErrCode enum already enumerates
+    // every known provider so this assertion is the only escape.
+    const code = (`upstream_${provider}` as unknown) as ErrCode;
     super({
-      code: `upstream_${provider}`,
+      code,
       kind: "upstream",
       status: 502,
       message,
@@ -180,8 +242,8 @@ export class BudgetExhaustedError extends AppError {
 }
 
 export class TransientError extends AppError {
-  constructor(code: string, message: string, context?: Record<string, unknown>) {
-    super({ code, kind: "transient", status: 503, message, retryable: true, context });
+  constructor(code: ErrCode, message: string, context?: Record<string, unknown>) {
+    super({ code, kind: "transient", status: 503, message, retryable: true, ...(context ? { context } : {}) });
     this.name = "TransientError";
   }
 }
@@ -189,22 +251,79 @@ export class TransientError extends AppError {
 // ---- Wrappers --------------------------------------------------------------
 
 /** Convert any unknown thrown value into an AppError (idempotent). */
-export function wrapUnknown(e: unknown, code: string, context?: Record<string, unknown>): AppError {
+export function wrapUnknown(e: unknown, code: ErrCode, context?: Record<string, unknown>): AppError {
   if (e instanceof AppError) {
     if (context) Object.assign(e.context, context);
     return e;
   }
-  const err = e instanceof Error ? e : new Error(typeof e === "string" ? e : JSON.stringify(e));
-  return new AppError({
-    code,
-    kind: "internal",
+  const err = e instanceof Error ? e : new Error(typeof e === "string" ? e : safeJson(e));
+  // Heuristic upgrade: detect common transient patterns from the cause.
+  const guessed = classify(err);
+  const opts: ConstructorParameters<typeof AppError>[0] = {
+    code: guessed?.code ?? code,
+    kind: guessed?.kind ?? "internal",
     message: err.message || code,
-    context,
     cause: err,
-  });
+  };
+  if (guessed) opts.retryable = guessed.retryable;
+  if (context) opts.context = context;
+  return new AppError(opts);
 }
 
 /** Type guard. */
 export function isAppError(e: unknown): e is AppError {
   return e instanceof AppError;
+}
+
+/**
+ * Heuristic classifier for stringly-typed errors thrown by the existing
+ * codebase or by the platform (D1, fetch, Workers AI). Returns null if no
+ * pattern matches; callers should then use the supplied default code/kind.
+ *
+ * Required by Task #27 acceptance: every logged failure has a well-typed
+ * code, even when thrown deep in legacy code that hasn't migrated to
+ * AppError yet.
+ */
+export function classify(err: unknown): { code: ErrCode; kind: ErrorKind; retryable: boolean } | null {
+  if (err instanceof AppError) return { code: err.code, kind: err.kind, retryable: err.retryable };
+  const msg = (err instanceof Error ? err.message : String(err ?? "")).toLowerCase();
+  if (!msg) return null;
+
+  // Network / fetch.
+  if (msg.includes("aborted") || msg.includes("timeout") || msg.includes("timed out")) {
+    return { code: "fetch_timeout", kind: "transient", retryable: true };
+  }
+  if (msg.includes("network connection lost") || msg.includes("econnreset") || msg.includes("ehostunreach")) {
+    return { code: "fetch_error", kind: "transient", retryable: true };
+  }
+
+  // HTTP status codes embedded in the message (e.g. "status_503").
+  const statusMatch = msg.match(/status[_ ](\d{3})/);
+  if (statusMatch) {
+    const s = Number(statusMatch[1]);
+    if (s === 429) return { code: "rate_limited", kind: "transient", retryable: true };
+    if (s >= 500) return { code: "fetch_5xx", kind: "transient", retryable: true };
+    if (s >= 400) return { code: "fetch_4xx", kind: "permanent", retryable: false };
+  }
+
+  // D1 / Vectorize / Workers AI.
+  if (msg.includes("d1_error") || msg.includes("sqlite_") || msg.includes("database is locked")) {
+    return { code: "db_error", kind: "transient", retryable: true };
+  }
+  if (msg.includes("vectorize")) return { code: "vectorize_error", kind: "upstream", retryable: true };
+  if (msg.includes("ai.run") || msg.includes("workers ai")) return { code: "ai_error", kind: "upstream", retryable: true };
+
+  // Parsing.
+  if (msg.includes("unexpected token") || msg.includes("json")) return { code: "json_parse_error", kind: "validation", retryable: false };
+  if (msg.includes("invalid url") || msg.includes("uri malformed")) return { code: "validation_failed", kind: "validation", retryable: false };
+
+  // Auth.
+  if (msg.includes("jwt") || msg.includes("unauthorized") || msg.includes("forbidden")) {
+    return { code: "unauthorized", kind: "auth", retryable: false };
+  }
+  return null;
+}
+
+function safeJson(v: unknown): string {
+  try { return JSON.stringify(v); } catch { return String(v); }
 }

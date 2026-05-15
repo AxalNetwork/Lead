@@ -5,7 +5,7 @@ permalink: /dashboard/errors/
 ---
 
 <h1 class="ads-page-title">Errors</h1>
-<p class="ads-page-sub">Centralized failure log. Filter by code/kind, drill into context, or replay a failed job.</p>
+<p class="ads-page-sub">Centralized failure log. Filter by code/kind, drill into context, replay a failed job, or mark a noisy cluster resolved.</p>
 
 <div class="ads-card" style="margin-bottom:12px">
   <div class="ads-filter-grid ads-filter-grid--3">
@@ -19,14 +19,34 @@ permalink: /dashboard/errors/
     </label>
     <label class="ads-field"><span>Code</span><input id="ads-err-code" placeholder="e.g. scrape_blocked"></label>
     <label class="ads-field"><span>Job id</span><input id="ads-err-job" placeholder="optional"></label>
+    <label class="ads-field"><span>Host</span><input id="ads-err-host" placeholder="e.g. example.com"></label>
+    <label class="ads-field"><span>Resolved</span>
+      <select id="ads-err-resolved">
+        <option value="">all</option>
+        <option value="false">open</option>
+        <option value="true">resolved</option>
+      </select>
+    </label>
     <label class="ads-field"><span>Since</span><input type="datetime-local" id="ads-err-since"></label>
     <button class="ads-btn" id="ads-err-refresh">Refresh</button>
   </div>
 </div>
 
 <div class="ads-card" style="margin-bottom:12px">
-  <h3>Last 24h — top error codes</h3>
-  <div id="ads-err-summary"><div class="ads-loading">Loading…</div></div>
+  <h3>Last 7 days — error rate</h3>
+  <canvas id="ads-err-chart" width="900" height="180" style="width:100%;max-width:100%;height:180px"></canvas>
+  <div id="ads-err-chart-legend" class="ads-muted" style="font-size:11px;margin-top:6px"></div>
+</div>
+
+<div class="ads-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+  <div class="ads-card">
+    <h3>Last 24h — top error codes</h3>
+    <div id="ads-err-summary"><div class="ads-loading">Loading…</div></div>
+  </div>
+  <div class="ads-card">
+    <h3>Open clusters (7d) — code × host</h3>
+    <div id="ads-err-clusters"><div class="ads-loading">Loading…</div></div>
+  </div>
 </div>
 
 <div class="ads-card">
@@ -41,8 +61,10 @@ permalink: /dashboard/errors/
       <button class="ads-btn ads-btn--ghost" id="ads-err-modal-close" type="button">&times;</button>
     </div>
     <div id="ads-err-modal-body"></div>
-    <div class="ads-form-actions" style="margin-top:14px">
+    <div class="ads-form-actions" style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <button class="ads-btn" id="ads-err-modal-replay" type="button" hidden>Replay job</button>
+      <button class="ads-btn ads-btn--ghost" id="ads-err-modal-resolve" type="button" hidden>Mark resolved</button>
+      <button class="ads-btn ads-btn--ghost" id="ads-err-modal-resolve-cluster" type="button" hidden>Resolve whole cluster</button>
       <a class="ads-btn ads-btn--ghost" id="ads-err-modal-job-link" href="#" hidden>Open job &rarr;</a>
       <span class="ads-form-msg" id="ads-err-modal-msg"></span>
     </div>

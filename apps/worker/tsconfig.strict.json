@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noPropertyAccessFromIndexSignature": true
+  },
+  "include": [
+    "src/errors.ts",
+    "src/db/error_log.ts",
+    "src/middleware/request_id.ts",
+    "src/routes/health.ts",
+    "src/routes/errors.ts"
+  ]
+}

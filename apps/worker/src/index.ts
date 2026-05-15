@@ -167,26 +167,32 @@ export default {
         msg.ack();
       } catch (e) {
         const appErr = e instanceof AppError ? e : wrapUnknown(e, "queue_run_failed", { msgId: msg.id, jobId });
-        await logError(env, { err: appErr, job_id: jobId, step: "queue.runJob" });
-        const message = appErr.message ?? "";
-        const transient = appErr.retryable ||
-          message.includes("status_429") ||
-          message.includes("status_503") ||
-          message.includes("status_502") ||
-          message.includes("status_504") ||
-          message.includes("fetch_error") ||
-          message.includes("D1_ERROR") ||
-          message.includes("Network connection lost");
-        if (transient && msg.attempts < 5) {
-          console.warn("Queue retry (transient)", msg.id, appErr.code, message);
-          msg.retry({ delaySeconds: Math.min(30 * Math.pow(2, msg.attempts), 600) });
-        } else {
-          console.error("Queue ack (permanent)", msg.id, appErr.code, message);
+        const attempts = msg.attempts;
+        await logError(env, { err: appErr, job_id: jobId, step: "queue.runJob", retry_count: attempts });
+        const transient = appErr.retryable;
+        const now = new Date().toISOString();
+        if (transient && attempts < 5) {
+          console.warn("Queue retry (transient)", msg.id, appErr.code, appErr.message);
           if (jobId) {
             try {
               await env.DB.prepare(
-                `UPDATE jobs SET status='failed', last_error_code=?, last_error_at=?, finished_at=COALESCE(finished_at, ?) WHERE id=?`,
-              ).bind(appErr.code, new Date().toISOString(), new Date().toISOString(), jobId).run();
+                `UPDATE jobs SET retry_count = ?, last_error_code = ?, last_error_at = ? WHERE id = ?`,
+              ).bind(attempts, appErr.code, now, jobId).run();
+            } catch { /* ignore */ }
+          }
+          msg.retry({ delaySeconds: Math.min(30 * Math.pow(2, attempts), 600) });
+        } else {
+          // attempts >= 5 transitions the job to dead_letter; otherwise failed.
+          const finalState = attempts >= 5 ? "dead_letter" : "failed";
+          console.error("Queue ack (permanent)", msg.id, finalState, appErr.code, appErr.message);
+          if (jobId) {
+            try {
+              await env.DB.prepare(
+                `UPDATE jobs SET status = ?, retry_count = ?, last_error_code = ?, last_error_at = ?, finished_at = COALESCE(finished_at, ?) WHERE id = ?`,
+              ).bind(finalState, attempts, appErr.code, now, now, jobId).run();
+              await env.DB.prepare(
+                `INSERT INTO job_state_transitions (job_id, from_state, to_state, reason, changed_by) VALUES (?, NULL, ?, ?, 'queue')`,
+              ).bind(jobId, finalState, appErr.code).run();
             } catch { /* ignore */ }
           }
           msg.ack();

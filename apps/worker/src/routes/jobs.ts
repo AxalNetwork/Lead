@@ -99,7 +99,7 @@ jobs.post("/:id/replay", async (c) => {
   const newId = crypto.randomUUID();
   const now = new Date().toISOString();
   await c.env.DB.prepare(
-    `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at, replay_of)
+    `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at, parent_job_id)
      VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
   ).bind(newId, `${job.name} (replay)`, job.source, job.kind, job.target, JSON.stringify(config), now, now, job.id).run();
   await c.env.DB.prepare(
@@ -107,7 +107,7 @@ jobs.post("/:id/replay", async (c) => {
   ).bind(newId, `manual replay of ${job.id}`, c.var.email ?? "system").run();
   const msg: JobMessage = { jobId: newId, kind: job.kind, target: job.target, config };
   await c.env.LEAD_QUEUE.send(msg);
-  return c.json({ ok: true, replay_job_id: newId, replay_of: job.id }, 201);
+  return c.json({ ok: true, replay_job_id: newId, parent_job_id: job.id }, 201);
 });
 
 jobs.post("/:id/cancel", async (c) => {

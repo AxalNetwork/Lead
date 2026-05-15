@@ -1,7 +1,9 @@
-// Task #27: structured error logging into D1.
+// Task #27: structured error logging into D1 + Analytics Engine mirror.
 //
 // Best-effort writes — we never let a logging failure mask the original
-// error. Truncation rules keep us under D1's 1MB row cap.
+// error. Truncation rules keep us under D1's 1MB row cap. Every call also
+// emits one Analytics Engine data point so spike detection / alerting can
+// be done without scanning D1.
 
 import type { Env } from "../types";
 import { AppError, wrapUnknown } from "../errors";
@@ -17,6 +19,10 @@ export interface LogErrorInput {
   step?: string | null;
   url?: string | null;
   method?: string | null;
+  workflow_run_id?: string | null;
+  host?: string | null;
+  user_email?: string | null;
+  retry_count?: number | null;
 }
 
 function clip(s: string | undefined | null, max: number): string | null {
@@ -24,19 +30,45 @@ function clip(s: string | undefined | null, max: number): string | null {
   return s.length > max ? s.slice(0, max) + "…[clipped]" : s;
 }
 
+function hostFromUrl(u?: string | null): string | null {
+  if (!u) return null;
+  try { return new URL(u).hostname.toLowerCase(); } catch { return null; }
+}
+
 export async function logError(env: Env, input: LogErrorInput): Promise<number | null> {
-  if (!env.DB) return null;
-  const e = input.err instanceof AppError ? input.err : wrapUnknown(input.err, "internal");
-  let contextJson: string | null = null;
+  const e = input.err instanceof AppError ? input.err : wrapUnknown(input.err, "internal_error");
+  const host = input.host ?? hostFromUrl(input.url);
+
+  // Mirror to Analytics Engine first (cheap, doesn't depend on D1).
   try {
-    contextJson = clip(JSON.stringify(e.context ?? {}), MAX_CONTEXT_JSON);
-  } catch { contextJson = null; }
+    if (env.ANALYTICS) {
+      env.ANALYTICS.writeDataPoint({
+        indexes: [e.code],
+        blobs: [
+          e.kind,
+          e.code,
+          input.step ?? "",
+          input.job_id ?? "",
+          input.request_id ?? "",
+          host ?? "",
+          input.workflow_run_id ?? "",
+          input.user_email ?? "",
+        ],
+        doubles: [e.status, e.retryable ? 1 : 0, input.retry_count ?? 0],
+      });
+    }
+  } catch { /* never throw from logger */ }
+
+  if (!env.DB) return null;
+  let contextJson: string | null = null;
+  try { contextJson = clip(JSON.stringify(e.context ?? {}), MAX_CONTEXT_JSON); } catch { contextJson = null; }
   try {
     const r = await env.DB.prepare(
       `INSERT INTO error_log
         (request_id, job_id, step, code, kind, status, retryable, message, context_json,
-         cause_name, cause_message, cause_stack, url, method)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         cause_name, cause_message, cause_stack, url, method,
+         workflow_run_id, host, user_email, retry_count)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
       .bind(
         input.request_id ?? null,
@@ -53,6 +85,10 @@ export async function logError(env: Env, input: LogErrorInput): Promise<number |
         clip(e.cause?.stack, MAX_STACK),
         input.url ?? null,
         input.method ?? null,
+        input.workflow_run_id ?? null,
+        host,
+        input.user_email ?? null,
+        input.retry_count ?? 0,
       )
       .run();
     const id = r.meta?.last_row_id;
@@ -68,11 +104,11 @@ export interface StepLogInput {
   job_id: string;
   step: string;
   status: "started" | "ok" | "warn" | "error" | "skipped";
-  duration_ms?: number;
-  count_in?: number;
-  count_out?: number;
-  error_id?: number | null;
-  meta?: Record<string, unknown>;
+  duration_ms?: number | undefined;
+  count_in?: number | undefined;
+  count_out?: number | undefined;
+  error_id?: number | null | undefined;
+  meta?: Record<string, unknown> | undefined;
 }
 
 export async function logStep(env: Env, input: StepLogInput): Promise<void> {

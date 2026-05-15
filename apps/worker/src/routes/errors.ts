@@ -1,13 +1,16 @@
 // Task #27: error log API powering /dashboard/errors/.
 //
 // Read endpoints:
-//   GET  /api/errors            list (filters: kind, code, job_id, q, since, limit)
-//   GET  /api/errors/summary    grouped counts by code (last 24h / 7d)
+//   GET  /api/errors            list (filters: kind, code, job_id, host, q, since, limit, resolved)
+//   GET  /api/errors/summary    grouped counts by code (window=24h default)
+//   GET  /api/errors/timeseries 7-day hourly chart
+//   GET  /api/errors/clusters   cluster by (code, host) for triage
 //   GET  /api/errors/:id        detail (full context, cause stack)
 //   GET  /api/errors/job/:jobId steps + errors for a single job
 //
-// Write endpoint:
-//   POST /api/errors/:id/replay re-enqueues the failing job for a fresh attempt
+// Write endpoints:
+//   POST /api/errors/:id/replay   re-enqueues the failing job for a fresh attempt
+//   POST /api/errors/:id/resolve  mark error (and optionally its cluster) as resolved
 
 import { Hono } from "hono";
 import type { Env, JobMessage, JobKind } from "../types";
@@ -31,6 +34,12 @@ interface ErrorRow {
   cause_stack: string | null;
   url: string | null;
   method: string | null;
+  workflow_run_id: string | null;
+  host: string | null;
+  user_email: string | null;
+  retry_count: number | null;
+  resolved_at: string | null;
+  resolved_by: string | null;
 }
 
 function parseContext(row: ErrorRow): Record<string, unknown> | null {
@@ -43,24 +52,31 @@ errors.get("/", async (c) => {
   const kind = c.req.query("kind");
   const code = c.req.query("code");
   const jobId = c.req.query("job_id");
+  const host = c.req.query("host");
   const q = c.req.query("q");
-  const since = c.req.query("since"); // ISO timestamp
+  const since = c.req.query("since");
+  const resolved = c.req.query("resolved"); // "true" | "false" | undefined (=all)
 
   const wheres: string[] = [];
   const binds: unknown[] = [];
   if (kind)  { wheres.push("kind = ?");   binds.push(kind); }
   if (code)  { wheres.push("code = ?");   binds.push(code); }
   if (jobId) { wheres.push("job_id = ?"); binds.push(jobId); }
+  if (host)  { wheres.push("host = ?");   binds.push(host); }
   if (since) { wheres.push("occurred_at >= ?"); binds.push(since); }
+  if (resolved === "true") wheres.push("resolved_at IS NOT NULL");
+  if (resolved === "false") wheres.push("resolved_at IS NULL");
   if (q)     { wheres.push("(message LIKE ? OR cause_message LIKE ? OR url LIKE ?)"); const like = `%${q}%`; binds.push(like, like, like); }
   const whereSql = wheres.length ? `WHERE ${wheres.join(" AND ")}` : "";
   const r = await c.env.DB.prepare(
-    `SELECT id, occurred_at, request_id, job_id, step, code, kind, status, retryable, message, context_json, url, method
+    `SELECT id, occurred_at, request_id, job_id, step, code, kind, status, retryable, message, context_json,
+            url, method, workflow_run_id, host, user_email, retry_count, resolved_at, resolved_by
      FROM error_log ${whereSql} ORDER BY occurred_at DESC LIMIT ?`,
   ).bind(...binds, limit).all<ErrorRow>();
   const items = (r.results ?? []).map((row) => ({
     ...row,
     retryable: !!row.retryable,
+    resolved: !!row.resolved_at,
     context: parseContext(row),
   }));
   return c.json({ items });
@@ -70,7 +86,9 @@ errors.get("/summary", async (c) => {
   const sinceParam = c.req.query("since");
   const since = sinceParam ?? new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   const byCode = await c.env.DB.prepare(
-    `SELECT code, kind, COUNT(*) AS n, MAX(occurred_at) AS last_at, SUM(CASE WHEN retryable=1 THEN 1 ELSE 0 END) AS retryable_n
+    `SELECT code, kind, COUNT(*) AS n, MAX(occurred_at) AS last_at,
+            SUM(CASE WHEN retryable=1 THEN 1 ELSE 0 END) AS retryable_n,
+            SUM(CASE WHEN resolved_at IS NULL THEN 1 ELSE 0 END) AS open_n
      FROM error_log WHERE occurred_at >= ? GROUP BY code, kind ORDER BY n DESC LIMIT 50`,
   ).bind(since).all();
   const byKind = await c.env.DB.prepare(
@@ -87,13 +105,48 @@ errors.get("/summary", async (c) => {
   });
 });
 
+errors.get("/timeseries", async (c) => {
+  // 7-day hourly buckets — used by the dashboard chart.
+  const days = Math.min(Math.max(Number(c.req.query("days") ?? "7"), 1), 30);
+  const since = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
+  const r = await c.env.DB.prepare(
+    `SELECT substr(occurred_at, 1, 13) AS bucket,
+            kind,
+            COUNT(*) AS n
+     FROM error_log
+     WHERE occurred_at >= ?
+     GROUP BY bucket, kind
+     ORDER BY bucket ASC`,
+  ).bind(since).all<{ bucket: string; kind: string; n: number }>();
+  return c.json({ since, days, points: r.results ?? [] });
+});
+
+errors.get("/clusters", async (c) => {
+  // Cluster errors by (code, host) — most useful for triage. Window = 7d.
+  const since = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+  const r = await c.env.DB.prepare(
+    `SELECT code, kind, COALESCE(host, '') AS host, COUNT(*) AS n,
+            COUNT(DISTINCT job_id) AS distinct_jobs,
+            MIN(occurred_at) AS first_at,
+            MAX(occurred_at) AS last_at,
+            SUM(CASE WHEN resolved_at IS NULL THEN 1 ELSE 0 END) AS open_n
+     FROM error_log
+     WHERE occurred_at >= ?
+     GROUP BY code, host
+     HAVING n >= 1
+     ORDER BY open_n DESC, n DESC
+     LIMIT 100`,
+  ).bind(since).all();
+  return c.json({ since, clusters: r.results ?? [] });
+});
+
 errors.get("/:id{[0-9]+}", async (c) => {
   const id = Number(c.req.param("id"));
   const row = await c.env.DB.prepare(
     `SELECT * FROM error_log WHERE id = ?`,
   ).bind(id).first<ErrorRow>();
   if (!row) return c.json({ error: "not_found" }, 404);
-  return c.json({ ...row, retryable: !!row.retryable, context: parseContext(row) });
+  return c.json({ ...row, retryable: !!row.retryable, resolved: !!row.resolved_at, context: parseContext(row) });
 });
 
 errors.get("/job/:jobId", async (c) => {
@@ -104,7 +157,7 @@ errors.get("/job/:jobId", async (c) => {
     `SELECT * FROM workflow_step_log WHERE job_id = ? ORDER BY started_at ASC LIMIT 500`,
   ).bind(jobId).all();
   const errs = await c.env.DB.prepare(
-    `SELECT id, occurred_at, step, code, kind, status, message, context_json
+    `SELECT id, occurred_at, step, code, kind, status, message, context_json, host, retry_count, resolved_at
      FROM error_log WHERE job_id = ? ORDER BY occurred_at ASC LIMIT 500`,
   ).bind(jobId).all<ErrorRow>();
   const transitions = await c.env.DB.prepare(
@@ -113,7 +166,7 @@ errors.get("/job/:jobId", async (c) => {
   return c.json({
     job,
     steps: steps.results ?? [],
-    errors: (errs.results ?? []).map((row) => ({ ...row, context: parseContext(row) })),
+    errors: (errs.results ?? []).map((row) => ({ ...row, context: parseContext(row), resolved: !!row.resolved_at })),
     transitions: transitions.results ?? [],
   });
 });
@@ -131,7 +184,7 @@ errors.post("/:id{[0-9]+}/replay", async (c) => {
   const newId = crypto.randomUUID();
   const now = new Date().toISOString();
   await c.env.DB.prepare(
-    `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at, replay_of)
+    `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at, parent_job_id)
      VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
   ).bind(newId, `${job.name} (replay)`, job.source, job.kind, job.target, JSON.stringify(config), now, now, job.id).run();
   await c.env.DB.prepare(
@@ -140,7 +193,28 @@ errors.post("/:id{[0-9]+}/replay", async (c) => {
   ).bind(newId, `replay_of error #${id}`, c.var.email ?? "system").run();
   const msg: JobMessage = { jobId: newId, kind: job.kind, target: job.target, config: config as Record<string, unknown> };
   await c.env.LEAD_QUEUE.send(msg);
-  return c.json({ ok: true, replay_job_id: newId, replay_of: job.id }, 201);
+  return c.json({ ok: true, replay_job_id: newId, parent_job_id: job.id }, 201);
+});
+
+errors.post("/:id{[0-9]+}/resolve", async (c) => {
+  const id = Number(c.req.param("id"));
+  const body = (await c.req.json().catch(() => ({}))) as { cluster?: boolean };
+  const row = await c.env.DB.prepare(`SELECT id, code, host FROM error_log WHERE id = ?`).bind(id).first<{ id: number; code: string; host: string | null }>();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  const now = new Date().toISOString();
+  const who = c.var.email ?? "system";
+  if (body.cluster) {
+    // Mark all open errors in the same (code, host) cluster as resolved.
+    const r = await c.env.DB.prepare(
+      `UPDATE error_log SET resolved_at = ?, resolved_by = ?
+       WHERE resolved_at IS NULL AND code = ? AND COALESCE(host,'') = COALESCE(?, '')`,
+    ).bind(now, who, row.code, row.host).run();
+    return c.json({ ok: true, resolved: r.meta?.changes ?? 0, scope: "cluster" });
+  }
+  await c.env.DB.prepare(
+    `UPDATE error_log SET resolved_at = ?, resolved_by = ? WHERE id = ?`,
+  ).bind(now, who, id).run();
+  return c.json({ ok: true, resolved: 1, scope: "single" });
 });
 
 function safeParse(s: string): unknown { try { return JSON.parse(s); } catch { return {}; } }

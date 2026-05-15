@@ -8,25 +8,116 @@ on:
 
 jobs:
   worker:
-    name: Worker (typecheck + lint + test)
+    name: Worker (typecheck + lint + gates + test)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: apps/worker
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: apps/worker/package-lock.json
       - run: npm ci
-      - run: npm run typecheck
-      # Lint is advisory until the audit follow-ups (AUDIT.md) are burned
-      # down; flip `continue-on-error` to `false` once the baseline is clean.
-      - run: npm run lint
+
+      # Strict typecheck: tsc --noEmit + the strict-flag tsconfig that gates
+      # noUncheckedIndexedAccess / exactOptionalPropertyTypes / noImplicitOverride
+      # / noFallthroughCasesInSwitch on all new (Task #27) modules.
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Lint runs but is advisory while the AUDIT.md baseline (32 errors) is
+      # burned down by follow-up #5; new errors introduced after that should
+      # flip continue-on-error to false.
+      - name: Lint (advisory)
+        run: npm run lint
         continue-on-error: true
-      - run: npm test
+
+      # ---- Hard gates: block specific anti-patterns in *new* code only. ----
+      # Compares against the PR base (or HEAD~1 for direct pushes), so the
+      # legacy 192-file baseline isn't blocked, but newly introduced code is.
+      - name: "Gate: no bare console.error in new code"
+        shell: bash
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="origin/${{ github.base_ref }}"
+            git fetch origin "${{ github.base_ref }}" --depth=1 || true
+          else
+            BASE="HEAD~1"
+          fi
+          CHANGED=$(git -C "$GITHUB_WORKSPACE" diff --name-only --diff-filter=AM "$BASE"...HEAD -- 'apps/worker/src/**/*.ts' || true)
+          [ -z "$CHANGED" ] && { echo "no changed worker ts files"; exit 0; }
+          echo "Scanning new lines in: $CHANGED"
+          BAD=0
+          for f in $CHANGED; do
+            ADDED=$(git -C "$GITHUB_WORKSPACE" diff "$BASE"...HEAD -- "$f" | grep -E '^\+[^+]' | grep -E 'console\.(error|warn)\(' || true)
+            if [ -n "$ADDED" ]; then
+              echo "::error file=$f::new bare console.error/warn — use logError(env, {err}) from src/db/error_log.ts"
+              echo "$ADDED"
+              BAD=1
+            fi
+          done
+          exit $BAD
+
+      - name: "Gate: no SQL string interpolation in new code"
+        shell: bash
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="origin/${{ github.base_ref }}"
+            git fetch origin "${{ github.base_ref }}" --depth=1 || true
+          else
+            BASE="HEAD~1"
+          fi
+          CHANGED=$(git -C "$GITHUB_WORKSPACE" diff --name-only --diff-filter=AM "$BASE"...HEAD -- 'apps/worker/src/**/*.ts' || true)
+          [ -z "$CHANGED" ] && exit 0
+          BAD=0
+          for f in $CHANGED; do
+            # Match added lines containing a SQL keyword AND a `${ ... }` interpolation in the same template literal context.
+            ADDED=$(git -C "$GITHUB_WORKSPACE" diff "$BASE"...HEAD -- "$f" \
+              | grep -E '^\+[^+]' \
+              | grep -iE '(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)[^"`]*\$\{' || true)
+            if [ -n "$ADDED" ]; then
+              echo "::error file=$f::SQL string interpolation in new code — use prepare(...).bind(...) parameter binding"
+              echo "$ADDED"
+              BAD=1
+            fi
+          done
+          exit $BAD
+
+      - name: "Gate: no fetch() without AbortSignal/timeout in new code"
+        shell: bash
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="origin/${{ github.base_ref }}"
+            git fetch origin "${{ github.base_ref }}" --depth=1 || true
+          else
+            BASE="HEAD~1"
+          fi
+          CHANGED=$(git -C "$GITHUB_WORKSPACE" diff --name-only --diff-filter=AM "$BASE"...HEAD -- 'apps/worker/src/**/*.ts' || true)
+          [ -z "$CHANGED" ] && exit 0
+          BAD=0
+          for f in $CHANGED; do
+            ADDED=$(git -C "$GITHUB_WORKSPACE" diff "$BASE"...HEAD -- "$f" \
+              | grep -E '^\+[^+]' \
+              | grep -E '(^|[^a-zA-Z_])fetch\(' \
+              | grep -vE '(signal|AbortSignal|httpFetch|env\.[A-Z_]+\.fetch|BROWSER\.fetch|AI_SEARCH\.fetch)' || true)
+            if [ -n "$ADDED" ]; then
+              echo "::error file=$f::raw fetch() without signal/timeout — use httpFetch() with AbortSignal.timeout(...)"
+              echo "$ADDED"
+              BAD=1
+            fi
+          done
+          exit $BAD
+
+      - name: Test
+        run: npm test
 
   site:
     name: Site (build)
