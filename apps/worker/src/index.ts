@@ -29,8 +29,9 @@ import { aiAnalytics } from "./routes/analytics_ae";
 import { accountsRoute, buyersRoute, signalsRoute } from "./routes/prospects";
 import { crawlersRoute } from "./routes/crawlers";
 import { personasRoute } from "./routes/personas";
+import { projectsRoute } from "./routes/projects";
 export { EntityLock } from "./do/EntityLock";
-export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow } from "./ai/workflows";
+export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, MatchProjectWorkflow } from "./ai/workflows";
 import { piiAuditOnLeadGet } from "./middleware/pii_audit";
 import { accessGuard } from "./middleware/access";
 import { runJob } from "./scraper/pipeline";
@@ -101,6 +102,8 @@ api.route("/api/signals", signalsRoute);
 api.route("/api/crawlers", crawlersRoute);
 // Task #46: persona profiler.
 api.route("/api/personas", personasRoute);
+// Task #47: projects (multi-audience matching workspace).
+api.route("/api/projects", projectsRoute);
 // /api/leads/:id/enrich, /api/leads/enrich/bulk, /:id/dnc, /:id/campaigns
 api.route("/api/leads", leadsEnrichActions);
 api.route("/api/leads", leadsDncActions);

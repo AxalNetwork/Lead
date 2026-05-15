@@ -103,6 +103,11 @@ index_name = "axal-accounts-768"  # dim=768 metric=cosine
 binding = "VEC_PERSONAS"
 index_name = "axal-personas-768"  # dim=768 metric=cosine
 
+# Task #47: project embeddings for the multi-audience matching workspace.
+[[vectorize]]
+binding = "VEC_PROJECTS"
+index_name = "axal-projects-768"  # dim=768 metric=cosine
+
 # Task #25: Durable Object for serialized merge locks (per-entity).
 [[durable_objects.bindings]]
 name = "ENTITY_LOCK"
@@ -170,6 +175,14 @@ binding = "WF_RESCORE_PERSONA"
 name = "rescore-persona"
 class_name = "RescorePersonaWorkflow"
 
+# Task #47: durable per-project match recompute. Triggered on create /
+# patch / nightly cron / manual recompute. Fans out to the five
+# audiences and upserts project_matches rows.
+[[workflows]]
+binding = "WF_MATCH_PROJECT"
+name = "match-project"
+class_name = "MatchProjectWorkflow"
+
 [[queues.producers]]
 binding = "LEAD_QUEUE"
 queue = "aidatasignal-lead-jobs"
@@ -187,4 +200,4 @@ custom_domain = true
 # Every 6 hours: re-scrape stale sources + re-enrich stale leads.
 # 03:15 UTC nightly: roll up lead_quality_snapshots, source_kpis_daily,
 # pipeline_kpis_daily, and dashboard_snapshots.
-crons = ["0 * * * *", "0 */6 * * *", "15 3 * * *", "20 3 * * *", "30 3 * * *", "45 3 * * *"]
+crons = ["0 * * * *", "0 */6 * * *", "15 3 * * *", "20 3 * * *", "30 3 * * *", "45 3 * * *", "10 4 * * *"]

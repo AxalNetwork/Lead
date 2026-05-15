@@ -20,7 +20,9 @@ export type AiPurpose =
   | "persona_infer"
   | "ocr"
   | "email_classify"
-  | "explanation";
+  | "explanation"
+  | "pitch"
+  | "project_match";
 
 export interface TrackAiArgs {
   purpose: AiPurpose;

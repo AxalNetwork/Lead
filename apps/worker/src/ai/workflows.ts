@@ -134,6 +134,24 @@ export class RescorePersonaWorkflow {
   }
 }
 
+// Task #47: durable per-project match recompute. Triggered on create /
+// patch / nightly cron / manual /recompute. Heavy lifting lives in
+// projects/match.ts so the inline fallback (no WF binding in dev) hits
+// the same code path.
+export class MatchProjectWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ projectId: string }>, step: WorkflowStep): Promise<{ ok: true; projectId: string; audiences: number }> {
+    const { projectId } = event.payload;
+    const { matchProject } = await import("../projects/match");
+    const r = await step.do("match", { retries: { limit: 2, backoff: "exponential" } }, async () => {
+      return await matchProject(this.env, projectId);
+    });
+    return { ok: true, projectId, audiences: r.audiences.length };
+  }
+}
+
 export class IngestPageWorkflow {
   env: Env;
   ctx: ExecutionContext;

@@ -89,6 +89,29 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
     })());
     return;
   }
+  // Cron 10 4 * * * → Task #47 nightly project match refresh. Walks
+  // every active project and dispatches MatchProjectWorkflow (or runs
+  // the matcher inline when the WF binding is absent).
+  if (event && (event as ScheduledEvent).cron === "10 4 * * *") {
+    ctx.waitUntil((async () => {
+      try {
+        const r = await env.DB.prepare(`SELECT id FROM projects WHERE deleted_at IS NULL AND status = 'active' ORDER BY last_modified DESC LIMIT 200`).all<{ id: string }>();
+        for (const row of r.results ?? []) {
+          if (env.WF_MATCH_PROJECT) {
+            try { await env.WF_MATCH_PROJECT.create({ params: { projectId: row.id } }); }
+            catch (e) { console.warn("nightly WF_MATCH_PROJECT.create failed", row.id, (e as Error).message); }
+          } else {
+            const { matchProject } = await import("./projects/match");
+            try { await matchProject(env, row.id); }
+            catch (e) { console.warn("nightly matchProject failed", row.id, (e as Error).message); }
+          }
+        }
+      } catch (e) {
+        console.error("nightly project match refresh failed", (e as Error).message);
+      }
+    })());
+    return;
+  }
   if (event && (event as ScheduledEvent).cron === "30 3 * * *") {
     ctx.waitUntil(
       runInvestorStats(env)

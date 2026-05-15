@@ -1,0 +1,95 @@
+---
+layout: default
+title: New project
+permalink: /dashboard/projects/new/
+---
+
+<h1 class="ads-page-title">New project</h1>
+<p class="ads-page-sub">Six steps. Each step is optional after Basics — you can refine later.</p>
+
+<form id="ads-new-project" class="ads-card" style="display:grid;gap:14px;max-width:760px">
+  <fieldset><legend><b>1. Basics</b></legend>
+    <label class="ads-field"><span>Name *</span><input name="name" required></label>
+    <label class="ads-field"><span>One-liner</span><input name="one_liner" placeholder="What you do, in one sentence"></label>
+    <label class="ads-field"><span>Kind</span>
+      <select name="kind"><option value="">—</option><option>company</option><option>product</option><option>fund</option><option>event</option><option>partnership</option><option>initiative</option></select>
+    </label>
+  </fieldset>
+
+  <fieldset><legend><b>2. What</b></legend>
+    <label class="ads-field"><span>Description</span><textarea name="description" rows="4"></textarea></label>
+    <label class="ads-field"><span>Problems solved</span><textarea name="problems_solved" rows="2"></textarea></label>
+    <label class="ads-field"><span>Unique value</span><textarea name="unique_value" rows="2"></textarea></label>
+  </fieldset>
+
+  <fieldset><legend><b>3. Who (target)</b></legend>
+    <label class="ads-field"><span>Target industries (comma)</span><input name="target_industries"></label>
+    <label class="ads-field"><span>Target geos (ISO2, comma)</span><input name="target_geos" placeholder="us,gb,ca"></label>
+  </fieldset>
+
+  <fieldset><legend><b>4. Audiences</b></legend>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <label><input type="checkbox" name="aud_customer" checked> Customers</label>
+      <label><input type="checkbox" name="aud_investor"> Investors</label>
+      <label><input type="checkbox" name="aud_partner"> Partners</label>
+      <label><input type="checkbox" name="aud_hire"> Hires</label>
+      <label><input type="checkbox" name="aud_design_partner"> Design partners</label>
+    </div>
+    <label class="ads-field"><span>Stage</span>
+      <select name="stage"><option value="">—</option><option>idea</option><option>mvp</option><option>launched</option><option>scaling</option></select>
+    </label>
+    <label class="ads-field"><span>Funding status</span>
+      <select name="funding_status"><option value="">—</option><option>pre_seed</option><option>seed</option><option>series_a</option><option>series_b</option><option>series_c</option><option>growth</option></select>
+    </label>
+    <label class="ads-field"><span>Funding target (USD)</span><input name="funding_target" type="number" min="0"></label>
+  </fieldset>
+
+  <fieldset><legend><b>5. Materials (optional)</b></legend>
+    <p class="ads-muted" style="font-size:12px">After creating the project, upload a deck and click "Suggest from deck" to auto-populate fields.</p>
+  </fieldset>
+
+  <fieldset><legend><b>6. Review</b></legend>
+    <p class="ads-muted" style="font-size:12px">Submitting starts matching across all selected audiences. First results appear within ~60 seconds.</p>
+  </fieldset>
+
+  <div style="display:flex;gap:8px;justify-content:flex-end">
+    <a class="ads-btn ads-btn--ghost" href="/dashboard/projects/">Cancel</a>
+    <button class="ads-btn" type="submit">Create project</button>
+  </div>
+  <div id="ads-new-status" class="ads-muted" style="font-size:13px"></div>
+</form>
+
+<script>
+document.getElementById('ads-new-project').addEventListener('submit', async function (e) {
+  e.preventDefault();
+  const f = new FormData(e.currentTarget);
+  const split = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const audiences = {
+    customer: !!f.get('aud_customer'), investor: !!f.get('aud_investor'),
+    partner: !!f.get('aud_partner'), hire: !!f.get('aud_hire'),
+    design_partner: !!f.get('aud_design_partner'),
+  };
+  const body = {
+    name: f.get('name'), one_liner: f.get('one_liner'), kind: f.get('kind') || null,
+    description: f.get('description'), problems_solved: f.get('problems_solved'), unique_value: f.get('unique_value'),
+    target_industries_json: JSON.stringify(split(f.get('target_industries'))),
+    target_geos_json: JSON.stringify(split(f.get('target_geos'))),
+    audiences_json: JSON.stringify(audiences),
+    stage: f.get('stage') || null, funding_status: f.get('funding_status') || null,
+    funding_target: f.get('funding_target') ? Number(f.get('funding_target')) : null,
+  };
+  const status = document.getElementById('ads-new-status');
+  status.textContent = 'Creating…';
+  try {
+    const r = await fetch('https://api.aidatasignal.com/api/projects', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error('http ' + r.status);
+    const { project } = await r.json();
+    location.href = '/dashboard/projects/' + project.id + '/';
+  } catch (err) {
+    status.textContent = 'Failed: ' + err.message;
+  }
+});
+</script>

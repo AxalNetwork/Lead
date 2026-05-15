@@ -1,0 +1,142 @@
+---
+layout: default
+title: Project workspace
+permalink: /dashboard/projects/workspace/
+---
+
+<div id="ads-project-root" class="ads-card"><div class="ads-muted">Loading project…</div></div>
+
+<style>
+  .ads-tabs { display:flex; gap:4px; border-bottom:1px solid #e5e9f0; margin-bottom:12px; flex-wrap:wrap }
+  .ads-tab { padding:8px 14px; border:1px solid transparent; border-bottom:none; cursor:pointer; background:transparent; font-size:13px }
+  .ads-tab.active { background:#fff; border-color:#e5e9f0; border-radius:6px 6px 0 0; font-weight:600 }
+  .ads-fitbar { display:inline-block; vertical-align:middle; width:80px; height:6px; background:#eef1f6; border-radius:3px; overflow:hidden }
+  .ads-fitbar > span { display:block; height:100%; background:#5b8cff }
+</style>
+
+<script>
+(function () {
+  // Pages live at /dashboard/projects/{id}/ — Jekyll renders this template
+  // via a permalink redirect; for now we read the id from the URL or the
+  // ?id= query string (workaround until we add per-id pages).
+  const id = (location.pathname.match(/\/projects\/([^\/]+)\/?$/) || [])[1] || new URLSearchParams(location.search).get('id');
+  const root = document.getElementById('ads-project-root');
+  if (!id || id === 'workspace') {
+    root.innerHTML = '<div class="ads-muted">No project id in URL. Use /dashboard/projects/{id}/.</div>';
+    return;
+  }
+  const AUD = ['customer','investor','partner','hire','design_partner'];
+  const AUD_LABEL = { customer:'Customers', investor:'Investors', partner:'Partners', hire:'Hires', design_partner:'Design partners' };
+  let active = 'customer';
+
+  async function loadProject() {
+    const r = await fetch('https://api.aidatasignal.com/api/projects/' + id, { credentials: 'include' });
+    if (!r.ok) { root.innerHTML = '<div class="ads-muted">Project not found.</div>'; return; }
+    const { project } = await r.json();
+    render(project);
+  }
+
+  function render(p) {
+    const tabs = AUD.map((a) => `<button class="ads-tab ${a===active?'active':''}" data-aud="${a}">${AUD_LABEL[a]} (${p['match_count_'+a] || 0})</button>`).join('');
+    root.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:8px">
+        <div><h1 class="ads-page-title" style="margin:0">${p.name}</h1>
+          <div class="ads-muted" style="font-size:13px">${p.one_liner || ''}</div></div>
+        <div style="display:flex;gap:6px">
+          <button class="ads-btn ads-btn--ghost" id="ads-recompute">Recompute</button>
+          <a class="ads-btn ads-btn--ghost" href="/dashboard/projects/">Back</a>
+        </div>
+      </div>
+      <div class="ads-tabs">${tabs}<button class="ads-tab" data-aud="materials">Materials</button><button class="ads-tab" data-aud="timeline">Timeline</button></div>
+      <div id="ads-tab-body"><div class="ads-muted">Loading…</div></div>
+    `;
+    document.getElementById('ads-recompute').addEventListener('click', async () => {
+      await fetch('https://api.aidatasignal.com/api/projects/' + id + '/recompute', { method: 'POST', credentials: 'include' });
+      alert('Recompute dispatched. Refresh in ~60s.');
+    });
+    root.querySelectorAll('.ads-tab').forEach((b) => b.addEventListener('click', () => { active = b.dataset.aud; render(p); }));
+    if (active === 'materials') return renderMaterials(p);
+    if (active === 'timeline') return renderTimeline();
+    renderMatches(active);
+  }
+
+  async function renderMatches(audience) {
+    const body = document.getElementById('ads-tab-body');
+    body.innerHTML = '<div class="ads-muted">Loading matches…</div>';
+    const r = await fetch('https://api.aidatasignal.com/api/projects/' + id + '/matches?audience=' + audience + '&limit=50', { credentials: 'include' });
+    if (!r.ok) { body.innerHTML = '<div class="ads-muted">Failed to load.</div>'; return; }
+    const { matches, total } = await r.json();
+    if (!matches.length) { body.innerHTML = '<div class="ads-muted">No matches yet — give the matcher a minute and refresh.</div>'; return; }
+    const exportHref = 'https://api.aidatasignal.com/api/projects/' + id + '/export?audience=' + audience + '&format=csv';
+    body.innerHTML = `
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:13px">
+        <div class="ads-muted">${matches.length} of ${total}</div>
+        <a class="ads-btn ads-btn--ghost" href="${exportHref}">Export CSV</a>
+      </div>
+      <table class="ads-table" style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr><th style="text-align:left">#</th><th style="text-align:left">Entity</th><th>Fit</th><th style="text-align:left">Components</th><th style="text-align:left">Pitch angle</th><th>Status</th></tr></thead>
+        <tbody>
+          ${matches.map((m) => `
+            <tr style="border-top:1px solid #eef1f6">
+              <td>${m.rank}</td>
+              <td>${m.entity_kind} <code style="font-size:11px">${m.entity_id}</code></td>
+              <td><span class="ads-fitbar"><span style="width:${m.fit_score.toFixed(0)}%"></span></span> ${m.fit_score.toFixed(0)}</td>
+              <td style="font-size:11px">P:${m.persona_score.toFixed(0)} S:${m.semantic_score.toFixed(0)} O:${m.overlay_score.toFixed(0)}</td>
+              <td style="font-size:12px;max-width:340px">${m.pitch_angle ? m.pitch_angle.replace(/</g,'&lt;') : '<span class="ads-muted">—</span>'}</td>
+              <td>
+                <select data-kind="${m.entity_kind}" data-eid="${m.entity_id}" class="ads-status">
+                  ${['new','shortlisted','contacted','replied','qualified','won','lost','snoozed'].map((s) => `<option value="${s}" ${s===m.status?'selected':''}>${s}</option>`).join('')}
+                </select>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+    body.querySelectorAll('.ads-status').forEach((sel) => {
+      sel.addEventListener('change', async () => {
+        await fetch('https://api.aidatasignal.com/api/projects/' + id + '/matches/' + audience + '/' + sel.dataset.kind + '/' + sel.dataset.eid + '/status', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: sel.value }),
+        });
+      });
+    });
+  }
+
+  function renderMaterials(p) {
+    const body = document.getElementById('ads-tab-body');
+    const mats = (() => { try { return JSON.parse(p.materials_json || '[]'); } catch { return []; } })();
+    body.innerHTML = `
+      <div style="margin-bottom:12px">
+        <h3 style="margin:0 0 6px;font-size:14px">Upload deck or supporting file</h3>
+        <form id="ads-mat-form" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="file" name="file" required>
+          <label><input type="checkbox" name="suggest" value="1"> Suggest from deck (paste extracted text below)</label>
+          <textarea name="text" rows="3" placeholder="Optional: paste deck text for AI extraction" style="width:100%"></textarea>
+          <button class="ads-btn" type="submit">Upload</button>
+        </form>
+      </div>
+      <h3 style="margin:0 0 6px;font-size:14px">Files</h3>
+      <ul style="font-size:13px">${mats.map((m) => `<li>${m.filename} <span class="ads-muted">(${(m.size/1024).toFixed(1)} KB)</span></li>`).join('') || '<li class="ads-muted">No files yet.</li>'}</ul>
+    `;
+    document.getElementById('ads-mat-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.currentTarget);
+      await fetch('https://api.aidatasignal.com/api/projects/' + id + '/materials', { method: 'POST', credentials: 'include', body: fd });
+      loadProject();
+    });
+  }
+
+  async function renderTimeline() {
+    const body = document.getElementById('ads-tab-body');
+    body.innerHTML = '<div class="ads-muted">Loading…</div>';
+    const r = await fetch('https://api.aidatasignal.com/api/projects/' + id + '/history', { credentials: 'include' });
+    const { history } = await r.json();
+    body.innerHTML = '<table style="width:100%;font-size:13px"><thead><tr><th style="text-align:left">When</th><th style="text-align:left">Field</th><th style="text-align:left">Change</th><th style="text-align:left">By</th></tr></thead><tbody>'
+      + history.map((h) => `<tr style="border-top:1px solid #eef1f6"><td>${h.changed_at}</td><td>${h.field}${h.audience?' ('+h.audience+')':''}</td><td>${h.old_value||''} → ${h.new_value||''}</td><td>${h.changed_by||''}</td></tr>`).join('')
+      + '</tbody></table>';
+  }
+
+  loadProject();
+})();
+</script>
