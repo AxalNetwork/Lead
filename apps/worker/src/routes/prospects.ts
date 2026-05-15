@@ -22,6 +22,7 @@ import { SIGNAL_KINDS, isSignalKind } from "../prospects/signalKinds";
 import { indexEntity } from "../ai/search_sync";
 import { withEntityLock, ALLOWED_MERGE_FIELDS } from "../do/EntityLock";
 import { ensureRoleTaxonomySeeded } from "../prospects/seedRoles";
+import { rescoreEntity } from "../personas/rescore";
 
 function pickAllowed(table: "accounts" | "buyers", body: Record<string, unknown>): Record<string, unknown> {
   const allow = ALLOWED_MERGE_FIELDS[table];
@@ -126,6 +127,8 @@ accountsRoute.post("/", async (c) => {
   const row = await insertAccount(c.env, body as Partial<AccountRow> & { name: string }, c.get("email"));
   // Fire-and-forget vectorize + AI search.
   c.executionCtx.waitUntil(syncAccountAi(c.env, row));
+  // Task #46: score the new account against every active persona.
+  c.executionCtx.waitUntil(rescoreEntity(c.env, "account", row.id).catch((e) => console.warn("persona rescore (account create) failed", (e as Error).message)));
   return c.json({ account: row }, 201);
 });
 
@@ -153,12 +156,19 @@ accountsRoute.put("/:id", async (c) => {
   const row = await updateAccount(c.env, id, safeFields as Partial<AccountRow>, c.get("email"), snapshot);
   if (!row) return c.json({ error: "not_found" }, 404);
   c.executionCtx.waitUntil(syncAccountAi(c.env, row));
+  // Task #46: re-score this account against every active persona so
+  // dashboards + persona_matches reflect the edit. Cheap (no embedding)
+  // and runs in the request tail.
+  c.executionCtx.waitUntil(rescoreEntity(c.env, "account", id).catch((e) => console.warn("persona rescore (account update) failed", (e as Error).message)));
   return c.json({ account: row });
 });
 
 accountsRoute.delete("/:id", async (c) => {
-  const ok = await deleteAccount(c.env, c.req.param("id"));
+  const id = c.req.param("id");
+  const ok = await deleteAccount(c.env, id);
   if (!ok) return c.json({ error: "not_found" }, 404);
+  // Task #46: drop persona_matches rows that pointed at this account.
+  c.executionCtx.waitUntil(c.env.DB.prepare(`DELETE FROM persona_matches WHERE entity_kind = 'account' AND entity_id = ?`).bind(id).run().then(() => undefined).catch((e) => console.warn("persona match cleanup (account delete) failed", (e as Error).message)));
   return c.json({ ok: true });
 });
 
@@ -194,6 +204,9 @@ accountsRoute.post("/:id/signals", async (c) => {
     created_by: c.get("email"),
   });
   const score = await recomputeAccountScore(c.env, id);
+  // Task #46: every new signal can shift signal_fit on every persona
+  // that targets this account.
+  c.executionCtx.waitUntil(rescoreEntity(c.env, "account", id).catch((e) => console.warn("persona rescore (signal insert) failed", (e as Error).message)));
   return c.json({ signal: sig, score }, 201);
 });
 
@@ -265,6 +278,11 @@ buyersRoute.post("/", async (c) => {
   const acct = await getAccount(c.env, body.account_id);
   if (!acct) return c.json({ error: "account_not_found" }, 404);
   const row = await insertBuyer(c.env, body as Partial<BuyerRow> & { account_id: string });
+  // Task #46: score the new buyer + parent account.
+  c.executionCtx.waitUntil((async () => {
+    try { await rescoreEntity(c.env, "buyer", row.id); await rescoreEntity(c.env, "account", row.account_id); }
+    catch (e) { console.warn("persona rescore (buyer create) failed", (e as Error).message); }
+  })());
   return c.json({ buyer: row }, 201);
 });
 
@@ -282,12 +300,29 @@ buyersRoute.put("/:id", async (c) => {
   }
   const r = await updateBuyer(c.env, id, safeFields as Partial<BuyerRow>);
   if (!r) return c.json({ error: "not_found" }, 404);
+  // Task #46: re-score this buyer (and its parent account) against every
+  // active persona. Buyer edits feed buyer-kind personas directly and
+  // can also lift the parent account's buyer_fit component.
+  c.executionCtx.waitUntil((async () => {
+    try { await rescoreEntity(c.env, "buyer", id); if (r.account_id) await rescoreEntity(c.env, "account", r.account_id); }
+    catch (e) { console.warn("persona rescore (buyer update) failed", (e as Error).message); }
+  })());
   return c.json({ buyer: r });
 });
 
 buyersRoute.delete("/:id", async (c) => {
-  const ok = await deleteBuyer(c.env, c.req.param("id"));
+  const id = c.req.param("id");
+  const cur = await getBuyer(c.env, id);
+  const ok = await deleteBuyer(c.env, id);
   if (!ok) return c.json({ error: "not_found" }, 404);
+  // Task #46: drop the buyer's persona_matches rows + re-score parent
+  // account (its buyer_fit may have just shifted).
+  c.executionCtx.waitUntil((async () => {
+    try {
+      await c.env.DB.prepare(`DELETE FROM persona_matches WHERE entity_kind = 'buyer' AND entity_id = ?`).bind(id).run();
+      if (cur?.account_id) await rescoreEntity(c.env, "account", cur.account_id);
+    } catch (e) { console.warn("persona cleanup (buyer delete) failed", (e as Error).message); }
+  })());
   return c.json({ ok: true });
 });
 
@@ -317,6 +352,8 @@ signalsRoute.post("/", async (c) => {
     created_by: c.get("email"),
   });
   const score = await recomputeAccountScore(c.env, body.account_id);
+  // Task #46: see /api/accounts/:id/signals — same trigger.
+  c.executionCtx.waitUntil(rescoreEntity(c.env, "account", body.account_id).catch((e) => console.warn("persona rescore (signal insert) failed", (e as Error).message)));
   return c.json({ signal: sig, score }, 201);
 });
 
@@ -347,6 +384,7 @@ signalsRoute.put("/:id", async (c) => {
   const updated = await updateSignal(c.env, id, patch);
   if (!updated) return c.json({ error: "not_found" }, 404);
   const score = await recomputeAccountScore(c.env, updated.account_id);
+  c.executionCtx.waitUntil(rescoreEntity(c.env, "account", updated.account_id).catch((e) => console.warn("persona rescore (signal edit) failed", (e as Error).message)));
   return c.json({ signal: updated, score });
 });
 
@@ -355,7 +393,12 @@ signalsRoute.delete("/:id", async (c) => {
   const sig = await c.env.DB.prepare(`SELECT account_id FROM signals WHERE id = ?`).bind(id).first<{ account_id: string }>();
   const ok = await deleteSignal(c.env, id);
   if (!ok) return c.json({ error: "not_found" }, 404);
-  if (sig) await recomputeAccountScore(c.env, sig.account_id);
+  if (sig) {
+    await recomputeAccountScore(c.env, sig.account_id);
+    // Task #46: signal removal can lower signal_fit on every persona
+    // that targets this account.
+    c.executionCtx.waitUntil(rescoreEntity(c.env, "account", sig.account_id).catch((e) => console.warn("persona rescore (signal delete) failed", (e as Error).message)));
+  }
   return c.json({ ok: true });
 });
 

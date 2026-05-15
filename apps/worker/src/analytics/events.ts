@@ -19,7 +19,8 @@ export type AiPurpose =
   | "bio_summary"
   | "persona_infer"
   | "ocr"
-  | "email_classify";
+  | "email_classify"
+  | "explanation";
 
 export interface TrackAiArgs {
   purpose: AiPurpose;

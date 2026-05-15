@@ -116,6 +116,24 @@ export class CrawlSignalsWorkflow {
   }
 }
 
+// Task #46: full-persona rescore. The workflow stays small — heavy
+// lifting is in personas/rescore.ts so the same code path is reachable
+// from the inline fallback (when WF binding is absent in dev) and from
+// the durable execution.
+export class RescorePersonaWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ personaId: string }>, step: WorkflowStep): Promise<{ ok: true; personaId: string; scored: number }> {
+    const { personaId } = event.payload;
+    const { rescorePersonaFull } = await import("../personas/rescore");
+    const r = await step.do("rescore", { retries: { limit: 2, backoff: "exponential" } }, async () => {
+      return await rescorePersonaFull(this.env, personaId);
+    });
+    return { ok: true, personaId, scored: r.scored };
+  }
+}
+
 export class IngestPageWorkflow {
   env: Env;
   ctx: ExecutionContext;

@@ -37,6 +37,7 @@ export interface Env {
   VEC_FIRMS?: VectorizeIndex;
   VEC_COMPANIES?: VectorizeIndex;
   VEC_ACCOUNTS?: VectorizeIndex;
+  VEC_PERSONAS?: VectorizeIndex;
   ENTITY_LOCK?: DurableObjectNamespace;
   ANALYTICS?: AnalyticsEngineDataset;
   RL_HOST?: RateLimiter;
@@ -47,10 +48,12 @@ export interface Env {
   WF_INGEST_PAGE?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   WF_ENRICH_ACCOUNT?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   WF_CRAWL_SIGNALS?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+  WF_RESCORE_PERSONA?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   AI_DAILY_NEURONS_CAP?: string;
   VECTORIZE_DAILY_QUERIES_CAP?: string;
   AI_SEARCH_NAMESPACE?: string;
   AI_EXTRACT_MODEL?: string;
+  PERSONA_RESCORE_SECRET?: string;
   AI_EMBED_MODEL?: string;
   AI_OCR_MODEL?: string;
   AI_SEARCH?: Fetcher;

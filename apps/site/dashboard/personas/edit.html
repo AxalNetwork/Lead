@@ -1,0 +1,113 @@
+---
+layout: default
+title: Edit persona
+permalink: /dashboard/personas/edit/
+---
+
+<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+  <h1 class="ads-page-title" style="margin:0">
+    <a href="/dashboard/personas/" style="color:inherit;text-decoration:none">Personas</a>
+    <span style="color:#888;font-weight:normal">›</span>
+    <span id="ads-persona-title">New persona</span>
+  </h1>
+  <div style="display:flex;gap:6px">
+    <button class="ads-btn ads-btn--ghost" id="ads-persona-clone" hidden>Clone</button>
+    <button class="ads-btn ads-btn--ghost" id="ads-persona-archive" hidden>Archive</button>
+    <button class="ads-btn ads-btn--ghost" id="ads-persona-analyze" hidden>Analyze top-50</button>
+    <button class="ads-btn ads-btn--ghost" id="ads-persona-rescore" hidden>Rescore all</button>
+    <button class="ads-btn" id="ads-persona-save">Save</button>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,420px);gap:16px;align-items:start;margin-top:12px">
+  <form class="ads-card" id="ads-persona-form" autocomplete="off">
+    <input type="hidden" name="id">
+
+    <fieldset style="border:0;padding:0;margin:0 0 12px">
+      <legend style="font-weight:600;margin-bottom:6px">Identity</legend>
+      <label class="ads-field"><span>Name</span><input name="name" required></label>
+      <label class="ads-field"><span>Kind</span>
+        <select name="kind">
+          <option value="account">Account (company)</option>
+          <option value="buyer">Buyer (person)</option>
+        </select>
+      </label>
+      <label class="ads-field"><span>Thesis</span>
+        <textarea name="thesis" rows="3" placeholder="Who we sell to and why this slice converts."></textarea>
+      </label>
+    </fieldset>
+
+    <fieldset style="border:0;padding:0;margin:0 0 12px">
+      <legend style="font-weight:600;margin-bottom:6px">Sizing</legend>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <label class="ads-field"><span>Min FTE</span><input name="size_min" type="number" min="0"></label>
+        <label class="ads-field"><span>Max FTE</span><input name="size_max" type="number" min="0"></label>
+      </div>
+      <label class="ads-field"><span>Size bands (comma-separated)</span>
+        <input name="size_bands" placeholder="51-200, 201-500">
+      </label>
+    </fieldset>
+
+    <fieldset style="border:0;padding:0;margin:0 0 12px">
+      <legend style="font-weight:600;margin-bottom:6px">Geography &amp; industry</legend>
+      <label class="ads-field"><span>Geos (ISO2 / region slugs)</span><input name="geos" placeholder="us, ca, emea"></label>
+      <label class="ads-field"><span>Industries (slugs)</span><input name="industries" placeholder="saas, fintech"></label>
+    </fieldset>
+
+    <fieldset style="border:0;padding:0;margin:0 0 12px">
+      <legend style="font-weight:600;margin-bottom:6px">Tech stack</legend>
+      <label class="ads-field"><span>Required (must have all)</span><input name="techs_required" placeholder="snowflake"></label>
+      <label class="ads-field"><span>Preferred</span><input name="techs_preferred" placeholder="dbt, airflow"></label>
+      <label class="ads-field"><span>Excluded (any one disqualifies)</span><input name="techs_excluded" placeholder="redshift"></label>
+    </fieldset>
+
+    <fieldset style="border:0;padding:0;margin:0 0 12px">
+      <legend style="font-weight:600;margin-bottom:6px">Signals</legend>
+      <label class="ads-field"><span>Preferred signal kinds</span>
+        <input name="signal_kinds" placeholder="hiring_role, funding_round, intent_keyword">
+      </label>
+    </fieldset>
+
+    <fieldset style="border:0;padding:0;margin:0 0 12px">
+      <legend style="font-weight:600;margin-bottom:6px">Buyer profile</legend>
+      <label class="ads-field"><span>Titles (substrings)</span><input name="buyer_titles" placeholder="head of data, ciso"></label>
+      <label class="ads-field"><span>Seniority</span><input name="buyer_seniority" placeholder="c_suite, vp, director"></label>
+      <label class="ads-field"><span>Departments</span><input name="buyer_departments" placeholder="engineering, security"></label>
+    </fieldset>
+
+    <fieldset style="border:0;padding:0;margin:0 0 12px">
+      <legend style="font-weight:600;margin-bottom:6px">Hard filters &amp; tuning</legend>
+      <label class="ads-field"><span>Hard filters (JSON)</span>
+        <textarea name="hard_filters_json" rows="3" placeholder='{"require_domain": true, "statuses_in": ["active"]}'></textarea>
+      </label>
+      <label class="ads-field"><span>Weight overrides (JSON)</span>
+        <textarea name="weights_json" rows="2" placeholder='{"signal":0.30,"buyer":0.20}'></textarea>
+      </label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <label class="ads-field"><span>Semantic threshold</span><input name="semantic_fit_threshold" type="number" min="0" max="1" step="0.05" placeholder="0.55"></label>
+        <label class="ads-field"><span>Recency boost (1.0–1.2)</span><input name="recency_boost" type="number" min="1" max="1.2" step="0.05" placeholder="0"></label>
+      </div>
+    </fieldset>
+
+    <div class="ads-form-actions" style="margin-top:8px">
+      <span class="ads-form-msg" id="ads-persona-msg"></span>
+    </div>
+  </form>
+
+  <aside style="display:flex;flex-direction:column;gap:12px;position:sticky;top:12px">
+    <div class="ads-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <h3 style="margin:0;font-size:14px">Top 25 matches right now</h3>
+        <span class="ads-muted" id="ads-persona-preview-status" style="font-size:11px">—</span>
+      </div>
+      <ol id="ads-persona-preview" style="padding-left:18px;margin:0;font-size:13px;max-height:420px;overflow:auto"></ol>
+    </div>
+    <div class="ads-card" id="ads-persona-notes-card" hidden>
+      <h3 style="margin:0 0 6px;font-size:14px">Persona notes (last analysis)</h3>
+      <pre id="ads-persona-notes" style="white-space:pre-wrap;font-size:12px;margin:0"></pre>
+      <span class="ads-muted" id="ads-persona-notes-at" style="font-size:11px"></span>
+    </div>
+  </aside>
+</div>
+
+<script src="/assets/js/personas.js?v={{ site.time | date: '%s' }}"></script>

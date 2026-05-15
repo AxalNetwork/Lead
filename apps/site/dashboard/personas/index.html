@@ -1,0 +1,37 @@
+---
+layout: default
+title: Personas
+permalink: /dashboard/personas/
+---
+
+<h1 class="ads-page-title">Personas</h1>
+<p class="ads-page-sub">Reusable target-customer definitions. Every account &amp; buyer is scored against each active persona.</p>
+
+<div class="ads-card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+  <div>
+    <label style="font-size:13px;margin-right:8px">Show
+      <select id="ads-personas-status" style="font-size:13px">
+        <option value="active" selected>active</option>
+        <option value="archived">archived</option>
+      </select>
+    </label>
+    <span class="ads-muted" id="ads-personas-count" style="font-size:12px"></span>
+  </div>
+  <a class="ads-btn" href="/dashboard/personas/edit/?new=1">+ New persona</a>
+</div>
+
+<div class="ads-card" style="overflow:auto">
+  <table class="ads-table" id="ads-personas-table" style="width:100%;border-collapse:collapse">
+    <thead><tr>
+      <th style="text-align:left;padding:8px">Name</th>
+      <th style="text-align:left;padding:8px">Kind</th>
+      <th style="text-align:right;padding:8px">Matches ≥60</th>
+      <th style="text-align:left;padding:8px">Top 5</th>
+      <th style="text-align:left;padding:8px">Updated</th>
+      <th style="padding:8px"></th>
+    </tr></thead>
+    <tbody id="ads-personas-tbody"><tr><td class="ads-muted" colspan="6" style="padding:8px">Loading…</td></tr></tbody>
+  </table>
+</div>
+
+<script src="/assets/js/personas.js?v={{ site.time | date: '%s' }}"></script>

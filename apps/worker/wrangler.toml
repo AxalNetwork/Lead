@@ -95,7 +95,13 @@ index_name = "axal-companies-768"  # dim=768 metric=cosine
 # Task #44: prospect accounts vector index.
 [[vectorize]]
 binding = "VEC_ACCOUNTS"
-index_name = "axal-accounts-768"
+index_name = "axal-accounts-768"  # dim=768 metric=cosine
+
+# Task #46: persona embeddings (re-embedded on every PATCH; queried for
+# the dashboard "Top 25 matches now" preview pane).
+[[vectorize]]
+binding = "VEC_PERSONAS"
+index_name = "axal-personas-768"  # dim=768 metric=cosine
 
 # Task #25: Durable Object for serialized merge locks (per-entity).
 [[durable_objects.bindings]]
@@ -155,6 +161,14 @@ class_name = "EnrichAccountWorkflow"
 binding = "WF_CRAWL_SIGNALS"
 name = "crawl-signals"
 class_name = "CrawlSignalsWorkflow"
+
+# Task #46: durable per-persona rescore. Triggered on persona create /
+# patch / clone / explicit rescore-all. Pages every entity of the
+# persona's kind in batches of 200 and upserts persona_matches.
+[[workflows]]
+binding = "WF_RESCORE_PERSONA"
+name = "rescore-persona"
+class_name = "RescorePersonaWorkflow"
 
 [[queues.producers]]
 binding = "LEAD_QUEUE"
