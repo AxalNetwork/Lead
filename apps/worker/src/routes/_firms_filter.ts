@@ -4,8 +4,8 @@
 
 export interface FirmFilter {
   q?: string;
-  kind?: string;
-  country?: string;
+  kinds?: string[];     // multi-select: kind IN (...)
+  countries?: string[]; // multi-select: hq_country_iso2 IN (...)
   city?: string;
   invests_in?: string[];   // geo slugs (substring match in geo_focus_json)
   stages?: string[];       // substring match in stages_json
@@ -34,10 +34,12 @@ function multi(v: string | null | undefined): string[] {
 }
 
 export function parseFirmFilter(qs: URLSearchParams): FirmFilter {
+  // Multi-select kind/country accept comma-joined ISO/slug lists. Single-value
+  // input (?kind=vc) keeps working because multi() returns a 1-element array.
   return {
     q: qs.get("q")?.trim() || undefined,
-    kind: qs.get("kind") || undefined,
-    country: qs.get("country")?.toUpperCase() || undefined,
+    kinds: multi(qs.get("kind")),
+    countries: multi(qs.get("country")).map((s) => s.toUpperCase()),
     city: qs.get("city")?.trim() || undefined,
     invests_in: multi(qs.get("invests_in")),
     stages: multi(qs.get("stages") ?? qs.get("stage")),
@@ -66,8 +68,14 @@ export function buildFirmWhere(f: FirmFilter): { sql: string; binds: unknown[] }
     wheres.push("(name LIKE ? OR thesis LIKE ?)");
     binds.push(`%${f.q}%`, `%${f.q}%`);
   }
-  if (f.kind) { wheres.push("kind = ?"); binds.push(f.kind); }
-  if (f.country) { wheres.push("hq_country_iso2 = ?"); binds.push(f.country); }
+  if (f.kinds && f.kinds.length) {
+    wheres.push("kind IN (" + f.kinds.map(() => "?").join(",") + ")");
+    for (const k of f.kinds) binds.push(k);
+  }
+  if (f.countries && f.countries.length) {
+    wheres.push("hq_country_iso2 IN (" + f.countries.map(() => "?").join(",") + ")");
+    for (const c of f.countries) binds.push(c);
+  }
   if (f.city) { wheres.push("hq_city LIKE ?"); binds.push(`%${f.city}%`); }
   if (f.invests_in && f.invests_in.length) {
     for (const g of f.invests_in) {

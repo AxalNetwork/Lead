@@ -80,7 +80,11 @@ firms.get("/", async (c) => {
   const rows = r.results ?? [];
   const hasMore = rows.length > limit;
   const items = hasMore ? rows.slice(0, limit) : rows;
-  const nextCursor = hasMore ? (items[items.length - 1].id as number) : null;
+  // Cursor is only stable under default id-DESC ordering. For any custom sort
+  // we omit nextCursor so the client knows not to attempt a load-more (which
+  // would otherwise duplicate rows by re-issuing the same query).
+  const cursorStable = sortCol === "id" && sortDir === "DESC";
+  const nextCursor = hasMore && cursorStable ? (items[items.length - 1].id as number) : null;
   return c.json({ items, nextCursor });
 });
 
@@ -146,7 +150,7 @@ firms.get("/:id", async (c) => {
     .prepare(
       `SELECT fp.id AS firm_people_id, fp.role, fp.is_decision_maker, fp.started_at, fp.ended_at, fp.source_url AS link_source_url,
               l.id, l.name, l.email, l.title, l.org, l.linkedin_url, l.twitter_url, l.persona_role, l.seniority,
-              l.country_iso2, l.region, l.city
+              l.country_iso2, l.region, l.city, l.last_enriched_at
        FROM firm_people fp
        LEFT JOIN leads l ON l.id = fp.lead_id
        WHERE fp.firm_id = ?
