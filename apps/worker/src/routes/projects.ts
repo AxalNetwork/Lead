@@ -359,7 +359,7 @@ projectsRoute.post("/:id/materials", async (c) => {
     // text/* decode, or printable-ASCII fallback) and feed to the LLM.
     let text = String(form.get("text") ?? "");
     if (!text.trim()) {
-      try { text = await extractTextFromUpload(buf, mime, filename); }
+      try { text = await extractTextFromUpload(buf, mime, filename, c.env); }
       catch (e) { console.warn("extractTextFromUpload failed", (e as Error).message); }
     }
     if (text.trim()) {

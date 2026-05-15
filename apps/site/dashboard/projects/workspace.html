@@ -316,14 +316,37 @@ permalink: /dashboard/projects/workspace/
     `;
     document.getElementById('ads-mat-form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const fd = new FormData(e.currentTarget);
-      const r = await fetch(API + '/materials', { method: 'POST', credentials: 'include', body: fd });
-      const j = await r.json().catch(() => ({}));
+      const form = e.currentTarget;
+      const fd = new FormData(form);
+      const out = document.getElementById('ads-suggest-out');
+      const submitBtn = form.querySelector('button[type="submit"]');
+      const wantsSuggest = fd.get('suggest') === '1';
+      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Uploading…'; }
+      if (out && wantsSuggest) {
+        out.innerHTML = '<div class="ads-card" style="padding:10px;font-size:13px"><span class="ads-muted">Extracting deck text and asking the model for suggestions… this can take 10–40 seconds for image-heavy decks.</span></div>';
+      }
+      let j = {};
+      try {
+        const r = await fetch(API + '/materials', { method: 'POST', credentials: 'include', body: fd });
+        j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error((j && j.error) || ('http ' + r.status));
+      } catch (err) {
+        if (out) out.innerHTML = '<div class="ads-card" style="padding:10px;font-size:13px;color:#b00020">Upload failed: ' + esc(err.message) + '</div>';
+        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Upload'; }
+        return;
+      }
       // Refresh the project (file list + persisted ai_suggestions_json)
       // first, then render the freshly-returned suggestions on top so
       // they aren't wiped by the re-render.
       await loadProject();
-      if (active === 'materials' && j && j.suggestions) renderSuggestions(j.suggestions);
+      if (active === 'materials') {
+        if (j && j.suggestions) {
+          renderSuggestions(j.suggestions);
+        } else if (wantsSuggest) {
+          const o2 = document.getElementById('ads-suggest-out');
+          if (o2) o2.innerHTML = '<div class="ads-card" style="padding:10px;font-size:13px"><span class="ads-muted">No suggestions returned — the deck may not contain extractable text. Try pasting the deck text in the textarea above.</span></div>';
+        }
+      }
     });
     if (stored) renderSuggestions(stored);
   }
