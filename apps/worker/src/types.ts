@@ -56,6 +56,7 @@ export interface Env {
   VECTORIZE_DAILY_QUERIES_CAP?: string;
   AI_SEARCH_NAMESPACE?: string;
   AI_EXTRACT_MODEL?: string;
+  AI_VISION_MODEL?: string;
   PERSONA_RESCORE_SECRET?: string;
   AI_EMBED_MODEL?: string;
   AI_OCR_MODEL?: string;

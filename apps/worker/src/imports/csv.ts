@@ -7,6 +7,8 @@ export interface ParsedTable {
   /** Optional debug info; not all parsers populate. */
   pageNumber?: number;
   confidence?: number;
+  /** XLSX/ODS sheet name; Google Sheets tab name. */
+  sheetName?: string;
 }
 
 const DELIMS = [",", "\t", ";", "|"];

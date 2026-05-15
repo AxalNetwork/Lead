@@ -1,20 +1,53 @@
-// parse_file queue consumer. Loads the uploaded file from R2, picks a parser
-// by mime/extension, persists a 5-row preview + extracted-URL list to KV,
-// auto-maps headers, and flips file_imports.status to 'mapped'.
+// parse_file queue consumer (Task #2 v2).
+// Loads the upload from R2, picks a parser, and emits per-tab classifications
+// so the dashboard can render multi-tab mapping with intent toggles.
+//
+// Wire-format invariants (consumed by routes/uploads.ts and dashboard.js):
+//   file_imports.format            = csv|tsv|xlsx|xls|ods|pdf-text|pdf-image|image|gsheet
+//   file_imports.tab_count         = number of tabs detected
+//   file_imports.column_map_json   = primary tab's confirmed map (legacy clients)
+//   file_imports.summary_json      = {format, tabs:[{sheet,intent,...}], source_signature}
+//   file_imports.source_signature  = sha256 of (filename pattern + tab names + header sets)
+//   file_import_tabs               = one row per tab with intent + map + confidence
+//   file_imports.status            = 'mapped' (after parse + auto-classify)
 
 import type { Env } from "../types";
-import { parseCsv } from "./csv";
+import { parseCsv, type ParsedTable } from "./csv";
 import { parseSpreadsheet } from "./xlsx_parser";
 import { parsePdfTables } from "./pdf_parser";
-import { autoMapHeaders, inferEntity } from "./auto_map";
+import { extractTablesFromImage, extractTablesFromImagePdf } from "./vision_pdf";
+import { autoMapHeaders, buildSamples, inferEntity } from "./auto_map";
 import { extractUrlsFromRows } from "./url_extract";
-import type { ParsedTable } from "./csv";
+import { detectFormat, IMAGE_PDF_DENSITY, type UploadFormat } from "./format_detect";
+import { fetchGoogleSheet } from "./google_sheets";
+import { classifyTab, type TabIntent } from "./tab_intent";
+import { sha256Hex } from "../ai/cache";
+
+interface FileImportRow {
+  id: string;
+  filename: string;
+  mime: string | null;
+  r2_key: string;
+}
+
+interface TabResult {
+  tabIndex: number;
+  sheetName: string | null;
+  pageNumber: number | null;
+  intent: TabIntent;
+  intentConfidence: number;
+  intentSubkind: string | null;
+  rowCount: number;
+  headers: string[];
+  columnMap: Record<string, string>;       // header → "entity.field" | "__skip__"
+  mapConfidence: Record<string, number>;
+}
 
 export async function processParseFile(env: Env, importId: string): Promise<void> {
   const row = await env.DB
-    .prepare("SELECT * FROM file_imports WHERE id = ?")
+    .prepare("SELECT id, filename, mime, r2_key FROM file_imports WHERE id = ?")
     .bind(importId)
-    .first<{ id: string; filename: string; mime: string | null; r2_key: string }>();
+    .first<FileImportRow>();
   if (!row) throw new Error(`file_import_not_found:${importId}`);
 
   await env.DB
@@ -27,48 +60,156 @@ export async function processParseFile(env: Env, importId: string): Promise<void
     if (!obj) throw new Error("upload_object_missing");
     const bytes = await obj.arrayBuffer();
     const ext = extOf(row.filename);
-    const tables = await parseByKind(bytes, ext, row.mime, env);
+    const format0 = detectFormat({ ext, mime: row.mime });
+    let { tables, format } = await parseByFormat(bytes, format0, env);
     if (!tables.length || !tables[0].headers.length) throw new Error("no_table_found");
-    // Use the largest table when multiple are detected (PDFs).
-    tables.sort((a, b) => b.rows.length - a.rows.length);
-    const primary = tables[0];
 
-    const map = autoMapHeaders(primary.headers);
-    const entity = inferEntity(map);
-    // Pull URLs from EVERY parsed table (not just the primary one) so that
-    // PDFs/workbooks with multiple sheets/tables surface every link.
+    // Per-tab classification + auto-mapping.
+    const tabResults: TabResult[] = [];
     const urlSet = new Set<string>();
-    for (const t of tables) for (const u of extractUrlsFromRows(t.rows)) urlSet.add(u);
+    let primaryIdx = 0;
+    let primaryRows = -1;
+    for (let i = 0; i < tables.length; i++) {
+      const t = tables[i];
+      const cls = classifyTab(t.sheetName ?? null, t.headers);
+      const samples = buildSamples(t.headers, t.rows);
+      const auto = autoMapHeaders(t.headers, samples);
+      const columnMap: Record<string, string> = {};
+      for (const [h, m] of Object.entries(auto.map)) {
+        columnMap[h] = m ? `${m.entity}.${m.field}` : "__skip__";
+      }
+      tabResults.push({
+        tabIndex: i,
+        sheetName: t.sheetName ?? null,
+        pageNumber: t.pageNumber ?? null,
+        intent: cls.intent,
+        intentConfidence: cls.confidence,
+        intentSubkind: cls.subkind ?? null,
+        rowCount: t.rows.length,
+        headers: t.headers,
+        columnMap,
+        mapConfidence: auto.confidence,
+      });
+      if (cls.intent === "firms" && t.rows.length > primaryRows) {
+        primaryRows = t.rows.length;
+        primaryIdx = i;
+      }
+      for (const u of extractUrlsFromRows(t.rows)) urlSet.add(u);
+    }
+    const primary = tables[primaryIdx];
+    const primaryTab = tabResults[primaryIdx];
     const urls = Array.from(urlSet);
-    const preview = primary.rows.slice(0, 5);
 
+    // Source signature: filename without trailing digits/timestamp + tab name
+    // set + headers per tab, sha256'd. Lets us auto-apply a saved template
+    // on a re-upload with the same shape.
+    const signature = await computeSourceSignature(row.filename, tabResults);
+
+    // Auto-apply template if one exists for this signature.
+    let appliedTemplate: { id: string; name: string } | null = null;
+    try {
+      const tpl = await env.DB
+        .prepare("SELECT id, name, tabs_json FROM import_templates WHERE source_signature = ? ORDER BY use_count DESC LIMIT 1")
+        .bind(signature).first<{ id: string; name: string; tabs_json: string }>();
+      if (tpl) {
+        const overlay = JSON.parse(tpl.tabs_json) as Array<{ sheet?: string; intent?: TabIntent; intent_subkind?: string; column_map?: Record<string, string> }>;
+        for (const t of tabResults) {
+          const match = overlay.find((o) => (o.sheet ?? "").toLowerCase() === (t.sheetName ?? "").toLowerCase());
+          if (!match) continue;
+          if (match.intent) { t.intent = match.intent; t.intentConfidence = 1; }
+          if (match.intent_subkind) t.intentSubkind = match.intent_subkind;
+          if (match.column_map) {
+            for (const [h, v] of Object.entries(match.column_map)) {
+              if (h in t.columnMap) {
+                t.columnMap[h] = v;
+                t.mapConfidence[h] = 1;
+              }
+            }
+          }
+        }
+        appliedTemplate = { id: tpl.id, name: tpl.name };
+        await env.DB.prepare(
+          "UPDATE import_templates SET use_count = use_count + 1, last_used_at = ? WHERE id = ?",
+        ).bind(new Date().toISOString(), tpl.id).run();
+      }
+    } catch { /* template lookup is best-effort */ }
+
+    // Persist per-tab rows.
+    await env.DB.prepare("DELETE FROM file_import_tabs WHERE import_id = ?").bind(importId).run();
+    for (const t of tabResults) {
+      await env.DB.prepare(
+        `INSERT INTO file_import_tabs
+          (id, import_id, tab_index, sheet_name, page_number, intent, intent_subkind,
+           intent_confidence, row_count, column_map_json, map_confidence_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(
+        crypto.randomUUID(), importId, t.tabIndex, t.sheetName, t.pageNumber,
+        t.intent, t.intentSubkind, t.intentConfidence, t.rowCount,
+        JSON.stringify(t.columnMap), JSON.stringify(t.mapConfidence),
+        new Date().toISOString(),
+      ).run();
+    }
+
+    // 5-row preview for the primary tab (legacy dashboard.js consumes it).
     await env.SCRAPE_CACHE.put(`upload_preview:${importId}`, JSON.stringify({
       headers: primary.headers,
-      rows: preview,
+      rows: primary.rows.slice(0, 5),
       tables_found: tables.length,
     }), { expirationTtl: 60 * 60 * 24 * 7 });
+    // Per-tab previews so the v2 UI can flip pills without re-fetching.
+    const tabPreviews: Record<string, { headers: string[]; rows: Array<Record<string, string>> }> = {};
+    for (let i = 0; i < tables.length; i++) {
+      tabPreviews[String(i)] = { headers: tables[i].headers, rows: tables[i].rows.slice(0, 5) };
+    }
+    await env.SCRAPE_CACHE.put(`upload_tab_previews:${importId}`, JSON.stringify(tabPreviews), {
+      expirationTtl: 60 * 60 * 24 * 7,
+    });
     await env.SCRAPE_CACHE.put(`upload_urls:${importId}`, JSON.stringify(urls), {
       expirationTtl: 60 * 60 * 24 * 7,
     });
-    // NOTE: We deliberately do NOT cache the full parsed rows here. KV values
-    // are capped at 25 MB and a 10k-row sheet can easily exceed that. The
-    // import phase re-loads bytes from R2 and re-parses, which is bounded
-    // memory and survives worker restarts.
+
+    // Pre-confirmation entity from the dominant tab's intent.
+    const entity = primaryTab.intent === "firms" ? "firms" : (inferEntity(toMappedFieldRecord(primaryTab.columnMap)));
+
+    const summary = {
+      format,
+      tab_count: tables.length,
+      tabs: tabResults.map((t) => ({
+        index: t.tabIndex,
+        sheet: t.sheetName,
+        page: t.pageNumber,
+        intent: t.intent,
+        intent_subkind: t.intentSubkind,
+        intent_confidence: t.intentConfidence,
+        rows_in: t.rowCount,
+        avg_map_confidence: avg(Object.values(t.mapConfidence)),
+      })),
+      source_signature: signature,
+      template_applied: appliedTemplate,
+    };
 
     await env.DB.prepare(
       `UPDATE file_imports
          SET status = 'mapped',
+             format = ?,
              entity = ?,
              row_count = ?,
+             tab_count = ?,
              urls_found = ?,
              column_map_json = ?,
+             summary_json = ?,
+             source_signature = ?,
              updated_at = ?
        WHERE id = ?`,
     ).bind(
-      entity,
+      format,
+      entity === "firm_metrics" ? "firms" : entity,
       primary.rows.length,
+      tables.length,
       urls.length,
-      JSON.stringify(serializeMap(map)),
+      JSON.stringify(primaryTab.columnMap),
+      JSON.stringify(summary),
+      signature,
       new Date().toISOString(),
       importId,
     ).run();
@@ -80,28 +221,106 @@ export async function processParseFile(env: Env, importId: string): Promise<void
   }
 }
 
-function serializeMap(map: Record<string, ReturnType<typeof autoMapHeaders>[string]>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(map)) {
-    out[k] = v ? `${v.entity}.${v.field}` : "__skip__";
-  }
-  return out;
-}
-
 function extOf(filename: string): string {
   const m = /\.([a-z0-9]+)$/i.exec(filename);
   return m ? m[1].toLowerCase() : "";
 }
 
-async function parseByKind(bytes: ArrayBuffer, ext: string, mime: string | null, env: Env): Promise<ParsedTable[]> {
-  const m = (mime || "").toLowerCase();
-  if (ext === "pdf" || m.includes("pdf")) return parsePdfTables(bytes, env);
-  if (ext === "csv" || m.includes("text/csv")) {
-    return [parseCsv(new TextDecoder().decode(bytes))];
+function avg(xs: number[]): number {
+  if (!xs.length) return 0;
+  let s = 0; for (const x of xs) s += x;
+  return Math.round((s / xs.length) * 100) / 100;
+}
+
+function toMappedFieldRecord(m: Record<string, string>): Record<string, { entity: "firms" | "leads" | "firm_metrics"; field: string } | null> {
+  const out: Record<string, { entity: "firms" | "leads" | "firm_metrics"; field: string } | null> = {};
+  for (const [h, v] of Object.entries(m)) {
+    if (!v || v === "__skip__") { out[h] = null; continue; }
+    const dot = v.indexOf(".");
+    if (dot < 0) { out[h] = null; continue; }
+    out[h] = { entity: v.slice(0, dot) as "firms" | "leads" | "firm_metrics", field: v.slice(dot + 1) };
   }
-  if (ext === "tsv") {
-    return [parseCsv(new TextDecoder().decode(bytes), "\t")];
+  return out;
+}
+
+async function computeSourceSignature(filename: string, tabs: TabResult[]): Promise<string> {
+  const filePattern = filename
+    .replace(/\.[a-z0-9]+$/i, "")
+    .replace(/[\d_-]+(20\d{2}|19\d{2})?$/i, "")
+    .replace(/[\W_]+/g, " ")
+    .trim()
+    .toLowerCase();
+  const sig = JSON.stringify({
+    f: filePattern,
+    tabs: tabs.map((t) => ({
+      n: (t.sheetName ?? "").toLowerCase(),
+      h: t.headers.map((h) => h.toLowerCase().trim()).sort(),
+    })).sort((a, b) => a.n.localeCompare(b.n)),
+  });
+  return sha256Hex(sig);
+}
+
+async function parseByFormat(
+  bytes: ArrayBuffer,
+  format0: UploadFormat,
+  env: Env,
+): Promise<{ tables: ParsedTable[]; format: UploadFormat }> {
+  // URL uploads (Google Sheets / Airtable) are stored as a JSON blob
+  // {source_url, format, tables} by routes/uploads.ts → /url. Decode and
+  // return the embedded tables so per-tab classification works identically
+  // to a local file upload.
+  if (format0 === "gsheet" || format0 === "airtable") {
+    const decoded = decodeJsonBlob(bytes);
+    if (decoded) return { tables: decoded.tables, format: (decoded.format as UploadFormat) || format0 };
   }
-  // Default: treat as a SheetJS-readable workbook (xlsx/xls/ods/csv).
-  return [await parseSpreadsheet(bytes)];
+  if (format0 === "csv")  return { tables: [parseCsv(new TextDecoder().decode(bytes))], format: "csv" };
+  if (format0 === "tsv")  return { tables: [parseCsv(new TextDecoder().decode(bytes), "\t")], format: "tsv" };
+  if (format0 === "xlsx" || format0 === "xls" || format0 === "ods") {
+    return { tables: await parseSpreadsheet(bytes), format: format0 };
+  }
+  if (format0 === "pdf-text") {
+    const tables = await parsePdfTables(bytes, env);
+    // Density check: low char-density per detected row → image PDF; try
+    // vision extractor if available.
+    const totalChars = tables.reduce((acc, t) => acc + t.rows.reduce((a, r) => a + Object.values(r).join("").length, 0), 0);
+    const totalRows = tables.reduce((acc, t) => acc + t.rows.length, 0);
+    const density = totalRows > 0 ? totalChars / Math.max(1, totalRows) : 0;
+    if ((!tables.length || density < IMAGE_PDF_DENSITY) && env.AI) {
+      const v = await extractTablesFromImagePdf(env, bytes);
+      if (v.length) return { tables: v, format: "pdf-image" };
+    }
+    return { tables, format: tables.length ? "pdf-text" : "pdf-image" };
+  }
+  if (format0 === "image") {
+    const v = await extractTablesFromImage(env, bytes);
+    return { tables: v, format: "image" };
+  }
+  // Last-resort: maybe the caller didn't set format and we got a JSON blob.
+  const jb = decodeJsonBlob(bytes);
+  if (jb) return { tables: jb.tables, format: (jb.format as UploadFormat) || "gsheet" };
+  // Default: try spreadsheet (sheetjs sniffs CSV too).
+  return { tables: await parseSpreadsheet(bytes), format: format0 };
+}
+
+/** Decode the JSON blob written by routes/uploads.ts /url. Returns null if
+ *  not a valid envelope. */
+function decodeJsonBlob(bytes: ArrayBuffer): { format?: string; tables: ParsedTable[] } | null {
+  // Cheap sniff: starts with '{' after BOM/whitespace.
+  if (bytes.byteLength < 2) return null;
+  const u8 = new Uint8Array(bytes);
+  let i = 0; while (i < u8.length && (u8[i] === 0xef || u8[i] === 0xbb || u8[i] === 0xbf || u8[i] <= 0x20)) i++;
+  if (u8[i] !== 0x7b) return null;
+  try {
+    const j = JSON.parse(new TextDecoder().decode(bytes)) as { format?: string; tables?: ParsedTable[] };
+    if (Array.isArray(j?.tables)) return { format: j.format, tables: j.tables };
+    return null;
+  } catch { return null; }
+}
+
+/** Public Google-Sheets entrypoint used by routes/uploads.ts when an URL is
+ *  uploaded instead of a file. */
+export async function fetchAndParseUrl(url: string): Promise<{ tables: ParsedTable[]; format: UploadFormat }> {
+  const fmt = detectFormat({ url });
+  if (fmt === "gsheet") return { tables: await fetchGoogleSheet(url), format: "gsheet" };
+  return { tables: [], format: fmt };
 }

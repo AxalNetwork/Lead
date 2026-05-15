@@ -232,7 +232,8 @@
     var counts = document.getElementById("ads-upload-progress-counts");
     var progMeta = document.getElementById("ads-upload-progress-meta");
 
-    var current = { id: null, headers: [], map: {}, entity: "firms", totalRows: 0, pollHandle: null };
+    var current = { id: null, headers: [], map: {}, entity: "firms", totalRows: 0, pollHandle: null,
+      tabs: [], tabPreviews: {}, activeTab: 0, summary: null };
 
     function setStep(name) {
       root.setAttribute("data-step", name);
@@ -319,79 +320,243 @@
     }
 
     var FIELD_OPTIONS = {
-      firms: ["name","website","domain","kind","thesis","stages","sectors","geo_focus","hq_city","hq_region","hq_country_iso2","check_size_typical_usd","check_size_min_usd","check_size_max_usd","aum_usd","current_fund_size_usd","current_fund_name","fund_count","portfolio_count","notable_investments","founded_year","team_size","linkedin_url","crunchbase_url","twitter_handle","signal_nfx_url","openvc_url","legal_name","submission_url"],
+      firms: ["name","website","domain","kind","thesis","stages","sectors","geo_focus","hq_city","hq_region","hq_country_iso2","check_size_typical_usd","check_size_min_usd","check_size_max_usd","aum_usd","current_fund_size_usd","current_fund_name","fund_count","portfolio_count","notable_investments","founded_year","team_size","linkedin_url","crunchbase_url","twitter_handle","signal_nfx_url","openvc_url","legal_name","submission_url","contact_email"],
       leads: ["name","email","phone","org","title","linkedin_url","twitter_url"],
+      firm_metrics: ["aum_usd","deals_count","exits_count","new_funds","fund_size_usd","geo_pct","stage_pct","sector_pct","period","dimension"],
     };
-    function showMapping(data) {
-      stopPoll();
-      var entity = data.entity || "firms";
-      var headers = (data.preview && data.preview.headers) || [];
-      var rows = (data.preview && data.preview.rows) || [];
-      var urls = data.urls || [];
-      current.headers = headers;
-      current.map = {};
-      current.entity = entity;
-      // seed with auto-detected map
-      var seed = data.column_map || {};
+    var INTENT_OPTIONS = [
+      { v: "firms", label: "Firms (List)" },
+      { v: "firm_metrics", label: "Time-series metrics" },
+      { v: "firm_kpi", label: "KPI snapshot (Stats)" },
+      { v: "firm_geo", label: "Geo allocation" },
+      { v: "leads", label: "Leads / People" },
+      { v: "notes", label: "Notes (skip)" },
+      { v: "discard", label: "Discard" },
+    ];
+
+    function fieldOptionsHtml() {
       var opts = ['<option value="__skip__">— skip —</option>'];
-      ["firms","leads"].forEach(function (ent) {
+      ["firms","leads","firm_metrics"].forEach(function (ent) {
         opts.push('<optgroup label="' + ent + '">');
         FIELD_OPTIONS[ent].forEach(function (f) {
           opts.push('<option value="' + ent + '.' + f + '">' + ent + '.' + f + '</option>');
         });
         opts.push("</optgroup>");
       });
-      var html = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;align-items:center">';
-      headers.forEach(function (h, i) {
-        var sel = seed[h] || "__skip__";
-        current.map[h] = sel;
-        html += '<div style="font-size:13px"><code>' + escapeHtml(h) + '</code></div>';
-        html += '<div><select data-h="' + escapeHtml(h) + '" style="width:100%;padding:4px;font-size:12px">' + opts.join("") + "</select></div>";
-        // mark seed selection after render
-        void i;
-      });
-      html += "</div>";
-      mapPanel.innerHTML = html;
-      // wire selects
-      mapPanel.querySelectorAll("select[data-h]").forEach(function (s) {
-        var h = s.getAttribute("data-h");
-        s.value = current.map[h] || "__skip__";
-        s.addEventListener("change", function () { current.map[h] = s.value; });
-      });
+      return opts.join("");
+    }
 
-      summary.textContent = (data.row_count || rows.length) + " rows · " + headers.length + " columns · entity: " + entity + (data.tables_found > 1 ? " · " + data.tables_found + " tables (extras → portfolio)" : "");
-      // preview
-      if (rows.length) {
-        var t = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr>' + headers.map(function (h) { return "<th>" + escapeHtml(h) + "</th>"; }).join("") + "</tr></thead><tbody>";
-        rows.slice(0, 5).forEach(function (r) {
-          t += "<tr>" + headers.map(function (h) { return "<td>" + escapeHtml(String(r[h] || "")) + "</td>"; }).join("") + "</tr>";
-        });
-        t += "</tbody></table></div>";
-        preview.innerHTML = t;
-      } else { preview.innerHTML = "<em>(no rows)</em>"; }
-      // urls
+    function showMapping(data) {
+      stopPoll();
+      var urls = data.urls || [];
+      current.tabs = (data.tabs || []).map(function (t) {
+        return {
+          tab_index: t.tab_index,
+          sheet_name: t.sheet_name,
+          intent: t.intent || "firms",
+          intent_subkind: t.intent_subkind || null,
+          intent_confidence: t.intent_confidence || 0,
+          row_count: t.row_count || 0,
+          column_map: t.column_map || {},
+          map_confidence: t.map_confidence || {},
+        };
+      });
+      current.tabPreviews = data.tab_previews || {};
+      current.summary = data.summary || null;
+      current.activeTab = 0;
+      // Legacy single-tab fallback when /tabs is empty (older parses).
+      if (!current.tabs.length) {
+        var headers = (data.preview && data.preview.headers) || [];
+        var seed = data.column_map || {};
+        current.tabs = [{
+          tab_index: 0, sheet_name: null, intent: data.entity === "leads" ? "leads" : "firms",
+          intent_subkind: null, intent_confidence: 0.5, row_count: data.row_count || 0,
+          column_map: headers.reduce(function (acc, h) { acc[h] = seed[h] || "__skip__"; return acc; }, {}),
+          map_confidence: {},
+        }];
+        current.tabPreviews = { "0": { headers: headers, rows: (data.preview && data.preview.rows) || [] } };
+      }
+      current.totalRows = data.row_count || current.tabs.reduce(function (a, t) { return a + (t.row_count || 0); }, 0);
+
+      renderTabPanel();
+
+      var tabSummary = current.tabs.length + " tab" + (current.tabs.length === 1 ? "" : "s")
+        + " · " + current.totalRows + " rows"
+        + (data.format ? " · " + data.format : "")
+        + ((current.summary && current.summary.template_applied) ? " · template: " + escapeHtml(current.summary.template_applied.name) : "");
+      summary.textContent = tabSummary;
+
       urlsSum.textContent = "URLs found (" + urls.length + ")";
       urlsBox.innerHTML = urls.length
         ? urls.slice(0, 200).map(function (u) { return escapeHtml(u); }).join("<br>")
         : "<em>(none)</em>";
-      current.totalRows = data.row_count || rows.length;
 
-      tellMsg("Parsed. Confirm the column map.", "ok");
+      tellMsg("Parsed. Review each tab, then confirm.", "ok");
       setStep("map");
+    }
+
+    function renderTabPanel() {
+      var pillsHtml = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">';
+      current.tabs.forEach(function (t, i) {
+        var label = (t.sheet_name || ("Tab " + (i + 1))) + " · " + t.intent;
+        var conf = Math.round((t.intent_confidence || 0) * 100);
+        var active = i === current.activeTab;
+        pillsHtml += '<button type="button" class="ads-tab-pill" data-tab="' + i + '" '
+          + 'style="padding:4px 10px;border:1px solid ' + (active ? "#2c7be5" : "#ccc") + ';'
+          + 'background:' + (active ? "#2c7be5" : "#fff") + ';color:' + (active ? "#fff" : "#333") + ';'
+          + 'border-radius:14px;font-size:12px;cursor:pointer">'
+          + escapeHtml(label) + ' <span style="opacity:.7">(' + conf + '%)</span></button>';
+      });
+      pillsHtml += '</div>';
+
+      // Save-template button on the right.
+      pillsHtml += '<div style="margin-bottom:10px;display:flex;gap:8px;align-items:center">'
+        + '<button type="button" id="ads-upload-save-template" '
+        + 'style="padding:4px 10px;border:1px solid #ccc;background:#fafafa;border-radius:4px;font-size:12px;cursor:pointer">'
+        + 'Save as template</button>'
+        + '<span id="ads-upload-template-msg" style="font-size:12px;color:#666"></span>'
+        + '</div>';
+
+      // Active tab content.
+      var tab = current.tabs[current.activeTab];
+      var preview2 = current.tabPreviews[String(current.activeTab)] || { headers: [], rows: [] };
+      var headers = preview2.headers;
+
+      // Intent + subkind selectors.
+      var intentSel = '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">'
+        + '<label style="font-size:12px;font-weight:600">Intent:</label>'
+        + '<select id="ads-tab-intent" style="padding:4px;font-size:12px">';
+      INTENT_OPTIONS.forEach(function (o) {
+        intentSel += '<option value="' + o.v + '"' + (o.v === tab.intent ? " selected" : "") + '>' + o.label + '</option>';
+      });
+      intentSel += '</select>';
+      intentSel += '<label style="font-size:12px;margin-left:10px">Subkind:</label>';
+      intentSel += '<select id="ads-tab-subkind" style="padding:4px;font-size:12px">'
+        + '<option value="">(none)</option>'
+        + '<option value="gov_fund"' + (tab.intent_subkind === "gov_fund" ? " selected" : "") + '>gov_fund</option>'
+        + '<option value="corporate"' + (tab.intent_subkind === "corporate" ? " selected" : "") + '>corporate</option>'
+        + '<option value="angel"' + (tab.intent_subkind === "angel" ? " selected" : "") + '>angel</option>'
+        + '</select></div>';
+
+      // Header rows with confidence bars.
+      var rowsHtml = '<div style="display:grid;grid-template-columns:2fr 2fr 80px;gap:6px;align-items:center">';
+      headers.forEach(function (h) {
+        var sel = tab.column_map[h] || "__skip__";
+        var conf = Math.round((tab.map_confidence[h] || 0) * 100);
+        var barColor = conf >= 80 ? "#2ecc71" : (conf >= 50 ? "#f1c40f" : "#e74c3c");
+        rowsHtml += '<div style="font-size:13px"><code>' + escapeHtml(h) + '</code></div>';
+        rowsHtml += '<div><select data-h="' + escapeHtml(h) + '" style="width:100%;padding:4px;font-size:12px">'
+          + fieldOptionsHtml() + '</select></div>';
+        rowsHtml += '<div style="display:flex;align-items:center;gap:4px">'
+          + '<div style="flex:1;height:6px;background:#eee;border-radius:3px;overflow:hidden">'
+          + '<div style="width:' + conf + '%;height:100%;background:' + barColor + '"></div></div>'
+          + '<span style="font-size:11px;color:#666;min-width:30px">' + conf + '%</span></div>';
+      });
+      rowsHtml += '</div>';
+
+      mapPanel.innerHTML = pillsHtml + intentSel + rowsHtml;
+
+      // Wire pills.
+      mapPanel.querySelectorAll(".ads-tab-pill").forEach(function (b) {
+        b.addEventListener("click", function () {
+          current.activeTab = parseInt(b.getAttribute("data-tab"), 10);
+          renderTabPanel();
+        });
+      });
+      // Wire intent + subkind.
+      var intentEl = mapPanel.querySelector("#ads-tab-intent");
+      intentEl.addEventListener("change", function () {
+        current.tabs[current.activeTab].intent = intentEl.value;
+        renderTabPanel();
+      });
+      var subkindEl = mapPanel.querySelector("#ads-tab-subkind");
+      subkindEl.addEventListener("change", function () {
+        current.tabs[current.activeTab].intent_subkind = subkindEl.value || null;
+      });
+      // Wire selects: pre-select then bind change.
+      mapPanel.querySelectorAll("select[data-h]").forEach(function (s) {
+        var h = s.getAttribute("data-h");
+        s.value = current.tabs[current.activeTab].column_map[h] || "__skip__";
+        s.addEventListener("change", function () {
+          current.tabs[current.activeTab].column_map[h] = s.value;
+        });
+      });
+      // Save template button.
+      var saveBtn = mapPanel.querySelector("#ads-upload-save-template");
+      var saveMsg = mapPanel.querySelector("#ads-upload-template-msg");
+      saveBtn.addEventListener("click", async function () {
+        var name = window.prompt("Template name?", (current.summary && current.summary.template_applied)
+          ? current.summary.template_applied.name : "");
+        if (!name) return;
+        try {
+          // Send the current per-tab edits in the same request so the saved
+          // template snapshots the operator's in-memory state, not stale DB.
+          var tabsPayload = current.tabs.map(function (t) {
+            return {
+              tab_index: t.tab_index,
+              intent: t.intent,
+              intent_subkind: t.intent_subkind,
+              column_map: t.column_map,
+            };
+          });
+          var res = await fetch(API_BASE + "/api/uploads/" + current.id + "/save-template", {
+            method: "POST", credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: name, tabs: tabsPayload }),
+          });
+          if (!res.ok) throw new Error(await res.text());
+          var j = await res.json();
+          saveMsg.textContent = "Saved (" + (j.id || "").slice(0, 8) + ").";
+          saveMsg.style.color = "#2ecc71";
+        } catch (err) {
+          saveMsg.textContent = "Failed: " + err.message;
+          saveMsg.style.color = "#e74c3c";
+        }
+      });
+
+      // Active-tab preview table.
+      if (preview2.rows.length) {
+        var t = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr>'
+          + headers.map(function (h) { return "<th>" + escapeHtml(h) + "</th>"; }).join("")
+          + "</tr></thead><tbody>";
+        preview2.rows.slice(0, 5).forEach(function (r) {
+          t += "<tr>" + headers.map(function (h) { return "<td>" + escapeHtml(String(r[h] || "")) + "</td>"; }).join("") + "</tr>";
+        });
+        t += "</tbody></table></div>";
+        preview.innerHTML = t;
+      } else {
+        preview.innerHTML = "<em>(no preview rows)</em>";
+      }
     }
 
     // ---- step 3: progress ---------------------------------------------
     confirmBtn.addEventListener("click", async function () {
       try {
         confirmBtn.disabled = true;
-        var body = { column_map: current.map, scrape_urls: scrapeChk.checked ? 1 : 0, entity: current.entity };
+        // Build per-tab payload.
+        var tabsPayload = current.tabs.map(function (t) {
+          return {
+            tab_index: t.tab_index,
+            intent: t.intent,
+            intent_subkind: t.intent_subkind,
+            column_map: t.column_map,
+          };
+        });
+        // Primary tab's map drives the legacy column_map field.
+        var primary = current.tabs[0] || { column_map: {}, intent: "firms" };
+        var body = {
+          column_map: primary.column_map,
+          entity: primary.intent === "leads" ? "leads" : "firms",
+          scrape_urls: scrapeChk.checked ? 1 : 0,
+          tabs: tabsPayload,
+        };
         var res = await fetch(API_BASE + "/api/uploads/" + current.id + "/confirm-map", {
           method: "POST", credentials: "include",
           headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
         });
         if (!res.ok) throw new Error(await res.text() || ("HTTP " + res.status));
         setStep("progress");
-        progMeta.textContent = "Importing " + current.totalRows + " rows…";
+        progMeta.textContent = "Importing " + current.totalRows + " rows across " + current.tabs.length + " tab(s)…";
         bar.style.width = "0%";
         counts.innerHTML = "";
         pollProgress();

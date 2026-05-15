@@ -20,6 +20,7 @@
 import type { ParsedTable } from "./csv";
 import type { Env } from "../types";
 import { aiExtractTablesFromPdfPages } from "../ai/extract";
+import { isChromeText } from "./chrome_filter";
 
 interface PdfTextItem { str: string; x: number; y: number; w: number }
 
@@ -39,28 +40,9 @@ async function loadPdfjs(): Promise<PdfMod | null> {
   return cached;
 }
 
-// Lines whose joined text matches one of these patterns are productivity-app
-// UI chrome rendered into "Print to PDF" exports. Filter unconditionally
-// before table detection — they never carry data and they corrupt header
-// inference on page 1 of Google Sheets exports.
-const CHROME_LINE_PATTERNS: RegExp[] = [
-  // Google Sheets menu bar (in any locale-stable English ordering).
-  /^File\s+Edit\s+View\s+Insert\s+Format\s+Data\s+Tools/i,
-  // Google Sheets toolbar / read-only banner.
-  /^Menus\s+\d+%/i,
-  /\bView only\b/i,
-  // Microsoft Excel ribbon.
-  /^Home\s+Insert\s+(Page Layout|Draw)\s+(Page Layout\s+)?Formulas\s+Data\s+Review/i,
-  // Standalone toolbar buttons that float to their own line.
-  /^(Share|Comment|Comments|Editing|Suggesting|Viewing)$/i,
-  // Generic page-number footer.
-  /^Page\s+\d+(\s+of\s+\d+)?$/i,
-];
-
 function isChromeLine(line: PdfTextItem[]): boolean {
   const text = line.map((it) => it.str).join(" ").replace(/\s+/g, " ").trim();
-  if (!text) return true;
-  return CHROME_LINE_PATTERNS.some((re) => re.test(text));
+  return isChromeText(text);
 }
 
 export async function parsePdfTables(bytes: ArrayBuffer, env?: Env): Promise<ParsedTable[]> {
