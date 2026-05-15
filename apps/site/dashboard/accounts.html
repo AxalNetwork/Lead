@@ -8,7 +8,7 @@ permalink: /dashboard/accounts/
 <p class="ads-page-sub">Customer-discovery prospects, sorted by blended account score (0.6·intent + 0.4·fit). Use the filters to narrow by industry, size, signal kind, or owner.</p>
 
 <div class="ads-card">
-  <form id="ads-accounts-filters" autocomplete="off" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;align-items:end">
+  <form id="ads-accounts-filters" class="ads-filter-grid ads-filter-grid--6" autocomplete="off">
     <label>Search<input name="q" placeholder="name or domain" style="width:100%;padding:6px"></label>
     <label>Status
       <select name="status" style="width:100%;padding:6px">
@@ -56,7 +56,7 @@ permalink: /dashboard/accounts/
   </form>
 </div>
 
-<div class="ads-card" style="margin-top:12px;display:grid;grid-template-columns:repeat(5,1fr);gap:12px" id="ads-accounts-strip">
+<div class="ads-card ads-strip-kpi ads-strip-kpi--5" style="margin-top:12px" id="ads-accounts-strip">
   <div><div class="ads-kpi__label">Matches</div><div class="ads-kpi__value" data-k="total">—</div></div>
   <div><div class="ads-kpi__label">Avg account</div><div class="ads-kpi__value" data-k="avg_account_score">—</div></div>
   <div><div class="ads-kpi__label">Avg intent</div><div class="ads-kpi__value" data-k="avg_intent_score">—</div></div>
@@ -64,7 +64,8 @@ permalink: /dashboard/accounts/
   <div><div class="ads-kpi__label">Top industries</div><div class="ads-kpi__value" data-k="industries" style="font-size:14px">—</div></div>
 </div>
 
-<div class="ads-card" style="margin-top:12px;overflow:auto">
+<div class="ads-card" style="margin-top:12px">
+ <div class="ads-table-wrap">
   <table class="ads-table" style="width:100%;border-collapse:collapse">
     <thead><tr>
       <th style="text-align:left;padding:8px;width:40px"></th>
@@ -78,6 +79,7 @@ permalink: /dashboard/accounts/
     </tr></thead>
     <tbody id="ads-accounts-tbody"><tr><td class="ads-muted" colspan="8">Loading…</td></tr></tbody>
   </table>
+ </div>
   <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:12px">
     <span class="ads-muted" id="ads-accounts-shown">—</span>
     <button class="ads-btn ads-btn--ghost" id="ads-accounts-loadmore" hidden>Load more</button>

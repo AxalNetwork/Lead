@@ -38,7 +38,7 @@ permalink: /dashboard/firms/detail/
     <section data-pane="overview">
       <h3 style="margin:12px 0 4px;font-size:14px">Thesis</h3>
       <p data-k="thesis" class="ads-muted">—</p>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:8px;font-size:13px">
+      <div class="ads-overview-grid" style="margin-top:8px;font-size:13px">
         <div><strong>Stages</strong><div data-k="stages">—</div></div>
         <div><strong>Sectors</strong><div data-k="sectors">—</div></div>
         <div><strong>Geo focus</strong><div data-k="geo_focus">—</div></div>
@@ -56,28 +56,34 @@ permalink: /dashboard/firms/detail/
           <button class="ads-btn ads-btn--ghost" data-act="add-person">Add person…</button>
         </div>
       </div>
+      <div class="ads-table-wrap">
       <table class="ads-table" style="width:100%;border-collapse:collapse">
         <thead><tr><th>Name</th><th>Role</th><th>DM?</th><th>Email</th><th>LinkedIn</th><th>Country</th><th>Last enriched</th></tr></thead>
         <tbody data-k="people-rows"></tbody>
       </table>
+      </div>
     </section>
 
     <section data-pane="portfolio" hidden>
       <h3 style="margin:12px 0 4px;font-size:14px">Portfolio</h3>
+      <div class="ads-table-wrap">
       <table class="ads-table" style="width:100%;border-collapse:collapse">
         <thead><tr><th>Company</th><th>Domain</th><th>Year</th><th>Stage</th><th>Amount</th><th>Lead?</th><th>Outcome</th><th>Exit value</th></tr></thead>
         <tbody data-k="portfolio-rows"></tbody>
       </table>
+      </div>
     </section>
 
     <section data-pane="relationships" hidden>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:8px">
+      <div class="ads-split-2" style="padding:8px">
         <div>
           <h4 style="margin:0 0 6px;font-size:13px">Co-invested-with</h4>
+          <div class="ads-table-wrap">
           <table class="ads-table" style="width:100%;border-collapse:collapse;font-size:12px">
             <thead><tr><th>Firm</th><th>Shared deals</th></tr></thead>
             <tbody data-k="coinvestors-rows"><tr><td colspan="2" class="ads-muted">Loading…</td></tr></tbody>
           </table>
+          </div>
         </div>
         <div>
           <h4 style="margin:0 0 6px;font-size:13px">Path to another firm</h4>
@@ -93,24 +99,28 @@ permalink: /dashboard/firms/detail/
 
     <section data-pane="history" hidden>
       <h3 style="margin:12px 0 4px;font-size:14px">Audit history</h3>
+      <div class="ads-table-wrap">
       <table class="ads-table" style="width:100%;border-collapse:collapse">
         <thead><tr><th>When</th><th>Field</th><th>Old</th><th>New</th><th>Source</th><th>By</th></tr></thead>
         <tbody data-k="history-rows"></tbody>
       </table>
+      </div>
     </section>
 
     <section data-pane="sources" hidden>
       <h3 style="margin:12px 0 4px;font-size:14px">Sources <span class="ads-muted" data-k="sources-host"></span></h3>
+      <div class="ads-table-wrap">
       <table class="ads-table" style="width:100%;border-collapse:collapse">
         <thead><tr><th>URL</th><th>Tier</th><th>Status</th><th>Last fetched</th><th>Bytes</th><th>Block reason</th></tr></thead>
         <tbody data-k="sources-rows"><tr><td colspan="6" class="ads-muted">Loading…</td></tr></tbody>
       </table>
+      </div>
     </section>
   </div>
 </template>
 
 <div id="ads-firm-edit-modal" class="ads-modal" hidden style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:200;display:flex;align-items:center;justify-content:center">
-  <form id="ads-firm-edit-form" style="background:#fff;border-radius:8px;width:min(540px,94vw);max-height:84vh;overflow:auto;padding:16px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+  <form id="ads-firm-edit-form" class="ads-modal-form" style="background:#fff;border-radius:8px;width:min(540px,94vw);max-height:84vh;overflow:auto;padding:16px">
     <h3 style="grid-column:span 2;margin:0 0 4px">Edit firm</h3>
     <label class="ads-field" style="grid-column:span 2"><span>Name</span><input name="name"></label>
     <label class="ads-field"><span>Kind</span>

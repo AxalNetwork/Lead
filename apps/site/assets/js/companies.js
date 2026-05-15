@@ -49,7 +49,7 @@
       }
       var html = "";
       if (!append) {
-        html += '<table class="ads-table"><thead><tr><th>Name</th><th>Stage</th><th>Funding</th><th>Last round</th><th>Valuation</th><th>Status</th><th>Location</th></tr></thead><tbody id="ads-companies-tbody">';
+        html += '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Name</th><th>Stage</th><th>Funding</th><th>Last round</th><th>Valuation</th><th>Status</th><th>Location</th></tr></thead><tbody id="ads-companies-tbody">';
       }
       items.forEach(function (it) {
         html += '<tr>'
@@ -63,7 +63,7 @@
           + '<td>' + esc([it.hq_city, it.hq_country_iso2].filter(Boolean).join(", ") || "—") + '</td>'
           + '</tr>';
       });
-      if (!append) { html += '</tbody></table>'; listEl.innerHTML = html; }
+      if (!append) { html += '</tbody></table></div>'; listEl.innerHTML = html; }
       else { var tbody = document.getElementById("ads-companies-tbody"); if (tbody) tbody.insertAdjacentHTML("beforeend", html); }
     }
 
@@ -131,21 +131,21 @@
       + '</div></div>';
 
     html += section("Funding",
-      '<table class="ads-table"><tbody>'
+      '<div class="ads-table-wrap"><table class="ads-table"><tbody>'
       + '<tr><th>Total funding</th><td>' + fmtUsd(f.total_funding_usd) + '</td></tr>'
       + '<tr><th>Last round</th><td>' + fmtUsd(f.last_round_usd) + ' (' + esc(f.last_round_stage || "—") + ') on ' + esc(f.last_round_at || "—") + '</td></tr>'
       + '<tr><th>Valuation</th><td>' + fmtUsd(f.valuation_usd) + '</td></tr>'
       + '<tr><th>Stage</th><td>' + esc(p.stage || "—") + '</td></tr>'
-      + '</tbody></table>');
+      + '</tbody></table></div>');
 
     if (x) html += section("Exit",
-      '<table class="ads-table"><tbody>'
+      '<div class="ads-table-wrap"><table class="ads-table"><tbody>'
       + '<tr><th>Kind</th><td>' + esc(x.kind) + '</td></tr>'
       + '<tr><th>Date</th><td>' + esc(x.date || "—") + '</td></tr>'
       + '<tr><th>Value</th><td>' + fmtUsd(x.value_usd) + '</td></tr>'
       + '<tr><th>Acquirer</th><td>' + esc(x.acquirer_name || "—") + '</td></tr>'
       + '<tr><th>Ticker</th><td>' + esc(x.ticker || "—") + '</td></tr>'
-      + '</tbody></table>');
+      + '</tbody></table></div>');
 
     html += section("Founders (" + (p.founders || []).length + ")",
       (p.founders || []).length
@@ -159,16 +159,16 @@
 
     html += section("Rounds (" + (p.rounds || []).length + ")",
       (p.rounds || []).length
-        ? '<table class="ads-table"><thead><tr><th>Date</th><th>Stage</th><th>Amount</th><th>Post-money</th><th>Source</th></tr></thead><tbody>'
+        ? '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Date</th><th>Stage</th><th>Amount</th><th>Post-money</th><th>Source</th></tr></thead><tbody>'
           + p.rounds.map(function (r) {
               return '<tr><td>' + esc(r.raised_at || "—") + '</td><td>' + esc(r.stage || "—") + '</td><td>' + fmtUsd(r.amount_usd) + '</td><td>' + fmtUsd(r.post_money_usd) + '</td>'
                 + '<td>' + (r.source_url ? '<a target="_blank" rel="noopener" href="' + esc(r.source_url) + '">link</a>' : "—") + '</td></tr>';
-            }).join("") + '</tbody></table>'
+            }).join("") + '</tbody></table></div>'
         : '<div class="ads-empty">No rounds on file.</div>');
 
     html += section("Investors (" + (p.investors || []).length + ")",
       (p.investors || []).length
-        ? '<table class="ads-table"><thead><tr><th>Investor</th><th>Type</th><th>Stage</th><th>Amount</th><th>Lead?</th><th>Date</th></tr></thead><tbody>'
+        ? '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Investor</th><th>Type</th><th>Stage</th><th>Amount</th><th>Lead?</th><th>Date</th></tr></thead><tbody>'
           + p.investors.map(function (i) {
               var nm = i.investor_lead_id
                 ? '<a href="/dashboard/investors/detail/?id=' + esc(i.investor_lead_id) + '">' + esc(i.investor_name || i.investor_lead_id) + '</a>'
@@ -176,7 +176,7 @@
               return '<tr><td>' + nm + '</td><td>' + esc(i.investor_kind || (i.firm_id ? "firm" : "—")) + '</td>'
                 + '<td>' + esc(i.stage || "—") + '</td><td>' + fmtUsd(i.amount_usd) + '</td>'
                 + '<td>' + (i.is_lead ? "Y" : "N") + '</td><td>' + esc(i.invested_at || "—") + '</td></tr>';
-            }).join("") + '</tbody></table>'
+            }).join("") + '</tbody></table></div>'
         : '<div class="ads-empty">No investors on file.</div>');
 
     html += section("News & media (" + (p.news || []).length + ")",
@@ -187,7 +187,7 @@
         : '<div class="ads-empty">No news yet.</div>');
 
     html += section("Profiles & socials",
-      '<table class="ads-table"><tbody>'
+      '<div class="ads-table-wrap"><table class="ads-table"><tbody>'
       + linkRow("Website", p.website, p.website)
       + linkRow("LinkedIn", profs.linkedin_url, profs.linkedin_url)
       + linkRow("Crunchbase", profs.crunchbase_url, profs.crunchbase_url)
@@ -195,16 +195,16 @@
       + linkRow("GitHub", profs.github_org ? "https://github.com/" + profs.github_org : null, profs.github_org)
       + linkRow("Pitchbook", profs.pitchbook_url, profs.pitchbook_url)
       + linkRow("SEC CIK", profs.sec_cik ? "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=" + profs.sec_cik : null, profs.sec_cik)
-      + '</tbody></table>');
+      + '</tbody></table></div>');
 
     html += section("Change history (last 50)",
       (p.history || []).length
-        ? '<table class="ads-table"><thead><tr><th>When</th><th>Field</th><th>Old → New</th><th>Source</th></tr></thead><tbody>'
+        ? '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>When</th><th>Field</th><th>Old → New</th><th>Source</th></tr></thead><tbody>'
           + p.history.map(function (h) {
               return '<tr><td>' + esc(h.changed_at) + '</td><td>' + esc(h.field) + '</td>'
                 + '<td><span class="ads-muted">' + esc(String(h.old_value || "")).slice(0, 40) + '</span> → ' + esc(String(h.new_value || "")).slice(0, 40) + '</td>'
                 + '<td>' + esc(h.source || "—") + (h.evidence_url ? ' · <a target="_blank" rel="noopener" href="' + esc(h.evidence_url) + '">evidence</a>' : "") + '</td></tr>';
-            }).join("") + '</tbody></table>'
+            }).join("") + '</tbody></table></div>'
         : '<div class="ads-empty">No history yet.</div>');
 
     return html;

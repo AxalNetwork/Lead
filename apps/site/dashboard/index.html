@@ -212,7 +212,7 @@ permalink: /dashboard/
       <button class="ads-btn ads-btn--ghost" id="ads-export-cancel" type="button">&times;</button>
     </div>
     <form id="ads-export-form">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+      <div class="ads-split-2" style="margin-bottom:12px">
         <label>Entity
           <select id="ads-export-entity" style="width:100%;padding:6px">
             <option value="leads">Leads</option>
@@ -232,7 +232,7 @@ permalink: /dashboard/
       </div>
       <fieldset style="border:1px solid #eee;padding:10px;margin-bottom:12px">
         <legend>Filters (optional)</legend>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        <div class="ads-split-3" style="gap:8px">
           <label>Status <input type="text" id="ads-export-filter-status" placeholder="approved" style="width:100%;padding:4px"></label>
           <label>Country (ISO2) <input type="text" id="ads-export-filter-country" maxlength="2" style="width:100%;padding:4px"></label>
           <label>Since <input type="date" id="ads-export-filter-since" style="width:100%;padding:4px"></label>
@@ -251,7 +251,7 @@ permalink: /dashboard/
           <select id="ads-export-cols-available" style="flex:1;padding:6px"></select>
           <button class="ads-btn ads-btn--ghost" type="button" id="ads-export-col-add">Add</button>
         </div>
-        <div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:6px">
+        <div class="ads-split-2" style="margin-top:8px;gap:6px">
           <label>Header override (current row) <input type="text" id="ads-export-col-header" placeholder="(leave blank)" style="width:100%;padding:4px"></label>
           <label>Transform (current row)
             <select id="ads-export-col-transform" style="width:100%;padding:4px">

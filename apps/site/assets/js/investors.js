@@ -54,7 +54,7 @@
       }
       var html = "";
       if (!append) {
-        html += '<table class="ads-table"><thead><tr>'
+        html += '<div class="ads-table-wrap"><table class="ads-table"><thead><tr>'
           + '<th>Name</th><th>Kind</th><th>Org / Title</th><th>Location</th>'
           + '<th>Sweet spot</th><th>#Inv</th><th>Unicorns</th><th>Avg check</th></tr></thead><tbody id="ads-investors-tbody">';
       }
@@ -71,7 +71,7 @@
           + '</tr>';
       });
       if (!append) {
-        html += '</tbody></table>';
+        html += '</tbody></table></div>';
         listEl.innerHTML = html;
       } else {
         var tbody = document.getElementById("ads-investors-tbody");
@@ -151,7 +151,7 @@
 
       tab("focus", "Thesis & focus",
         (p.thesis ? '<div class="ads-card" style="margin-bottom:12px"><h3 style="margin-top:0">Thesis</h3><p>' + esc(p.thesis) + '</p></div>' : '')
-        + '<table class="ads-table"><tbody>'
+        + '<div class="ads-table-wrap"><table class="ads-table"><tbody>'
         + '<tr><th>Sweet spot stage</th><td>' + esc(p.sweet_spot_stage || "—") + '</td></tr>'
         + '<tr><th>Stages</th><td>' + ((p.stage_focus || []).map(esc).join(", ") || "—") + '</td></tr>'
         + '<tr><th>Sectors</th><td>' + ((p.sector_focus || []).map(esc).join(", ") || "—") + '</td></tr>'
@@ -164,7 +164,7 @@
         + '<tr><th>Investments</th><td>' + fmtInt(n.investment_count) + '</td></tr>'
         + '<tr><th>Unicorns</th><td>' + fmtInt(n.unicorn_count) + '</td></tr>'
         + '<tr><th>Exits</th><td>' + fmtInt(n.exit_count) + '</td></tr>'
-        + '</tbody></table>'),
+        + '</tbody></table></div>'),
 
       tab("stage", "Stage",
         Object.keys(br.stage || {}).length ? breakdownTable(br.stage, "Stage focus") : empty("No stage breakdown yet.")),
@@ -177,12 +177,12 @@
 
       tab("portfolio", "Portfolio",
         (p.portfolio || []).length
-          ? '<table class="ads-table"><thead><tr><th>Company</th><th>Stage</th><th>Amount</th><th>Lead?</th><th>Date</th></tr></thead><tbody>'
+          ? '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Company</th><th>Stage</th><th>Amount</th><th>Lead?</th><th>Date</th></tr></thead><tbody>'
             + p.portfolio.map(function (i) {
                 return '<tr><td>' + (i.company_id ? '<a href="/dashboard/companies/detail/?id=' + esc(i.company_id) + '">' + esc(i.company_name || "—") + '</a>' : esc(i.company_name || "—")) + '</td>'
                   + '<td>' + esc(i.stage || "—") + '</td><td>' + fmtUsd(i.amount_usd) + '</td>'
                   + '<td>' + (i.is_lead ? "Y" : "N") + '</td><td>' + esc(i.invested_at || "—") + '</td></tr>';
-              }).join("") + '</tbody></table>'
+              }).join("") + '</tbody></table></div>'
           : empty("No portfolio rows yet.")),
 
       tab("network", "Network (co-investors)",
@@ -218,7 +218,7 @@
           : empty("No media yet.")),
 
       tab("contact", "Contact",
-        '<table class="ads-table"><tbody>'
+        '<div class="ads-table-wrap"><table class="ads-table"><tbody>'
         + linkRow("Email", c.email ? 'mailto:' + c.email : null, c.email)
         + linkRow("LinkedIn", c.linkedin_url, c.linkedin_url)
         + linkRow("Twitter", c.twitter_url, c.twitter_url)
@@ -230,16 +230,16 @@
         + linkRow("NFX Signal", profs.signal_nfx_url, profs.signal_nfx_url)
         + linkRow("Crunchbase", profs.crunchbase_url, profs.crunchbase_url)
         + linkRow("Wikipedia", profs.wikipedia_url, profs.wikipedia_url)
-        + '</tbody></table>'),
+        + '</tbody></table></div>'),
 
       tab("history", "History",
         (p.history || []).length
-          ? '<table class="ads-table"><thead><tr><th>When</th><th>Field</th><th>Old → New</th><th>Source</th></tr></thead><tbody>'
+          ? '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>When</th><th>Field</th><th>Old → New</th><th>Source</th></tr></thead><tbody>'
             + p.history.map(function (h) {
                 return '<tr><td>' + esc(h.changed_at) + '</td><td>' + esc(h.field) + '</td>'
                   + '<td><span class="ads-muted">' + esc(String(h.old_value || "")).slice(0, 40) + '</span> → ' + esc(String(h.new_value || "")).slice(0, 40) + '</td>'
                   + '<td>' + esc(h.source || "—") + (h.evidence_url ? ' · <a target="_blank" rel="noopener" href="' + esc(h.evidence_url) + '">evidence</a>' : "") + '</td></tr>';
-              }).join("") + '</tbody></table>'
+              }).join("") + '</tbody></table></div>'
           : empty("No history yet.")),
     ];
 
@@ -269,9 +269,9 @@
     map = map || {};
     var keys = Object.keys(map).sort(function (a, b) { return map[b] - map[a]; });
     if (!keys.length) return '<div class="ads-muted">No ' + esc(label) + ' breakdown.</div>';
-    return '<table class="ads-table" style="margin-bottom:8px"><thead><tr><th>' + esc(label) + '</th><th>Count</th></tr></thead><tbody>'
+    return '<div class="ads-table-wrap"><table class="ads-table" style="margin-bottom:8px"><thead><tr><th>' + esc(label) + '</th><th>Count</th></tr></thead><tbody>'
       + keys.map(function (k) { return '<tr><td>' + esc(k) + '</td><td>' + fmtInt(map[k]) + '</td></tr>'; }).join("")
-      + '</tbody></table>';
+      + '</tbody></table></div>';
   }
   function linkRow(label, href, txt) {
     if (!txt) return '<tr><th>' + esc(label) + '</th><td class="ads-muted">—</td></tr>';

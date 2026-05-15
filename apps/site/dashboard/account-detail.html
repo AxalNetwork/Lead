@@ -7,7 +7,7 @@ permalink: /dashboard/accounts/detail/
 <h1 class="ads-page-title" id="ads-acct-name">Account</h1>
 <p class="ads-page-sub" id="ads-acct-sub">—</p>
 
-<div class="ads-card" id="ads-acct-strip" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+<div class="ads-card ads-strip-kpi ads-strip-kpi--4" id="ads-acct-strip">
   <div><div class="ads-kpi__label">Account score</div><div class="ads-kpi__value" data-k="account_score">—</div></div>
   <div><div class="ads-kpi__label">Intent</div><div class="ads-kpi__value" data-k="intent_score">—</div></div>
   <div><div class="ads-kpi__label">Fit</div><div class="ads-kpi__value" data-k="fit_score">—</div></div>
@@ -15,7 +15,7 @@ permalink: /dashboard/accounts/detail/
 </div>
 
 <div class="ads-card" style="margin-top:12px">
-  <div role="tablist" id="ads-acct-tabs" style="display:flex;gap:4px;border-bottom:1px solid #dde3f0">
+  <div role="tablist" id="ads-acct-tabs" class="ads-tabs" style="gap:4px;border-bottom:1px solid #dde3f0">
     <button role="tab" class="ads-tab active" data-tab="overview">Overview</button>
     <button role="tab" class="ads-tab" data-tab="buyers">Buyers</button>
     <button role="tab" class="ads-tab" data-tab="signals">Signals</button>
@@ -35,7 +35,7 @@ permalink: /dashboard/accounts/detail/
 
 <div class="ads-card" style="margin-top:12px">
   <h3 style="margin:0 0 8px;font-size:14px">Add manual signal</h3>
-  <form id="ads-acct-add-signal" autocomplete="off" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;align-items:end">
+  <form id="ads-acct-add-signal" class="ads-filter-grid ads-filter-grid--4" autocomplete="off">
     <label>Kind<select name="kind" id="ads-acct-signal-kind" style="width:100%;padding:6px"></select></label>
     <label>Weight (1-10)<input name="weight" type="number" min="1" max="10" step="0.5" style="width:100%;padding:6px"></label>
     <label>Confidence (0-1)<input name="confidence" type="number" min="0" max="1" step="0.05" value="1" style="width:100%;padding:6px"></label>

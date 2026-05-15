@@ -85,7 +85,7 @@
       ? '<div class="ads-muted" style="margin-bottom:10px;font-size:12px">Showing the most recent 200 jobs matching status/kind/source filters. Narrow status/kind/source to reach older jobs.</div>'
       : '';
     if (!rows.length) { c.innerHTML = capNote + '<div class="ads-empty">No jobs match these filters.</div>'; return; }
-    var html = capNote + '<table class="ads-table ads-table--clickable"><thead><tr>' +
+    var html = capNote + '<div class="ads-table-wrap"><table class="ads-table ads-table--clickable"><thead><tr>' +
       '<th>Name</th><th>Kind</th><th>Source</th><th>Status</th>' +
       '<th>Pages</th><th>Blocked</th><th>Leads</th><th>Cost</th><th>Started</th><th>Finished</th>' +
       '</tr></thead><tbody>';
@@ -104,7 +104,7 @@
         '<td>' + esc(fmtTime(j.finished_at || j.cancelled_at)) + '</td>' +
         '</tr>';
     });
-    html += "</tbody></table>";
+    html += "</tbody></table></div>";
     c.innerHTML = html;
   }
 

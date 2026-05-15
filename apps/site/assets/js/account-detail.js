@@ -41,7 +41,7 @@
   function renderBuyers(d) {
     var pane = document.querySelector('#ads-acct-tab-body [data-pane="buyers"]');
     if (!d.buyers.length) { pane.innerHTML = '<p class="ads-muted">No buyers tracked yet.</p>'; return; }
-    pane.innerHTML = '<table class="ads-table" style="width:100%;border-collapse:collapse">' +
+    pane.innerHTML = '<div class="ads-table-wrap"><table class="ads-table" style="width:100%;border-collapse:collapse">' +
       '<thead><tr><th align="left" style="padding:6px">Name</th><th align="left" style="padding:6px">Title</th><th align="left" style="padding:6px">Role</th><th align="left" style="padding:6px">Seniority</th><th align="right" style="padding:6px">Influence</th></tr></thead><tbody>' +
       d.buyers.map(function (b) {
         return "<tr>" +
@@ -51,12 +51,12 @@
           '<td style="padding:6px">' + esc(b.seniority || "—") + "</td>" +
           '<td style="padding:6px;text-align:right">' + fmt(b.influence_score) + "</td>" +
         "</tr>";
-      }).join("") + "</tbody></table>";
+      }).join("") + "</tbody></table></div>";
   }
   function renderSignals(d) {
     var pane = document.querySelector('#ads-acct-tab-body [data-pane="signals"]');
     if (!d.signals.length) { pane.innerHTML = '<p class="ads-muted">No signals yet. Add one below.</p>'; return; }
-    pane.innerHTML = '<table class="ads-table" style="width:100%;border-collapse:collapse"><thead><tr>' +
+    pane.innerHTML = '<div class="ads-table-wrap"><table class="ads-table" style="width:100%;border-collapse:collapse"><thead><tr>' +
       '<th align="left" style="padding:6px">When</th><th align="left" style="padding:6px">Kind</th><th align="left" style="padding:6px">Source</th><th align="right" style="padding:6px">Weight</th><th align="right" style="padding:6px">Conf.</th><th align="left" style="padding:6px">Evidence</th></tr></thead><tbody>' +
       d.signals.map(function (s) {
         return "<tr>" +
@@ -67,7 +67,7 @@
           '<td style="padding:6px;text-align:right">' + fmt(s.confidence) + "</td>" +
           '<td style="padding:6px">' + (s.evidence_url ? '<a href="' + esc(s.evidence_url) + '" target="_blank">link</a>' : "—") + "</td>" +
         "</tr>";
-      }).join("") + "</tbody></table>";
+      }).join("") + "</tbody></table></div>";
   }
   function renderTech(d) {
     var pane = document.querySelector('#ads-acct-tab-body [data-pane="tech"]');
@@ -79,7 +79,7 @@
   function renderHistory(d) {
     var pane = document.querySelector('#ads-acct-tab-body [data-pane="history"]');
     if (!d.history.length) { pane.innerHTML = '<p class="ads-muted">No history yet.</p>'; return; }
-    pane.innerHTML = '<table class="ads-table" style="width:100%;border-collapse:collapse"><thead><tr>' +
+    pane.innerHTML = '<div class="ads-table-wrap"><table class="ads-table" style="width:100%;border-collapse:collapse"><thead><tr>' +
       '<th align="left" style="padding:6px">When</th><th align="left" style="padding:6px">Field</th><th align="left" style="padding:6px">Old → New</th><th align="left" style="padding:6px">By</th></tr></thead><tbody>' +
       d.history.map(function (h) {
         return "<tr>" +
@@ -88,7 +88,7 @@
           '<td style="padding:6px">' + esc(h.old_value || "∅") + " → " + esc(h.new_value || "∅") + "</td>" +
           '<td style="padding:6px">' + esc(h.changed_by || h.source || "—") + "</td>" +
         "</tr>";
-      }).join("") + "</tbody></table>";
+      }).join("") + "</tbody></table></div>";
   }
   function renderScore(d, score) {
     var pane = document.querySelector('#ads-acct-tab-body [data-pane="score"]');
@@ -99,9 +99,9 @@
         "<div><h4>Intent</h4><p>" + bar(s.intent_score != null ? s.intent_score : d.account.intent_score) + "</p>" +
           "<p class=\"ads-muted\">Formula: 100 · (1 − exp(−Σ(weight·confidence·exp(−age_days/30)) ÷ 25))</p>" +
           (byKind.length
-            ? '<table style="width:100%;border-collapse:collapse"><thead><tr><th align="left" style="padding:4px">Kind</th><th align="right" style="padding:4px">Count</th><th align="right" style="padding:4px">Contribution</th></tr></thead><tbody>' +
+            ? '<div class="ads-table-wrap"><table style="width:100%;border-collapse:collapse"><thead><tr><th align="left" style="padding:4px">Kind</th><th align="right" style="padding:4px">Count</th><th align="right" style="padding:4px">Contribution</th></tr></thead><tbody>' +
               byKind.map(function (k) { return "<tr><td style=\"padding:4px\">" + esc(k.kind) + "</td><td style=\"padding:4px;text-align:right\">" + esc(k.count) + "</td><td style=\"padding:4px;text-align:right\">" + esc(k.raw_contribution) + "</td></tr>"; }).join("") +
-              "</tbody></table>"
+              "</tbody></table></div>"
             : '<p class="ads-muted">No signals contributing yet.</p>') +
         "</div>" +
         "<div><h4>Fit</h4><p>" + bar(s.fit_score != null ? s.fit_score : d.account.fit_score) + "</p>" +
@@ -111,7 +111,7 @@
             var head = fb.icp_name ? '<p class="ads-muted">ICP: ' + esc(fb.icp_name) + ' — weighted avg of industry · size · geo · funding · buyer-role coverage.</p>' :
               '<p class="ads-muted">Weighted avg of industry · size · geo · funding · buyer-role coverage.</p>';
             if (!comps.length) return head + '<p class="ads-muted">No fit components yet.</p>';
-            return head + '<table style="width:100%;border-collapse:collapse"><thead><tr>' +
+            return head + '<div class="ads-table-wrap"><table style="width:100%;border-collapse:collapse"><thead><tr>' +
               '<th align="left" style="padding:4px">Component</th>' +
               '<th align="right" style="padding:4px">Score</th>' +
               '<th align="right" style="padding:4px">Weight</th>' +
@@ -123,7 +123,7 @@
                   '<td style="padding:4px;text-align:right">' + esc(c.weight) + '</td>' +
                   '<td style="padding:4px">' + esc(c.reason || '') + '</td>' +
                 "</tr>";
-              }).join("") + "</tbody></table>";
+              }).join("") + "</tbody></table></div>";
           })() +
           "<h4 style=\"margin-top:12px\">Account = 0.6·intent + 0.4·fit</h4><p>" + bar(s.account_score != null ? s.account_score : d.account.account_score) + "</p>" +
         "</div>" +

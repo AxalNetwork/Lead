@@ -30,11 +30,11 @@
     var c = document.getElementById("ads-lead-history");
     var items = (r && r.items) || [];
     if (!items.length) { c.innerHTML = '<div class="ads-empty">No history.</div>'; return; }
-    var html = '<table class="ads-table"><thead><tr><th>When</th><th>Field</th><th>Old → New</th><th>Source</th></tr></thead><tbody>';
+    var html = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>When</th><th>Field</th><th>Old → New</th><th>Source</th></tr></thead><tbody>';
     items.forEach(function (h) {
       html += "<tr><td style='font-size:11px'>" + esc(h.changed_at) + "</td><td><code>" + esc(h.field) + "</code></td><td>" + esc(h.old_value || "—") + " → " + esc(h.new_value || "—") + "</td><td class='ads-muted'>" + esc(h.source || "") + "</td></tr>";
     });
-    c.innerHTML = html + "</tbody></table>";
+    c.innerHTML = html + "</tbody></table></div>";
   }
 
   async function loadCampaigns(id) {
@@ -42,14 +42,14 @@
     var c = document.getElementById("ads-lead-campaigns");
     var items = (r && r.items) || [];
     if (!items.length) { c.innerHTML = '<div class="ads-empty">Not in any campaign.</div>'; return; }
-    var html = '<table class="ads-table"><thead><tr><th>Campaign</th><th>Status</th><th>Added</th><th>Last event</th></tr></thead><tbody>';
+    var html = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Campaign</th><th>Status</th><th>Added</th><th>Last event</th></tr></thead><tbody>';
     items.forEach(function (m) {
       html += "<tr><td><a href='/dashboard/campaigns/?id=" + esc(m.campaign_id) + "'>" + esc(m.campaign_name || m.campaign_id) + "</a></td>"
         + "<td>" + esc(m.status || "queued") + "</td>"
         + "<td style='font-size:11px'>" + esc(m.added_at || "") + "</td>"
         + "<td style='font-size:11px'>" + esc(m.last_event_at || "") + "</td></tr>";
     });
-    c.innerHTML = html + "</tbody></table>";
+    c.innerHTML = html + "</tbody></table></div>";
   }
 
   async function markDnc(id, reason) {

@@ -6,11 +6,11 @@
     var c = document.getElementById("ads-tax-sectors");
     if (!c) return;
     if (!items || !items.length) { c.innerHTML = '<div class="ads-empty">No sectors.</div>'; return; }
-    var html = '<table class="ads-table"><thead><tr><th>Slug</th><th>Label</th><th>Aliases</th></tr></thead><tbody>';
+    var html = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Slug</th><th>Label</th><th>Aliases</th></tr></thead><tbody>';
     items.forEach(function (s) {
       html += "<tr><td><code>" + esc(s.slug) + "</code></td><td>" + esc(s.label) + "</td><td class='ads-muted' style='font-size:11px'>" + esc((s.aliases || []).slice(0, 5).join(", ")) + "</td></tr>";
     });
-    c.innerHTML = html + "</tbody></table>";
+    c.innerHTML = html + "</tbody></table></div>";
   }
 
   function renderGeos(items, kind) {
@@ -18,11 +18,11 @@
     if (!c) return;
     var filtered = kind ? items.filter(function (g) { return g.kind === kind; }) : items;
     if (!filtered.length) { c.innerHTML = '<div class="ads-empty">No matches.</div>'; return; }
-    var html = '<table class="ads-table"><thead><tr><th>Slug</th><th>Label</th><th>Kind</th><th>Country</th></tr></thead><tbody>';
+    var html = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Slug</th><th>Label</th><th>Kind</th><th>Country</th></tr></thead><tbody>';
     filtered.slice(0, 500).forEach(function (g) {
       html += "<tr><td><code>" + esc(g.slug) + "</code></td><td>" + esc(g.label) + "</td><td>" + esc(g.kind) + "</td><td>" + esc(g.country_iso2 || "") + "</td></tr>";
     });
-    c.innerHTML = html + "</tbody></table>";
+    c.innerHTML = html + "</tbody></table></div>";
   }
 
   function renderHeatmap(cells) {

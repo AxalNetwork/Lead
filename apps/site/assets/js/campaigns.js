@@ -9,7 +9,7 @@
       var data = await api("/api/campaigns");
       var items = (data && data.items) || [];
       if (!items.length) { c.innerHTML = '<div class="ads-empty">No campaigns yet — create one from an ICP.</div>'; return; }
-      var html = '<table class="ads-table ads-table--clickable"><thead><tr><th>Name</th><th>Channel</th><th>Status</th><th>ICP</th><th>Exported</th><th>Created</th></tr></thead><tbody>';
+      var html = '<div class="ads-table-wrap"><table class="ads-table ads-table--clickable"><thead><tr><th>Name</th><th>Channel</th><th>Status</th><th>ICP</th><th>Exported</th><th>Created</th></tr></thead><tbody>';
       items.forEach(function (i) {
         html += "<tr data-camp-id='" + esc(i.id) + "'>" +
           "<td><a href='?id=" + esc(i.id) + "'>" + esc(i.name) + "</a></td>" +
@@ -19,7 +19,7 @@
           "<td>" + (i.exported_count || 0) + (i.exporter ? " (" + esc(i.exporter) + ")" : "") + "</td>" +
           "<td>" + esc(new Date(i.created_at).toLocaleString()) + "</td></tr>";
       });
-      c.innerHTML = html + "</tbody></table>";
+      c.innerHTML = html + "</tbody></table></div>";
     } catch (e) { c.innerHTML = '<div class="ads-empty">Failed: ' + esc(e.message) + '</div>'; }
   }
 
@@ -41,11 +41,11 @@
   function renderMembers(items) {
     var c = document.getElementById("ads-camp-members");
     if (!items || !items.length) { c.innerHTML = '<div class="ads-empty">No members yet — click Preview to materialize, or Export to push.</div>'; return; }
-    var html = '<table class="ads-table"><thead><tr><th>Name</th><th>Email</th><th>Org</th><th>Status</th><th>Last event</th></tr></thead><tbody>';
+    var html = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Name</th><th>Email</th><th>Org</th><th>Status</th><th>Last event</th></tr></thead><tbody>';
     items.forEach(function (m) {
       html += "<tr><td>" + esc(m.name || "—") + "</td><td>" + esc(m.email || "—") + "</td><td>" + esc(m.org || "—") + "</td><td><span class='ads-pill " + (m.status === "replied" || m.status === "meeting" ? "ok" : m.status === "bounced" ? "err" : "idle") + "'>" + esc(m.status) + "</span></td><td>" + esc(m.last_event_at || "—") + "</td></tr>";
     });
-    c.innerHTML = html + "</tbody></table>";
+    c.innerHTML = html + "</tbody></table></div>";
   }
 
   document.addEventListener("click", async function (e) {

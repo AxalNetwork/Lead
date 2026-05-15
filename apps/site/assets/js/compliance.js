@@ -13,11 +13,11 @@
       var items = (data && data.items) || [];
       document.getElementById("ads-dnc-meta").textContent = items.length + " entries";
       if (!items.length) { c.innerHTML = '<div class="ads-empty">DNC list is empty.</div>'; return; }
-      var html = '<table class="ads-table"><thead><tr><th>Kind</th><th>Value</th><th>Reason</th><th>Added by</th><th>Added at</th><th></th></tr></thead><tbody>';
+      var html = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Kind</th><th>Value</th><th>Reason</th><th>Added by</th><th>Added at</th><th></th></tr></thead><tbody>';
       items.forEach(function (r) {
         html += "<tr><td>" + esc(r.kind) + "</td><td><code>" + esc(r.value) + "</code></td><td class='ads-muted'>" + esc(r.reason || "") + "</td><td class='ads-muted' style='font-size:11px'>" + esc(r.added_by || "") + "</td><td>" + esc(new Date(r.added_at).toLocaleString()) + "</td><td><button class='ads-btn ads-btn--ghost ads-btn--sm' data-dnc-rm='" + esc(r.kind) + "|" + esc(r.value) + "'>Remove</button></td></tr>";
       });
-      c.innerHTML = html + "</tbody></table>";
+      c.innerHTML = html + "</tbody></table></div>";
     } catch (e) { c.innerHTML = '<div class="ads-empty">Failed: ' + esc(e.message) + '</div>'; }
   }
 
@@ -27,12 +27,12 @@
       var data = await api("/api/compliance/audit/pii?limit=200");
       var items = (data && data.items) || [];
       if (!items.length) { c.innerHTML = '<div class="ads-empty">No PII access yet.</div>'; return; }
-      var html = '<table class="ads-table"><thead><tr><th>When</th><th>User</th><th>Lead</th><th>Fields</th><th>Reason</th><th>IP</th></tr></thead><tbody>';
+      var html = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>When</th><th>User</th><th>Lead</th><th>Fields</th><th>Reason</th><th>IP</th></tr></thead><tbody>';
       items.forEach(function (r) {
         var fields = []; try { fields = JSON.parse(r.fields_json || "[]"); } catch (e) {}
         html += "<tr><td>" + esc(new Date(r.accessed_at).toLocaleString()) + "</td><td>" + esc(r.user_email) + "</td><td><code>" + esc(r.lead_id.slice(0, 8)) + "</code></td><td class='ads-muted' style='font-size:11px'>" + esc(fields.join(", ")) + "</td><td>" + esc(r.reason || "") + "</td><td class='ads-muted' style='font-size:11px'>" + esc(r.ip || "") + "</td></tr>";
       });
-      c.innerHTML = html + "</tbody></table>";
+      c.innerHTML = html + "</tbody></table></div>";
     } catch (e) { c.innerHTML = '<div class="ads-empty">Failed: ' + esc(e.message) + '</div>'; }
   }
 

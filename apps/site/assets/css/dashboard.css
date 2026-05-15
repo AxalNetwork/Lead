@@ -163,3 +163,144 @@ nav.ads-nav-panel > a.active{color:#fff;background:var(--ads-panel-2)}
 .ads-picker__opt-meta{color:var(--ads-muted);font-size:11px;display:inline-flex;align-items:center;gap:4px}
 .ads-picker__opt-meta code{background:rgba(0,0,0,.25);padding:1px 6px;border-radius:6px;font-size:10px}
 .ads-picker__empty{padding:10px;color:var(--ads-muted);font-size:12px;text-align:center}
+
+/* Mobile responsive — Task #56 */
+.ads-main{min-width:0}
+.ads-card{min-width:0}
+.ads-brand{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+
+.ads-page-with-sidebar{display:grid;grid-template-columns:220px 1fr;gap:16px;align-items:start}
+
+.ads-filter-grid{display:grid;gap:10px;align-items:end}
+.ads-filter-grid--3{grid-template-columns:1fr 1fr 120px}
+.ads-filter-grid--4{grid-template-columns:repeat(4,1fr)}
+.ads-filter-grid--5{grid-template-columns:repeat(5,1fr)}
+.ads-filter-grid--6{grid-template-columns:repeat(6,1fr)}
+
+.ads-strip-kpi{display:grid;gap:12px}
+.ads-strip-kpi--3{grid-template-columns:repeat(3,1fr)}
+.ads-strip-kpi--4{grid-template-columns:repeat(4,1fr)}
+.ads-strip-kpi--5{grid-template-columns:repeat(5,1fr)}
+
+.ads-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;width:100%}
+.ads-table-wrap > table.ads-table{min-width:100%}
+
+.ads-split-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.ads-split-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.ads-overview-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.ads-modal-form{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+
+@media(max-width:768px){
+  html,body.ads-body{max-width:100vw;overflow-x:hidden}
+
+  .ads-main{padding:20px 14px;max-width:100%}
+  .ads-page-title{font-size:22px;line-height:1.25;margin-bottom:4px}
+  .ads-page-sub{font-size:13px;margin-bottom:18px}
+  .ads-topbar__inner{padding:10px 14px;gap:8px;flex-wrap:nowrap}
+  .ads-topbar__spacer{flex:1 1 0;min-width:0}
+  .ads-brand{font-size:16px;flex:0 1 auto}
+
+  .ads-page-with-sidebar,
+  .ads-filter-grid,
+  .ads-filter-grid--3,
+  .ads-filter-grid--4,
+  .ads-filter-grid--5,
+  .ads-filter-grid--6,
+  .ads-split-2,
+  .ads-split-3,
+  .ads-overview-grid,
+  .ads-modal-form{grid-template-columns:1fr}
+
+  .ads-strip-kpi{grid-template-columns:repeat(2,1fr)}
+
+  /* Inline grid-column spans (e.g. style="grid-column:span 2") would
+     otherwise create implicit columns inside the now-1-col grid. Force
+     every spanning child of our utility grids to occupy the full row. */
+  .ads-page-with-sidebar > [style*="grid-column"],
+  .ads-filter-grid > [style*="grid-column"],
+  .ads-modal-form > [style*="grid-column"],
+  .ads-split-2 > [style*="grid-column"],
+  .ads-split-3 > [style*="grid-column"],
+  .ads-overview-grid > [style*="grid-column"]{
+    grid-column:1 / -1 !important;
+  }
+
+  .ads-card form label{display:block;font-size:12px;width:100%;margin-bottom:8px}
+  .ads-card form input[type="text"],
+  .ads-card form input[type="email"],
+  .ads-card form input[type="url"],
+  .ads-card form input[type="number"],
+  .ads-card form input[type="date"],
+  .ads-card form input[type="search"],
+  .ads-card form input[type="tel"],
+  .ads-card form input:not([type]),
+  .ads-card form select,
+  .ads-card form textarea{
+    width:100% !important;min-height:42px;font-size:14px;box-sizing:border-box;
+  }
+  .ads-card form input[type="checkbox"],
+  .ads-card form input[type="radio"]{
+    width:auto !important;min-height:0;display:inline-block
+  }
+
+  .ads-card{padding:14px}
+
+  /* Safety net: any .ads-table inside a card that isn't already wrapped
+     in .ads-table-wrap becomes a horizontally-scrollable block on phones,
+     so JS-rendered tables still contain their own overflow. */
+  .ads-card > .ads-table,
+  .ads-card .ads-empty + .ads-table,
+  .ads-card details > div > .ads-table{
+    display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;width:100%;max-width:100%
+  }
+
+  /* Tab strips: horizontal scroll, never wrap. */
+  .ads-tabs{flex-wrap:nowrap !important;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .ads-tabs::-webkit-scrollbar{display:none}
+  .ads-tab{white-space:nowrap;flex-shrink:0;min-height:44px}
+
+  .ads-grid{grid-template-columns:repeat(2,1fr) !important;gap:12px}
+  .ads-kpi__value{font-size:24px}
+
+  .ads-section{grid-template-columns:1fr !important;gap:12px}
+  .ads-analytics-grid{grid-template-columns:1fr !important}
+
+  .ads-btn{min-height:44px;padding:10px 14px}
+  .ads-btn--sm{min-height:32px;padding:6px 10px}
+
+  .ads-modal > div,
+  #ads-firm-edit-form{
+    width:calc(100vw - 24px) !important;max-width:calc(100vw - 24px) !important;
+    padding:14px !important;max-height:calc(100vh - 32px) !important
+  }
+  .ads-drawer__panel{width:100vw !important}
+
+  .ads-filters{flex-direction:column;align-items:stretch;gap:8px}
+  .ads-filters > *{width:100%}
+  .ads-field--inline{display:block;min-width:0;width:100%;margin-right:0}
+  .ads-field--inline > input,
+  .ads-field--inline > select,
+  .ads-field--inline > textarea{width:100%;min-height:44px;box-sizing:border-box}
+  .ads-form-actions{flex-direction:column;align-items:stretch;flex-wrap:wrap;gap:8px}
+  .ads-form-actions > .ads-btn,
+  .ads-form-actions > input,
+  .ads-form-actions > select,
+  .ads-form-actions > textarea{flex:1 1 auto;justify-content:center;width:100%;min-height:44px;box-sizing:border-box}
+  .ads-actions{flex-wrap:wrap;gap:8px}
+  .ads-actions > .ads-btn,
+  .ads-actions > .ads-export-wrap{width:100%}
+  .ads-actions > .ads-export-wrap .ads-btn{width:100%}
+
+  .ads-scrape__head{align-items:flex-start}
+
+  .ads-bar{grid-template-columns:90px 1fr 60px}
+  .ads-funnel__row{grid-template-columns:70px 1fr 50px}
+
+  .ads-heatmap{display:block;overflow-x:auto}
+}
+
+@media(max-width:420px){
+  .ads-grid{grid-template-columns:1fr !important}
+  .ads-strip-kpi{grid-template-columns:1fr}
+  .ads-page-title{font-size:20px}
+}

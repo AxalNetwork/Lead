@@ -33,12 +33,12 @@
       '      <button class="ads-btn ads-btn--ghost" data-action="skip">Skip 14d</button>' +
       '    </div>' +
       '  </div>' +
-      '  <table class="ads-table"><thead><tr><th></th><th>Primary</th><th>Candidate</th></tr></thead><tbody>' +
+      '  <div class="ads-table-wrap"><table class="ads-table"><thead><tr><th></th><th>Primary</th><th>Candidate</th></tr></thead><tbody>' +
       row("Name",   item.primary_name,   item.candidate_name) +
       row("Email",  item.primary_email,  item.candidate_email) +
       row("Org",    item.primary_org,    item.candidate_org) +
       row("Source", item.primary_source_url, item.candidate_source_url) +
-      '  </tbody></table>' +
+      '  </tbody></table></div>' +
       '</div>'
     );
   }

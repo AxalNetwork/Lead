@@ -55,12 +55,12 @@
     var c = document.getElementById("ads-recent-leads");
     if (!c) return;
     if (!items || !items.length) return renderEmpty(c, "No leads yet.");
-    var html = '<table class="ads-table"><thead><tr><th>Name</th><th>Org</th><th>Source</th><th>Status</th></tr></thead><tbody>';
+    var html = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Name</th><th>Org</th><th>Source</th><th>Status</th></tr></thead><tbody>';
     items.forEach(function (l) {
       var pillCls = l.status === "approved" ? "ok" : l.status === "pending" ? "warn" : l.status === "flagged" ? "err" : "idle";
       html += "<tr><td>" + esc(l.name || "—") + "</td><td>" + esc(l.org || "—") + "</td><td>" + esc(l.source_domain || "—") + '</td><td><span class="ads-pill ' + pillCls + '">' + esc(l.status || "new") + "</span></td></tr>";
     });
-    html += "</tbody></table>";
+    html += "</tbody></table></div>";
     c.innerHTML = html;
   }
 
@@ -68,11 +68,11 @@
     var c = document.getElementById("ads-top-sources");
     if (!c) return;
     if (!items || !items.length) return renderEmpty(c, "No source data yet.");
-    var html = '<table class="ads-table"><thead><tr><th>Domain</th><th>Leads</th></tr></thead><tbody>';
+    var html = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Domain</th><th>Leads</th></tr></thead><tbody>';
     items.forEach(function (s) {
       html += "<tr><td>" + esc(s.domain) + "</td><td>" + fmtInt(s.lead_count) + "</td></tr>";
     });
-    html += "</tbody></table>";
+    html += "</tbody></table></div>";
     c.innerHTML = html;
   }
 
@@ -80,12 +80,12 @@
     var c = document.getElementById("ads-recent-jobs");
     if (!c) return;
     if (!items || !items.length) return renderEmpty(c, "No jobs yet.");
-    var html = '<table class="ads-table"><thead><tr><th>Job</th><th>Source</th><th>Status</th><th>Started</th></tr></thead><tbody>';
+    var html = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Job</th><th>Source</th><th>Status</th><th>Started</th></tr></thead><tbody>';
     items.forEach(function (j) {
       var pillCls = j.status === "completed" ? "ok" : j.status === "running" ? "warn" : j.status === "failed" ? "err" : "idle";
       html += "<tr><td>" + esc(j.name || j.id) + "</td><td>" + esc(j.source || "—") + '</td><td><span class="ads-pill ' + pillCls + '">' + esc(j.status || "queued") + "</span></td><td>" + (j.started_at ? esc(new Date(j.started_at).toLocaleString()) : "—") + "</td></tr>";
     });
-    html += "</tbody></table>";
+    html += "</tbody></table></div>";
     c.innerHTML = html;
   }
 
@@ -93,11 +93,11 @@
     var c = document.getElementById("ads-leads-by-category");
     if (!c) return;
     if (!items || !items.length) return renderEmpty(c, "No categories yet.");
-    var html = '<table class="ads-table"><thead><tr><th>Category</th><th>Leads</th></tr></thead><tbody>';
+    var html = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Category</th><th>Leads</th></tr></thead><tbody>';
     items.forEach(function (cat) {
       html += "<tr><td>" + esc(cat.category) + "</td><td>" + fmtInt(cat.count) + "</td></tr>";
     });
-    html += "</tbody></table>";
+    html += "</tbody></table></div>";
     c.innerHTML = html;
   }
 
@@ -112,7 +112,7 @@
       c.innerHTML = '<div class="ads-empty">No active jobs.</div>';
       return;
     }
-    var html = '<table class="ads-table ads-table--active"><thead><tr><th>Job</th><th>Kind</th><th>Status</th><th>Pages</th><th>Leads</th><th>Elapsed</th><th></th></tr></thead><tbody>';
+    var html = '<div class="ads-table-wrap"><table class="ads-table ads-table--active"><thead><tr><th>Job</th><th>Kind</th><th>Status</th><th>Pages</th><th>Leads</th><th>Elapsed</th><th></th></tr></thead><tbody>';
     items.forEach(function (j) {
       var pillCls = j.status === "running" ? "warn" : "idle";
       html +=
@@ -126,7 +126,7 @@
         '<td><button class="ads-btn ads-btn--ghost ads-btn--sm" data-cancel-job="' + esc(j.id) + '">Cancel</button></td>' +
         '</tr>';
     });
-    html += "</tbody></table>";
+    html += "</tbody></table></div>";
     c.innerHTML = html;
   }
   async function pollActiveJobs() {
@@ -362,11 +362,11 @@
       summary.textContent = (data.row_count || rows.length) + " rows · " + headers.length + " columns · entity: " + entity + (data.tables_found > 1 ? " · " + data.tables_found + " tables (extras → portfolio)" : "");
       // preview
       if (rows.length) {
-        var t = '<table class="ads-table"><thead><tr>' + headers.map(function (h) { return "<th>" + escapeHtml(h) + "</th>"; }).join("") + "</tr></thead><tbody>";
+        var t = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr>' + headers.map(function (h) { return "<th>" + escapeHtml(h) + "</th>"; }).join("") + "</tr></thead><tbody>";
         rows.slice(0, 5).forEach(function (r) {
           t += "<tr>" + headers.map(function (h) { return "<td>" + escapeHtml(String(r[h] || "")) + "</td>"; }).join("") + "</tr>";
         });
-        t += "</tbody></table>";
+        t += "</tbody></table></div>";
         preview.innerHTML = t;
       } else { preview.innerHTML = "<em>(no rows)</em>"; }
       // urls
@@ -481,7 +481,7 @@
     var c = document.getElementById("ads-discover-candidates");
     if (!c) return;
     if (!items || !items.length) { c.innerHTML = '<div class="ads-empty">No pending candidates.</div>'; return; }
-    var html = '<table class="ads-table"><thead><tr><th>Name / Title</th><th>Source</th><th>URL</th><th>Persona</th><th></th></tr></thead><tbody>';
+    var html = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Name / Title</th><th>Source</th><th>URL</th><th>Persona</th><th></th></tr></thead><tbody>';
     items.forEach(function (r) {
       html +=
         '<tr data-cand-id="' + esc(r.id) + '">' +
@@ -494,7 +494,7 @@
           '<button class="ads-btn ads-btn--ghost ads-btn--sm" data-reject-cand="' + esc(r.id) + '">Reject</button>' +
         '</td></tr>';
     });
-    html += '</tbody></table>';
+    html += '</tbody></table></div>';
     c.innerHTML = html;
   }
   async function pollCandidates(firm) {
@@ -620,21 +620,21 @@
       var keys = Object.keys(data.by_importer || {});
       if (!keys.length) { byEl.innerHTML = '<p class="ads-muted">No imports yet.</p>'; }
       else {
-        byEl.innerHTML = '<table class="ads-table"><thead><tr><th>Importer</th><th>Jobs</th><th>Seen</th><th>Created</th><th>Updated</th><th>Unchanged</th><th>Errors</th></tr></thead><tbody>' +
+        byEl.innerHTML = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Importer</th><th>Jobs</th><th>Seen</th><th>Created</th><th>Updated</th><th>Unchanged</th><th>Errors</th></tr></thead><tbody>' +
           keys.map(function (k) {
             var v = data.by_importer[k];
             return '<tr><td>' + escapeHtml(k) + '</td><td>' + fmtInt(v.jobs) + '</td><td>' + fmtInt(v.total_seen) + '</td><td>' + fmtInt(v.created) + '</td><td>' + fmtInt(v.updated) + '</td><td>' + fmtInt(v.unchanged) + '</td><td>' + fmtInt(v.errors) + '</td></tr>';
-          }).join("") + '</tbody></table>';
+          }).join("") + '</tbody></table></div>';
       }
     }
     if (listEl) {
       var items = data.items || [];
       if (!items.length) { listEl.innerHTML = ""; }
       else {
-        listEl.innerHTML = '<table class="ads-table"><thead><tr><th>When</th><th>Importer</th><th>Target</th><th>Status</th><th>Seen</th><th>Created</th><th>Updated</th><th>Unchanged</th><th>Errors</th></tr></thead><tbody>' +
+        listEl.innerHTML = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>When</th><th>Importer</th><th>Target</th><th>Status</th><th>Seen</th><th>Created</th><th>Updated</th><th>Unchanged</th><th>Errors</th></tr></thead><tbody>' +
           items.map(function (it) {
             return '<tr><td>' + escapeHtml(it.started_at || it.created_at || "—") + '</td><td>' + escapeHtml(it.importer || "—") + '</td><td title="' + escapeHtml(it.target || "") + '">' + escapeHtml(truncate(it.target || "", 60)) + '</td><td>' + escapeHtml(it.status || "—") + '</td><td>' + fmtInt(it.total_seen) + '</td><td>' + fmtInt(it.created) + '</td><td>' + fmtInt(it.updated) + '</td><td>' + fmtInt(it.unchanged) + '</td><td>' + fmtInt((it.errors || []).length) + '</td></tr>';
-          }).join("") + '</tbody></table>';
+          }).join("") + '</tbody></table></div>';
       }
     }
   }

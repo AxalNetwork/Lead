@@ -184,7 +184,7 @@
       var rows = (data.items || []).map(function (f) {
         return '<tr><td><a href="/dashboard/firms/detail/?id=' + f.id + '">' + esc(f.name) + '</a></td><td>' + esc(f.hq_country_iso2 || "") + '</td><td>' + (f.website ? '<a href="' + esc(f.website) + '" target="_blank" rel="noopener">' + esc(f.website.replace(/^https?:\/\//, "")) + '</a>' : "") + '</td></tr>';
       }).join("");
-      setText("ads-fa-gaps", '<table class="ads-table" style="width:100%;border-collapse:collapse"><thead><tr><th>Firm</th><th>Country</th><th>Website</th></tr></thead><tbody>' + (rows || '<tr><td colspan="3" class="ads-muted">No gaps.</td></tr>') + '</tbody></table>');
+      setText("ads-fa-gaps", '<div class="ads-table-wrap"><table class="ads-table" style="width:100%;border-collapse:collapse"><thead><tr><th>Firm</th><th>Country</th><th>Website</th></tr></thead><tbody>' + (rows || '<tr><td colspan="3" class="ads-muted">No gaps.</td></tr>') + '</tbody></table></div>');
     }).catch(function () { fail("ads-fa-gaps"); });
   }
 

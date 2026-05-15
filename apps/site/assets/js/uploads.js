@@ -80,7 +80,7 @@
       return;
     }
     var html =
-      '<table class="ads-table"><thead><tr>' +
+      '<div class="ads-table-wrap"><table class="ads-table"><thead><tr>' +
       '<th>File</th><th>Status</th><th>Entity</th><th>Rows</th><th>Imported</th>' +
       '<th>Firms +/Δ</th><th>Leads +/Δ</th><th>URLs queued</th><th>When</th><th></th>' +
       '</tr></thead><tbody>';
@@ -106,7 +106,7 @@
         '</td>' +
         '</tr>';
     });
-    html += '</tbody></table>';
+    html += '</tbody></table></div>';
     c.innerHTML = html;
   }
 
@@ -209,7 +209,7 @@
             '</div>';
 
     // Mapping table
-    html += '<table class="ads-table"><thead><tr><th>Header</th><th>Maps to</th><th>Sample 1</th><th>Sample 2</th></tr></thead><tbody>';
+    html += '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Header</th><th>Maps to</th><th>Sample 1</th><th>Sample 2</th></tr></thead><tbody>';
     preview.headers.forEach(function (h) {
       var current = (map[h] && (map[h].entity ? (map[h].entity + "." + map[h].field) : map[h])) || "__skip__";
       var samples = preview.rows.map(function (r) { return r[h] || ""; });
@@ -217,7 +217,7 @@
               '<td><span class="ads-muted">' + esc(samples[0] || "") + '</span></td>' +
               '<td><span class="ads-muted">' + esc(samples[1] || "") + '</span></td></tr>';
     });
-    html += '</tbody></table>';
+    html += '</tbody></table></div>';
 
     if (urls.length) {
       html += '<details style="margin-top:12px"><summary>Found URLs (' + fmtInt(urls.length) + ')</summary>' +

@@ -155,7 +155,7 @@
       var data = await api("/api/icp");
       var items = (data && data.items) || [];
       if (!items.length) { c.innerHTML = '<div class="ads-empty">No ICPs yet — click + New ICP.</div>'; return; }
-      var html = '<table class="ads-table ads-table--clickable"><thead><tr><th>Name</th><th>Description</th><th>Sectors</th><th>Geographies</th><th>Updated</th><th></th></tr></thead><tbody>';
+      var html = '<div class="ads-table-wrap"><table class="ads-table ads-table--clickable"><thead><tr><th>Name</th><th>Description</th><th>Sectors</th><th>Geographies</th><th>Updated</th><th></th></tr></thead><tbody>';
       items.forEach(function (i) {
         html += "<tr data-icp-id='" + esc(i.id) + "'>" +
           "<td>" + esc(i.name) + "</td>" +
@@ -168,7 +168,7 @@
               "<button class='ads-btn ads-btn--ghost ads-btn--sm' data-icp-del='" + esc(i.id) + "'>Delete</button></td>" +
           "</tr>";
       });
-      c.innerHTML = html + "</tbody></table>";
+      c.innerHTML = html + "</tbody></table></div>";
     } catch (e) { c.innerHTML = '<div class="ads-empty">Failed: ' + esc(e.message) + '</div>'; }
   }
 
@@ -244,11 +244,11 @@
       var items = (data && data.items) || [];
       document.getElementById("ads-icp-preview-meta").textContent = "(" + (data.total || 0) + " matches, showing " + items.length + ")";
       if (!items.length) { c.innerHTML = '<div class="ads-empty">No matches.</div>'; return; }
-      var html = '<table class="ads-table"><thead><tr><th>Score</th><th>Name</th><th>Org</th><th>Email</th><th>Reasons</th></tr></thead><tbody>';
+      var html = '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Score</th><th>Name</th><th>Org</th><th>Email</th><th>Reasons</th></tr></thead><tbody>';
       items.forEach(function (m) {
         html += "<tr><td>" + m.score.toFixed(3) + "</td><td>" + esc(m.name || "—") + "</td><td>" + esc(m.org || "—") + "</td><td>" + esc(m.email || "—") + "</td><td class='ads-muted' style='font-size:11px'>" + esc((m.reasons || []).join(", ")) + "</td></tr>";
       });
-      c.innerHTML = html + "</tbody></table>";
+      c.innerHTML = html + "</tbody></table></div>";
       card.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (e) { c.innerHTML = '<div class="ads-empty">Failed: ' + esc(e.message) + '</div>'; }
   }

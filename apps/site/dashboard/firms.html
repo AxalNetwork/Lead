@@ -7,7 +7,7 @@ permalink: /dashboard/firms/
 <h1 class="ads-page-title">Firms</h1>
 <p class="ads-page-sub">Search, filter, and export the firms catalog. Saved views live in the sidebar.</p>
 
-<div style="display:grid;grid-template-columns:220px 1fr;gap:16px;align-items:start">
+<div class="ads-page-with-sidebar">
   <aside class="ads-card" id="ads-firms-views">
     <h3 style="margin:0 0 8px;font-size:14px">Saved views</h3>
     <ul id="ads-firms-views-list" style="list-style:none;padding:0;margin:0 0 12px;font-size:13px">
@@ -17,7 +17,7 @@ permalink: /dashboard/firms/
   </aside>
 
   <div>
-    <form id="ads-firms-filters" class="ads-card" autocomplete="off" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;align-items:end">
+    <form id="ads-firms-filters" class="ads-card ads-filter-grid ads-filter-grid--4" autocomplete="off">
       <label class="ads-field" style="grid-column:span 2"><span>Search</span><input type="text" name="q" placeholder="name or thesis…"></label>
       <label class="ads-field"><span>Kind (multi)</span>
         <select name="kind" multiple size="4" style="height:auto">
@@ -88,7 +88,7 @@ permalink: /dashboard/firms/
       </div>
     </form>
 
-    <div class="ads-card" id="ads-firms-summary" style="margin-top:12px;display:grid;grid-template-columns:repeat(5,1fr);gap:12px">
+    <div class="ads-card ads-strip-kpi ads-strip-kpi--5" id="ads-firms-summary" style="margin-top:12px">
       <div><div class="ads-kpi__label">Matches</div><div class="ads-kpi__value" data-k="count">—</div></div>
       <div><div class="ads-kpi__label">Total AUM</div><div class="ads-kpi__value" data-k="aum">—</div></div>
       <div><div class="ads-kpi__label">Median check</div><div class="ads-kpi__value" data-k="median">—</div></div>
@@ -96,11 +96,13 @@ permalink: /dashboard/firms/
       <div><div class="ads-kpi__label">Top cities</div><div class="ads-kpi__value" data-k="cities" style="font-size:14px">—</div></div>
     </div>
 
-    <div class="ads-card" style="margin-top:12px;overflow:auto">
+    <div class="ads-card" style="margin-top:12px">
+     <div class="ads-table-wrap">
       <table class="ads-table" id="ads-firms-table" style="width:100%;border-collapse:collapse">
         <thead><tr id="ads-firms-thead"></tr></thead>
         <tbody id="ads-firms-tbody"><tr><td class="ads-muted">Loading…</td></tr></tbody>
       </table>
+     </div>
       <div id="ads-firms-paging" style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:12px">
         <span class="ads-muted" id="ads-firms-shown">—</span>
         <button class="ads-btn ads-btn--ghost" id="ads-firms-loadmore" hidden>Load more</button>
@@ -112,7 +114,7 @@ permalink: /dashboard/firms/
 <div id="ads-firms-cols-modal" class="ads-modal" hidden style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:200;display:flex;align-items:center;justify-content:center">
   <div style="background:#fff;border-radius:8px;width:min(420px,92vw);max-height:80vh;overflow:auto;padding:16px">
     <h3 style="margin:0 0 8px">Columns</h3>
-    <div id="ads-firms-cols-list" style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:13px"></div>
+    <div id="ads-firms-cols-list" class="ads-split-2" style="gap:4px;font-size:13px"></div>
     <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
       <button class="ads-btn ads-btn--ghost" type="button" id="ads-firms-cols-close">Close</button>
     </div>

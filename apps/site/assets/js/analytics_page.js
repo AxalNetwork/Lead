@@ -53,7 +53,7 @@
       }).join("");
       set("ads-chart-health",
         '<div style="margin-bottom:10px">' + spark + '<div class="ads-muted" style="font-size:11px">Hourly tier mix · last 24h</div></div>' +
-        '<table class="ads-table"><thead><tr><th>Host</th><th>Attempts</th><th>Block</th><th>Avg</th><th>Cost</th></tr></thead><tbody>' + rows + '</tbody></table>');
+        '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Host</th><th>Attempts</th><th>Block</th><th>Avg</th><th>Cost</th></tr></thead><tbody>' + rows + '</tbody></table></div>');
     }
 
     var cost = await api("/api/analytics/scrapers/cost?days=30");
