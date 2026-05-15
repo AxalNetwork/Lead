@@ -2,6 +2,7 @@ import type { Env, JobMessage } from "./types";
 import { enrichLead } from "./enrichment/orchestrator";
 import { runNightlyAggregator } from "./services/analytics_v2.aggregator";
 import { runRelationshipDerivation } from "./scraper/relationships/derive";
+import { runInvestorStats } from "./services/investor_stats";
 
 interface SourceRow {
   id: string;
@@ -35,6 +36,17 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       runRelationshipDerivation(env)
         .then((r) => console.log("relationship derivation done", JSON.stringify(r)))
         .catch((e) => console.error("relationship derivation failed", (e as Error).message)),
+    );
+    return;
+  }
+  // Cron 30 3 * * * → recompute investor counters + snapshot daily stats
+  // (Task #24). Runs between the analytics aggregator (15) and relationship
+  // derivation (45) so today's snapshot is fresh when downstream jobs read.
+  if (event && (event as ScheduledEvent).cron === "30 3 * * *") {
+    ctx.waitUntil(
+      runInvestorStats(env)
+        .then((r) => console.log("investor stats done", JSON.stringify(r)))
+        .catch((e) => console.error("investor stats failed", (e as Error).message)),
     );
     return;
   }

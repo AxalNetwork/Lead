@@ -1,0 +1,45 @@
+---
+layout: default
+title: Investors
+permalink: /dashboard/investors/
+---
+
+<h1 class="ads-page-title">Investors</h1>
+<p class="ads-page-sub">Browse the investor universe — GPs, angels, scouts, operators, LPs.</p>
+
+<div class="ads-card">
+  <div class="ads-strip" id="ads-investors-strip"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<div class="ads-card" style="margin-top:16px">
+  <form id="ads-investors-filters" autocomplete="off" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;align-items:end">
+    <label>Search<input name="q" placeholder="name or org" style="width:100%;padding:6px"></label>
+    <label>Kind
+      <select name="kind" style="width:100%;padding:6px">
+        <option value="">all</option>
+        <option value="gp">GP</option><option value="angel">Angel</option>
+        <option value="operator">Operator</option><option value="lp">LP</option>
+        <option value="scout">Scout</option><option value="principal">Principal</option>
+        <option value="associate">Associate</option>
+      </select>
+    </label>
+    <label>Stage<input name="stage" placeholder="seed, series_a…" style="width:100%;padding:6px"></label>
+    <label>Sector<input name="sector" placeholder="ai, fintech…" style="width:100%;padding:6px"></label>
+    <label>Country (ISO2)<input name="country" maxlength="2" style="width:100%;padding:6px;text-transform:uppercase"></label>
+    <label>Min check ($)<input name="min_check_usd" type="number" min="0" style="width:100%;padding:6px"></label>
+    <div style="grid-column:1/-1;display:flex;gap:8px">
+      <button class="ads-btn" type="submit">Apply</button>
+      <button class="ads-btn ads-btn--ghost" type="reset">Reset</button>
+      <span class="ads-form-msg" id="ads-investors-msg"></span>
+    </div>
+  </form>
+</div>
+
+<div class="ads-card" style="margin-top:16px">
+  <div id="ads-investors-list"><div class="ads-loading">Loading…</div></div>
+  <div style="margin-top:12px;text-align:center">
+    <button class="ads-btn ads-btn--ghost" id="ads-investors-more" hidden>Load more</button>
+  </div>
+</div>
+
+<script src="/assets/js/investors.js"></script>

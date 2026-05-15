@@ -1,0 +1,46 @@
+---
+layout: default
+title: Companies
+permalink: /dashboard/companies/
+---
+
+<h1 class="ads-page-title">Companies</h1>
+<p class="ads-page-sub">Portfolio companies, rounds, exits.</p>
+
+<div class="ads-card">
+  <div class="ads-strip" id="ads-companies-strip"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<div class="ads-card" style="margin-top:16px">
+  <form id="ads-companies-filters" autocomplete="off" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;align-items:end">
+    <label>Search<input name="q" placeholder="name or domain" style="width:100%;padding:6px"></label>
+    <label>Status
+      <select name="status" style="width:100%;padding:6px">
+        <option value="">all</option>
+        <option value="active">active</option>
+        <option value="acquired">acquired</option>
+        <option value="ipo">ipo</option>
+        <option value="shutdown">shutdown</option>
+        <option value="stealth">stealth</option>
+      </select>
+    </label>
+    <label>Stage<input name="stage" placeholder="seed, series_a…" style="width:100%;padding:6px"></label>
+    <label>Sector<input name="sector" placeholder="ai, fintech…" style="width:100%;padding:6px"></label>
+    <label>Country (ISO2)<input name="country" maxlength="2" style="width:100%;padding:6px;text-transform:uppercase"></label>
+    <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" name="unicorn" value="1"> Unicorn only</label>
+    <div style="grid-column:1/-1;display:flex;gap:8px">
+      <button class="ads-btn" type="submit">Apply</button>
+      <button class="ads-btn ads-btn--ghost" type="reset">Reset</button>
+      <span class="ads-form-msg" id="ads-companies-msg"></span>
+    </div>
+  </form>
+</div>
+
+<div class="ads-card" style="margin-top:16px">
+  <div id="ads-companies-list"><div class="ads-loading">Loading…</div></div>
+  <div style="margin-top:12px;text-align:center">
+    <button class="ads-btn ads-btn--ghost" id="ads-companies-more" hidden>Load more</button>
+  </div>
+</div>
+
+<script src="/assets/js/companies.js"></script>

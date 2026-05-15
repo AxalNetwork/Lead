@@ -174,14 +174,90 @@ const PORTFOLIO_FIELDS: Record<string, ColumnSpec> = {
   firm_country_iso2: { sql: `f.hq_country_iso2`, header: "firm_country_iso2" },
 };
 
-type Entity = "leads" | "firms" | "firm_people" | "portfolio";
-const VALID_ENTITIES: Entity[] = ["leads", "firms", "firm_people", "portfolio"];
+// Task #24: investor + company entity column whitelists.
+// Investors are leads with l.investor_kind set, so we reuse the leads
+// virtuals (first_name/primary_email/linkedin) and add a few investor-only
+// scalars + a fund-name lookup.
+const INVESTOR_FIELDS: Record<string, ColumnSpec> = {
+  ...realLeadColumns(),
+  investor_kind:           { sql: `l.investor_kind`, header: "investor_kind" },
+  thesis:                  { sql: `l.thesis`, header: "thesis" },
+  sweet_spot_stage:        { sql: `l.sweet_spot_stage`, header: "sweet_spot_stage" },
+  stage_focus_json:        { sql: `l.stage_focus_json`, header: "stage_focus_json", json: true },
+  sector_focus_slugs_json: { sql: `l.sector_focus_slugs_json`, header: "sector_focus_slugs_json", json: true },
+  geo_focus_json:          { sql: `l.geo_focus_json`, header: "geo_focus_json", json: true },
+  check_size_min_usd:      { sql: `l.check_size_min_usd`, header: "check_size_min_usd" },
+  check_size_max_usd:      { sql: `l.check_size_max_usd`, header: "check_size_max_usd" },
+  check_size_typical_usd:  { sql: `l.check_size_typical_usd`, header: "check_size_typical_usd" },
+  signal_nfx_url:          { sql: `l.signal_nfx_url`, header: "signal_nfx_url" },
+  crunchbase_url:          { sql: `l.crunchbase_url`, header: "crunchbase_url" },
+  wikipedia_url:           { sql: `l.wikipedia_url`, header: "wikipedia_url" },
+  office_hours_url:        { sql: `l.office_hours_url`, header: "office_hours_url" },
+  pitch_form_url:          { sql: `l.pitch_form_url`, header: "pitch_form_url" },
+  calendly_url:            { sql: `l.calendly_url`, header: "calendly_url" },
+  current_role_title:      { sql: `l.current_role_title`, header: "current_role_title" },
+  current_fund_name:       { sql: `(SELECT f2.name FROM firms f2 WHERE f2.id = l.current_fund_id)`, header: "current_fund_name" },
+  investment_count:        { sql: `l.investment_count`, header: "investment_count" },
+  unicorn_count:           { sql: `l.unicorn_count`, header: "unicorn_count" },
+  exit_count:              { sql: `l.exit_count`, header: "exit_count" },
+  avg_check_usd:           { sql: `l.avg_check_usd`, header: "avg_check_usd" },
+  total_deployed_usd:      { sql: `l.total_deployed_usd`, header: "total_deployed_usd" },
+  board_seats_count:       { sql: `l.board_seats_count`, header: "board_seats_count" },
+  // Inherit virtuals from LEAD_FIELDS that need scalar subqueries.
+  first_name:        LEAD_FIELDS.first_name,
+  last_name:         LEAD_FIELDS.last_name,
+  primary_email:     LEAD_FIELDS.primary_email,
+  primary_phone:     LEAD_FIELDS.primary_phone,
+  primary_linkedin:  LEAD_FIELDS.primary_linkedin,
+};
+
+const COMPANY_REAL_COLUMNS = [
+  "id", "name", "legal_name", "slug", "domain", "website", "logo_url",
+  "description", "status", "founded_year",
+  "hq_country_iso2", "hq_region", "hq_city",
+  "industries_json", "stage", "total_funding_usd", "last_round_usd",
+  "last_round_at", "last_round_stage", "valuation_usd", "unicorn",
+  "exit_kind", "exit_date", "exit_value_usd", "acquirer_name", "ticker",
+  "employees", "linkedin_url", "crunchbase_url", "twitter_handle",
+  "github_org", "pitchbook_url", "sec_cik", "socials_json", "tags_json",
+  "source_url", "imported_from", "last_enriched_at", "created_at", "updated_at",
+] as const;
+const COMPANY_JSON_FIELDS = new Set(["industries_json", "socials_json", "tags_json"]);
+
+function realCompanyColumns(): Record<string, ColumnSpec> {
+  const out: Record<string, ColumnSpec> = {};
+  for (const c of COMPANY_REAL_COLUMNS) {
+    out[c] = { sql: `co.${c}`, header: c, json: COMPANY_JSON_FIELDS.has(c) };
+  }
+  return out;
+}
+
+const COMPANY_FIELDS: Record<string, ColumnSpec> = {
+  ...realCompanyColumns(),
+  investor_count: {
+    sql: `(SELECT COUNT(DISTINCT COALESCE(ii.investor_lead_id, CAST(ii.firm_id AS TEXT))) FROM investor_investments ii WHERE ii.company_id = co.id)`,
+    header: "investor_count",
+  },
+  round_count: {
+    sql: `(SELECT COUNT(*) FROM company_rounds cr WHERE cr.company_id = co.id)`,
+    header: "round_count",
+  },
+  founder_count: {
+    sql: `(SELECT COUNT(*) FROM company_founders cf WHERE cf.company_id = co.id)`,
+    header: "founder_count",
+  },
+};
+
+type Entity = "leads" | "firms" | "firm_people" | "portfolio" | "investors" | "companies";
+const VALID_ENTITIES: Entity[] = ["leads", "firms", "firm_people", "portfolio", "investors", "companies"];
 
 const FIELD_REGISTRY: Record<Entity, Record<string, ColumnSpec>> = {
   leads: LEAD_FIELDS,
   firms: FIRM_FIELDS,
   firm_people: FIRM_PEOPLE_FIELDS,
   portfolio: PORTFOLIO_FIELDS,
+  investors: INVESTOR_FIELDS,
+  companies: COMPANY_FIELDS,
 };
 
 // ---------------------------------------------------------------------------
@@ -303,10 +379,40 @@ function buildPortfolioQuery(cols: ResolvedColumn[], filter: FilterShape): Built
   };
 }
 
+function buildInvestorsQuery(cols: ResolvedColumn[], filter: FilterShape): BuiltQuery {
+  const selects = cols.map((c) => `${c.spec.sql} AS ${c.alias}`).join(", ");
+  const where: string[] = ["l.investor_kind IS NOT NULL"];
+  const binds: unknown[] = [];
+  if (filter.status) { where.push("l.status = ?"); binds.push(filter.status); }
+  if (filter.has_email) where.push("(l.email IS NOT NULL AND l.email <> '')");
+  if (filter.country_iso2) { where.push("l.country_iso2 = ?"); binds.push(filter.country_iso2); }
+  if (filter.since) { where.push("l.created_at >= ?"); binds.push(filter.since); }
+  if (!filter.include_merged) where.push("(l.merged_into IS NULL OR l.merged_into = '')");
+  return {
+    sql: `SELECT ${selects} FROM leads l WHERE ${where.join(" AND ")} ORDER BY l.investment_count DESC NULLS LAST, l.id DESC LIMIT 50000`,
+    binds, resolved: cols,
+  };
+}
+
+function buildCompaniesQuery(cols: ResolvedColumn[], filter: FilterShape): BuiltQuery {
+  const selects = cols.map((c) => `${c.spec.sql} AS ${c.alias}`).join(", ");
+  const where: string[] = []; const binds: unknown[] = [];
+  if (filter.country_iso2) { where.push("co.hq_country_iso2 = ?"); binds.push(filter.country_iso2); }
+  if (filter.status) { where.push("co.status = ?"); binds.push(filter.status); }
+  if (filter.since) { where.push("co.created_at >= ?"); binds.push(filter.since); }
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  return {
+    sql: `SELECT ${selects} FROM companies co ${whereSql} ORDER BY co.total_funding_usd DESC NULLS LAST, co.id DESC LIMIT 50000`,
+    binds, resolved: cols,
+  };
+}
+
 function buildQuery(entity: Entity, cols: ResolvedColumn[], filter: FilterShape): BuiltQuery {
   if (entity === "leads") return buildLeadsQuery(cols, filter);
   if (entity === "firms") return buildFirmsQuery(cols, filter);
   if (entity === "firm_people") return buildFirmPeopleQuery(cols, filter);
+  if (entity === "investors") return buildInvestorsQuery(cols, filter);
+  if (entity === "companies") return buildCompaniesQuery(cols, filter);
   return buildPortfolioQuery(cols, filter);
 }
 
