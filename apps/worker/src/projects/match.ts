@@ -119,45 +119,62 @@ export async function matchProject(env: Env, projectId: string): Promise<{ ok: t
   const counts: Record<string, number> = {};
   const out: MatchAudienceOutput[] = [];
 
+  // Two-phase recompute per audience:
+  //   Phase 1 — score everything, bulk-upsert ranked rows immediately
+  //             with empty pitch/intro so the workspace becomes visible
+  //             within seconds (well under the 60s SLA).
+  //   Phase 2 — enrich top-K rows (pitch + intro) in bounded-parallel
+  //             batches and patch each row in place. Phase 2 runs
+  //             after persist so a slow AI provider can never delay
+  //             results from appearing.
   for (const audience of enabled) {
     const ranked = await rankAudience(env, spec, audience, vector);
-    // Generate pitch angles for top-K only.
-    const pitchTop = ranked.slice(0, PITCH_TOP);
-    const introTop = pitchTop;
-    const enriched: Array<Parameters<typeof bulkUpsertMatches>[4][number]> = [];
+    const initial: Array<Parameters<typeof bulkUpsertMatches>[4][number]> = [];
     const keepKeys: Array<{ entity_kind: string; entity_id: string }> = [];
     for (let i = 0; i < ranked.length; i += 1) {
       const r = ranked[i];
-      let pitch: string | null = null;
-      let explanation: string | null = null;
-      let intro: unknown[] | null = null;
-      if (i < pitchTop.length) {
-        const pe = await generatePitchAndExplanation(env, spec, audience, r, row.last_modified).catch(() => null);
-        if (pe) { pitch = pe.pitch; explanation = pe.explanation; }
-      }
-      if (i < introTop.length) {
-        intro = await shortestIntroPath(env, r).catch(() => null);
-      }
-      // Fold explanation into components_json so the API response carries
-      // it without a schema migration.
-      const components = { ...r.components, explanation } as Record<string, unknown>;
-      enriched.push({
+      const components = { ...r.components, explanation: null } as Record<string, unknown>;
+      initial.push({
         entity_kind: r.entity_kind, entity_id: r.entity_id,
         rank: i + 1, fit_score: r.fit_score,
         persona_score: r.persona_score, semantic_score: r.semantic_score, overlay_score: r.overlay_score,
-        components, pitch_angle: pitch, intro_path: intro,
+        components, pitch_angle: null, intro_path: null,
         entity_modified_at: (r.components as Record<string, unknown>).last_modified as string | null,
       });
       keepKeys.push({ entity_kind: r.entity_kind, entity_id: r.entity_id });
     }
-    // True upsert — preserves status/notes via ON CONFLICT in
-    // bulkUpsertMatches. Then demote rank=0 for stale rows whose status
-    // is still "new" (untouched by user) so the workspace doesn't show
-    // them in the top list while keeping shortlisted/contacted history.
-    await bulkUpsertMatches(env, projectId, audience, row.last_modified, enriched);
+    await bulkUpsertMatches(env, projectId, audience, row.last_modified, initial);
     await demoteStaleNewMatches(env, projectId, audience, keepKeys);
-    counts[audience] = enriched.length;
-    out.push({ audience, count: enriched.length });
+    counts[audience] = initial.length;
+    out.push({ audience, count: initial.length });
+
+    // Phase 2 — bounded parallel enrichment for top-K. AI failures and
+    // intro-path errors are non-fatal: we keep the persisted ranked row.
+    const enrichTargets = ranked.slice(0, PITCH_TOP);
+    const CONCURRENCY = 8;
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(CONCURRENCY, enrichTargets.length) }, async () => {
+      while (true) {
+        const i = cursor; cursor += 1;
+        if (i >= enrichTargets.length) return;
+        const r = enrichTargets[i];
+        const [pe, intro] = await Promise.all([
+          generatePitchAndExplanation(env, spec, audience, r, row.last_modified).catch(() => null),
+          shortestIntroPath(env, r).catch(() => null),
+        ]);
+        const components = { ...r.components, explanation: pe?.explanation ?? null } as Record<string, unknown>;
+        try {
+          await env.DB.prepare(
+            `UPDATE project_matches SET pitch_angle = ?, intro_path_json = ?, components_json = ?
+               WHERE project_id = ? AND audience = ? AND entity_kind = ? AND entity_id = ?`,
+          ).bind(
+            pe?.pitch ?? null, intro ? JSON.stringify(intro) : null, JSON.stringify(components),
+            projectId, audience, r.entity_kind, r.entity_id,
+          ).run();
+        } catch (e) { console.warn("enrichment update failed", (e as Error).message); }
+      }
+    });
+    await Promise.all(workers);
   }
 
   await setMatchCounts(env, projectId, counts);
