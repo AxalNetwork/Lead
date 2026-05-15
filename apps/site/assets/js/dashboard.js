@@ -399,9 +399,14 @@
     }
 
     function renderTabPanel() {
-      var pillsHtml = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">';
+      // Total rows across ALL tabs (multi-tab uploads must not show only
+      // the primary tab's row_count — the operator needs the full picture).
+      var totalAllTabs = current.tabs.reduce(function (a, t) { return a + (t.row_count || 0); }, 0);
+      var pillsHtml = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px">';
       current.tabs.forEach(function (t, i) {
-        var label = (t.sheet_name || ("Tab " + (i + 1))) + " · " + t.intent;
+        var rowCount = t.row_count || 0;
+        var label = (t.sheet_name || ("Tab " + (i + 1))) + " · " + t.intent
+          + " · " + rowCount + (rowCount === 1 ? " row" : " rows");
         var conf = Math.round((t.intent_confidence || 0) * 100);
         var active = i === current.activeTab;
         pillsHtml += '<button type="button" class="ads-tab-pill" data-tab="' + i + '" '
@@ -411,6 +416,9 @@
           + escapeHtml(label) + ' <span style="opacity:.7">(' + conf + '%)</span></button>';
       });
       pillsHtml += '</div>';
+      pillsHtml += '<div style="font-size:12px;color:#666;margin-bottom:10px">'
+        + 'Total across tabs: <strong>' + totalAllTabs + '</strong> rows'
+        + '</div>';
 
       // Save-template button on the right.
       pillsHtml += '<div style="margin-bottom:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'

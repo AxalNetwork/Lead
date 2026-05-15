@@ -231,22 +231,52 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
       }
     }
 
-    // Merge per-tab summary into file_imports.summary_json.
+    // Merge per-tab outcomes back into the parse-time summary so we end up
+    // with ONE canonical schema (no separate tabs_outcome/totals object).
+    // Required per-tab keys: name, intent, rows_seen, rows_imported,
+    // rows_updated, rows_rejected, low_confidence_cells, ocr_disagreements.
+    // Required aggregate keys: newFirms, updatedFirms, newCompanies,
+    // urlsExtracted, jobsQueued, warnings.
     const existingSummaryRaw = await env.DB.prepare("SELECT summary_json FROM file_imports WHERE id = ?")
       .bind(importId).first<{ summary_json: string | null }>();
     let merged: Record<string, unknown> = {};
     try { if (existingSummaryRaw?.summary_json) merged = JSON.parse(existingSummaryRaw.summary_json) as Record<string, unknown>; } catch { /* ignore */ }
-    merged.tabs_outcome = summaries;
-    merged.totals = {
-      rows_imported: totalImported,
-      rows_skipped: totalSkipped,
-      firms_created: totalFirmsCreated,
-      firms_updated: totalFirmsUpdated,
-      metrics_inserted: totalMetricsInserted,
-      leads_created: totalLeadsCreated,
-      leads_updated: totalLeadsUpdated,
-      queued_jobs: queuedJobs,
-    };
+    type ParseTab = { index: number; sheet?: string | null; intent?: string;
+      rows_seen?: number; rows_imported?: number; rows_updated?: number;
+      rows_rejected?: number; low_confidence_cells?: number; ocr_disagreements?: number };
+    const parseTabs: ParseTab[] = Array.isArray(merged.tabs) ? (merged.tabs as ParseTab[]) : [];
+    type SumLike = { tab_index?: number; rows_imported?: number;
+      firms_updated?: number; rows_skipped?: number; errors?: string[] };
+    const byIdx = new Map<number, SumLike>();
+    for (const s of summaries as unknown as SumLike[]) {
+      if (typeof s.tab_index === "number") byIdx.set(s.tab_index, s);
+    }
+    for (const t of parseTabs) {
+      const s = byIdx.get(t.index);
+      t.rows_imported = s?.rows_imported ?? 0;
+      t.rows_updated = s?.firms_updated ?? 0;
+      t.rows_rejected = s?.rows_skipped ?? 0;
+      t.rows_seen = t.rows_seen ?? 0;
+      t.low_confidence_cells = t.low_confidence_cells ?? 0;
+      t.ocr_disagreements = t.ocr_disagreements ?? 0;
+    }
+    merged.tabs = parseTabs;
+    // Aggregate totals (canonical names per acceptance contract).
+    const urlsRaw = await env.SCRAPE_CACHE.get(`upload_urls:${importId}`);
+    const urlsExtracted = urlsRaw ? (JSON.parse(urlsRaw) as string[]).length : 0;
+    const warnings = summaries.flatMap((s) => s.errors).slice(0, 50);
+    merged.newFirms = totalFirmsCreated;
+    merged.updatedFirms = totalFirmsUpdated;
+    merged.newCompanies = 0;
+    merged.urlsExtracted = urlsExtracted;
+    merged.jobsQueued = queuedJobs;
+    merged.warnings = warnings;
+    merged.rows_imported_total = totalImported;
+    merged.rows_updated_total = totalFirmsUpdated;
+    merged.rows_rejected_total = totalSkipped;
+    merged.metrics_inserted = totalMetricsInserted;
+    merged.leads_created = totalLeadsCreated;
+    merged.leads_updated = totalLeadsUpdated;
 
     const errFlat = summaries.flatMap((s) => s.errors).slice(0, 20).join("; ");
     await env.DB.prepare(
