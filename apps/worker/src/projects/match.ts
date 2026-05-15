@@ -32,12 +32,14 @@ async function rankAudience(
   audience: Audience,
   projectVector: number[] | null,
 ): Promise<AudienceMatchResult[]> {
-  // 1) Persona-derived candidates (only meaningful for account/buyer kinds).
+  // 1) Persona-derived candidates. Load persona-fit maps for every
+  // entity kind this audience actually consumes so persona signal is
+  // not silently zeroed for investor/partner/hire.
   const personaIds = spec.persona_ids[audience] ?? [];
-  const accountFitMap = await loadPersonaFitMap(env, personaIds, "account");
-  // We track buyer-fit independently; today only the customer audience
-  // pulls buyers in via persona_matches.
-  const buyerFitMap = audience === "customer" ? await loadPersonaFitMap(env, personaIds, "buyer") : new Map<string, number>();
+  const personaMaps: Partial<Record<AudienceCandidate["entity_kind"], Map<string, number>>> = {};
+  for (const kind of AUDIENCE_KINDS[audience]) {
+    personaMaps[kind] = await loadPersonaFitMap(env, personaIds, kind);
+  }
 
   // 2) Semantic candidates from this audience's vector indexes.
   const semHits: SemanticHit[] = projectVector
@@ -60,8 +62,10 @@ async function rankAudience(
     }
     return candidates.get(k)!;
   };
-  if (allowedKinds.has("account")) for (const [id, s] of accountFitMap) { const c = ensure("account", id); if (c) c.persona_score = s; }
-  if (allowedKinds.has("buyer"))   for (const [id, s] of buyerFitMap)   { const c = ensure("buyer", id);   if (c) c.persona_score = s; }
+  for (const [kind, m] of Object.entries(personaMaps)) {
+    if (!m) continue;
+    for (const [id, s] of m) { const c = ensure(kind as AudienceCandidate["entity_kind"], id); if (c) c.persona_score = s; }
+  }
   for (const h of semHits) { const c = ensure(h.entity_kind, h.entity_id); if (c) c.semantic_cosine = h.cosine; }
 
   // 4) Bulk-load facts per kind.

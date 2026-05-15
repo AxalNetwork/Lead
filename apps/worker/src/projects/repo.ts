@@ -105,7 +105,13 @@ export async function insertProject(env: Env, body: Partial<ProjectRow> & { name
   const now = new Date().toISOString();
   const cols = ["id","created_by","created_at","updated_at","last_modified", ...PROJECT_FIELDS];
   const binds: unknown[] = [id, by ?? null, now, now, now];
-  for (const f of PROJECT_FIELDS) binds.push((body as Record<string, unknown>)[f] ?? null);
+  // Per migration 180: status NOT NULL DEFAULT 'active', kind NOT NULL DEFAULT 'product'.
+  // Provide explicit defaults so unset payloads do not violate NOT NULL.
+  const COL_DEFAULTS: Record<string, unknown> = { status: "active", kind: "product" };
+  for (const f of PROJECT_FIELDS) {
+    const v = (body as Record<string, unknown>)[f];
+    binds.push(v != null ? v : (COL_DEFAULTS[f] ?? null));
+  }
   await env.DB.prepare(`INSERT INTO projects (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`).bind(...binds).run();
   await env.DB.prepare(`INSERT INTO project_history (id, project_id, field, new_value, changed_by) VALUES (?, ?, 'created', ?, ?)`)
     .bind(crypto.randomUUID(), id, body.name, by ?? null).run();
@@ -142,9 +148,13 @@ export async function softDeleteProject(env: Env, id: string, by?: string): Prom
   const now = new Date().toISOString();
   const r = await env.DB.prepare(`UPDATE projects SET deleted_at = ?, status = 'archived', updated_at = ? WHERE id = ? AND deleted_at IS NULL`)
     .bind(now, now, id).run();
-  await env.DB.prepare(`INSERT INTO project_history (id, project_id, field, new_value, changed_by) VALUES (?, ?, 'archived', 'archived', ?)`)
-    .bind(crypto.randomUUID(), id, by ?? null).run();
-  return ((r.meta?.changes ?? 0) as number) > 0;
+  const changed = ((r.meta?.changes ?? 0) as number) > 0;
+  // Only audit a real archive — avoid ghost rows for not_found / already_archived.
+  if (changed) {
+    await env.DB.prepare(`INSERT INTO project_history (id, project_id, field, new_value, changed_by) VALUES (?, ?, 'archived', 'archived', ?)`)
+      .bind(crypto.randomUUID(), id, by ?? null).run();
+  }
+  return changed;
 }
 
 export async function setProjectEmbeddingMeta(env: Env, id: string, dim: number, text: string): Promise<void> {
@@ -275,7 +285,7 @@ export async function listProjectHistory(env: Env, projectId: string, limit = 20
 export async function loadPersonaFitMap(
   env: Env,
   personaIds: string[],
-  entityKind: "account" | "buyer",
+  entityKind: "account" | "buyer" | "lead" | "firm" | "company",
 ): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   if (!personaIds.length) return map;
