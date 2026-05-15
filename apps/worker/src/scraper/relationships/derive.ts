@@ -112,6 +112,14 @@ export async function runRelationshipDerivation(env: Env): Promise<DeriveResult>
   const result: DeriveResult = { entities_upserted: 0, edges_upserted: 0, by_kind: {} };
   result.entities_upserted = await backfillEntities(env);
 
+  // State-convergent derivation: clear all prior derive:* edges before
+  // re-emitting from current source truth. Manually-curated rows
+  // (source NOT LIKE 'derive:%') are preserved. This guarantees that
+  // removed source facts (deleted firm_people rows, edited
+  // companies_json, dropped portfolio entries, etc.) disappear from
+  // the relationship graph on the next nightly run.
+  await env.DB.prepare("DELETE FROM relationships WHERE source LIKE 'derive:%'").run();
+
   // Cache entity ids by (ref_table, ref_id) once — saves N round-trips.
   const allEntities = await env.DB
     .prepare("SELECT id, ref_table, ref_id FROM entities WHERE ref_table IS NOT NULL")
