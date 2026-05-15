@@ -76,17 +76,21 @@ bucket_name = "aidatasignal-ai-cache"
 binding = "AI"
 
 # Task #25: Vectorize indexes for entity resolution. 768-dim BGE base embeddings.
+# Task #39: dimensions + metric are encoded as a trailing comment on the
+# `index_name` line (`# dim=N metric=METRIC`) so the deploy workflow can
+# create each index with the correct shape. wrangler itself ignores the
+# comment.
 [[vectorize]]
 binding = "VEC_LEADS"
-index_name = "axal-leads-768"
+index_name = "axal-leads-768"  # dim=768 metric=cosine
 
 [[vectorize]]
 binding = "VEC_FIRMS"
-index_name = "axal-firms-768"
+index_name = "axal-firms-768"  # dim=768 metric=cosine
 
 [[vectorize]]
 binding = "VEC_COMPANIES"
-index_name = "axal-companies-768"
+index_name = "axal-companies-768"  # dim=768 metric=cosine
 
 # Task #44: prospect accounts vector index.
 [[vectorize]]

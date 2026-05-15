@@ -73,6 +73,182 @@ jobs:
             fi
           done
 
+      # Task #39: Pre-create Vectorize indexes declared in wrangler.toml.
+      # The Cloudflare API returns code 3149 ("vector index already exists")
+      # when the index is present, which we treat as success.
+      #
+      # wrangler.toml itself doesn't carry dimensions/metric, so each
+      # [[vectorize]] block annotates them via a trailing comment on the
+      # `index_name` line: `index_name = "foo"  # dim=768 metric=cosine`.
+      # If the annotation is missing we fall back to 768/cosine (the
+      # values used by every existing axal index — BGE base embeddings)
+      # and emit a warning so a typo doesn't silently create the wrong
+      # index shape.
+      - name: Ensure Vectorize indexes exist
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: 30c9362191318777b71647145decda48
+          VECTORIZE_DEFAULT_DIM: "768"
+          VECTORIZE_DEFAULT_METRIC: "cosine"
+        run: |
+          set -euo pipefail
+          # Emit `name<TAB>dim<TAB>metric` for every [[vectorize]] block,
+          # parsing the optional `# dim=N metric=M` annotation on the
+          # index_name line.
+          PARSED=$(awk -v ddim="$VECTORIZE_DEFAULT_DIM" -v dmet="$VECTORIZE_DEFAULT_METRIC" '
+            /^\[\[vectorize\]\]/ { flag=1; next }
+            /^\[/ { flag=0 }
+            flag && /^[[:space:]]*index_name[[:space:]]*=/ {
+              name=""; dim=ddim; met=dmet
+              if (match($0, /"[^"]+"/)) name=substr($0, RSTART+1, RLENGTH-2)
+              if (match($0, /dim[[:space:]]*=[[:space:]]*[0-9]+/)) {
+                s=substr($0, RSTART, RLENGTH); sub(/^dim[[:space:]]*=[[:space:]]*/, "", s); dim=s
+              }
+              if (match($0, /metric[[:space:]]*=[[:space:]]*[A-Za-z_-]+/)) {
+                s=substr($0, RSTART, RLENGTH); sub(/^metric[[:space:]]*=[[:space:]]*/, "", s); met=s
+              }
+              if (name != "") printf "%s\t%s\t%s\n", name, dim, met
+            }
+          ' wrangler.toml | sort -u)
+          if [ -z "$PARSED" ]; then
+            echo "No Vectorize indexes declared in wrangler.toml; skipping."
+            exit 0
+          fi
+          while IFS=$'\t' read -r I DIM METRIC; do
+            [ -z "$I" ] && continue
+            # Surface missing annotation so a future contributor doesn't
+            # silently get the default shape.
+            if ! grep -E "^[[:space:]]*index_name[[:space:]]*=[[:space:]]*\"${I}\".*dim=" wrangler.toml >/dev/null; then
+              echo "WARNING: index '${I}' has no '# dim=N metric=M' annotation; defaulting to ${DIM}/${METRIC}." >&2
+            fi
+            echo "Ensuring Vectorize index: $I (dim=${DIM}, metric=${METRIC})"
+            RESP=$(curl -sS -X POST \
+              "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/vectorize/v2/indexes" \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "{\"name\":\"${I}\",\"config\":{\"dimensions\":${DIM},\"metric\":\"${METRIC}\"}}")
+            if echo "$RESP" | grep -q '"success":true'; then
+              echo "  created."
+            elif echo "$RESP" | grep -q '"code":3149' || echo "$RESP" | grep -qi 'already exists'; then
+              echo "  already exists — ok."
+            else
+              echo "  unexpected response: $RESP" >&2
+              exit 1
+            fi
+          done <<< "$PARSED"
+
+      # Task #39: Pre-create Queues declared in wrangler.toml. We extract
+      # queue names from both [[queues.producers]] (`queue = "..."`) and
+      # [[queues.consumers]] (`queue = "..."`) blocks. The Cloudflare API
+      # returns code 100123 ("queue with this name already exists") when
+      # the queue is present, which we treat as success.
+      - name: Ensure Queues exist
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: 30c9362191318777b71647145decda48
+        run: |
+          set -euo pipefail
+          QUEUES=$(awk '/^\[\[queues\.(producers|consumers)\]\]/{flag=1;next} /^\[/{flag=0} flag && /^[[:space:]]*queue[[:space:]]*=/' wrangler.toml \
+            | sed -E 's/.*"([^"]+)".*/\1/' | sort -u)
+          if [ -z "$QUEUES" ]; then
+            echo "No Queues declared in wrangler.toml; skipping."
+            exit 0
+          fi
+          for Q in $QUEUES; do
+            echo "Ensuring Queue: $Q"
+            RESP=$(curl -sS -X POST \
+              "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues" \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "{\"queue_name\":\"${Q}\"}")
+            if echo "$RESP" | grep -q '"success":true'; then
+              echo "  created."
+            elif echo "$RESP" | grep -q '"code":100123' || echo "$RESP" | grep -qi 'already exists'; then
+              echo "  already exists — ok."
+            else
+              echo "  unexpected response: $RESP" >&2
+              exit 1
+            fi
+          done
+
+      # Task #39: Analytics Engine datasets do NOT have a create-dataset
+      # REST endpoint — Cloudflare auto-provisions a dataset the first
+      # time the Worker calls `writeDataPoint` against it. We still parse
+      # every `[[analytics_engine_datasets]]` block and probe the AE SQL
+      # endpoint per dataset, treating three outcomes as success:
+      #   1. `"success":true`         — dataset exists and is queryable.
+      #   2. table-not-found error    — dataset hasn't received its first
+      #      write yet; will be auto-provisioned by the Worker.
+      #   3. (anything else)          — fail loudly so a bad token /
+      #      account / typo surfaces here instead of in production.
+      - name: Ensure Analytics Engine datasets are reachable
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: 30c9362191318777b71647145decda48
+        run: |
+          set -euo pipefail
+          DATASETS=$(awk '/^\[\[analytics_engine_datasets\]\]/{flag=1;next} /^\[/{flag=0} flag && /^[[:space:]]*dataset[[:space:]]*=/' wrangler.toml \
+            | sed -E 's/.*"([^"]+)".*/\1/' | sort -u)
+          if [ -z "$DATASETS" ]; then
+            echo "No Analytics Engine datasets declared in wrangler.toml; skipping."
+            exit 0
+          fi
+          for D in $DATASETS; do
+            echo "Probing Analytics Engine dataset: $D"
+            RESP=$(curl -sS -X POST \
+              "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/analytics_engine/sql" \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              --data "SELECT 1 FROM \"${D}\" LIMIT 1")
+            if echo "$RESP" | grep -q '"success":true'; then
+              echo "  exists and queryable — ok."
+            elif echo "$RESP" | grep -qiE 'table.*not found|unknown table|no such table|does not exist'; then
+              echo "  not yet written to — will be auto-provisioned on first writeDataPoint."
+            else
+              echo "  unexpected response: $RESP" >&2
+              exit 1
+            fi
+          done
+
+      # Task #39: Pre-create KV namespaces declared in wrangler.toml.
+      # Cloudflare KV is unusual in that wrangler.toml binds a namespace
+      # by its account-scoped `id`, not by name — so even when CI creates
+      # the namespace, the returned id still has to be hand-pasted into
+      # wrangler.toml on first introduction. This step therefore covers
+      # the easy case (the namespace title doesn't yet exist for the
+      # account) and emits a clear ACTION REQUIRED line with the new id
+      # so the operator can paste it back. Subsequent deploys are no-ops
+      # because the title already exists (CF returns code 10014).
+      - name: Ensure KV namespaces exist
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: 30c9362191318777b71647145decda48
+        run: |
+          set -euo pipefail
+          BINDINGS=$(awk '/^\[\[kv_namespaces\]\]/{flag=1;next} /^\[/{flag=0} flag && /^[[:space:]]*binding[[:space:]]*=/' wrangler.toml \
+            | sed -E 's/.*"([^"]+)".*/\1/' | sort -u)
+          if [ -z "$BINDINGS" ]; then
+            echo "No KV namespaces declared in wrangler.toml; skipping."
+            exit 0
+          fi
+          for B in $BINDINGS; do
+            echo "Ensuring KV namespace title: $B"
+            RESP=$(curl -sS -X POST \
+              "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/storage/kv/namespaces" \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "{\"title\":\"${B}\"}")
+            if echo "$RESP" | grep -q '"success":true'; then
+              NEW_ID=$(echo "$RESP" | sed -E 's/.*"id":"([^"]+)".*/\1/')
+              echo "  created (id=${NEW_ID})."
+              echo "  ACTION REQUIRED: paste id=${NEW_ID} into the [[kv_namespaces]] block for binding ${B} in apps/worker/wrangler.toml." >&2
+            elif echo "$RESP" | grep -q '"code":10014' || echo "$RESP" | grep -qi 'already exists'; then
+              echo "  already exists — ok."
+            else
+              echo "  unexpected response: $RESP" >&2
+              exit 1
+            fi
+          done
+
       - name: Deploy via wrangler
         uses: cloudflare/wrangler-action@v3
         with:
