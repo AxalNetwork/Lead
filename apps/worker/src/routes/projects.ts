@@ -38,9 +38,25 @@ const PATCHABLE_KEYS = new Set([
   "hire_persona_ids_json","design_partner_persona_ids_json",
 ]);
 
+// Map convenience UI field names to the underlying *_json columns so
+// the workspace edit panel and suggestion-apply flow can send plain
+// `target_industries: [...]` instead of pre-stringified `_json` keys.
+const ALIAS_TO_JSON: Record<string, string> = {
+  target_industries: "target_industries_json",
+  target_geos: "target_geos_json",
+  target_customer_size_bands: "target_customer_size_bands_json",
+  audiences: "audiences_json",
+  customer_persona_ids: "customer_persona_ids_json",
+  investor_persona_ids: "investor_persona_ids_json",
+  partner_persona_ids: "partner_persona_ids_json",
+  hire_persona_ids: "hire_persona_ids_json",
+  design_partner_persona_ids: "design_partner_persona_ids_json",
+};
+
 function normalizeBody(body: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(body)) {
+  for (let [k, v] of Object.entries(body)) {
+    if (ALIAS_TO_JSON[k]) k = ALIAS_TO_JSON[k];
     if (!PATCHABLE_KEYS.has(k)) continue;
     if (k.endsWith("_json") && (Array.isArray(v) || (v && typeof v === "object"))) out[k] = JSON.stringify(v);
     else out[k] = v;
@@ -123,9 +139,66 @@ projectsRoute.get("/:id/matches", async (c) => {
   const limit = Number(c.req.query("limit") ?? 50);
   const offset = Number(c.req.query("offset") ?? 0);
   const status = c.req.query("status") ?? undefined;
+  const country = c.req.query("country") ?? undefined;
   const fitMin = c.req.query("fit_min") ? Number(c.req.query("fit_min")) : undefined;
-  const r = await listProjectMatches(c.env, id, audience, { limit, offset, status, fit_min: fitMin });
+  const r = await listProjectMatches(c.env, id, audience, { limit, offset, status, country, fit_min: fitMin });
   return c.json({ matches: r.rows, total: r.total });
+});
+
+// ---- bulk shortlist (writes status='shortlisted' for matching keys)
+projectsRoute.post("/:id/matches/:audience/bulk-status", async (c) => {
+  const id = c.req.param("id");
+  const audience = c.req.param("audience");
+  if (!AUDIENCES.includes(audience as never)) return c.json({ error: "bad_audience" }, 400);
+  const body = (await c.req.json<{ keys?: Array<{ kind: string; id: string }>; status?: string }>().catch(() => ({}))) as { keys?: Array<{ kind: string; id: string }>; status?: string };
+  const status = String(body.status ?? "shortlisted");
+  if (!["new","shortlisted","contacted","replied","qualified","won","lost","snoozed"].includes(status)) {
+    return c.json({ error: "bad_status" }, 400);
+  }
+  const keys = Array.isArray(body.keys) ? body.keys.slice(0, 200) : [];
+  let updated = 0;
+  for (const k of keys) {
+    const ok = await updateMatchStatus(c.env, id, audience, k.kind, k.id, status, c.get("email"));
+    if (ok) updated += 1;
+  }
+  return c.json({ ok: true, updated });
+});
+
+// ---- practice-pitch generator: returns a 4-paragraph cold email tailored
+// to a specific match. Server-side AI call (cached). Defaults to the
+// stored pitch_angle when AI is unavailable.
+projectsRoute.post("/:id/matches/:audience/:kind/:eid/practice-pitch", async (c) => {
+  const id = c.req.param("id");
+  const audience = c.req.param("audience");
+  if (!AUDIENCES.includes(audience as never)) return c.json({ error: "bad_audience" }, 400);
+  const project = await getProject(c.env, id);
+  if (!project) return c.json({ error: "not_found" }, 404);
+  const m = await c.env.DB.prepare(
+    `SELECT pitch_angle, components_json FROM project_matches
+       WHERE project_id = ? AND audience = ? AND entity_kind = ? AND entity_id = ?`,
+  ).bind(id, audience, c.req.param("kind"), c.req.param("eid")).first<{ pitch_angle: string | null; components_json: string | null }>();
+  if (!m) return c.json({ error: "match_not_found" }, 404);
+  let comp: Record<string, unknown> = {}; try { comp = JSON.parse(m.components_json ?? "{}"); } catch {}
+  const explanation = String(comp.explanation ?? "");
+  if (!c.env.AI) {
+    return c.json({ email: { subject: `${project.name} — quick intro`, body: m.pitch_angle ?? explanation ?? "(no AI available)" } });
+  }
+  try {
+    const model = c.env.AI_EXTRACT_MODEL ?? "@cf/meta/llama-3.1-8b-instruct-fast";
+    const res = (await c.env.AI.run(model, {
+      messages: [
+        { role: "system", content: 'Write a 4-paragraph cold email. Return strict JSON {"subject": ..., "body": ...}. No preamble.' },
+        { role: "user", content: `Project: ${project.name}\nOne-liner: ${project.one_liner ?? ""}\nAudience: ${audience}\nWhy this fits: ${explanation}\nPitch angle: ${m.pitch_angle ?? ""}\nWrite a personalized 4-paragraph cold email.` },
+      ],
+    })) as { response?: string };
+    const raw = (res?.response ?? "").trim();
+    const j = raw.match(/\{[\s\S]*\}/);
+    let parsed: { subject?: string; body?: string } = {};
+    if (j) { try { parsed = JSON.parse(j[0]); } catch {} }
+    return c.json({ email: { subject: parsed.subject ?? `${project.name} — quick intro`, body: parsed.body ?? raw } });
+  } catch (e) {
+    return c.json({ email: { subject: `${project.name} — quick intro`, body: m.pitch_angle ?? explanation }, error: (e as Error).message });
+  }
 });
 
 // ---- match status
@@ -228,7 +301,8 @@ projectsRoute.get("/:id/export", async (c) => {
   const format = (c.req.query("format") ?? "csv").toLowerCase();
   const fitMin = c.req.query("fit_min") ? Number(c.req.query("fit_min")) : undefined;
   const status = c.req.query("status") ?? undefined;
-  const { rows } = await listProjectMatches(c.env, id, audience, { limit: 1000, offset: 0, status, fit_min: fitMin });
+  const country = c.req.query("country") ?? undefined;
+  const { rows } = await listProjectMatches(c.env, id, audience, { limit: 1000, offset: 0, status, country, fit_min: fitMin });
   const data = await hydrateForExport(c.env, rows);
 
   let body = "";

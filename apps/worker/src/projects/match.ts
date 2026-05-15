@@ -16,12 +16,12 @@ import { trackAi } from "../analytics/events";
 const TOP_N_PER_AUDIENCE = 200;
 const PITCH_TOP = 50;
 
-async function loadFactsByKind(env: Env, kind: AudienceCandidate["entity_kind"], ids: string[]): Promise<Map<string, Record<string, unknown>>> {
+async function loadFactsByKind(env: Env, kind: AudienceCandidate["entity_kind"], ids: string[], spec: ProjectSpec): Promise<Map<string, Record<string, unknown>>> {
   switch (kind) {
     case "account": return loadAccountFactsBulk(env, ids);
     case "firm":    return loadFirmFactsBulk(env, ids);
-    case "company": return loadCompanyFactsBulk(env, ids);
-    case "lead":    return loadLeadFactsBulk(env, ids);
+    case "company": return loadCompanyFactsBulk(env, ids, { target_industries: spec.target_industries });
+    case "lead":    return loadLeadFactsBulk(env, ids, { target_industries: spec.target_industries });
     case "buyer":   return new Map();
   }
 }
@@ -72,7 +72,7 @@ async function rankAudience(
     byKind.set(c.entity_kind, arr);
   }
   for (const [kind, ids] of byKind) {
-    const facts = await loadFactsByKind(env, kind as AudienceCandidate["entity_kind"], ids);
+    const facts = await loadFactsByKind(env, kind as AudienceCandidate["entity_kind"], ids, spec);
     for (const id of ids) {
       const k = `${kind}:${id}`;
       const c = candidates.get(k);

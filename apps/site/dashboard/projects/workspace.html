@@ -12,29 +12,40 @@ permalink: /dashboard/projects/workspace/
   .ads-tab.active { background:#fff; border-color:#e5e9f0; border-radius:6px 6px 0 0; font-weight:600 }
   .ads-fitbar { display:inline-block; vertical-align:middle; width:80px; height:6px; background:#eef1f6; border-radius:3px; overflow:hidden }
   .ads-fitbar > span { display:block; height:100%; background:#5b8cff }
+  .ads-filters { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px; font-size:12px }
+  .ads-filters input, .ads-filters select { font-size:12px; padding:3px 6px }
+  .ads-edit-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px }
+  .ads-edit-grid label { font-size:12px; display:flex; flex-direction:column; gap:2px }
+  .ads-edit-grid input, .ads-edit-grid textarea, .ads-edit-grid select { font-size:13px; padding:4px 6px }
+  .ads-edit-grid .full { grid-column:1/-1 }
 </style>
 
 <script>
 (function () {
-  // Pages live at /dashboard/projects/{id}/ — Jekyll renders this template
-  // via a permalink redirect; for now we read the id from the URL or the
-  // ?id= query string (workaround until we add per-id pages).
-  // Project id is passed as ?id=… so a single Jekyll page serves every
-  // project without needing per-id static files.
   const id = new URLSearchParams(location.search).get('id') || (location.pathname.match(/\/projects\/([^\/]+)\/?$/) || [])[1];
   const root = document.getElementById('ads-project-root');
   if (!id || id === 'workspace') {
     root.innerHTML = '<div class="ads-muted">No project id in URL. Use /dashboard/projects/workspace/?id={id}.</div>';
     return;
   }
+  const API = 'https://api.aidatasignal.com/api/projects/' + id;
   const AUD = ['customer','investor','partner','hire','design_partner'];
   const AUD_LABEL = { customer:'Customers', investor:'Investors', partner:'Partners', hire:'Hires', design_partner:'Design partners' };
+  const STATUSES = ['new','shortlisted','contacted','replied','qualified','won','lost','snoozed'];
   let active = 'customer';
+  let curProject = null;
+  // Per-audience filter state, persisted across re-renders.
+  const filters = {};
+  for (const a of AUD) filters[a] = { status: '', country: '', fit_min: '' };
+  // Per-row selection state (audience -> Set of "kind:id").
+  const selected = {};
+  for (const a of AUD) selected[a] = new Set();
 
   async function loadProject() {
-    const r = await fetch('https://api.aidatasignal.com/api/projects/' + id, { credentials: 'include' });
+    const r = await fetch(API, { credentials: 'include' });
     if (!r.ok) { root.innerHTML = '<div class="ads-muted">Project not found.</div>'; return; }
     const { project } = await r.json();
+    curProject = project;
     render(project);
   }
 
@@ -42,19 +53,26 @@ permalink: /dashboard/projects/workspace/
     const tabs = AUD.map((a) => `<button class="ads-tab ${a===active?'active':''}" data-aud="${a}">${AUD_LABEL[a]} (${p['match_count_'+a] || 0})</button>`).join('');
     root.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:8px">
-        <div><h1 class="ads-page-title" style="margin:0">${p.name}</h1>
-          <div class="ads-muted" style="font-size:13px">${p.one_liner || ''}</div></div>
+        <div><h1 class="ads-page-title" style="margin:0">${esc(p.name)}</h1>
+          <div class="ads-muted" style="font-size:13px">${esc(p.one_liner || '')}</div></div>
         <div style="display:flex;gap:6px">
+          <button class="ads-btn ads-btn--ghost" id="ads-edit-toggle">Edit summary</button>
           <button class="ads-btn ads-btn--ghost" id="ads-recompute">Recompute</button>
           <a class="ads-btn ads-btn--ghost" href="/dashboard/projects/">Back</a>
         </div>
       </div>
-      <div class="ads-tabs">${tabs}<button class="ads-tab" data-aud="materials">Materials</button><button class="ads-tab" data-aud="timeline">Timeline</button></div>
+      <div id="ads-edit-panel" hidden></div>
+      <div class="ads-tabs">${tabs}<button class="ads-tab ${active==='materials'?'active':''}" data-aud="materials">Materials</button><button class="ads-tab ${active==='timeline'?'active':''}" data-aud="timeline">Timeline</button></div>
       <div id="ads-tab-body"><div class="ads-muted">Loading…</div></div>
     `;
     document.getElementById('ads-recompute').addEventListener('click', async () => {
-      await fetch('https://api.aidatasignal.com/api/projects/' + id + '/recompute', { method: 'POST', credentials: 'include' });
+      await fetch(API + '/recompute', { method: 'POST', credentials: 'include' });
       alert('Recompute dispatched. Refresh in ~60s.');
+    });
+    document.getElementById('ads-edit-toggle').addEventListener('click', () => {
+      const panel = document.getElementById('ads-edit-panel');
+      panel.hidden = !panel.hidden;
+      if (!panel.hidden) renderEditPanel(p);
     });
     root.querySelectorAll('.ads-tab').forEach((b) => b.addEventListener('click', () => { active = b.dataset.aud; render(p); }));
     if (active === 'materials') return renderMaterials(p);
@@ -62,92 +80,297 @@ permalink: /dashboard/projects/workspace/
     renderMatches(active);
   }
 
+  function renderEditPanel(p) {
+    const panel = document.getElementById('ads-edit-panel');
+    const inds = (() => { try { return JSON.parse(p.target_industries_json || '[]').join(', '); } catch { return ''; } })();
+    const geos = (() => { try { return JSON.parse(p.target_geos_json || '[]').join(', '); } catch { return ''; } })();
+    panel.innerHTML = `
+      <form id="ads-edit-form" class="ads-card" style="margin:8px 0">
+        <div class="ads-edit-grid">
+          <label>Name<input name="name" value="${esc(p.name)}" required></label>
+          <label>Stage<input name="stage" value="${esc(p.stage || '')}"></label>
+          <label class="full">One-liner<input name="one_liner" value="${esc(p.one_liner || '')}"></label>
+          <label class="full">Description<textarea name="description" rows="3">${esc(p.description || '')}</textarea></label>
+          <label class="full">Problems solved<textarea name="problems_solved" rows="2">${esc(p.problems_solved || '')}</textarea></label>
+          <label class="full">Unique value<textarea name="unique_value" rows="2">${esc(p.unique_value || '')}</textarea></label>
+          <label>Target industries (comma)<input name="target_industries" value="${esc(inds)}"></label>
+          <label>Target geos (comma, ISO2)<input name="target_geos" value="${esc(geos)}"></label>
+        </div>
+        <div style="margin-top:8px;display:flex;gap:6px;justify-content:flex-end">
+          <button type="button" class="ads-btn ads-btn--ghost" id="ads-edit-cancel">Cancel</button>
+          <button type="submit" class="ads-btn">Save</button>
+        </div>
+      </form>
+    `;
+    document.getElementById('ads-edit-cancel').addEventListener('click', () => { panel.hidden = true; });
+    document.getElementById('ads-edit-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.currentTarget);
+      const payload = {
+        name: fd.get('name'), stage: fd.get('stage'), one_liner: fd.get('one_liner'),
+        description: fd.get('description'), problems_solved: fd.get('problems_solved'),
+        unique_value: fd.get('unique_value'),
+        target_industries: String(fd.get('target_industries') || '').split(',').map((s) => s.trim()).filter(Boolean),
+        target_geos: String(fd.get('target_geos') || '').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean),
+      };
+      const r = await fetch(API, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (r.ok) { panel.hidden = true; loadProject(); } else { alert('Save failed'); }
+    });
+  }
+
   async function renderMatches(audience) {
     const body = document.getElementById('ads-tab-body');
-    body.innerHTML = '<div class="ads-muted">Loading matches…</div>';
-    const r = await fetch('https://api.aidatasignal.com/api/projects/' + id + '/matches?audience=' + audience + '&limit=50', { credentials: 'include' });
-    if (!r.ok) { body.innerHTML = '<div class="ads-muted">Failed to load.</div>'; return; }
-    const { matches, total } = await r.json();
-    if (!matches.length) { body.innerHTML = '<div class="ads-muted">No matches yet — give the matcher a minute and refresh.</div>'; return; }
-    const exportHref = 'https://api.aidatasignal.com/api/projects/' + id + '/export?audience=' + audience + '&format=csv';
+    const f = filters[audience];
+    const qs = new URLSearchParams({ audience, limit: '100' });
+    if (f.status) qs.set('status', f.status);
+    if (f.country) qs.set('country', f.country);
+    if (f.fit_min) qs.set('fit_min', f.fit_min);
     body.innerHTML = `
-      <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:13px;align-items:center;gap:8px">
-        <div class="ads-muted">${matches.length} of ${total}</div>
-        <div style="display:flex;gap:6px">
-          <a class="ads-btn ads-btn--ghost" href="${exportHref}">Export CSV</a>
-          <a class="ads-btn ads-btn--ghost" href="${exportHref.replace('format=csv','format=lemlist')}">Lemlist</a>
-          <a class="ads-btn ads-btn--ghost" href="${exportHref.replace('format=csv','format=hubspot')}">HubSpot</a>
-        </div>
+      <div class="ads-filters">
+        <span>Filters:</span>
+        <label>Status <select id="ads-f-status"><option value="">any</option>${STATUSES.map((s) => `<option value="${s}" ${s===f.status?'selected':''}>${s}</option>`).join('')}</select></label>
+        <label>Country <input id="ads-f-country" maxlength="2" placeholder="US" value="${esc(f.country)}" style="width:50px"></label>
+        <label>Min fit <input id="ads-f-fit" type="number" min="0" max="100" value="${esc(f.fit_min)}" style="width:60px"></label>
+        <button class="ads-btn ads-btn--ghost" id="ads-f-apply">Apply</button>
+        <span style="margin-left:auto;display:flex;gap:6px">
+          <button class="ads-btn ads-btn--ghost" id="ads-bulk-shortlist" disabled>Shortlist selected</button>
+          <a class="ads-btn ads-btn--ghost" id="ads-x-csv" href="#">CSV</a>
+          <a class="ads-btn ads-btn--ghost" id="ads-x-lemlist" href="#">Lemlist</a>
+          <a class="ads-btn ads-btn--ghost" id="ads-x-hubspot" href="#">HubSpot</a>
+        </span>
       </div>
+      <div id="ads-matches-body" class="ads-muted">Loading matches…</div>
+    `;
+    document.getElementById('ads-f-apply').addEventListener('click', () => {
+      f.status = document.getElementById('ads-f-status').value;
+      f.country = document.getElementById('ads-f-country').value.trim().toUpperCase();
+      f.fit_min = document.getElementById('ads-f-fit').value;
+      selected[audience].clear();
+      renderMatches(audience);
+    });
+    const exportQs = new URLSearchParams({ audience });
+    if (f.status) exportQs.set('status', f.status);
+    if (f.country) exportQs.set('country', f.country);
+    if (f.fit_min) exportQs.set('fit_min', f.fit_min);
+    const xBase = API + '/export?' + exportQs.toString();
+    document.getElementById('ads-x-csv').href = xBase + '&format=csv';
+    document.getElementById('ads-x-lemlist').href = xBase + '&format=lemlist';
+    document.getElementById('ads-x-hubspot').href = xBase + '&format=hubspot';
+
+    const r = await fetch(API + '/matches?' + qs.toString(), { credentials: 'include' });
+    const mb = document.getElementById('ads-matches-body');
+    if (!r.ok) { mb.innerHTML = '<div class="ads-muted">Failed to load.</div>'; return; }
+    const { matches, total } = await r.json();
+    if (!matches.length) { mb.innerHTML = '<div class="ads-muted">No matches yet — give the matcher a minute and refresh.</div>'; return; }
+    mb.innerHTML = `
+      <div class="ads-muted" style="font-size:12px;margin-bottom:6px">${matches.length} of ${total}</div>
       <table class="ads-table" style="width:100%;border-collapse:collapse;font-size:13px">
-        <thead><tr><th style="text-align:left">#</th><th style="text-align:left">Entity</th><th>Fit</th><th style="text-align:left">Components</th><th style="text-align:left">Why + pitch</th><th>Status</th></tr></thead>
+        <thead><tr>
+          <th><input type="checkbox" id="ads-sel-all"></th>
+          <th style="text-align:left">#</th><th style="text-align:left">Entity</th>
+          <th>Fit</th><th style="text-align:left">Components</th>
+          <th style="text-align:left">Why + pitch</th>
+          <th style="text-align:left">Intro</th>
+          <th>Status</th><th></th>
+        </tr></thead>
         <tbody>
           ${matches.map((m) => {
             let comp = {}; try { comp = JSON.parse(m.components_json || '{}'); } catch {}
             const explanation = comp && comp.explanation ? String(comp.explanation) : '';
+            const country = comp && comp.country ? String(comp.country) : '';
+            // intro_path_json is an array of "kind:id" hop strings (or
+            // null when no path was found within depth=4).
+            const introArr = m.intro_path_json ? (() => { try { return JSON.parse(m.intro_path_json); } catch { return null; } })() : null;
+            const introTxt = Array.isArray(introArr) && introArr.length > 1
+              ? introArr.map((n) => esc(typeof n === 'string' ? n : (n && (n.name || n.id)) || '')).join(' → ')
+              : '<span class="ads-muted">direct</span>';
+            const key = m.entity_kind + ':' + m.entity_id;
+            const checked = selected[audience].has(key) ? 'checked' : '';
+            const openHref = entityOpenHref(m.entity_kind, m.entity_id);
             return `
             <tr style="border-top:1px solid #eef1f6">
+              <td><input type="checkbox" class="ads-sel" data-key="${key}" data-kind="${m.entity_kind}" data-eid="${m.entity_id}" ${checked}></td>
               <td>${m.rank}</td>
-              <td>${m.entity_kind} <code style="font-size:11px">${m.entity_id}</code></td>
+              <td>${m.entity_kind}${country?` <span class="ads-muted" style="font-size:11px">[${esc(country)}]</span>`:''} <code style="font-size:11px">${esc(m.entity_id)}</code></td>
               <td><span class="ads-fitbar"><span style="width:${m.fit_score.toFixed(0)}%"></span></span> ${m.fit_score.toFixed(0)}</td>
               <td style="font-size:11px">P:${m.persona_score.toFixed(0)} S:${m.semantic_score.toFixed(0)} O:${m.overlay_score.toFixed(0)}</td>
-              <td style="font-size:12px;max-width:380px">
-                ${explanation ? `<div style="color:#3b4654;margin-bottom:4px"><b>Why:</b> ${explanation.replace(/</g,'&lt;')}</div>` : ''}
-                ${m.pitch_angle ? `<div><b>Pitch:</b> ${m.pitch_angle.replace(/</g,'&lt;')}</div>` : (explanation ? '' : '<span class="ads-muted">—</span>')}
+              <td style="font-size:12px;max-width:320px">
+                ${explanation ? `<div style="color:#3b4654;margin-bottom:4px"><b>Why:</b> ${esc(explanation)}</div>` : ''}
+                ${m.pitch_angle ? `<div><b>Pitch:</b> ${esc(m.pitch_angle)}</div>` : (explanation ? '' : '<span class="ads-muted">—</span>')}
               </td>
+              <td style="font-size:11px;max-width:160px">${introTxt}</td>
               <td>
                 <select data-kind="${m.entity_kind}" data-eid="${m.entity_id}" class="ads-status">
-                  ${['new','shortlisted','contacted','replied','qualified','won','lost','snoozed'].map((s) => `<option value="${s}" ${s===m.status?'selected':''}>${s}</option>`).join('')}
+                  ${STATUSES.map((s) => `<option value="${s}" ${s===m.status?'selected':''}>${s}</option>`).join('')}
                 </select>
+              </td>
+              <td style="white-space:nowrap">
+                ${openHref?`<a class="ads-btn ads-btn--ghost" href="${openHref}" target="_blank" style="padding:2px 6px;font-size:11px">Open</a>`:''}
+                <button class="ads-btn ads-btn--ghost ads-practice" data-kind="${m.entity_kind}" data-eid="${m.entity_id}" style="padding:2px 6px;font-size:11px">Practice pitch</button>
               </td>
             </tr>
           `;}).join('')}
         </tbody>
       </table>
     `;
-    body.querySelectorAll('.ads-status').forEach((sel) => {
+    const bulkBtn = document.getElementById('ads-bulk-shortlist');
+    function refreshBulkBtn() { bulkBtn.disabled = selected[audience].size === 0; bulkBtn.textContent = 'Shortlist selected (' + selected[audience].size + ')'; }
+    refreshBulkBtn();
+    document.getElementById('ads-sel-all').addEventListener('change', (e) => {
+      mb.querySelectorAll('.ads-sel').forEach((cb) => {
+        cb.checked = e.target.checked;
+        if (cb.checked) selected[audience].add(cb.dataset.key); else selected[audience].delete(cb.dataset.key);
+      });
+      refreshBulkBtn();
+    });
+    mb.querySelectorAll('.ads-sel').forEach((cb) => cb.addEventListener('change', () => {
+      if (cb.checked) selected[audience].add(cb.dataset.key); else selected[audience].delete(cb.dataset.key);
+      refreshBulkBtn();
+    }));
+    bulkBtn.addEventListener('click', async () => {
+      const keys = [...selected[audience]].map((k) => { const [kind, eid] = k.split(':'); return { kind, id: eid }; });
+      const r = await fetch(API + '/matches/' + audience + '/bulk-status', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keys, status: 'shortlisted' }),
+      });
+      const j = await r.json().catch(() => ({}));
+      alert('Updated ' + (j.updated || 0) + ' rows.');
+      selected[audience].clear();
+      renderMatches(audience);
+    });
+    mb.querySelectorAll('.ads-status').forEach((sel) => {
       sel.addEventListener('change', async () => {
-        await fetch('https://api.aidatasignal.com/api/projects/' + id + '/matches/' + audience + '/' + sel.dataset.kind + '/' + sel.dataset.eid + '/status', {
+        await fetch(API + '/matches/' + audience + '/' + sel.dataset.kind + '/' + sel.dataset.eid + '/status', {
           method: 'POST', credentials: 'include',
           headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: sel.value }),
         });
       });
+    });
+    mb.querySelectorAll('.ads-practice').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true; btn.textContent = '…';
+        try {
+          const r = await fetch(API + '/matches/' + audience + '/' + btn.dataset.kind + '/' + btn.dataset.eid + '/practice-pitch', {
+            method: 'POST', credentials: 'include',
+          });
+          const j = await r.json();
+          const subj = (j.email && j.email.subject) || '(no subject)';
+          const bodyTxt = (j.email && j.email.body) || '(no body)';
+          showPitchModal(subj, bodyTxt);
+        } catch (e) { alert('Failed: ' + e.message); }
+        btn.disabled = false; btn.textContent = 'Practice pitch';
+      });
+    });
+  }
+
+  function entityOpenHref(kind, id) {
+    if (kind === 'lead' || kind === 'buyer') return '/dashboard/leads/?id=' + encodeURIComponent(id);
+    if (kind === 'account') return '/dashboard/accounts/?id=' + encodeURIComponent(id);
+    if (kind === 'firm') return '/dashboard/firms/?id=' + encodeURIComponent(id);
+    if (kind === 'company') return '/dashboard/companies/?id=' + encodeURIComponent(id);
+    return null;
+  }
+
+  function showPitchModal(subject, body) {
+    const dlg = document.createElement('div');
+    dlg.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:9999';
+    dlg.innerHTML = `
+      <div class="ads-card" style="background:#fff;max-width:640px;width:92%;padding:16px">
+        <h3 style="margin:0 0 8px">Practice pitch</h3>
+        <label style="font-size:12px">Subject<input id="ads-pp-s" value="${esc(subject)}" style="width:100%;padding:4px"></label>
+        <label style="font-size:12px;display:block;margin-top:6px">Body<textarea id="ads-pp-b" rows="14" style="width:100%;font-family:inherit">${esc(body)}</textarea></label>
+        <div style="margin-top:10px;display:flex;gap:6px;justify-content:flex-end">
+          <button class="ads-btn ads-btn--ghost" id="ads-pp-copy">Copy</button>
+          <button class="ads-btn" id="ads-pp-close">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(dlg);
+    dlg.querySelector('#ads-pp-close').addEventListener('click', () => dlg.remove());
+    dlg.querySelector('#ads-pp-copy').addEventListener('click', () => {
+      const s = dlg.querySelector('#ads-pp-s').value;
+      const b = dlg.querySelector('#ads-pp-b').value;
+      navigator.clipboard.writeText('Subject: ' + s + '\n\n' + b);
     });
   }
 
   function renderMaterials(p) {
     const body = document.getElementById('ads-tab-body');
     const mats = (() => { try { return JSON.parse(p.materials_json || '[]'); } catch { return []; } })();
+    // Rehydrate previously-stored deck suggestions so they survive a
+    // page reload / project refresh. The fresh-upload handler also
+    // re-renders these via renderSuggestions().
+    const stored = (() => { try { return JSON.parse(p.ai_suggestions_json || 'null'); } catch { return null; } })();
     body.innerHTML = `
       <div style="margin-bottom:12px">
         <h3 style="margin:0 0 6px;font-size:14px">Upload deck or supporting file</h3>
         <form id="ads-mat-form" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <input type="file" name="file" required>
-          <label><input type="checkbox" name="suggest" value="1"> Suggest from deck (paste extracted text below)</label>
+          <label><input type="checkbox" name="suggest" value="1"> Suggest from deck</label>
           <textarea name="text" rows="3" placeholder="Optional: paste deck text for AI extraction" style="width:100%"></textarea>
           <button class="ads-btn" type="submit">Upload</button>
         </form>
+        <div id="ads-suggest-out" style="margin-top:8px"></div>
       </div>
       <h3 style="margin:0 0 6px;font-size:14px">Files</h3>
-      <ul style="font-size:13px">${mats.map((m) => `<li>${m.filename} <span class="ads-muted">(${(m.size/1024).toFixed(1)} KB)</span></li>`).join('') || '<li class="ads-muted">No files yet.</li>'}</ul>
+      <ul style="font-size:13px">${mats.map((m) => `<li>${esc(m.filename)} <span class="ads-muted">(${(m.size/1024).toFixed(1)} KB)</span></li>`).join('') || '<li class="ads-muted">No files yet.</li>'}</ul>
     `;
     document.getElementById('ads-mat-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(e.currentTarget);
-      await fetch('https://api.aidatasignal.com/api/projects/' + id + '/materials', { method: 'POST', credentials: 'include', body: fd });
-      loadProject();
+      const r = await fetch(API + '/materials', { method: 'POST', credentials: 'include', body: fd });
+      const j = await r.json().catch(() => ({}));
+      // Refresh the project (file list + persisted ai_suggestions_json)
+      // first, then render the freshly-returned suggestions on top so
+      // they aren't wiped by the re-render.
+      await loadProject();
+      if (active === 'materials' && j && j.suggestions) renderSuggestions(j.suggestions);
+    });
+    if (stored) renderSuggestions(stored);
+  }
+
+  function renderSuggestions(s) {
+    const out = document.getElementById('ads-suggest-out');
+    if (!out) return;
+    out.innerHTML = `
+      <div class="ads-card" style="background:#f7faff;padding:10px">
+        <h4 style="margin:0 0 6px;font-size:13px">Suggestions from deck — review &amp; apply</h4>
+        <div class="ads-edit-grid">
+          <label>One-liner<input id="ads-s-ol" value="${esc(s.one_liner || '')}"></label>
+          <label>Stage<input id="ads-s-stage" value="${esc(s.stage || '')}"></label>
+          <label class="full">Problems<textarea id="ads-s-prob" rows="2">${esc(s.problems_solved || '')}</textarea></label>
+          <label class="full">Unique value<textarea id="ads-s-uv" rows="2">${esc(s.unique_value || '')}</textarea></label>
+          <label>Industries<input id="ads-s-ind" value="${esc((s.target_industries || []).join(', '))}"></label>
+          <label>Geos<input id="ads-s-geo" value="${esc((s.target_geos || []).join(', '))}"></label>
+        </div>
+        <div style="margin-top:8px;text-align:right">
+          <button class="ads-btn" id="ads-s-apply">Apply to project</button>
+        </div>
+      </div>`;
+    document.getElementById('ads-s-apply').addEventListener('click', async () => {
+      const payload = {
+        one_liner: document.getElementById('ads-s-ol').value,
+        stage: document.getElementById('ads-s-stage').value,
+        problems_solved: document.getElementById('ads-s-prob').value,
+        unique_value: document.getElementById('ads-s-uv').value,
+        target_industries: document.getElementById('ads-s-ind').value.split(',').map((x) => x.trim()).filter(Boolean),
+        target_geos: document.getElementById('ads-s-geo').value.split(',').map((x) => x.trim().toUpperCase()).filter(Boolean),
+      };
+      const r = await fetch(API, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      if (r.ok) { alert('Applied.'); loadProject(); } else { alert('Failed.'); }
     });
   }
 
   async function renderTimeline() {
     const body = document.getElementById('ads-tab-body');
     body.innerHTML = '<div class="ads-muted">Loading…</div>';
-    const r = await fetch('https://api.aidatasignal.com/api/projects/' + id + '/history', { credentials: 'include' });
+    const r = await fetch(API + '/history', { credentials: 'include' });
     const { history } = await r.json();
     body.innerHTML = '<table style="width:100%;font-size:13px"><thead><tr><th style="text-align:left">When</th><th style="text-align:left">Field</th><th style="text-align:left">Change</th><th style="text-align:left">By</th></tr></thead><tbody>'
-      + history.map((h) => `<tr style="border-top:1px solid #eef1f6"><td>${h.changed_at}</td><td>${h.field}${h.audience?' ('+h.audience+')':''}</td><td>${h.old_value||''} → ${h.new_value||''}</td><td>${h.changed_by||''}</td></tr>`).join('')
+      + (history || []).map((h) => `<tr style="border-top:1px solid #eef1f6"><td>${esc(h.changed_at)}</td><td>${esc(h.field)}${h.audience?' ('+esc(h.audience)+')':''}</td><td>${esc(h.old_value||'')} → ${esc(h.new_value||'')}</td><td>${esc(h.changed_by||'')}</td></tr>`).join('')
       + '</tbody></table>';
   }
+
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
 
   loadProject();
 })();

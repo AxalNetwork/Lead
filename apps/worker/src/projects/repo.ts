@@ -216,13 +216,19 @@ export interface ProjectMatchRow {
   computed_at: string;
 }
 
-export async function listProjectMatches(env: Env, projectId: string, audience: string, opts: { limit?: number; offset?: number; status?: string; fit_min?: number; include_demoted?: boolean } = {}): Promise<{ rows: ProjectMatchRow[]; total: number }> {
+export async function listProjectMatches(env: Env, projectId: string, audience: string, opts: { limit?: number; offset?: number; status?: string; fit_min?: number; country?: string; include_demoted?: boolean } = {}): Promise<{ rows: ProjectMatchRow[]; total: number }> {
   const limit = Math.min(Math.max(1, opts.limit ?? 50), 1000);
   const offset = Math.max(0, opts.offset ?? 0);
   const where: string[] = ["project_id = ?", "audience = ?"];
   const binds: unknown[] = [projectId, audience];
   if (opts.status) { where.push("status = ?"); binds.push(opts.status); }
   if (typeof opts.fit_min === "number") { where.push("fit_score >= ?"); binds.push(opts.fit_min); }
+  if (opts.country) {
+    // Country was forwarded into components_json by the fact loaders.
+    // Compare case-insensitively against the entity's iso2 code.
+    where.push("lower(json_extract(components_json, '$.country')) = ?");
+    binds.push(String(opts.country).toLowerCase());
+  }
   // Demoted rows (rank=0, status='new') fall out of the workspace by
   // default; pass include_demoted=true to surface them (e.g., for an
   // archive view).
@@ -290,7 +296,7 @@ export async function loadPersonaFitMap(
 // Minimal entity fact loaders. Keep payloads small — overlays use a
 // fixed set of attributes. Anything missing falls back to neutral
 // defaults in the scorer.
-export async function loadAccountFactsBulk(env: Env, ids: string[]): Promise<Map<string, Record<string, unknown>>> {
+export async function loadAccountFactsBulk(env: Env, ids: string[], _spec?: unknown): Promise<Map<string, Record<string, unknown>>> {
   const map = new Map<string, Record<string, unknown>>();
   if (!ids.length) return map;
   const placeholders = ids.map(() => "?").join(",");
@@ -299,10 +305,14 @@ export async function loadAccountFactsBulk(env: Env, ids: string[]): Promise<Map
       `SELECT id, name, domain, country_iso2, intent_score, last_modified FROM accounts WHERE id IN (${placeholders})`,
     ).bind(...ids).all<{ id: string; name: string; domain: string | null; country_iso2: string | null; intent_score: number | null; last_modified: string | null }>();
     for (const row of r.results ?? []) {
+      // intent_score (0..100) doubles as our early_adopter signal — accounts
+      // that have shown intent are by definition more likely to try new
+      // tools as design partners.
+      const intent = Number(row.intent_score ?? 0);
       map.set(row.id, {
         name: row.name, domain: row.domain, country: row.country_iso2,
-        intent_score: row.intent_score ?? 0, last_modified: row.last_modified,
-        recent_signal_count: 0, early_adopter_score: 0,
+        intent_score: intent, last_modified: row.last_modified,
+        recent_signal_count: 0, early_adopter_score: intent,
       });
     }
     // Recent-signal counts (30d).
@@ -343,18 +353,28 @@ export async function loadFirmFactsBulk(env: Env, ids: string[]): Promise<Map<st
   return map;
 }
 
-export async function loadCompanyFactsBulk(env: Env, ids: string[]): Promise<Map<string, Record<string, unknown>>> {
+export async function loadCompanyFactsBulk(env: Env, ids: string[], spec?: { target_industries?: string[] }): Promise<Map<string, Record<string, unknown>>> {
   const map = new Map<string, Record<string, unknown>>();
   if (!ids.length) return map;
   const placeholders = ids.map(() => "?").join(",");
+  const wantedInds = new Set((spec?.target_industries ?? []).map((s) => s.toLowerCase()));
   try {
     const r = await env.DB.prepare(
-      `SELECT id, name, country_iso2, industry, last_modified FROM companies WHERE id IN (${placeholders})`,
-    ).bind(...ids).all<{ id: string; name: string; country_iso2: string | null; industry: string | null; last_modified: string | null }>();
+      `SELECT id, name, domain, country_iso2, industry, industries_json, last_modified FROM companies WHERE id IN (${placeholders})`,
+    ).bind(...ids).all<{ id: string; name: string; domain: string | null; country_iso2: string | null; industry: string | null; industries_json: string | null; last_modified: string | null }>();
     for (const row of r.results ?? []) {
+      const industries: string[] = (() => {
+        try { const a = JSON.parse(row.industries_json ?? "[]"); return Array.isArray(a) ? a : []; }
+        catch { return []; }
+      })();
+      const flat = new Set<string>(industries.map((s) => String(s).toLowerCase()));
+      if (row.industry) flat.add(String(row.industry).toLowerCase());
+      let shared = 0;
+      for (const w of wantedInds) if (flat.has(w)) shared += 1;
       map.set(String(row.id), {
-        name: row.name, country: row.country_iso2, industry: row.industry,
-        last_modified: row.last_modified, is_competitor: false, shared_icp_count: 0,
+        name: row.name, domain: row.domain, country: row.country_iso2, industry: row.industry,
+        industries: [...flat], last_modified: row.last_modified,
+        is_competitor: false, shared_icp_count: shared, shared_industries: shared,
       });
     }
   } catch (e) {
@@ -363,18 +383,32 @@ export async function loadCompanyFactsBulk(env: Env, ids: string[]): Promise<Map
   return map;
 }
 
-export async function loadLeadFactsBulk(env: Env, ids: string[]): Promise<Map<string, Record<string, unknown>>> {
+const SENIOR_TIERS = new Set(["c_suite","c_level","vp","director","founder","partner","owner"]);
+
+export async function loadLeadFactsBulk(env: Env, ids: string[], spec?: { target_industries?: string[]; required_seniority?: string[] }): Promise<Map<string, Record<string, unknown>>> {
   const map = new Map<string, Record<string, unknown>>();
   if (!ids.length) return map;
   const placeholders = ids.map(() => "?").join(",");
+  const wantedSen = new Set((spec?.required_seniority ?? []).map((s) => s.toLowerCase()));
+  const wantedInds = new Set((spec?.target_industries ?? []).map((s) => s.toLowerCase()));
   try {
     const r = await env.DB.prepare(
-      `SELECT id, name, org, title, country_iso2, last_modified FROM leads WHERE id IN (${placeholders}) AND merged_into IS NULL`,
-    ).bind(...ids).all<{ id: string; name: string | null; org: string | null; title: string | null; country_iso2: string | null; last_modified: string | null }>();
+      `SELECT id, name, email, org, title, country_iso2, seniority, sector_focus_json, last_modified
+         FROM leads WHERE id IN (${placeholders}) AND merged_into IS NULL`,
+    ).bind(...ids).all<{ id: string; name: string | null; email: string | null; org: string | null; title: string | null; country_iso2: string | null; seniority: string | null; sector_focus_json: string | null; last_modified: string | null }>();
     for (const row of r.results ?? []) {
+      const sen = (row.seniority ?? "").toLowerCase();
+      const seniority_match = wantedSen.size ? wantedSen.has(sen) : SENIOR_TIERS.has(sen);
+      const sectors: string[] = (() => {
+        try { const a = JSON.parse(row.sector_focus_json ?? "[]"); return Array.isArray(a) ? a.map((x) => String(x).toLowerCase()) : []; }
+        catch { return []; }
+      })();
+      let shared = 0;
+      for (const s of sectors) if (wantedInds.has(s)) shared += 1;
       map.set(String(row.id), {
-        name: row.name, org: row.org, title: row.title, country: row.country_iso2,
-        last_modified: row.last_modified, shared_industries: 0, seniority_match: false,
+        name: row.name, email: row.email, org: row.org, title: row.title, country: row.country_iso2,
+        seniority: sen, seniority_match, shared_industries: shared,
+        last_modified: row.last_modified,
       });
     }
   } catch (e) {

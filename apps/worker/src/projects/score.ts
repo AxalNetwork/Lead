@@ -155,8 +155,11 @@ export function scoreCandidate(audience: Audience, p: ProjectSpec, c: AudienceCa
     components: {
       ...ov.sub, persona: personaS, semantic: semanticS, overlay: ov.score,
       // Forward the entity's last_modified so the pitch cache key can
-      // invalidate when the underlying entity changes.
+      // invalidate when the underlying entity changes; forward country
+      // so /matches?country= and the workspace tag can filter without a
+      // second DB hop.
       last_modified: (c.facts as Record<string, unknown>)?.last_modified ?? null,
+      country: (c.facts as Record<string, unknown>)?.country ?? null,
     },
   };
 }
