@@ -184,6 +184,22 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       } catch (e) {
         console.error("nightly news refresh batch failed", (e as Error).message);
       }
+      // Task #3: nightly profile classification. Picks the next N
+      // stalest entities and classifies each — types + ideology +
+      // interests + influence + AI summary. Piggybacks this cron slot
+      // (Free plan caps crons at 5).
+      try {
+        if (env.WF_CLASSIFY_BATCH) {
+          await env.WF_CLASSIFY_BATCH.create({ params: { limit: 50, staleDays: 7 } });
+          console.log("classify-batch workflow dispatched");
+        } else {
+          const { classifyBatch } = await import("./profile/classifier");
+          const r = await classifyBatch(env, { limit: 25, staleDays: 7 });
+          console.log("classify-batch inline", JSON.stringify(r));
+        }
+      } catch (e) {
+        console.error("nightly classify-batch failed", (e as Error).message);
+      }
     })());
     return;
   }

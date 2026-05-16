@@ -388,6 +388,46 @@ export async function scanEntity(env: Env, entity: EntityForScan, opts: ScanOpti
     }
   }
 
+  // ---- 7. Task #3: profile classifier PEP signal ----
+  // If our public-persona classifier flagged this entity as a PEP
+  // (entity_profile_axes.is_pep = 1) and OpenSanctions did not already
+  // surface a PEP match, raise a synthetic medium-severity finding so
+  // the DD score reflects it. Provider = "profile_classifier".
+  try {
+    const axes = await env.DB.prepare(
+      `SELECT is_pep, is_government_official, primary_type, classified_at, classifier_version
+         FROM entity_profile_axes WHERE entity_id = ?`,
+    ).bind(entity.id).first<{ is_pep: number | null; is_government_official: number | null; primary_type: string | null; classified_at: string | null; classifier_version: string | null }>();
+    if (axes && axes.is_pep === 1) {
+      const existing = await env.DB.prepare(
+        `SELECT 1 FROM dd_findings
+          WHERE entity_id = ? AND finding_type = 'pep'
+            AND source_provider = 'opensanctions'
+            AND status IN ('open','confirmed')
+          LIMIT 1`,
+      ).bind(entity.id).first<{ 1: number }>();
+      if (!existing) {
+        const description = `Classified as PEP by ${axes.classifier_version ?? "profile_classifier"}` +
+          (axes.primary_type ? ` (primary type: ${axes.primary_type})` : "") +
+          (axes.is_government_official === 1 ? `; current government official.` : "") +
+          (axes.classified_at ? ` Classified at ${axes.classified_at}.` : "");
+        const { inserted } = await upsertFinding(env, {
+          entity_id: entity.id,
+          finding_type: "pep",
+          finding_subtype: "profile_classifier",
+          source_provider: "profile_classifier",
+          source_url: `internal:profile_classifier:${entity.id}`,
+          title: `PEP (profile classifier): ${entity.name}`,
+          description,
+          severity: "medium",
+        });
+        if (inserted) added += 1;
+      }
+    }
+  } catch (e) {
+    console.warn("scan profile_classifier pep hook failed", (e as Error).message);
+  }
+
   // ---- Recompute score from the live findings ----
   const all = await env.DB.prepare(
     `SELECT finding_type, severity, status, match_score FROM dd_findings WHERE entity_id = ?`,

@@ -1,0 +1,123 @@
+---
+layout: default
+title: Politicians & PEPs
+permalink: /dashboard/politicians/
+---
+
+<h1 class="ads-page-title">Politicians & Politically-Exposed Persons</h1>
+<p class="ads-page-sub">Entities classified as politicians, current government officials, or PEPs — ranked by derived political-influence score.</p>
+
+<div class="ads-card" style="margin-bottom:14px">
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+    <label style="font-size:12px">Min influence:
+      <select id="ads-pol-min" style="margin-left:6px">
+        <option value="0">All</option>
+        <option value="0.2">≥ 0.2</option>
+        <option value="0.4">≥ 0.4</option>
+        <option value="0.6">≥ 0.6</option>
+        <option value="0.8">≥ 0.8</option>
+      </select>
+    </label>
+    <label style="font-size:12px">Jurisdiction:
+      <input id="ads-pol-jur" type="text" placeholder="US-federal, CA-federal…" style="margin-left:6px;padding:4px 8px;font-size:12px">
+    </label>
+    <label style="font-size:12px">Party contains:
+      <input id="ads-pol-party" type="text" placeholder="democrat, liberal…" style="margin-left:6px;padding:4px 8px;font-size:12px">
+    </label>
+    <label style="font-size:12px">Ideology axis:
+      <select id="ads-pol-axis" style="margin-left:6px">
+        <option value="">—</option>
+        <option value="left_right">Left ↔ Right</option>
+        <option value="lib_auth">Libertarian ↔ Authoritarian</option>
+        <option value="prog_cons">Progressive ↔ Conservative</option>
+        <option value="glob_nat">Globalist ↔ Nationalist</option>
+        <option value="sec_rel">Secular ↔ Religious</option>
+      </select>
+    </label>
+    <label style="font-size:12px">≥ <input id="ads-pol-axis-min" type="number" step="0.1" min="-1" max="1" style="width:70px;padding:4px 6px;font-size:12px"></label>
+    <label style="font-size:12px">≤ <input id="ads-pol-axis-max" type="number" step="0.1" min="-1" max="1" style="width:70px;padding:4px 6px;font-size:12px"></label>
+    <button id="ads-pol-apply" class="ads-btn" type="button">Apply</button>
+  </div>
+</div>
+
+<div class="ads-card">
+  <div class="ads-active__head">
+    <h3>Results</h3>
+    <span class="ads-muted" id="ads-pol-count"></span>
+  </div>
+  <div class="ads-table-wrap" id="ads-pol-table"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<script>
+  (function () {
+    var API = (window.ADS_API_BASE || "https://api.aidatasignal.com").replace(/\/+$/, "");
+    function esc(s) {
+      return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+    function fmtAxis(v) {
+      if (v === null || v === undefined) return '<span class="ads-muted">—</span>';
+      var sign = v > 0 ? "+" : "";
+      var color = v > 0.3 ? "#a33" : v < -0.3 ? "#2c6eb5" : "#666";
+      return '<span style="color:' + color + ';font-weight:600">' + sign + v.toFixed(2) + '</span>';
+    }
+    function fmtInf(v) {
+      var pct = Math.round((v || 0) * 100);
+      return '<div style="display:flex;align-items:center;gap:6px"><div style="width:60px;height:6px;background:#eee;border-radius:3px"><div style="height:100%;width:' + pct + '%;background:#2c6eb5;border-radius:3px"></div></div><span style="font-size:11px">' + pct + '%</span></div>';
+    }
+    async function load() {
+      var p = new URLSearchParams();
+      p.set("limit", "100");
+      var minI = document.getElementById("ads-pol-min").value;
+      if (minI) p.set("min_influence", minI);
+      var jur = document.getElementById("ads-pol-jur").value.trim();
+      if (jur) p.set("jurisdiction", jur);
+      var party = document.getElementById("ads-pol-party").value.trim();
+      if (party) p.set("party", party);
+      var axis = document.getElementById("ads-pol-axis").value;
+      if (axis) {
+        p.set("axis", axis);
+        var amin = document.getElementById("ads-pol-axis-min").value;
+        var amax = document.getElementById("ads-pol-axis-max").value;
+        if (amin !== "") p.set("axis_min", amin);
+        if (amax !== "") p.set("axis_max", amax);
+      }
+      var host = document.getElementById("ads-pol-table");
+      var countEl = document.getElementById("ads-pol-count");
+      host.innerHTML = '<div class="ads-loading">Loading…</div>';
+      try {
+        var r = await fetch(API + "/api/profile/politicians?" + p.toString(), { credentials: "include" });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        var data = await r.json();
+        var items = data.items || [];
+        countEl.textContent = items.length + " entit" + (items.length === 1 ? "y" : "ies");
+        if (!items.length) { host.innerHTML = '<div class="ads-muted" style="font-size:13px">No matches.</div>'; return; }
+        host.innerHTML = '<table class="ads-table" style="width:100%;font-size:12px"><thead><tr>' +
+          '<th>Name</th><th>Type</th><th>Flags</th><th>Pol. influence</th><th>Left/Right</th><th>Lib/Auth</th><th>Prog/Cons</th><th>Glob/Nat</th><th>Sec/Rel</th>' +
+          '</tr></thead><tbody>' +
+          items.map(function (e) {
+            var flags = "";
+            if (e.is_pep) flags += '<span style="background:#a33;color:#fff;padding:1px 5px;border-radius:6px;font-size:9px;margin-right:3px">PEP</span>';
+            if (e.is_government_official) flags += '<span style="background:#1a3a6b;color:#fff;padding:1px 5px;border-radius:6px;font-size:9px">GOV</span>';
+            return '<tr>' +
+              '<td><a href="/dashboard/profile/?entity=' + encodeURIComponent(e.id) + '"><strong>' + esc(e.display_name || e.id) + '</strong></a> <span class="ads-muted" style="font-size:10px">' + esc(e.kind) + '</span></td>' +
+              '<td>' + esc(e.primary_type || "—") + '</td>' +
+              '<td>' + flags + '</td>' +
+              '<td>' + fmtInf(e.political_influence) + '</td>' +
+              '<td>' + fmtAxis(e.left_right) + '</td>' +
+              '<td>' + fmtAxis(e.lib_auth)   + '</td>' +
+              '<td>' + fmtAxis(e.prog_cons)  + '</td>' +
+              '<td>' + fmtAxis(e.glob_nat)   + '</td>' +
+              '<td>' + fmtAxis(e.sec_rel)    + '</td>' +
+            '</tr>';
+          }).join("") +
+          '</tbody></table>';
+      } catch (e) { host.innerHTML = '<div class="ads-muted">Failed: ' + esc(e.message) + '</div>'; }
+    }
+    document.addEventListener("DOMContentLoaded", function () {
+      document.getElementById("ads-pol-apply").addEventListener("click", load);
+      load();
+    });
+  })();
+</script>

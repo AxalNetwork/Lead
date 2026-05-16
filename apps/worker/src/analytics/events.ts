@@ -22,7 +22,11 @@ export type AiPurpose =
   | "email_classify"
   | "explanation"
   | "pitch"
-  | "project_match";
+  | "project_match"
+  | "classify_types"
+  | "classify_ideology"
+  | "classify_interests"
+  | "profile_summary";
 
 export interface TrackAiArgs {
   purpose: AiPurpose;

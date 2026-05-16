@@ -123,6 +123,20 @@ export interface Env {
   NEWS_REFRESH_PER_ENTITY_CAP?: string;
   // Task #2: refresh-news workflow (durable per-entity news pull).
   WF_REFRESH_NEWS?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+
+  // ---- Task #3: Profile-type classifier + political/ideology profiler ----
+  WF_CLASSIFY_ENTITY?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+  WF_CLASSIFY_BATCH?:  { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+  WF_REFRESH_GOVERNMENT?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+  // Set to "off" to disable ideology axes entirely (axes stay NULL).
+  CLASSIFIER_IDEOLOGY?: string;
+  // FEC + OpenSecrets political-donation source keys (both optional).
+  FEC_API_KEY?: string;
+  OPENSECRETS_API_KEY?: string;
+  // ProPublica Congress (US federal appointments). Optional.
+  PROPUBLICA_API_KEY?: string;
+  // Toggle the Canadian Open Parliament adapter ("true" to enable).
+  OPENPARLIAMENT_ENABLED?: string;
 }
 
 export type JobKind =

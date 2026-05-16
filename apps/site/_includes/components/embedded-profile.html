@@ -1,0 +1,37 @@
+{% comment %}
+  Task #3: Embedded Profile (type + ideology + influence + summary) panel for
+  every detail page. Requires `include.table`
+  (firms|investors|companies|accounts|buyers|leads). Resolves the page's
+  id/ref query param to a u_entities.id via /api/entities/resolve and
+  mounts window.ADS.Profile.mount() in-place.
+{% endcomment %}
+<section id="ads-embedded-profile-section" class="ads-card" style="margin-top:16px;padding:12px">
+  <h3 style="margin:0 0 8px;font-size:14px">Profile classification</h3>
+  <div id="ads-embedded-profile-body"><div class="ads-loading">Loading profile…</div></div>
+</section>
+<script src="/assets/js/profile-tab.js?v={{ site.time | date: '%s' }}"></script>
+<script>
+  (function () {
+    var TABLE = {{ include.table | jsonify }};
+    document.addEventListener("DOMContentLoaded", async function () {
+      var p = new URLSearchParams(window.location.search);
+      var ref = p.get("id") || p.get("ref");
+      var body = document.getElementById("ads-embedded-profile-body");
+      if (!ref) { body.innerHTML = '<div class="ads-muted" style="font-size:12px">No entity ref.</div>'; return; }
+      try {
+        var API = (window.ADS_API_BASE || "https://api.aidatasignal.com").replace(/\/+$/, "");
+        var r = await fetch(API + "/api/entities/resolve?table=" + encodeURIComponent(TABLE) + "&ref=" + encodeURIComponent(ref), { credentials: "include" });
+        var j = r.ok ? await r.json() : null;
+        if (!j || !j.entity_id) {
+          body.innerHTML = '<div class="ads-muted" style="font-size:12px">No unified entity mapped for this record yet.</div>';
+          return;
+        }
+        if (window.ADS && window.ADS.Profile) {
+          window.ADS.Profile.mount({ rootId: "ads-embedded-profile-body", entityId: j.entity_id });
+        }
+      } catch (e) {
+        body.innerHTML = '<div class="ads-muted" style="font-size:12px">Profile unavailable: ' + e.message + '</div>';
+      }
+    });
+  })();
+</script>

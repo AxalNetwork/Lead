@@ -1,0 +1,29 @@
+---
+layout: default
+title: Profile
+permalink: /dashboard/profile/
+---
+
+<h1 class="ads-page-title" id="ads-profile-title">Profile</h1>
+<p class="ads-page-sub">Pass <code>?entity=&lt;id&gt;</code> or <code>?table=firms&amp;ref=&lt;id&gt;</code> in the URL to scope this view.</p>
+
+<div class="ads-card" style="margin-bottom:18px;border-left:3px solid #2c6eb5;background:#f0f6ff">
+  <p style="margin:0;font-size:12px;color:#1a3a6b">
+    <strong>How this works.</strong> Profile type, ideology axes, interests, and the public-persona summary
+    are inferred by Workers AI from the entity's news mentions, government appointment rows, and political
+    donation rows. Ideology axes stay <strong>null</strong> when there isn't enough public evidence — we
+    never default to "centrist". Influence axes are derived (not AI). Operators can <em>pin</em> any
+    type or ideology value via <code>POST /api/profile/&lt;id&gt;/override</code>.
+  </p>
+</div>
+
+<div id="ads-profile-root"><div class="ads-loading">Loading profile…</div></div>
+
+<script src="/assets/js/profile-tab.js?v={{ site.time | date: '%s' }}"></script>
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    if (window.ADS && window.ADS.Profile && typeof window.ADS.Profile.mountStandalone === "function") {
+      window.ADS.Profile.mountStandalone();
+    }
+  });
+</script>

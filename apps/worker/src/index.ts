@@ -36,8 +36,9 @@ import { personasRoute } from "./routes/personas";
 import { projectsRoute } from "./routes/projects";
 import { ddRoute } from "./routes/dd";
 import { newsRoute, factsCitationsRoute } from "./routes/news";
+import { profileRoute } from "./routes/profile";
 export { EntityLock } from "./do/EntityLock";
-export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow } from "./ai/workflows";
+export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, RefreshGovernmentWorkflow } from "./ai/workflows";
 import { piiAuditOnLeadGet } from "./middleware/pii_audit";
 import { accessGuard } from "./middleware/access";
 import { requestId } from "./middleware/request_id";
@@ -129,6 +130,8 @@ api.route("/api/dd", ddRoute);
 // Task #2: news ingestion + citations + fact verification.
 api.route("/api/news", newsRoute);
 api.route("/api/facts", factsCitationsRoute);
+// Task #3: profile classifier (types + ideology + influence + politicians).
+api.route("/api/profile", profileRoute);
 // /api/leads/:id/enrich, /api/leads/enrich/bulk, /:id/dnc, /:id/campaigns
 api.route("/api/leads", leadsEnrichActions);
 api.route("/api/leads", leadsDncActions);

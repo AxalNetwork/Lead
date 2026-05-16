@@ -54,6 +54,12 @@ AGG_CLIMATESCAPE_MAX_PAGES = "8"
 # doesn't trigger 500 fetches.
 AGG_WIKIPEDIA_INFOBOX_CAP = "300"
 
+# Task #3: profile classifier ideology axes. Set to "off" to disable the
+# political-ideology axes entirely (the five axes stay NULL on every row).
+CLASSIFIER_IDEOLOGY = "on"
+# Set to "true" to enable the Canadian Open Parliament adapter (no key).
+OPENPARLIAMENT_ENABLED = "true"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "aidatasignal-leads"
@@ -217,6 +223,27 @@ class_name = "DDScanBatchWorkflow"
 binding = "WF_REFRESH_NEWS"
 name = "refresh-news"
 class_name = "RefreshNewsWorkflow"
+
+# Task #3: per-entity profile classification (types + ideology + influence
+# + AI summary). Triggered on POST /api/profile/classify/:id/dispatch.
+[[workflows]]
+binding = "WF_CLASSIFY_ENTITY"
+name = "classify-entity"
+class_name = "ClassifyEntityWorkflow"
+
+# Task #3: nightly batch classifier — runs from the `0 4 * * *` cron
+# after the DD batch (piggybacks the existing slot).
+[[workflows]]
+binding = "WF_CLASSIFY_BATCH"
+name = "classify-batch"
+class_name = "ClassifyBatchWorkflow"
+
+# Task #3: refresh government appointments + political donations for a
+# single entity without re-running the full classifier.
+[[workflows]]
+binding = "WF_REFRESH_GOVERNMENT"
+name = "refresh-government"
+class_name = "RefreshGovernmentWorkflow"
 
 [[queues.producers]]
 binding = "LEAD_QUEUE"

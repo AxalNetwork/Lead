@@ -219,6 +219,62 @@ export class RefreshNewsWorkflow {
   }
 }
 
+// Task #3: per-entity profile classification (types + ideology + interests +
+// influence + AI summary). Heavy lifting in profile/classifier.ts so the
+// same code path is reachable from the route handler and from durable
+// execution.
+export class ClassifyEntityWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ entityId: string; force?: boolean; refreshGovernment?: boolean }>, step: WorkflowStep): Promise<{ ok: true; entityId: string; primary_type: string | null }> {
+    const { entityId, force, refreshGovernment } = event.payload;
+    if (refreshGovernment) {
+      const { refreshGovernmentAppointments } = await import("../profile/government");
+      const { refreshDonations } = await import("../profile/donations");
+      await step.do("refresh_government", { retries: { limit: 1 } }, async () => refreshGovernmentAppointments(this.env, entityId));
+      await step.do("refresh_donations",  { retries: { limit: 1 } }, async () => refreshDonations(this.env, entityId));
+    }
+    const { classifyEntity } = await import("../profile/classifier");
+    const r = await step.do("classify", { retries: { limit: 1, backoff: "exponential" } }, async () => {
+      return await classifyEntity(this.env, entityId, { force: !!force });
+    });
+    return { ok: true, entityId, primary_type: r.primary_type };
+  }
+}
+
+// Task #3: nightly batch classifier. Picks the next N entities whose
+// profile axes are missing or stale (>staleDays) and classifies each.
+export class ClassifyBatchWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ limit?: number; staleDays?: number }>, step: WorkflowStep): Promise<{ ok: true; scanned: number; classified: number; errors: number }> {
+    const limit = event.payload?.limit ?? 50;
+    const staleDays = event.payload?.staleDays ?? 7;
+    const { classifyBatch } = await import("../profile/classifier");
+    const r = await step.do("batch", { retries: { limit: 1 } }, async () => classifyBatch(this.env, { limit, staleDays }));
+    return { ok: true, scanned: r.scanned, classified: r.classified, errors: r.errors };
+  }
+}
+
+// Task #3: refresh government appointments + donations for a single
+// entity. Stand-alone workflow so an operator can re-pull political
+// rows without re-running the full classifier.
+export class RefreshGovernmentWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ entityId: string }>, step: WorkflowStep): Promise<{ ok: true; entityId: string; appointments: number; donations: number }> {
+    const { entityId } = event.payload;
+    const { refreshGovernmentAppointments } = await import("../profile/government");
+    const { refreshDonations } = await import("../profile/donations");
+    const a = await step.do("appointments", { retries: { limit: 1 } }, async () => refreshGovernmentAppointments(this.env, entityId));
+    const d = await step.do("donations",    { retries: { limit: 1 } }, async () => refreshDonations(this.env, entityId));
+    return { ok: true, entityId, appointments: a.upserted, donations: d.upserted };
+  }
+}
+
 export class IngestPageWorkflow {
   env: Env;
   ctx: ExecutionContext;
