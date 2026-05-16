@@ -125,7 +125,44 @@ async function resolveOrCreate(
 ): Promise<string | null> {
   const existing = await getLegacyEntityId(env, table, legacyId);
   if (existing) return existing;
-  // Cross-link by strongest available identifier before creating new.
+  // Cross-link by strongest available identifier before creating new:
+  // (a) deterministic domain match against u_entities.primary_domain
+  // (orgs only — collapses firm/account/company duplicates sharing a
+  // domain); (b) primary_email_key/primary_linkedin_key direct hits;
+  // (c) channel-table reverse lookups for any other handle.
+  if (kind === "org" && init.primary_domain) {
+    const r = await env.DB.prepare(
+      `SELECT id FROM u_entities
+        WHERE primary_domain = ? AND status NOT IN ('merged','soft_deleted')
+        LIMIT 1`,
+    ).bind(init.primary_domain).first<{ id: string }>();
+    if (r?.id) {
+      await setLegacyEntityId(env, table, legacyId, r.id);
+      return r.id;
+    }
+  }
+  if (kind === "person" && init.primary_email_key) {
+    const r = await env.DB.prepare(
+      `SELECT id FROM u_entities
+        WHERE primary_email_key = ? AND status NOT IN ('merged','soft_deleted')
+        LIMIT 1`,
+    ).bind(init.primary_email_key).first<{ id: string }>();
+    if (r?.id) {
+      await setLegacyEntityId(env, table, legacyId, r.id);
+      return r.id;
+    }
+  }
+  if (init.primary_linkedin_key) {
+    const r = await env.DB.prepare(
+      `SELECT id FROM u_entities
+        WHERE primary_linkedin_key = ? AND status NOT IN ('merged','soft_deleted')
+        LIMIT 1`,
+    ).bind(init.primary_linkedin_key).first<{ id: string }>();
+    if (r?.id) {
+      await setLegacyEntityId(env, table, legacyId, r.id);
+      return r.id;
+    }
+  }
   for (const ch of channelLookups) {
     if (!ch.raw) continue;
     const hit = await findEntityByChannel(env, ch.kind, ch.raw);

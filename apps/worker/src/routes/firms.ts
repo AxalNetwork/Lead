@@ -74,7 +74,7 @@ firms.get("/", async (c) => {
     ? `id ${sortDir}`
     : `${sortCol} ${sortDir} NULLS LAST, id DESC`;
   const r = await c.env.DB
-    .prepare(`SELECT * FROM firms ${whereSql} ORDER BY ${orderBy} LIMIT ?`)
+    .prepare(`SELECT * FROM v_firms ${whereSql} ORDER BY ${orderBy} LIMIT ?`)
     .bind(...binds, limit + 1)
     .all<Record<string, unknown>>();
   const rows = r.results ?? [];
@@ -97,11 +97,11 @@ firms.get("/aggregate", async (c) => {
   const filter = parseFirmFilter(url.searchParams);
   const { sql: whereSql, binds } = buildFirmWhere(filter);
   const totalRow = await c.env.DB
-    .prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(aum_usd), 0) AS aum FROM firms ${whereSql}`)
+    .prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(aum_usd), 0) AS aum FROM v_firms ${whereSql}`)
     .bind(...binds).first<{ n: number; aum: number }>();
   // Median check size — D1 has no PERCENTILE_CONT, so emulate with ORDER+LIMIT.
   const sizesR = await c.env.DB
-    .prepare(`SELECT check_size_typical_usd AS v FROM firms ${whereSql ? whereSql + " AND" : "WHERE"} check_size_typical_usd IS NOT NULL ORDER BY check_size_typical_usd`)
+    .prepare(`SELECT check_size_typical_usd AS v FROM v_firms ${whereSql ? whereSql + " AND" : "WHERE"} check_size_typical_usd IS NOT NULL ORDER BY check_size_typical_usd`)
     .bind(...binds).all<{ v: number }>();
   const sizes = (sizesR.results ?? []).map((r) => r.v);
   const median = sizes.length
@@ -110,13 +110,13 @@ firms.get("/aggregate", async (c) => {
         : Math.round((sizes[sizes.length / 2 - 1] + sizes[sizes.length / 2]) / 2))
     : 0;
   const cityR = await c.env.DB
-    .prepare(`SELECT hq_city AS k, COUNT(*) AS n FROM firms ${whereSql ? whereSql + " AND" : "WHERE"} hq_city IS NOT NULL AND hq_city != '' GROUP BY hq_city ORDER BY n DESC LIMIT 3`)
+    .prepare(`SELECT hq_city AS k, COUNT(*) AS n FROM v_firms ${whereSql ? whereSql + " AND" : "WHERE"} hq_city IS NOT NULL AND hq_city != '' GROUP BY hq_city ORDER BY n DESC LIMIT 3`)
     .bind(...binds).all<{ k: string; n: number }>();
   // Sectors: explode by counting LIKE-matches per known slug. We pull every
   // sector_json once and reduce in-memory — scoped to the current filter set
   // so this stays O(filtered rows) rather than O(all firms).
   const allSecR = await c.env.DB
-    .prepare(`SELECT sectors_json FROM firms ${whereSql}`)
+    .prepare(`SELECT sectors_json FROM v_firms ${whereSql}`)
     .bind(...binds).all<{ sectors_json: string | null }>();
   const counts: Record<string, number> = {};
   for (const row of allSecR.results ?? []) {
@@ -143,7 +143,7 @@ firms.get("/aggregate", async (c) => {
 firms.get("/:id", async (c) => {
   const id = Number(c.req.param("id"));
   if (!Number.isFinite(id)) return c.json({ error: "bad_request" }, 400);
-  const firm = await c.env.DB.prepare("SELECT * FROM firms WHERE id = ?").bind(id).first();
+  const firm = await c.env.DB.prepare("SELECT * FROM v_firms WHERE id = ?").bind(id).first();
   if (!firm) return c.json({ error: "not_found" }, 404);
 
   const people = await c.env.DB
@@ -151,15 +151,15 @@ firms.get("/:id", async (c) => {
       `SELECT fp.id AS firm_people_id, fp.role, fp.is_decision_maker, fp.started_at, fp.ended_at, fp.source_url AS link_source_url,
               l.id, l.name, l.email, l.title, l.org, l.linkedin_url, l.twitter_url, l.persona_role, l.seniority,
               l.country_iso2, l.region, l.city, l.last_enriched_at
-       FROM firm_people fp
-       LEFT JOIN leads l ON l.id = fp.lead_id
+       FROM v_firm_people fp
+       LEFT JOIN v_leads l ON l.id = fp.lead_id
        WHERE fp.firm_id = ?
        ORDER BY fp.is_decision_maker DESC, fp.id ASC`,
     )
     .bind(id)
     .all();
   const portfolio = await c.env.DB
-    .prepare("SELECT * FROM firm_portfolio WHERE firm_id = ? ORDER BY investment_year DESC, id DESC")
+    .prepare("SELECT * FROM v_firm_portfolio WHERE firm_id = ? ORDER BY investment_year DESC, id DESC")
     .bind(id)
     .all();
   return c.json({ ...firm, people: people.results ?? [], portfolio: portfolio.results ?? [] });
@@ -186,8 +186,16 @@ firms.post("/", async (c) => {
     .run();
   const newId = (r.meta.last_row_id as number) ?? null;
   const created = newId != null
-    ? await c.env.DB.prepare("SELECT * FROM firms WHERE id = ?").bind(newId).first()
+    ? await c.env.DB.prepare("SELECT * FROM v_firms WHERE id = ?").bind(newId).first()
     : null;
+  if (created) {
+    try {
+      const { syncFirmToEntity } = await import("../entities/dualwrite");
+      await syncFirmToEntity(c.env, created as never, "firms_route_post");
+    } catch (e) {
+      console.warn("syncFirmToEntity (POST) failed", newId, (e as Error).message);
+    }
+  }
   return c.json(created, 201);
 });
 
@@ -199,7 +207,7 @@ firms.patch("/:id", async (c) => {
   if (!body || typeof body !== "object") return c.json({ error: "bad_request" }, 400);
 
   const before = await c.env.DB
-    .prepare("SELECT * FROM firms WHERE id = ?")
+    .prepare("SELECT * FROM v_firms WHERE id = ?")
     .bind(id)
     .first<Record<string, unknown>>();
   if (!before) return c.json({ error: "not_found" }, 404);
@@ -226,6 +234,16 @@ firms.patch("/:id", async (c) => {
     .prepare(`UPDATE firms SET ${setParts.join(", ")} WHERE id = ?`)
     .bind(...setValues)
     .run();
+
+  try {
+    const updated = await c.env.DB.prepare("SELECT * FROM firms WHERE id = ?").bind(id).first();
+    if (updated) {
+      const { syncFirmToEntity } = await import("../entities/dualwrite");
+      await syncFirmToEntity(c.env, updated as never, "firms_route_patch");
+    }
+  } catch (e) {
+    console.warn("syncFirmToEntity (PATCH) failed", id, (e as Error).message);
+  }
 
   const email = c.get("email");
   const stmts = changes.map((ch) =>
@@ -273,7 +291,7 @@ firms.get("/:id/sources", async (c) => {
   if (!Number.isFinite(id)) return c.json({ error: "bad_request" }, 400);
   const limit = Math.min(200, Math.max(1, Number(c.req.query("limit") ?? "50")));
   const firm = await c.env.DB
-    .prepare("SELECT domain, website FROM firms WHERE id = ?")
+    .prepare("SELECT domain, website FROM v_firms WHERE id = ?")
     .bind(id).first<{ domain: string | null; website: string | null }>();
   if (!firm) return c.json({ error: "not_found" }, 404);
   let host = (firm.domain || "").trim().toLowerCase();
@@ -310,7 +328,7 @@ firms.post("/:id/people", async (c) => {
   if (!body || typeof body.lead_id !== "string" || !body.lead_id.trim()) {
     return c.json({ error: "bad_request", message: "lead_id required" }, 400);
   }
-  const exists = await c.env.DB.prepare("SELECT id FROM firms WHERE id = ?").bind(firmId).first();
+  const exists = await c.env.DB.prepare("SELECT id FROM v_firms WHERE id = ?").bind(firmId).first();
   if (!exists) return c.json({ error: "not_found" }, 404);
   const role = typeof body.role === "string" ? body.role : null;
   try {
@@ -357,7 +375,7 @@ firms.post("/:id/portfolio", async (c) => {
   if (!body || typeof body.company_name !== "string" || !body.company_name.trim()) {
     return c.json({ error: "bad_request", message: "company_name required" }, 400);
   }
-  const exists = await c.env.DB.prepare("SELECT id FROM firms WHERE id = ?").bind(firmId).first();
+  const exists = await c.env.DB.prepare("SELECT id FROM v_firms WHERE id = ?").bind(firmId).first();
   if (!exists) return c.json({ error: "not_found" }, 404);
   const r = await c.env.DB
     .prepare(
@@ -388,7 +406,7 @@ firms.post("/:id/crawl-team", async (c) => {
   const firmId = Number(c.req.param("id"));
   if (!Number.isFinite(firmId)) return c.json({ error: "bad_request" }, 400);
   const firm = await c.env.DB
-    .prepare("SELECT id, name, website, domain FROM firms WHERE id = ?")
+    .prepare("SELECT id, name, website, domain FROM v_firms WHERE id = ?")
     .bind(firmId)
     .first<{ id: number; name: string; website: string | null; domain: string | null }>();
   if (!firm) return c.json({ error: "not_found" }, 404);
