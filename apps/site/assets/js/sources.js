@@ -201,7 +201,7 @@
             <td style="padding:4px">${Number(r.records_seen || 0)}</td>
             <td style="padding:4px">${Number(r.records_created || 0)}</td>
             <td style="padding:4px">${Number(r.records_updated || 0)}</td>
-            <td style="padding:4px">${Number(r.records_errors || 0)}${r.error_message ? ` <span class="ads-muted" title="${esc(r.error_message)}">⚠</span>` : ""}${r.job_id && (Number(r.records_errors || 0) > 0 || r.status === "failed") ? ` <a href="/dashboard/errors/?job_id=${esc(r.job_id)}" target="_blank" rel="noopener" title="View error log entries for this run">log</a>` : ""}</td>
+            <td style="padding:4px">${Number(r.records_errors || 0)}${r.error_message ? ` <span class="ads-muted" title="${esc(r.error_message)}">⚠</span>` : ""}${r.job_id && (Number(r.records_errors || 0) > 0 || r.status === "failed") ? ` <a href="/dashboard/errors/?job_id=${encodeURIComponent(r.job_id)}" target="_blank" rel="noopener" title="View error log entries for this run">log</a>` : ""}</td>
             <td style="padding:4px">${esc(r.trigger || "")}</td>
           </tr>`).join("")}
           </tbody></table>`;
