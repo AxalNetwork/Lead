@@ -9,10 +9,12 @@
 //   5. Score the candidate "table region" (length + column consistency).
 //   6. Merge cross-page continuations: when two consecutive pages have the
 //      same header line, treat the second as a continuation.
-//   7. If the heuristic finds zero tables AND an `env` with AI binding is
-//      provided, fall back to a Workers AI extraction over the raw page
-//      text — handles spreadsheet exports / loosely-aligned PDFs that
-//      defeat the column-snap heuristic.
+//   7. If the heuristic finds zero tables OR very few total rows (<5,
+//      indicating it likely latched onto residual chrome/header noise),
+//      AND an `env` with AI binding is provided, fall back to a Workers AI
+//      extraction over the raw page text — handles spreadsheet exports /
+//      loosely-aligned PDFs that defeat the column-snap heuristic. The
+//      richer of the two results wins.
 //
 // Returns one ParsedTable per detected table, ordered by page. We only return
 // tables with >=3 rows and >=2 columns to filter noisy paragraphs.
@@ -89,9 +91,15 @@ export async function parsePdfTables(bytes: ArrayBuffer, env?: Env): Promise<Par
     if (!pageTables.length) lastTableHeaderKey = null;
   }
 
-  if (tables.length === 0 && env && env.AI) {
+  // AI text fallback fires when the heuristic returned nothing OR when the
+  // heuristic only produced thin tables (likely Google Sheets / Excel
+  // print-to-PDF chrome lines that survived the chrome filter and formed a
+  // tiny fake header). We pick whichever side has more rows.
+  const totalRows = tables.reduce((acc, t) => acc + t.rows.length, 0);
+  if (env && env.AI && (tables.length === 0 || totalRows < 5)) {
     const fallback = await aiExtractTablesFromPdfPages(env, pageTexts);
-    if (fallback.length) return fallback;
+    const fbRows = fallback.reduce((acc, t) => acc + t.rows.length, 0);
+    if (fallback.length && fbRows > totalRows) return fallback;
   }
   return tables;
 }

@@ -9,10 +9,10 @@
 //      the bitmap (JPEG-encoded for /Filter /DCTDecode, raw RGB otherwise).
 //      We pull JPEGs straight through and skip raw RGB (would need PNG
 //      encoding which is heavyweight in a Worker).
-//   2. Whole-PDF passthrough: as a fallback we send the entire PDF bytes
-//      base64-encoded to a Workers AI vision model (llava / llama-3.2-vision)
-//      with an extract-tables prompt. Cheaper than per-page when no XObject
-//      images exist (vector-only image PDFs are rare).
+//   2. Text fallback: when no decodable bitmaps are present (vector-only
+//      PDFs, exports from Google Sheets, etc.) we route the per-page pdfjs
+//      text through aiExtractTablesFromPdfPages instead of sending the raw
+//      PDF container to a vision model (which would just fail).
 //
 // Output schema matches the AI text fallback in ai/extract.ts so the
 // downstream tab-intent / auto-map pipeline is identical.
@@ -24,6 +24,7 @@ import { assertBudget } from "../ai/budget";
 import { limitAi } from "../scraper/rateLimit";
 import { trackAi } from "../analytics/events";
 import { isChromeText } from "./chrome_filter";
+import { aiExtractTablesFromPdfPages } from "../ai/extract";
 
 const VISION_MODEL_DEFAULT = "@cf/meta/llama-3.2-11b-vision-instruct";
 const MAX_VISION_PAGES = 10;
@@ -286,13 +287,22 @@ export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer, op
   // priority when both fire (image-only PDFs have no recoverable text).
   const pdfTabNames = detectTabStripNames(pages.map((p) => p.pdfText));
   const visionTabNames: string[] = [];
-  const images = pages.map((p) => p.jpeg).filter((b): b is Uint8Array => b !== null);
+  // Keep the original page index alongside each decoded bitmap so that
+  // mixed PDFs (some pages with a decodable image XObject, some without)
+  // don't drift: `pdfText` and the reported `pageNumber` must always come
+  // from the page the bitmap actually belongs to, not the compacted index.
+  const images = pages
+    .map((p, originalIndex) => (p.jpeg ? { jpeg: p.jpeg, originalIndex } : null))
+    .filter((x): x is { jpeg: Uint8Array; originalIndex: number } => x !== null);
   if (!images.length) {
-    // Whole-PDF vision fallback: many image-PDFs embed image objects we
-    // can't decode (non-JPEG XObjects, JPX, inline images). Send the entire
-    // PDF bytes to the vision model as a last resort so we don't hard-fail
-    // with no_table_found on otherwise-readable scans.
-    return await wholePdfFallback(env, bytes, opts);
+    // No decodable bitmaps. Sending the raw PDF bytes to a vision model is
+    // useless (the model expects an image, not a PDF container), so instead
+    // fall back to the text-based AI extractor over the per-page pdfjs text
+    // we already pulled. Honors skipOcr (cache-only) by short-circuiting.
+    if (opts.skipOcr) return [];
+    const pageTexts = pages.map((p) => p.pdfText).filter((t) => t.trim().length > 0);
+    if (!pageTexts.length) return [];
+    return await aiExtractTablesFromPdfPages(env, pageTexts);
   }
 
   const model = env.AI_VISION_MODEL ?? VISION_MODEL_DEFAULT;
@@ -300,8 +310,9 @@ export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer, op
   let lastHeaderKey: string | null = null;
   let tableIdx = -1;
   for (let p = 0; p < images.length; p++) {
-    const bytesPage = images[p];
-    const pdfText = pages[p]?.pdfText ?? "";
+    const bytesPage = images[p].jpeg;
+    const origIdx = images[p].originalIndex;
+    const pdfText = pages[origIdx]?.pdfText ?? "";
     const cacheKey = await sha256Hex(`${model}:vision-tables-v2:${bytesPage.length}:` + (await sha256Hex(bytesToBase64(bytesPage))));
     let parsed: VisionParse | null = await aiCacheGet<VisionParse>(env, cacheKey);
     if (parsed) {
@@ -341,7 +352,7 @@ export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer, op
         return obj;
       }).filter((r) => Object.values(r).some((v) => v.length > 0));
       if (!rows.length) continue;
-      const dis = scoreCellDisagreement(rows, pdfText, p + 1);
+      const dis = scoreCellDisagreement(rows, pdfText, origIdx + 1);
       if (lastHeaderKey === headerKey && out.length) {
         const last = out[out.length - 1];
         const baseRow = last.rows.length;
@@ -355,7 +366,7 @@ export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer, op
         // Vision wins; fall back to pdfjs-text-derived names.
         const sheetName = visionTabNames[tableIdx] ?? pdfTabNames[tableIdx] ?? null;
         out.push({
-          headers, rows, pageNumber: p + 1,
+          headers, rows, pageNumber: origIdx + 1,
           confidence: Math.max(0.3, 0.95 - dis.score),
           sheetName: sheetName ?? undefined,
           ocrDisagreements: dis.flagged,
@@ -380,9 +391,9 @@ export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer, op
   return out;
 }
 
-/** Whole-PDF vision fallback: send the raw PDF bytes to the vision model
- *  with the same extract-tables prompt. Used when per-page JPEG extraction
- *  yields no decodable bitmaps. Cached by content hash. */
+/** @deprecated Kept for reference. Raw-PDF-to-vision is unreliable; the
+ *  call site now uses aiExtractTablesFromPdfPages over pdfjs page text. */
+// @ts-expect-error retained for reference, intentionally unused
 async function wholePdfFallback(env: Env, bytes: ArrayBuffer, opts: { skipOcr?: boolean }): Promise<ParsedTable[]> {
   if (!env.AI) return [];
   const ai = env.AI;
