@@ -21,9 +21,26 @@ export interface AdverseMediaHit {
   published_at?: string;
   snippet?: string;
   matched_keywords: string[];
+  // Quotable evidence sentence — the substring of title/snippet that
+  // contains the matched keyword, used by reviewers + the DD summary.
+  evidence_text: string;
   severity: "low" | "medium" | "high" | "critical";
   severity_score: number; // 0..1
   reputability: number;   // 0..1
+}
+
+// Pull the sentence containing `keyword` from a longer text. Falls back
+// to the keyword itself if the text doesn't split into sentences.
+function extractEvidenceSentence(text: string, keyword: string): string {
+  if (!text || !keyword) return keyword || "";
+  const idx = text.toLowerCase().indexOf(keyword.toLowerCase());
+  if (idx < 0) return keyword;
+  // Walk backwards/forwards to sentence boundaries (., !, ?, newline).
+  let start = idx;
+  while (start > 0 && !/[.!?\n]/.test(text[start - 1])) start -= 1;
+  let end = idx + keyword.length;
+  while (end < text.length && !/[.!?\n]/.test(text[end])) end += 1;
+  return text.slice(start, end + 1).trim().slice(0, 280);
 }
 
 // Curated negative-keyword classes. `weight` is the per-class severity
@@ -153,6 +170,10 @@ export async function scanAdverseMedia(
     const reputability = rep[domain] ?? 0.4;
     const topWeight = matched.reduce((m, x) => (x.weight > m ? x.weight : m), 0);
     const score = Math.max(0, Math.min(1, topWeight * (0.5 + 0.5 * reputability)));
+    // Quote the sentence around the highest-weighted keyword so the
+    // reviewer can adjudicate without leaving the dashboard.
+    const top = matched.reduce((m, x) => (x.weight > m.weight ? x : m), matched[0]);
+    const evidence_text = extractEvidenceSentence(text, top.keyword);
     out.push({
       title: h.title,
       url: h.url,
@@ -160,6 +181,7 @@ export async function scanAdverseMedia(
       published_at: h.published_at,
       snippet: h.snippet,
       matched_keywords: matched.map((m) => m.keyword),
+      evidence_text,
       severity: classifySeverity(score),
       severity_score: Math.round(score * 1000) / 1000,
       reputability,

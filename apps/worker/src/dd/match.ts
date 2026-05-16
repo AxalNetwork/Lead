@@ -153,6 +153,14 @@ export interface MatchOptions {
   enableAi?: boolean;
   aiContextA?: string;       // optional extra bio/role text for AI arbiter
   aiContextB?: string;
+  // Optional disambiguators. When both sides supply a value and they
+  // disagree, we apply a penalty so a same-name hit doesn't trigger a
+  // false-positive sanction. Pure missing data on either side is a
+  // no-op (we never penalize for absence).
+  candidateDob?: string | null;
+  watchlistDob?: string | null;
+  candidateCountry?: string | null; // ISO-2 or country name
+  watchlistCountry?: string | null;
 }
 
 /**
@@ -235,8 +243,20 @@ export async function matchNames(
     }
   }
 
+  // Apply DOB/country disagreement gate. When both sides supply a value
+  // and they don't agree, scale the composite down (35% off for DOB,
+  // 15% off for country) — strong same-name hits stay above threshold,
+  // weak ones drop below.
+  let gated = bestComposite;
+  const dobA = opts.candidateDob && opts.candidateDob.length >= 4 ? opts.candidateDob.slice(0, 10) : null;
+  const dobB = opts.watchlistDob && opts.watchlistDob.length >= 4 ? opts.watchlistDob.slice(0, 10) : null;
+  if (dobA && dobB && dobA !== dobB) gated *= 0.65;
+  const cA = opts.candidateCountry?.toLowerCase().slice(0, 2);
+  const cB = opts.watchlistCountry?.toLowerCase().slice(0, 2);
+  if (cA && cB && cA !== cB) gated *= 0.85;
+
   return {
-    score: bestComposite,
+    score: Math.min(1, gated),
     method: best.best_method,
     evidence: { ...best, best_alias: bestAlias },
   };

@@ -119,9 +119,12 @@ export function computeScores(findings: FindingForScore[]): ScoreResult {
   const rawRisk = cat.sanctions + cat.pep + cat.adverse_media + cat.court_case + cat.enforcement + cat.disqualified_director - 0.5 * cat.green_flag;
   const risk_score = Math.max(0, Math.min(100, Math.round(rawRisk * 10) / 10));
 
-  // Trust starts at 50 (neutral) and is dragged down by negatives,
-  // lifted by green flags. Capped at [0,100].
-  const trustRaw = 50 - Math.min(80, trust_drag) + Math.min(35, green_lift);
+  // Trust starts at 65 (slightly-positive default for a clean entity)
+  // and is dragged down by negatives, lifted by green flags. Capped at
+  // [0,100]. Baseline >60 ensures no-match entities clear the spec's
+  // "trust_score > 60 for clean entities" acceptance bar before any
+  // green-flag enrichment has run.
+  const trustRaw = 65 - Math.min(80, trust_drag) + Math.min(35, green_lift);
   const trust_score = Math.max(0, Math.min(100, Math.round(trustRaw * 10) / 10));
 
   return {

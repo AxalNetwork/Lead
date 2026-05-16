@@ -29,6 +29,10 @@ const SOURCES: SourceDef[] = [
   { provider: "un", list_name: "consolidated", url: "https://data.opensanctions.org/datasets/latest/un_sc_sanctions/index.json" },
   // UK HMT consolidated
   { provider: "uk_hmt", list_name: "consolidated", url: "https://data.opensanctions.org/datasets/latest/gb_hmt_sanctions/index.json" },
+  // INTERPOL Red Notices (mirrored via OpenSanctions).
+  { provider: "interpol", list_name: "red_notices", url: "https://data.opensanctions.org/datasets/latest/interpol_red_notices/index.json" },
+  // Politically Exposed Persons (Wikidata-derived global PEP set).
+  { provider: "wd_peps", list_name: "global_peps", url: "https://data.opensanctions.org/datasets/latest/wd_peps/index.json" },
 ];
 
 async function sha256Bytes(b: ArrayBuffer): Promise<string> {
