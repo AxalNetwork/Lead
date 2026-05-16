@@ -1886,9 +1886,16 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
         `INSERT INTO job_state_transitions (job_id, from_state, to_state, reason, changed_by) VALUES (?, 'running', 'timed_out', 'budget_exceeded', 'in_run_deadline')`,
       ).bind(jobId).run().catch(() => undefined);
       // Task #2: explicit queue-step telemetry so the deadline path
-      // doesn't masquerade as ok:true in queue.step_end (the outer
-      // queue handler still emits ok:true on normal return, but
-      // ops/alerts can grep for queue.step_deadline to reconcile).
+      // doesn't masquerade as ok:true in queue.step_end. The outer
+      // queue handler still emits ok:true on normal return (runJob
+      // returns void after the deadline path transitions the row to
+      // timed_out), so dashboards/alerts MUST reconcile the two
+      // signals when computing success rates:
+      //   - true success    : queue.step_end ok:true  AND no queue.step_deadline for the same job_id
+      //   - deadline timeout: queue.step_end ok:true  AND queue.step_deadline emitted for same job_id
+      //   - hard failure    : queue.step_end ok:false
+      // The DB row's `status` column is the source of truth; these
+      // logs are observability hints.
       console.log("queue.step_deadline", JSON.stringify({
         job_id: jobId, ok: false, final_state: "timed_out",
         error_code: "workflow_step_failed", reason: "budget_exceeded",

@@ -246,6 +246,14 @@ async function tier1Browser(env: Env, url: string, opts: FetchOptions): Promise<
     const browser = await mod.launch(env.BROWSER);
     try {
       const page = await browser.newPage();
+      // Task #2: stricter 15s default timeout for ALL page operations
+      // (not just goto), so any future waitForSelector / evaluate /
+      // content() calls inherit the same ceiling. Swallow if the
+      // binding doesn't expose this method (older puppeteer-core).
+      try {
+        const p = page as unknown as { setDefaultTimeout?: (ms: number) => void };
+        p.setDefaultTimeout?.(15_000);
+      } catch { /* ignore */ }
       await page.setUserAgent(pickRandom(USER_AGENTS));
       await page.setExtraHTTPHeaders({ "Accept-Language": pickRandom(ACCEPT_LANGS) });
       await page.setViewport({
