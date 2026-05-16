@@ -155,20 +155,56 @@ admin.post("/repair-pipeline", async (c) => {
       summariesEnq += 1;
     }
 
-    // (3) Attach the canonical `prospect` role to any person entity that
-    // was created via the leads dual-write but never had any role row
-    // attached (the symptom that breaks /api/investors filtering). This
-    // matches the spec phrase "entity_roles attached" and is idempotent
-    // — INSERT OR IGNORE on the (entity_id, role) unique key.
-    const roleRes = await c.env.DB.prepare(
-      `INSERT OR IGNORE INTO entity_roles (entity_id, role, is_primary, source, confidence)
-         SELECT e.id, 'prospect', 0, 'repair', 1
-           FROM u_entities e
-           JOIN entity_legacy_map m ON m.entity_id = e.id AND m.legacy_table = 'leads'
-          WHERE e.kind = 'person'
-            AND NOT EXISTS (SELECT 1 FROM entity_roles r WHERE r.entity_id = e.id)`,
-    ).run().catch(() => null);
-    rolesAdded = Number(roleRes?.meta?.changes ?? 0);
+    // (3) Repair missing entity_roles for every legacy table. Each
+    // statement is INSERT-OR-IGNORE on the (entity_id, role) unique
+    // key so re-running the repair is a no-op once converged.
+    //   leads  with investor_kind set → 'investor' role on the entity
+    //   leads  without investor_kind  → 'prospect' role  (fallback)
+    //   firms                          → 'firm'     role on the entity
+    //   companies                      → 'company'  role on the entity
+    //   company_founders               → 'founder'  role on the entity
+    const phases: Array<{ label: string; sql: string }> = [
+      {
+        label: "investor",
+        sql: `INSERT OR IGNORE INTO entity_roles (entity_id, role, is_primary, source, confidence)
+               SELECT e.id, 'investor', 1, 'repair', 1
+                 FROM u_entities e
+                 JOIN entity_legacy_map m ON m.entity_id = e.id AND m.legacy_table = 'leads'
+                 JOIN leads l ON l.id = m.legacy_id
+                WHERE e.kind = 'person'
+                  AND l.investor_kind IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM entity_roles r WHERE r.entity_id = e.id AND r.role = 'investor')`,
+      },
+      {
+        label: "prospect",
+        sql: `INSERT OR IGNORE INTO entity_roles (entity_id, role, is_primary, source, confidence)
+               SELECT e.id, 'prospect', 0, 'repair', 1
+                 FROM u_entities e
+                 JOIN entity_legacy_map m ON m.entity_id = e.id AND m.legacy_table = 'leads'
+                WHERE e.kind = 'person'
+                  AND NOT EXISTS (SELECT 1 FROM entity_roles r WHERE r.entity_id = e.id)`,
+      },
+      {
+        label: "firm",
+        sql: `INSERT OR IGNORE INTO entity_roles (entity_id, role, is_primary, source, confidence)
+               SELECT e.id, 'firm', 1, 'repair', 1
+                 FROM u_entities e
+                 JOIN entity_legacy_map m ON m.entity_id = e.id AND m.legacy_table = 'firms'
+                WHERE NOT EXISTS (SELECT 1 FROM entity_roles r WHERE r.entity_id = e.id AND r.role = 'firm')`,
+      },
+      {
+        label: "company",
+        sql: `INSERT OR IGNORE INTO entity_roles (entity_id, role, is_primary, source, confidence)
+               SELECT e.id, 'company', 1, 'repair', 1
+                 FROM u_entities e
+                 JOIN entity_legacy_map m ON m.entity_id = e.id AND m.legacy_table = 'companies'
+                WHERE NOT EXISTS (SELECT 1 FROM entity_roles r WHERE r.entity_id = e.id AND r.role = 'company')`,
+      },
+    ];
+    for (const p of phases) {
+      const r = await c.env.DB.prepare(p.sql).run().catch(() => null);
+      rolesAdded += Number(r?.meta?.changes ?? 0);
+    }
   } catch (e) {
     errorMsg = (e as Error).message;
   }

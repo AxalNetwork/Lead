@@ -52,8 +52,11 @@ async function sha256(input: string): Promise<string> {
 }
 
 async function isCancelled(env: Env, jobId: string): Promise<boolean> {
+  // Task #2: also short-circuit when the budget sweeper has marked the
+  // row `timed_out`. Without this, an in-flight queue message would keep
+  // executing past the budget even though the job is officially dead.
   const r = await env.DB.prepare("SELECT status FROM jobs WHERE id = ?").bind(jobId).first<{ status: string }>();
-  return r?.status === "cancelled";
+  return r?.status === "cancelled" || r?.status === "timed_out";
 }
 
 async function markRunning(env: Env, jobId: string): Promise<void> {

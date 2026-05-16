@@ -1,6 +1,7 @@
 import type { Env } from "../types";
 import { checkRobots } from "./robots";
 import { tosBlockedReason } from "./tos";
+import { isCircuitOpen, recordFetchOutcome } from "./circuit_breaker";
 import { fetchWaybackHtml } from "./fallbacks/wayback";
 import { fetchBraveCache } from "./fallbacks/brave";
 
@@ -466,6 +467,15 @@ export async function fetchPage(env: Env, url: string, opts: FetchOptions = {}):
       await logAttempt(env, opts.jobId, host, url, r);
       return r;
     }
+    // Task #2: per-host circuit breaker. If the host has been flapping
+    // (5 failures in 10 min), short-circuit for 1h with `circuit_open`.
+    // Skipped when `skipPolicy` is set so internal trusted calls bypass.
+    const breaker = await isCircuitOpen(env, host);
+    if (breaker) {
+      const r = blockResult(url, 0, breaker);
+      await logAttempt(env, opts.jobId, host, url, r);
+      return r;
+    }
     const robots = await checkRobots(env, url);
     if (!robots.allowed) {
       const r = blockResult(url, 0, robots.reason ?? "robots_disallow");
@@ -486,10 +496,17 @@ export async function fetchPage(env: Env, url: string, opts: FetchOptions = {}):
   for (const fn of tiers) {
     const r = await fn(env, url, opts);
     await logAttempt(env, opts.jobId, host, url, r);
-    if (r.ok) return r;
+    if (r.ok) {
+      // Success resets the breaker counter for this host.
+      if (!opts.skipPolicy) await recordFetchOutcome(env, host, true);
+      return r;
+    }
     last = r;
     if (!shouldEscalate(r.blockReason)) break;
   }
+  // All tiers failed → count one failure against the host. The breaker
+  // may trip if this is the 5th miss inside the 10-min window.
+  if (!opts.skipPolicy) await recordFetchOutcome(env, host, false);
 
   // Live-only callers (e.g. team-path probes) must not be satisfied by
   // archived/cached snapshots — return the last live tier result as-is.

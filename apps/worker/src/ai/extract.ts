@@ -16,6 +16,24 @@ import { assertBudget } from "./budget";
 import { limitAi } from "../scraper/rateLimit";
 import { trackAi } from "../analytics/events";
 
+// Task #2: hard timeout for Workers AI calls. The binding does not accept
+// AbortSignal, so we race against a timer and surface a uniform
+// "ai_timeout" error. 45s is generous for an 8B-class model on long
+// extraction prompts; embeddings/arbitration use shorter values below.
+async function runAiWithTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race<T>([
+      p,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`ai_timeout:${label}:${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export interface AiExtractedPerson {
   name: string;
   role?: string | null;
@@ -89,13 +107,13 @@ export async function aiExtractPeople(env: Env, html: string, jobId?: string): P
     const t0 = Date.now();
     let people: AiExtractedPerson[] = [];
     try {
-      const res = (await env.AI.run(model, {
+      const res = (await runAiWithTimeout(env.AI.run(model, {
         messages: [
           { role: "system", content: "Extract investors/partners as JSON. Skip non-people. Return strict JSON." },
           { role: "user", content: `Extract people from this team-page text. ${c}` },
         ],
         response_format: { type: "json_schema", json_schema: PERSON_SCHEMA },
-      })) as { response?: string; people?: AiExtractedPerson[] };
+      }), 45_000, "extract_people")) as { response?: string; people?: AiExtractedPerson[] };
       const parsed = parsePeopleResponse(res);
       people = parsed.filter((p) => (p.confidence ?? 0) >= MIN_CONFIDENCE);
     } catch (e) {
@@ -198,13 +216,13 @@ export async function aiExtractTablesFromPdfPages(env: Env, pageTexts: string[])
       if (!(await limitAi(env))) continue;
       const t0 = Date.now();
       try {
-        const res = (await env.AI.run(model, {
+        const res = (await runAiWithTimeout(env.AI.run(model, {
           messages: [
             { role: "system", content: "You extract tabular data from a single PDF page. Return strict JSON {tables: [{headers, rows}]}. Skip page numbers, app chrome (File/Edit/View toolbars, sheet tab strips, Share buttons), and prose paragraphs. If the page has no table, return {tables: []}. Each row must have the same length as headers; pad with empty strings if needed." },
             { role: "user", content: `PDF page text:\n${text}` },
           ],
           response_format: { type: "json_schema", json_schema: TABLE_SCHEMA },
-        })) as { response?: string; tables?: AiExtractedTable[] };
+        }), 60_000, "extract_tables")) as { response?: string; tables?: AiExtractedTable[] };
         pageTables = parseTablesResponse(res);
       } catch (e) {
         console.warn("aiExtractTablesFromPdfPages failed", (e as Error).message);
@@ -262,7 +280,7 @@ export async function aiEmbed(env: Env, text: string): Promise<number[] | null> 
   if (!(await limitAi(env))) return null;
   const t0 = Date.now();
   try {
-    const res = (await env.AI.run(model, { text: [text] })) as { data?: number[][] };
+    const res = (await runAiWithTimeout(env.AI.run(model, { text: [text] }), 20_000, "embed")) as { data?: number[][] };
     const vec = Array.isArray(res?.data?.[0]) ? res.data![0] : null;
     if (!vec) return null;
     trackAi(env, { purpose: "embedding", model, ms: Date.now() - t0, neurons: estimateNeurons(text.length) });
@@ -288,13 +306,13 @@ export async function aiArbitrate(env: Env, candidateA: string, candidateB: stri
   if (!(await limitAi(env))) return { match: "maybe", confidence: 0 };
   const t0 = Date.now();
   try {
-    const res = (await env.AI.run(model, {
+    const res = (await runAiWithTimeout(env.AI.run(model, {
       messages: [
         { role: "system", content: "Decide if two profiles describe the same person. Reply JSON: {match: yes|no|maybe, confidence: 0..1}." },
         { role: "user", content: `A: ${candidateA}\nB: ${candidateB}` },
       ],
       response_format: { type: "json_object" },
-    })) as { response?: string };
+    }), 30_000, "arbitrate")) as { response?: string };
     const out = parseArbResponse(res);
     trackAi(env, { purpose: "arbitration", model, ms: Date.now() - t0, neurons: estimateNeurons(candidateA.length + candidateB.length) });
     await aiCachePut(env, cacheKey, out);
