@@ -121,7 +121,11 @@ function parseRssItems(xml: string, source: string, provider: string): NewsCandi
     const url = (linkMatch?.[1] || "").trim();
     if (!url) continue;
     const title = (titleMatch?.[1] || "").trim();
-    const pub = dateMatch ? new Date(dateMatch[2]).toISOString() : null;
+    let pub: string | null = null;
+    if (dateMatch) {
+      const ts = Date.parse(dateMatch[2]);
+      if (Number.isFinite(ts)) { try { pub = new Date(ts).toISOString(); } catch { pub = null; } }
+    }
     const snippet = descMatch ? descMatch[2].replace(/<[^>]+>/g, " ").trim().slice(0, 500) : null;
     items.push({ url, title, headline: title, byline: null, published_at: pub, source_name: source, snippet, language: "en", provider });
   }

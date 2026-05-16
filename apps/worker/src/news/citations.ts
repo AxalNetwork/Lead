@@ -118,16 +118,14 @@ export async function persistCitationsForMention(
       // Confirming citation — attach to the existing fact.
       factId = existing.id;
     } else if (existing) {
-      // Contradicting citation — attach to BOTH the existing fact (with contradicts=1)
-      // AND insert a competing news-sourced fact with its own citation.
-      contradicts = 1;
-      // Attach contradicting citation to the existing fact first.
+      // Contradicting evidence: the new article disagrees with the prior fact.
+      // Mark the PRIOR fact's citation as contradicting (1), but the citation
+      // on the newly-created competing fact SUPPORTS that competing fact (0).
       await insertCitation(env, existing.id, newsItemId, claim.quote, 1);
       touched.push({ fact_id: existing.id, contradicts: 1 });
-      // Then create the competing fact and cite from this article.
       factId = await insertFact(env, entityId, claim, evidence_url);
     } else {
-      // No prior fact — create one, cite from this article.
+      // No prior fact — create one, cite from this article (supporting).
       factId = await insertFact(env, entityId, claim, evidence_url);
     }
     await insertCitation(env, factId, newsItemId, claim.quote, contradicts);

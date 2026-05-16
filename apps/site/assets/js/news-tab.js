@@ -186,7 +186,8 @@
       host.innerHTML = '<table class="ads-table" style="width:100%;font-size:13px">' +
         '<thead><tr><th>Predicate</th><th>Value</th><th>Source</th><th>Verified</th></tr></thead><tbody>' +
         facts.map(function (f) {
-          var v = f.value == null ? "—" : String(f.value);
+          var raw = f.value_text != null ? f.value_text : (f.value_number != null ? f.value_number : (f.value != null ? f.value : null));
+          var v = raw == null ? "—" : String(raw);
           var verified = f.verified_score == null ? "—" : Number(f.verified_score).toFixed(2);
           return "<tr>" +
             "<td>" + esc(f.predicate || "") + "</td>" +
