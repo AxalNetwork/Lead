@@ -31,7 +31,7 @@ export async function isCircuitOpen(env: Env, host: string): Promise<string | nu
     if (!r || !r.tripped_until) return null;
     const until = Date.parse(r.tripped_until);
     if (Number.isFinite(until) && until > Date.now()) {
-      return `circuit_open:${host}:until=${r.tripped_until}`;
+      return `fetch.circuit_open:${host}:until=${r.tripped_until}`;
     }
     return null;
   } catch {

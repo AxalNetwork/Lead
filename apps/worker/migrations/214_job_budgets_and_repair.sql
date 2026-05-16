@@ -23,10 +23,15 @@ UPDATE jobs SET running_started_at = started_at
 --   firm_team_crawl     2 minutes
 --   profile_fanout      1 minute
 --   everything else     90 seconds (matches spec)
+-- Fanout jobs are emitted with `kind = 'url'` and a `name` prefix of
+-- `profile_fanout:<child_url>` (see scraper/pipeline.ts). Match both
+-- the canonical kind and the name prefix so the 60s budget actually
+-- applies in production.
 UPDATE jobs SET budget_ms = CASE
-  WHEN kind = 'firmlist'        THEN 300000
-  WHEN kind = 'firm_team_crawl' THEN 120000
-  WHEN kind = 'profile_fanout'  THEN 60000
+  WHEN kind = 'firmlist'                        THEN 300000
+  WHEN kind = 'firm_team_crawl'                 THEN 120000
+  WHEN kind = 'profile_fanout'                  THEN 60000
+  WHEN name LIKE 'profile_fanout:%'             THEN 60000
   ELSE 90000
 END
 WHERE budget_ms IS NULL;
@@ -44,9 +49,10 @@ FOR EACH ROW
 WHEN NEW.budget_ms IS NULL
 BEGIN
   UPDATE jobs SET budget_ms = CASE
-    WHEN NEW.kind = 'firmlist'        THEN 300000
-    WHEN NEW.kind = 'firm_team_crawl' THEN 120000
-    WHEN NEW.kind = 'profile_fanout'  THEN 60000
+    WHEN NEW.kind = 'firmlist'                        THEN 300000
+    WHEN NEW.kind = 'firm_team_crawl'                 THEN 120000
+    WHEN NEW.kind = 'profile_fanout'                  THEN 60000
+    WHEN NEW.name LIKE 'profile_fanout:%'             THEN 60000
     ELSE 90000
   END WHERE id = NEW.id;
 END;
