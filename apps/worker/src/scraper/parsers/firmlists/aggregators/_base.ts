@@ -23,6 +23,39 @@ import { limitHost } from "../../../rateLimit";
 /** Alias kept for backward-compat: identical shape to `ImporterHints`. */
 export type AggregatorHints = ImporterHints;
 
+/**
+ * Task #2: shared aggregator-importer contract. Each new aggregator
+ * implements this interface — the registry routes URLs to the right
+ * importer via `urlPattern` and the pipeline calls `hydrate(url, env,
+ * hints)` which yields raw records lazily. The existing
+ * `FirmlistImporter` shim wraps the generator into the buffered
+ * `FirmlistImportResult` the pipeline already consumes, so we can
+ * adopt the generator pattern site-by-site without forking the
+ * pipeline.
+ */
+export interface RawRecord {
+  name: string;
+  website?: string | null;
+  linkedin?: string | null;
+  twitter?: string | null;
+  thesis?: string | null;
+  geo?: string | null;
+  city?: string | null;
+  country?: string | null;
+  stage?: string | null;
+  sector?: string | null;
+  check_size?: string | null;
+  source_url?: string | null;
+  /** Additional importer-specific fields preserved verbatim. */
+  [k: string]: unknown;
+}
+
+export interface AggregatorImporter {
+  id: string;
+  urlPattern: RegExp;
+  hydrate(url: string, env: Env, hints?: ImporterHints): AsyncGenerator<RawRecord, void, void>;
+}
+
 /** Page-budget lookup for paginated aggregators. */
 export function pageBudget(env: Env, name: string, defaultBudget: number): number {
   const key = `AGG_${name.toUpperCase()}_MAX_PAGES`;
@@ -33,15 +66,41 @@ export function pageBudget(env: Env, name: string, defaultBudget: number): numbe
 }
 
 /**
- * Pause until the per-host rate limiter says we have a free slot.
- * Soft cap of 6 retries (~6s of waiting) before giving up and letting
- * the fetch fire anyway — the request itself will then be slowed by
- * the Cloudflare edge limiter if needed.
+ * Pause until the per-host rate limiter says we have a free slot AND
+ * at least `AGG_HOST_MIN_INTERVAL_MS` (default 3000ms) has elapsed
+ * since the last aggregator request to the same host. The 3s gap is
+ * required by the Task #2 contract (≤ 1 req / 3s per host). We back
+ * it with the SCRAPE_CACHE KV namespace so the pacing survives across
+ * worker isolates / cron invocations.
  */
+const HOST_MIN_INTERVAL_MS_DEFAULT = 3_000;
+const HOST_LAST_FETCH_PREFIX = "agg:last_fetch:";
+
 export async function awaitHostSlot(env: Env, url: string): Promise<void> {
   let host = "";
   try { host = new URL(url).hostname.toLowerCase(); } catch { return; }
   if (!host) return;
+
+  // 3s per-host pacing.
+  const minInterval = (() => {
+    const raw = (env as unknown as Record<string, string | undefined>).AGG_HOST_MIN_INTERVAL_MS;
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) && n >= 0 ? n : HOST_MIN_INTERVAL_MS_DEFAULT;
+  })();
+  const kv = (env as unknown as { SCRAPE_CACHE?: KVNamespace }).SCRAPE_CACHE;
+  if (kv && minInterval > 0) {
+    const key = `${HOST_LAST_FETCH_PREFIX}${host}`;
+    try {
+      const raw = await kv.get(key);
+      const last = raw ? Number(raw) : 0;
+      const now = Date.now();
+      const wait = last + minInterval - now;
+      if (wait > 0) await new Promise((r) => setTimeout(r, Math.min(wait, minInterval)));
+      await kv.put(key, String(Date.now()), { expirationTtl: 300 });
+    } catch { /* swallow — fall through to the limitHost check */ }
+  }
+
+  // Secondary check against the existing per-host limiter (60/min).
   for (let i = 0; i < 6; i++) {
     const ok = await limitHost(env, host);
     if (ok) return;

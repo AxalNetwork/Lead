@@ -6,11 +6,10 @@ import { rowToCandidate } from "./_helpers";
 import { importKey } from "./aggregators/_base";
 
 /** Task #2: every firm scraped from the NYC Founder Guide is force-
- *  tagged with `geo:nyc_metro` so the dashboard's NYC filter finds
- *  them even when the row itself doesn't carry a city. The tag taxonomy
- *  uses single-colon prefixes consumed by `mapTagTaxonomy` in the
- *  pipeline (`geo` is one of the accepted prefixes; `geo_metro` is not). */
-const NYC_TAG = "geo:nyc_metro";
+ *  tagged with `geo_metro:new_york` (per the task spec). The
+ *  `geo_metro` prefix is recognized by `mapTagTaxonomy` in the
+ *  pipeline and routes to the `geo` taxonomy. */
+const NYC_TAG = "geo_metro:new_york";
 
 /**
  * NYC Founder Guide investor list (or any wiki/Notion-style listing where

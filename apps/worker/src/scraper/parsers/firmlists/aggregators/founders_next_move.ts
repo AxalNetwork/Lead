@@ -8,26 +8,34 @@ import { applyHints, awaitHostSlot, detectSignupWall, importKey, type Aggregator
 /**
  * Founders Next Move (foundersnextmove.com) importer.
  *
- * Founders Next Move publishes 8 sub-directories under
- * /investors/{category} (accelerators, government funds, impact funds,
- * corporate VCs, etc.). Each page is a static HTML list; rows are
- * `<li>` or `<tr>` items with the firm name + outbound site link.
+ * Per Task #2 spec, Founders Next Move publishes 8 sub-pages under
+ * `/free/{category}`: advice, discounts, accelerators, enterprise,
+ * students, impact, government, consulting. Each page is a static
+ * HTML list; rows are `<li>` or `<tr>` items with the firm name +
+ * outbound site link.
  *
- * The importer auto-detects which category the URL is for and stamps a
- * `role:{slug}` tag on every firm so downstream filters can split the
- * data by program type. Hints (passed by the operator) take precedence
- * over the URL-derived default.
+ * The importer auto-detects which category the URL is for from the
+ * URL path and stamps a `role:{slug}` tag on every firm so downstream
+ * filters can split the data by program type. Hints (passed by the
+ * operator) take precedence over the URL-derived default.
  */
 const ROLE_BY_SLUG: Record<string, string> = {
+  // Spec-mandated /free/* paths.
+  "advice": "advisor",
+  "discounts": "discount_program",
   "accelerators": "accelerator",
+  "enterprise": "enterprise_program",
+  "students": "student_program",
+  "impact": "impact_fund",
+  "government": "gov_fund",
+  "consulting": "consulting_program",
+  // Tolerant aliases for /investors/* legacy paths.
   "accelerator": "accelerator",
   "incubators": "incubator",
   "incubator": "incubator",
   "government-funds": "gov_fund",
-  "government": "gov_fund",
   "grants": "grant_program",
   "impact-funds": "impact_fund",
-  "impact": "impact_fund",
   "corporate-vcs": "corp_vc",
   "corporate": "corp_vc",
   "venture-studios": "venture_studio",

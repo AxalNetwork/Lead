@@ -1712,6 +1712,10 @@ function mapTagTaxonomy(prefix: string): Taxonomy | null {
     case "role":       return "role";
     case "geo":
     case "geo_region":
+    // Task #2: NYC Founder Guide tags every firm `geo_metro:new_york`
+    // (spec requirement). Route the `geo_metro` prefix to the same
+    // `geo` taxonomy used by other geo-flavored tags.
+    case "geo_metro":
     case "region":
     case "country":    return "geo";
     case "sector":     return "sector";

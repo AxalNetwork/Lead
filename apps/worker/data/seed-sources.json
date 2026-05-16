@@ -241,7 +241,23 @@
     {
       "importer": "founders_next_move",
       "kind": "firmlist",
-      "url": "https://www.foundersnextmove.com/investors/accelerators",
+      "url": "https://www.foundersnextmove.com/free/advice",
+      "label": "Founders Next Move — Advice",
+      "record_type": "companies",
+      "hints": { "role_hint": "advisor" }
+    },
+    {
+      "importer": "founders_next_move",
+      "kind": "firmlist",
+      "url": "https://www.foundersnextmove.com/free/discounts",
+      "label": "Founders Next Move — Discounts",
+      "record_type": "companies",
+      "hints": { "role_hint": "discount_program" }
+    },
+    {
+      "importer": "founders_next_move",
+      "kind": "firmlist",
+      "url": "https://www.foundersnextmove.com/free/accelerators",
       "label": "Founders Next Move — Accelerators",
       "record_type": "companies",
       "hints": { "role_hint": "accelerator" }
@@ -249,58 +265,42 @@
     {
       "importer": "founders_next_move",
       "kind": "firmlist",
-      "url": "https://www.foundersnextmove.com/investors/incubators",
-      "label": "Founders Next Move — Incubators",
+      "url": "https://www.foundersnextmove.com/free/enterprise",
+      "label": "Founders Next Move — Enterprise",
       "record_type": "companies",
-      "hints": { "role_hint": "incubator" }
+      "hints": { "role_hint": "enterprise_program" }
     },
     {
       "importer": "founders_next_move",
       "kind": "firmlist",
-      "url": "https://www.foundersnextmove.com/investors/government-funds",
-      "label": "Founders Next Move — Government Funds",
+      "url": "https://www.foundersnextmove.com/free/students",
+      "label": "Founders Next Move — Students",
       "record_type": "companies",
-      "hints": { "role_hint": "gov_fund" }
+      "hints": { "role_hint": "student_program" }
     },
     {
       "importer": "founders_next_move",
       "kind": "firmlist",
-      "url": "https://www.foundersnextmove.com/investors/grants",
-      "label": "Founders Next Move — Grants",
-      "record_type": "companies",
-      "hints": { "role_hint": "grant_program" }
-    },
-    {
-      "importer": "founders_next_move",
-      "kind": "firmlist",
-      "url": "https://www.foundersnextmove.com/investors/impact-funds",
-      "label": "Founders Next Move — Impact Funds",
+      "url": "https://www.foundersnextmove.com/free/impact",
+      "label": "Founders Next Move — Impact",
       "record_type": "companies",
       "hints": { "role_hint": "impact_fund" }
     },
     {
       "importer": "founders_next_move",
       "kind": "firmlist",
-      "url": "https://www.foundersnextmove.com/investors/corporate-vcs",
-      "label": "Founders Next Move — Corporate VCs",
+      "url": "https://www.foundersnextmove.com/free/government",
+      "label": "Founders Next Move — Government",
       "record_type": "companies",
-      "hints": { "role_hint": "corp_vc" }
+      "hints": { "role_hint": "gov_fund" }
     },
     {
       "importer": "founders_next_move",
       "kind": "firmlist",
-      "url": "https://www.foundersnextmove.com/investors/venture-studios",
-      "label": "Founders Next Move — Venture Studios",
+      "url": "https://www.foundersnextmove.com/free/consulting",
+      "label": "Founders Next Move — Consulting",
       "record_type": "companies",
-      "hints": { "role_hint": "venture_studio" }
-    },
-    {
-      "importer": "founders_next_move",
-      "kind": "firmlist",
-      "url": "https://www.foundersnextmove.com/investors/syndicates",
-      "label": "Founders Next Move — Syndicates",
-      "record_type": "companies",
-      "hints": { "role_hint": "syndicate" }
+      "hints": { "role_hint": "consulting_program" }
     }
   ]
 }
