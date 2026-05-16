@@ -106,6 +106,25 @@ export async function eraseByIdentifier(
     stageDnc("email", lead.email);
     stageDnc("phone", lead.phone);
     stageDnc("linkedin", lead.linkedin_url);
+    // Task #3: GDPR erasure also wipes DD findings, scan runs, and
+    // risk-score rows for any entity linked to this lead. Findings can
+    // contain third-party names mentioned alongside the lead, so we
+    // remove them entirely rather than retaining for audit.
+    stmts.push(
+      env.DB.prepare(
+        `DELETE FROM dd_findings WHERE entity_id IN (SELECT id FROM entities WHERE ref_table = 'leads' AND ref_id = ?)`,
+      ).bind(lead.id),
+    );
+    stmts.push(
+      env.DB.prepare(
+        `DELETE FROM dd_scan_runs WHERE entity_id IN (SELECT id FROM entities WHERE ref_table = 'leads' AND ref_id = ?)`,
+      ).bind(lead.id),
+    );
+    stmts.push(
+      env.DB.prepare(
+        `DELETE FROM entity_risk_scores WHERE entity_id IN (SELECT id FROM entities WHERE ref_table = 'leads' AND ref_id = ?)`,
+      ).bind(lead.id),
+    );
   }
 
   // D1's batch() executes all statements as a single, atomic SQL

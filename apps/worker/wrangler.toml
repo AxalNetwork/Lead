@@ -196,6 +196,21 @@ binding = "WF_MATCH_PROJECT"
 name = "match-project"
 class_name = "MatchProjectWorkflow"
 
+# Task #3: per-entity DD scan. Triggered on POST /api/dd/scan/:id/dispatch,
+# inside the batch workflow, and on demand from the dashboard.
+[[workflows]]
+binding = "WF_DD_SCAN_ENTITY"
+name = "dd-scan-entity"
+class_name = "DDScanEntityWorkflow"
+
+# Task #3: nightly DD batch scan. Refreshes watchlist cache then scans
+# the next N due entities (oldest-scanned-first), bounded so a single
+# tick can't melt the queue.
+[[workflows]]
+binding = "WF_DD_SCAN_BATCH"
+name = "dd-scan-batch"
+class_name = "DDScanBatchWorkflow"
+
 [[queues.producers]]
 binding = "LEAD_QUEUE"
 queue = "aidatasignal-lead-jobs"
@@ -210,12 +225,13 @@ pattern = "api.aidatasignal.com"
 custom_domain = true
 
 [triggers]
-# Free plan caps cron triggers at 5 per Worker. We use 3:
+# Free plan caps cron triggers at 5 per Worker. We use 4:
 #   `0 * * * *`     hourly — buyer-signal crawl (Task #45).
 #   `0 */6 * * *`   every 6h — re-scrape stale sources + re-enrich stale leads.
 #   `15 3 * * *`    nightly — runs ALL nightly jobs sequentially:
 #       analytics aggregator → account-score refresh → investor stats
 #       → relationship derivation → project match refresh.
-#       Previously 5 separate cron times (15/20/30/45 03:UTC, 10 04:UTC)
-#       but Free plan limit is 5 crons total; consolidated into one slot.
-crons = ["0 * * * *", "0 */6 * * *", "15 3 * * *"]
+#   `0 4 * * *`     daily — Task #3 DD watchlist refresh + batch scan
+#       (refreshes OpenSanctions/OFAC/EU/UN/UK_HMT snapshots into R2 then
+#       scans the next N due entities oldest-first). 1 slot remaining.
+crons = ["0 * * * *", "0 */6 * * *", "15 3 * * *", "0 4 * * *"]

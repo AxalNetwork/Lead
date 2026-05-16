@@ -152,6 +152,55 @@ export class MatchProjectWorkflow {
   }
 }
 
+// Task #3: per-entity due-diligence scan. The workflow stays small —
+// heavy lifting (provider fan-out, findings upsert, score recompute,
+// AI summary) lives in `dd/scan.ts` so the same code path is reachable
+// from the inline route handler and from durable execution.
+export class DDScanEntityWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ entityId: number; triggered_by?: string; providers?: string[] }>, step: WorkflowStep): Promise<{ ok: true; entityId: number; risk_score: number; risk_band: string }> {
+    const { entityId, triggered_by, providers } = event.payload;
+    const { scanEntity, loadEntityForScan } = await import("../dd/scan");
+    const ent = await step.do("load_entity", { retries: { limit: 2, backoff: "exponential" } }, async () => {
+      const e = await loadEntityForScan(this.env, entityId);
+      if (!e) throw new Error(`entity_not_found:${entityId}`);
+      return e;
+    });
+    const r = await step.do("scan", { retries: { limit: 1, backoff: "exponential" } }, async () => {
+      return await scanEntity(this.env, ent, {
+        trigger: "workflow",
+        triggered_by: triggered_by ?? null,
+        providers,
+        enableAi: true,
+      });
+    });
+    return { ok: true, entityId, risk_score: r.risk_score, risk_band: r.risk_band };
+  }
+}
+
+// Task #3: nightly DD batch scan. Pulls the oldest-scanned (or
+// never-scanned) entities and runs the per-entity workflow on each.
+// Bounded by `limit` so a single tick can't melt the queue.
+export class DDScanBatchWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ limit?: number; staleDays?: number }>, step: WorkflowStep): Promise<{ ok: true; scanned: number; failed: number }> {
+    const limit = event.payload?.limit ?? 100;
+    const staleDays = event.payload?.staleDays ?? 7;
+    const { batchScanDueEntities, refreshAllWatchlists } = await import("../dd/watchlistRefresh");
+    await step.do("refresh_watchlists", { retries: { limit: 1 } }, async () => {
+      return await refreshAllWatchlists(this.env);
+    });
+    const r = await step.do("batch_scan", { retries: { limit: 1 } }, async () => {
+      return await batchScanDueEntities(this.env, { limit, staleDays });
+    });
+    return { ok: true, scanned: r.scanned, failed: r.failed };
+  }
+}
+
 export class IngestPageWorkflow {
   env: Env;
   ctx: ExecutionContext;

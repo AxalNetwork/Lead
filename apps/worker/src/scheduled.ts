@@ -138,6 +138,28 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
     })());
     return;
   }
+  // Cron 0 4 * * * → Task #3 daily DD watchlist refresh + batch scan.
+  // Dispatches DDScanBatchWorkflow when bound; otherwise runs inline so
+  // dev environments without workflows still produce risk scores.
+  if (event && (event as ScheduledEvent).cron === "0 4 * * *") {
+    ctx.waitUntil((async () => {
+      try {
+        if (env.WF_DD_SCAN_BATCH) {
+          await env.WF_DD_SCAN_BATCH.create({ params: { limit: 100, staleDays: 7 } });
+          console.log("dd-scan-batch workflow dispatched");
+        } else {
+          const { refreshAllWatchlists, batchScanDueEntities } = await import("./dd/watchlistRefresh");
+          const wl = await refreshAllWatchlists(env);
+          console.log("dd watchlist refresh", JSON.stringify({ refreshed: wl.refreshed, failed: wl.failed }));
+          const sc = await batchScanDueEntities(env, { limit: 100, staleDays: 7 });
+          console.log("dd batch scan", JSON.stringify(sc));
+        }
+      } catch (e) {
+        console.error("daily dd-scan-batch failed", (e as Error).message);
+      }
+    })());
+    return;
+  }
   // Task #5: every 6h, the registry is the source of truth. We enqueue
   // a firmlist job for every enabled row whose `next_run_after` has
   // passed (or is null) — capped at 200/tick so a single cron tick

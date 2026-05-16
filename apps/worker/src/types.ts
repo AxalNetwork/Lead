@@ -52,6 +52,9 @@ export interface Env {
   WF_CRAWL_SIGNALS?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   WF_RESCORE_PERSONA?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   WF_MATCH_PROJECT?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+  // Task #3: DD scan workflows (per-entity + batch).
+  WF_DD_SCAN_ENTITY?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+  WF_DD_SCAN_BATCH?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   AI_DAILY_NEURONS_CAP?: string;
   VECTORIZE_DAILY_QUERIES_CAP?: string;
   AI_SEARCH_NAMESPACE?: string;
@@ -100,6 +103,12 @@ export interface Env {
   // ---- Misc enrichment ----
   ENRICHMENT_KV_TTL_DAYS?: string; // default 14
   NITTER_BASE?: string;            // default https://nitter.net
+
+  // ---- Task #3: Due-diligence providers ----
+  // Most DD providers are public/free (OpenSanctions, GDELT, SEC EDGAR,
+  // CourtListener). UK Companies House reuses UK_CH_API_KEY above.
+  // NEWSAPI_KEY is optional and used to augment adverse-media scans.
+  NEWSAPI_KEY?: string;
 }
 
 export type JobKind =

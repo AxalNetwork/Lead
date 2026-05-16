@@ -1,0 +1,39 @@
+---
+layout: default
+title: Due Diligence — Entity
+permalink: /dashboard/dd-entity/
+---
+
+<h1 class="ads-page-title" id="ads-dd-title">Entity DD</h1>
+<p class="ads-page-sub" id="ads-dd-sub">Pass <code>?entity=&lt;id&gt;</code> in the URL to scope this view.</p>
+
+<div class="ads-card" style="margin-bottom:18px">
+  <div class="ads-active__head">
+    <h3>Risk & trust</h3>
+    <span class="ads-muted" id="ads-dd-e-meta"></span>
+  </div>
+  <div id="ads-dd-e-score"><div class="ads-loading">Loading…</div></div>
+  <div id="ads-dd-e-summary" style="margin-top:14px;white-space:pre-wrap;font-size:14px;line-height:1.55;color:var(--ads-text)"></div>
+  <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+    <button id="ads-dd-e-scan" class="ads-btn">Run scan now</button>
+    <button id="ads-dd-e-dispatch" class="ads-btn">Queue scan</button>
+  </div>
+  <div class="ads-form-msg" id="ads-dd-e-msg" style="margin-top:8px"></div>
+</div>
+
+<div class="ads-card" style="margin-bottom:18px">
+  <div class="ads-active__head">
+    <h3>Findings</h3>
+    <span class="ads-muted" id="ads-dd-e-fcount"></span>
+  </div>
+  <div id="ads-dd-e-findings"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<div class="ads-card">
+  <div class="ads-active__head">
+    <h3>Scan history</h3>
+  </div>
+  <div id="ads-dd-e-runs"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<script src="/assets/js/dd-entity.js"></script>

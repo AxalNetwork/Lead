@@ -1,0 +1,74 @@
+---
+layout: default
+title: Due Diligence
+permalink: /dashboard/dd-review/
+---
+
+<h1 class="ads-page-title">Due Diligence</h1>
+<p class="ads-page-sub">Sanctions, PEP, adverse media, court cases, and enforcement findings. Review and adjudicate signals here.</p>
+
+<div class="ads-card" style="margin-bottom:18px">
+  <div class="ads-active__head">
+    <h3>Risk overview</h3>
+    <span class="ads-muted" id="ads-dd-meta"></span>
+  </div>
+  <div id="ads-dd-bands" style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px">
+    <div class="ads-loading">Loading…</div>
+  </div>
+</div>
+
+<div class="ads-card" style="margin-bottom:18px">
+  <div class="ads-active__head">
+    <h3>Review queue</h3>
+    <span class="ads-muted">Open findings of high or critical severity.</span>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+    <select id="ads-dd-filter-type" class="ads-input">
+      <option value="">All categories</option>
+      <option value="sanction">Sanctions</option>
+      <option value="pep">PEP</option>
+      <option value="adverse_media">Adverse media</option>
+      <option value="court_case">Court cases</option>
+      <option value="enforcement">Enforcement</option>
+      <option value="disqualified_director">Disqualified directors</option>
+    </select>
+    <select id="ads-dd-filter-sev" class="ads-input">
+      <option value="">All severities</option>
+      <option value="critical">Critical</option>
+      <option value="high">High</option>
+      <option value="medium">Medium</option>
+      <option value="low">Low</option>
+    </select>
+    <select id="ads-dd-filter-status" class="ads-input">
+      <option value="open">Open</option>
+      <option value="confirmed">Confirmed</option>
+      <option value="false_positive">False positive</option>
+      <option value="resolved">Resolved</option>
+      <option value="">All statuses</option>
+    </select>
+    <button id="ads-dd-refresh" class="ads-btn">Refresh</button>
+    <button id="ads-dd-batch" class="ads-btn">Run batch scan</button>
+  </div>
+  <div id="ads-dd-queue"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<div class="ads-card" style="margin-bottom:18px">
+  <div class="ads-active__head">
+    <h3>Top-risk entities</h3>
+    <span class="ads-muted">Highest composite risk scores.</span>
+  </div>
+  <div id="ads-dd-scores"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<div class="ads-card">
+  <div class="ads-active__head">
+    <h3>Watchlist snapshots</h3>
+    <span class="ads-muted">Daily cache of OFAC / EU / UN / UK_HMT / OpenSanctions consolidated.</span>
+  </div>
+  <div style="margin:8px 0">
+    <button id="ads-dd-wl-refresh" class="ads-btn">Force refresh</button>
+  </div>
+  <div id="ads-dd-watchlists"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<script src="/assets/js/dd-review.js"></script>
