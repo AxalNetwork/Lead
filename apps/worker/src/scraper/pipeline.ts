@@ -11,6 +11,9 @@ import { selectImporter, FIRMLIST_IMPORTERS } from "./parsers/firmlists";
 import { upsertFirm } from "./firms_upsert";
 import { getLegacyEntityId } from "../entities/roles";
 import { canonicalEmail, canonicalLinkedin } from "../entities/normalize";
+import { addTag } from "../entities/tags";
+import { insertFact } from "../entities/facts";
+import type { Taxonomy } from "../entities/model";
 import { buildSeedUrls, type FetchedPage } from "./firmcrawl/pathProbes";
 import { extractPeopleFromPage, nameKeyOf, type ExtractedPerson } from "./firmcrawl/personExtract";
 import { aiExtractPeople } from "../ai/extract";
@@ -670,7 +673,10 @@ async function processFirmlist(
     const fKey = (f as unknown as { import_key?: string }).import_key;
     if (fKey) {
       const ent = await getLegacyEntityId(env, "firms", upsertRes.firmId);
-      if (ent) firmKeyToEntity.set(fKey, ent);
+      if (ent) {
+        firmKeyToEntity.set(fKey, ent);
+        await tagAsFolkImport(env, ent, picked.name, f.source_url ?? target);
+      }
     }
 
     // Enqueue child team-crawl job using the persisted firm record's
@@ -746,7 +752,10 @@ async function processFirmlist(
       let entityId: string | null = null;
       if (leadId) entityId = await getLegacyEntityId(env, "leads", leadId);
       if (!entityId) entityId = await resolvePersonEntityId(env, p.email ?? null, p.linkedin_url ?? null);
-      if (entityId) personKeyToEntity.set(pKey, entityId);
+      if (entityId) {
+        personKeyToEntity.set(pKey, entityId);
+        await tagAsFolkImport(env, entityId, picked.name, p.source_url ?? target, p.tags ?? null);
+      }
     }
   }
 
@@ -1333,6 +1342,72 @@ function pickTeamUrl(f: import("./parsers/firmlists/types").FirmCandidate): stri
     return u.toString();
   } catch {
     return null;
+  }
+}
+
+/**
+ * Stamp an imported entity with Folk-share provenance.
+ *
+ * For Folk shares (`picked.name === "folk"`) Task #1 requires every fact
+ * to carry `source='folk_share'` and `source_kind='import'`. We achieve
+ * that by writing a single canonical import-provenance fact at entity
+ * level (`predicate='import_source'`) and by routing each importer-emitted
+ * tag through `addTag` with the same source label, so the unified entity
+ * graph encodes "this row came from a Folk share" deterministically.
+ *
+ * For non-Folk firmlist importers the function is still safe to call:
+ * it falls back to `source_kind='scrape'` and `source=firmlist:{name}`.
+ */
+async function tagAsFolkImport(
+  env: Env,
+  entityId: string,
+  importerName: string,
+  sourceUrl: string,
+  extraTags: string[] | null = null,
+): Promise<void> {
+  const isFolk = importerName === "folk";
+  const source = isFolk ? "folk_share" : `firmlist:${importerName}`;
+  const sourceKind = isFolk ? "import" : "scrape";
+  try {
+    await insertFact(env, {
+      entity_id: entityId,
+      predicate: "import_source",
+      value_text: source,
+      source,
+      source_kind: sourceKind,
+      evidence_url: sourceUrl || null,
+      confidence: 1,
+    });
+  } catch (e) {
+    console.warn("tagAsFolkImport.fact", entityId, (e as Error).message);
+  }
+  if (extraTags?.length) {
+    for (const raw of extraTags) {
+      if (typeof raw !== "string" || !raw.trim()) continue;
+      // Importer emits `role:angel`, `geo_region:middle_east`,
+      // `country:FR`, `sector:fintech`, `stage:seed`. We split on the
+      // first colon and map to the matching `entity_tags.taxonomy`.
+      const [rawTax, ...rest] = raw.split(":");
+      const slug = rest.join(":").trim();
+      if (!slug) continue;
+      const tax = mapTagTaxonomy(rawTax.trim().toLowerCase());
+      if (!tax) continue;
+      await addTag(env, { entity_id: entityId, taxonomy: tax, slug, source }).catch(() => undefined);
+    }
+  }
+}
+
+function mapTagTaxonomy(prefix: string): Taxonomy | null {
+  switch (prefix) {
+    case "role":       return "role";
+    case "geo":
+    case "geo_region":
+    case "region":
+    case "country":    return "geo";
+    case "sector":     return "sector";
+    case "stage":      return "stage";
+    case "tag":        return "tag";
+    default:           return null;
   }
 }
 

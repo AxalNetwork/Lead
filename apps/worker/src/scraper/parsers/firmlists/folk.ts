@@ -38,6 +38,10 @@ export async function importFirms(url: string, env: Env): Promise<FirmlistImport
 
   const errors: string[] = [];
   const roleHint = inferRoleFromSlug(parsed.slug);
+  // Seed-source hints (region/country/role_hint) — propagated into every
+  // emitted person/firm so re-imports always carry `geo_region:...`,
+  // `country:...`, `role:...` tags regardless of slug heuristics.
+  const seedHints = lookupSeedHints(url, parsed.slug);
 
   // -------------------- Phase A: bootstrap HTML --------------------
   let bootstrap: FolkBootstrap | null = null;
@@ -49,7 +53,22 @@ export async function importFirms(url: string, env: Env): Promise<FirmlistImport
   }
 
   // groupSchema is the column dictionary; we use it to coerce values.
-  const fieldMap = bootstrap ? buildFieldMap(bootstrap.groupSchema ?? []) : new Map<string, FolkField>();
+  // Persistence layer: if Phase A failed (or Folk shipped a new SPA shell
+  // that broke our extractor), fall back to the last-known cached schema
+  // for this share id. On success, refresh the cache.
+  let fieldMap: Map<string, FolkField>;
+  if (bootstrap && bootstrap.groupSchema?.length) {
+    fieldMap = buildFieldMap(bootstrap.groupSchema);
+    await saveSchemaCache(env, parsed.shareId, bootstrap.groupSchema, bootstrap.groupId).catch(() => undefined);
+  } else {
+    const cached = await loadSchemaCache(env, parsed.shareId).catch(() => null);
+    if (cached?.length) {
+      fieldMap = buildFieldMap(cached);
+      errors.push("phaseA_schema_from_cache");
+    } else {
+      fieldMap = new Map<string, FolkField>();
+    }
+  }
 
   // -------------------- Phase B: Browser Rendering --------------------
   // Open the page in puppeteer, intercept api.folk.app XHRs, scroll to
@@ -108,6 +127,7 @@ export async function importFirms(url: string, env: Env): Promise<FirmlistImport
       const cand = toFirmCandidate(r, fieldMap, url);
       if (cand) {
         cand.import_key = importKey;
+        applySeedHintsFirm(cand, seedHints);
         firms.push(cand);
         seenFirmKeys.add(importKey);
       }
@@ -119,6 +139,7 @@ export async function importFirms(url: string, env: Env): Promise<FirmlistImport
     const personCand = toPersonCandidate(r, fieldMap, url, roleHint);
     if (!personCand) continue;
     personCand.import_key = importKey;
+    applySeedHints(personCand, seedHints);
     people.push(personCand);
     seenPersonKeys.add(importKey);
 
@@ -782,6 +803,119 @@ function deepFind(blob: unknown, pred: (v: unknown) => boolean): unknown | null 
     }
   }
   return null;
+}
+
+// ============================================================================
+// Schema-map persistence (per-share cache)
+// ============================================================================
+// See migration 211_folk_share_schema_cache.sql. We cache the most recent
+// successful `groupSchema` so re-imports that can't parse the bootstrap
+// (Folk SPA shell change, transient HTML strip, etc.) still get
+// schema-aware coercion — required for Task #1's idempotent re-import
+// guarantee.
+
+async function loadSchemaCache(env: Env, shareId: string): Promise<FolkSchemaField[] | null> {
+  try {
+    const row = await env.DB.prepare(
+      `SELECT schema_json FROM folk_share_schema_cache WHERE share_id = ?`,
+    ).bind(shareId).first<{ schema_json: string }>();
+    if (!row?.schema_json) return null;
+    const arr = JSON.parse(row.schema_json);
+    return Array.isArray(arr) ? (arr as FolkSchemaField[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function saveSchemaCache(
+  env: Env,
+  shareId: string,
+  schema: FolkSchemaField[],
+  groupId: string | null,
+): Promise<void> {
+  if (!schema?.length) return;
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `INSERT INTO folk_share_schema_cache (share_id, schema_json, group_id, fetched_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(share_id) DO UPDATE SET
+       schema_json = excluded.schema_json,
+       group_id    = excluded.group_id,
+       fetched_at  = excluded.fetched_at`,
+  ).bind(shareId, JSON.stringify(schema), groupId, now).run();
+}
+
+// ============================================================================
+// Seed-source hints → tags
+// ============================================================================
+// Mirrors `apps/worker/data/seed-sources.json`. Task #1 requires that
+// imports from the four pre-seeded shares always emit deterministic
+// `role:`, `country:`, `geo_region:` tags. Until Task #6's source registry
+// loader exists, we embed the hint table here keyed by share id, plus a
+// slug-pattern fallback so future Folk shares with conventional names
+// still get geo_region tagging.
+
+interface SeedHints {
+  role_hint: string | null;
+  country: string | null;
+  region: string | null;
+}
+
+const FOLK_SEED_HINTS_BY_ID: Record<string, SeedHints> = {
+  "Q9XBlKjvAYG6XAh2Lk0Mt": { role_hint: "angel",      country: null, region: "middle_east" },
+  "PaXsApRD43c8wWlBC85oA": { role_hint: null,         country: null, region: null },
+  "8oUL6QHbWsRDC4mNvjwbb": { role_hint: "vc_partner", country: "FR", region: null },
+  "Eer2zk2OqxiOmZH6BLwOu": { role_hint: "vc_partner", country: "US", region: null },
+};
+
+function lookupSeedHints(url: string, slug: string): SeedHints {
+  const parsed = parseShareUrl(url);
+  const exact = parsed ? FOLK_SEED_HINTS_BY_ID[parsed.shareId] : null;
+  if (exact) return exact;
+  // Slug-pattern fallback so new shares matching known naming conventions
+  // still get sensible geo_region/country tagging on first import.
+  const s = slug.toLowerCase();
+  const region =
+    /middle.?east/.test(s) ? "middle_east" :
+    /europe|emea/.test(s)  ? "europe" :
+    /latam|latin.?america/.test(s) ? "latam" :
+    /south.?east.?asia|sea\b/.test(s) ? "sea" :
+    /africa/.test(s) ? "africa" :
+    null;
+  const country =
+    /\bfrench|france\b/.test(s) ? "FR" :
+    /\b(us|usa|united.?states|american)\b/.test(s) ? "US" :
+    /\b(uk|britain|british)\b/.test(s) ? "GB" :
+    /\bgerman/.test(s) ? "DE" :
+    null;
+  return { role_hint: null, country, region };
+}
+
+function applySeedHints(p: KeyedPersonCandidate, h: SeedHints): void {
+  const tags = new Set<string>(p.tags ?? []);
+  if (h.role_hint) {
+    tags.add(`role:${h.role_hint}`);
+    if (!p.category) p.category = h.role_hint;
+  }
+  if (h.region) tags.add(`geo_region:${h.region}`);
+  if (h.country) {
+    tags.add(`country:${h.country}`);
+    if (!p.country_iso2) p.country_iso2 = h.country;
+  }
+  if (tags.size) p.tags = Array.from(tags);
+}
+
+function applySeedHintsFirm(f: KeyedFirmCandidate, h: SeedHints): void {
+  // Firms don't carry a `tags` array directly; geo/country flow through
+  // the firm-level columns (`hq_country_iso2`, `hq_region`, `kind`) so
+  // the downstream upsert + dual-write tag pass picks them up.
+  if (h.role_hint && !f.kind) f.kind = h.role_hint === "vc_partner" ? "vc" : h.role_hint;
+  if (h.country && !f.hq_country_iso2) f.hq_country_iso2 = h.country;
+  if (h.region && !f.hq_region) f.hq_region = h.region;
+  const geo = new Set<string>(f.geo_focus ?? []);
+  if (h.region) geo.add(h.region);
+  if (h.country) geo.add(h.country);
+  if (geo.size) f.geo_focus = Array.from(geo);
 }
 
 function walk(blob: unknown, visit: (v: unknown) => void): void {
