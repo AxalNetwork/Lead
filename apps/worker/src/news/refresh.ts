@@ -136,15 +136,34 @@ export async function refreshEntityNews(env: Env, entityId: string, opts: { arch
           result.mentions++;
         }
 
-        // Extract claims for the subject entity and persist citations.
-        const claims = await extractClaims(env, ent.display_name, fetched.body);
-        if (claims.length > 0) {
-          const touched = await persistCitationsForMention(env, persisted.id, ent.id, cand.url, claims);
-          result.citations += touched.length;
-          // Recompute verified_score for each touched fact.
-          const unique = [...new Set(touched.map((t) => t.fact_id))];
-          for (const fid of unique) await recomputeVerifiedScore(env, fid);
+        // Extract claims PER resolved mention (not only the subject). The
+        // article may state facts about any entity it mentions, so we run
+        // the claim extractor once for each unique mention/entity pair.
+        const seen = new Set<string>();
+        const mentionTargets: Array<{ entity_id: string; display_name: string }> = [];
+        mentionTargets.push({ entity_id: ent.id, display_name: ent.display_name });
+        seen.add(ent.id);
+        for (const m of enriched.mentions) {
+          if (seen.has(m.entity_id)) continue;
+          // Look up display_name for the resolved mention; skip if absent.
+          const e = await env.DB.prepare(
+            `SELECT display_name FROM u_entities WHERE id = ? LIMIT 1`,
+          ).bind(m.entity_id).first<{ display_name: string }>();
+          if (e?.display_name) {
+            mentionTargets.push({ entity_id: m.entity_id, display_name: e.display_name });
+            seen.add(m.entity_id);
+          }
         }
+        const allTouched: string[] = [];
+        for (const tgt of mentionTargets) {
+          const claims = await extractClaims(env, tgt.display_name, fetched.body);
+          if (claims.length === 0) continue;
+          const touched = await persistCitationsForMention(env, persisted.id, tgt.entity_id, cand.url, claims);
+          result.citations += touched.length;
+          for (const t of touched) allTouched.push(t.fact_id);
+        }
+        const unique = [...new Set(allTouched)];
+        for (const fid of unique) await recomputeVerifiedScore(env, fid);
       } catch (e) {
         errors.push(`enrich_failed:${cand.url}:${(e as Error).message}`);
       }

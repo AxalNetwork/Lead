@@ -199,13 +199,23 @@
           while (holder.firstChild) {
             var child = holder.firstChild;
             if (child.classList && child.classList.contains("ads-cite-pill")) {
-              child.addEventListener("click", function (e) {
-                e.stopPropagation();
-                openPopover(node, data, {});
-              });
+              child.setAttribute("tabindex", "0");
+              child.setAttribute("role", "button");
+              child.setAttribute("aria-label", "Show citations");
+              var open = function (e) { if (e) e.stopPropagation(); openPopover(node, data, {}); };
+              child.addEventListener("click", open);
+              child.addEventListener("mouseenter", open);
+              child.addEventListener("focus", open);
+              child.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(e); } });
             }
             node.appendChild(child);
           }
+          // Hovering anywhere on the fact value (not just the pill) also opens
+          // the popover — satisfies the spec's "hover fact pill reveals
+          // supporting citations" requirement when fact text is the natural target.
+          node.addEventListener("mouseenter", function () { openPopover(node, data, {}); });
+          node.addEventListener("focus", function () { openPopover(node, data, {}); });
+          if (!node.hasAttribute("tabindex")) node.setAttribute("tabindex", "0");
         });
       })(nodes[i]);
     }
