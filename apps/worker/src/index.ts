@@ -177,7 +177,8 @@ export default {
     } catch (e) {
       console.warn("sweepStuckJobs failed", (e as Error).message);
     }
-    console.log("queue.batch_begin", JSON.stringify({ size: batchSize, swept: batchSwept }));
+    const batchAttempts = batch.messages.map((m) => ({ msg_id: m.id, attempts: m.attempts }));
+    console.log("queue.batch_begin", JSON.stringify({ size: batchSize, swept: batchSwept, attempts: batchAttempts }));
     for (const msg of batch.messages) {
       const body = msg.body as QueueMessage | undefined;
       // Task #4: dispatch the new summary-rebuild envelope before the legacy

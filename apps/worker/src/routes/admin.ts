@@ -390,10 +390,13 @@ admin.get("/queue-health", async (c) => {
        ORDER BY ms ASC`,
   ).bind(now).all<{ ms: number }>();
   const ageList = (ages.results ?? []).map((r) => Number(r.ms ?? 0));
+  // Nearest-rank percentile: index = ceil(p/100 * n) - 1, clamped to
+  // [0, n-1]. This matches the standard nearest-rank definition and
+  // avoids the small-sample skew from floor((p/100)*n).
   const pct = (p: number): number => {
     if (!ageList.length) return 0;
-    const i = Math.min(ageList.length - 1, Math.floor((p / 100) * ageList.length));
-    return Math.max(0, ageList[i] ?? 0);
+    const idx = Math.min(ageList.length - 1, Math.max(0, Math.ceil((p / 100) * ageList.length) - 1));
+    return Math.max(0, ageList[idx] ?? 0);
   };
 
   // Top error_log step failures in the last 24h — operator-readable
