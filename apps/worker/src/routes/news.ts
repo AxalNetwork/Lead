@@ -196,6 +196,14 @@ factsCitationsRoute.post("/:id/cite", async (c) => {
   const factId = c.req.param("id");
   const body = (await c.req.json().catch(() => ({}))) as { news_item_id?: string; quote?: string; contradicts?: 0 | 1 };
   if (!body.news_item_id) return c.json({ error: "missing_news_item_id" }, 400);
+  // Validate both ends exist before inserting — fact_citations has no FK
+  // constraints, so unchecked inserts can create orphan citation rows.
+  const [factRow, newsRow] = await Promise.all([
+    c.env.DB.prepare(`SELECT id FROM facts WHERE id = ? LIMIT 1`).bind(factId).first<{ id: string }>(),
+    c.env.DB.prepare(`SELECT id FROM news_items WHERE id = ? LIMIT 1`).bind(body.news_item_id).first<{ id: string }>(),
+  ]);
+  if (!factRow) return c.json({ error: "fact_not_found" }, 404);
+  if (!newsRow) return c.json({ error: "news_item_not_found" }, 404);
   const id = crypto.randomUUID();
   try {
     await c.env.DB.prepare(

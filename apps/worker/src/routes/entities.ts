@@ -52,7 +52,10 @@ entitiesRoute.get("/resolve", async (c) => {
   // backfill path (no investor backfill exists). Try the canonical key
   // first, then fall back so investor detail pages can mount the News
   // tab without an extra investor backfill migration.
-  const candidates: Array<string> = table === "investors" ? ["investors", "leads", "firms"] : [table];
+  // Narrow investor fallback to `leads` only — investor IDs and firm IDs
+  // can collide in the legacy schema, and falling through to `firms`
+  // would silently return an organization entity for a person request.
+  const candidates: Array<string> = table === "investors" ? ["investors", "leads"] : [table];
   let entityId: string | null = null;
   let matchedTable: string | null = null;
   for (const t of candidates) {
