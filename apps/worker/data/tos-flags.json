@@ -25,6 +25,10 @@
     {
       "domain": "glassdoor.com",
       "reason": "Glassdoor ToS Section 5 prohibits automated scraping and use of bots/crawlers."
+    },
+    {
+      "domain": "tiktok.com",
+      "reason": "TikTok ToS Section 5 prohibits scraping or use of automated agents. Use the official TikTok API instead."
     }
   ]
 }

@@ -19,11 +19,18 @@ permalink: /dashboard/health/
 <div class="ads-grid" style="margin-top:12px">
   <div class="ads-card"><div class="ads-kpi__label">Errors (last 1h)</div><div class="ads-kpi__value" id="ads-health-err-1h">—</div></div>
   <div class="ads-card"><div class="ads-kpi__label">Errors (last 24h)</div><div class="ads-kpi__value" id="ads-health-err-24h">—</div></div>
+  <div class="ads-card"><div class="ads-kpi__label">Queue depth</div><div class="ads-kpi__value" id="ads-health-q-depth">—</div></div>
+  <div class="ads-card"><div class="ads-kpi__label">Running jobs</div><div class="ads-kpi__value" id="ads-health-q-running">—</div></div>
+  <div class="ads-card"><div class="ads-kpi__label">Stuck (over budget)</div><div class="ads-kpi__value" id="ads-health-q-stuck">—</div></div>
+  <div class="ads-card"><div class="ads-kpi__label">Oldest running</div><div class="ads-kpi__value" id="ads-health-q-oldest">—</div></div>
 </div>
 
 <div class="ads-form-actions" style="margin-top:14px">
   <button class="ads-btn" id="ads-health-refresh">Refresh</button>
+  <button class="ads-btn ads-btn--ghost" id="ads-health-sweep">Clear stuck jobs</button>
+  <button class="ads-btn ads-btn--ghost" id="ads-health-repair">Run repair pipeline</button>
   <a class="ads-btn ads-btn--ghost" href="/dashboard/errors/">View error log &rarr;</a>
+  <span class="ads-form-msg" id="ads-health-action-msg"></span>
 </div>
 
 <script src="/assets/js/health.js?v={{ site.time | date: '%s' }}"></script>

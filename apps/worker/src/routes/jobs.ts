@@ -37,11 +37,22 @@ jobs.post("/", async (c) => {
       return c.json({ error: "tos_blocked", message: tosReason, host: source }, 403);
     }
   }
+  // Task #2: per-kind wall-clock budget. The queue handler sweeps any
+  // job whose `running` time exceeds this value to `timed_out`. Callers
+  // can override via config.budget_ms.
+  const budgetMs =
+    typeof config.budget_ms === "number" && config.budget_ms > 0
+      ? Math.min(Math.floor(config.budget_ms), 600000)
+      : body.kind === "firmlist"
+        ? 300000
+        : body.kind === "firm_team_crawl"
+          ? 120000
+          : 90000;
   await c.env.DB.prepare(
-    `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
-     VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
+    `INSERT INTO jobs (id, name, source, status, kind, target, config_json, budget_ms, started_at, created_at)
+     VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
   )
-    .bind(id, name, source, body.kind, target, JSON.stringify(config), now, now)
+    .bind(id, name, source, body.kind, target, JSON.stringify(config), budgetMs, now, now)
     .run();
 
   const msg: JobMessage = { jobId: id, kind: body.kind, target, config };

@@ -4,10 +4,50 @@
   const $ = (id) => document.getElementById(id);
   function esc(s) { return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
+  function fmtAge(ms) {
+    if (!ms || ms < 0) return "—";
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return s + "s";
+    const m = Math.floor(s / 60);
+    if (m < 60) return m + "m " + (s % 60) + "s";
+    const h = Math.floor(m / 60);
+    return h + "h " + (m % 60) + "m";
+  }
+
+  async function loadQueue() {
+    try {
+      const r = await fetch(API + "/api/admin/queue-health", { credentials: "include" });
+      if (!r.ok) return;
+      const j = await r.json();
+      if ($("ads-health-q-depth")) $("ads-health-q-depth").textContent = j.depth ?? "—";
+      if ($("ads-health-q-running")) $("ads-health-q-running").textContent = j.running ?? "—";
+      const stuckEl = $("ads-health-q-stuck");
+      if (stuckEl) {
+        stuckEl.textContent = j.stuck ?? "—";
+        stuckEl.style.color = (j.stuck > 0) ? "#b3261e" : "";
+      }
+      if ($("ads-health-q-oldest")) $("ads-health-q-oldest").textContent = fmtAge(j.oldest_running_age_ms);
+    } catch (e) { /* ignore */ }
+  }
+
+  async function callAdmin(path, label) {
+    const msgEl = $("ads-health-action-msg");
+    if (msgEl) msgEl.textContent = label + "…";
+    try {
+      const r = await fetch(API + path, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const j = await r.json();
+      if (msgEl) msgEl.textContent = label + ": " + JSON.stringify(j);
+    } catch (e) {
+      if (msgEl) msgEl.textContent = label + " failed: " + e.message;
+    }
+    await loadQueue();
+  }
+
   async function load() {
     const banner = $("ads-health-banner");
     const checksEl = $("ads-health-checks");
     banner.style.background = "#f4f4f6"; banner.style.color = "#444"; banner.textContent = "Probing…";
+    loadQueue();
     try {
       const r = await fetch(API + "/api/health/deep", { credentials: "include" });
       const j = await r.json();
@@ -39,6 +79,10 @@
 
   document.addEventListener("DOMContentLoaded", () => {
     $("ads-health-refresh").addEventListener("click", load);
+    const sweep = $("ads-health-sweep");
+    if (sweep) sweep.addEventListener("click", () => callAdmin("/api/admin/clear-stuck-jobs", "Sweep"));
+    const repair = $("ads-health-repair");
+    if (repair) repair.addEventListener("click", () => callAdmin("/api/admin/repair-pipeline", "Repair"));
     load();
     setInterval(load, 30000);
   });

@@ -42,6 +42,7 @@ import { requestId } from "./middleware/request_id";
 import { runJob } from "./scraper/pipeline";
 import { scheduled as scheduledHandler } from "./scheduled";
 import { errors as errorsRoute } from "./routes/errors";
+import { admin, sweepStuckJobs } from "./routes/admin";
 import { AppError, wrapUnknown } from "./errors";
 import { logError } from "./db/error_log";
 
@@ -127,6 +128,9 @@ api.route("/api/leads", leadsEnrichActions);
 api.route("/api/leads", leadsDncActions);
 api.route("/api/leads", leadsCampaignActions);
 api.route("/api/errors", errorsRoute);
+// Task #2: operational admin endpoints (sweep stuck jobs, repair pipeline,
+// rebuild summary, queue-health roll-up).
+api.route("/api/admin", admin);
 
 api.notFound((c) => c.json({ error: "not_found", request_id: c.var.request_id }, 404));
 api.onError((err, c) => {
@@ -158,6 +162,10 @@ export default {
   },
 
   async queue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {
+    // Task #2: opportunistic stuck-job sweep at the head of every batch.
+    // Cheap (one indexed UPDATE) and guarantees we never let a job sit
+    // in `running` past its budget even when the queue is otherwise idle.
+    try { await sweepStuckJobs(env); } catch (e) { console.warn("sweepStuckJobs failed", (e as Error).message); }
     for (const msg of batch.messages) {
       const body = msg.body as QueueMessage | undefined;
       // Task #4: dispatch the new summary-rebuild envelope before the legacy
