@@ -165,25 +165,42 @@ export default {
     // Task #2: opportunistic stuck-job sweep at the head of every batch.
     // Cheap (one indexed UPDATE) and guarantees we never let a job sit
     // in `running` past its budget even when the queue is otherwise idle.
-    try { await sweepStuckJobs(env); } catch (e) { console.warn("sweepStuckJobs failed", (e as Error).message); }
+    const batchStartedAt = Date.now();
+    const batchSize = batch.messages.length;
+    let batchSwept = 0;
+    let batchAcked = 0;
+    let batchRetried = 0;
+    let batchDeadLettered = 0;
+    let batchFailed = 0;
+    try {
+      batchSwept = await sweepStuckJobs(env);
+    } catch (e) {
+      console.warn("sweepStuckJobs failed", (e as Error).message);
+    }
+    console.log("queue.batch_begin", JSON.stringify({ size: batchSize, swept: batchSwept }));
     for (const msg of batch.messages) {
       const body = msg.body as QueueMessage | undefined;
       // Task #4: dispatch the new summary-rebuild envelope before the legacy
       // JobMessage validation kicks in.
       if (isRebuildSummaryMessage(body)) {
+        const stepStart = Date.now();
         try {
           await handleSummaryMessage(env, body);
           msg.ack();
+          batchAcked++;
+          console.log("queue.step_end", JSON.stringify({ step: "rebuild_summary", msg_id: msg.id, ms: Date.now() - stepStart, ok: true }));
         } catch (e) {
           const appErr = e instanceof AppError ? e : wrapUnknown(e, "queue_run_failed", { msgId: msg.id, op: "rebuild_summary" });
           await logError(env, { err: appErr, step: "queue.rebuildSummary", retry_count: msg.attempts });
-          if (msg.attempts < 3) msg.retry({ delaySeconds: 30 * Math.pow(2, msg.attempts) });
-          else msg.ack();
+          console.log("queue.step_end", JSON.stringify({ step: "rebuild_summary", msg_id: msg.id, ms: Date.now() - stepStart, ok: false, error_code: appErr.code }));
+          if (msg.attempts < 3) { msg.retry({ delaySeconds: 30 * Math.pow(2, msg.attempts) }); batchRetried++; }
+          else { msg.ack(); batchAcked++; batchFailed++; }
         }
         continue;
       }
       const legacy = body as JobMessage | undefined;
       const jobId = legacy && typeof legacy === "object" && "jobId" in legacy ? String((legacy as { jobId: unknown }).jobId) : null;
+      const stepStart = Date.now();
       try {
         if (!legacy || typeof legacy !== "object" || !("jobId" in legacy) || !("kind" in legacy) || !("target" in legacy)) {
           console.warn("Skipping malformed queue message", msg.id);
@@ -195,6 +212,8 @@ export default {
         }
         await runJob(legacy, env);
         msg.ack();
+        batchAcked++;
+        console.log("queue.step_end", JSON.stringify({ step: "runJob", msg_id: msg.id, job_id: jobId, ms: Date.now() - stepStart, ok: true }));
       } catch (e) {
         const appErr = e instanceof AppError ? e : wrapUnknown(e, "queue_run_failed", { msgId: msg.id, jobId });
         const attempts = msg.attempts;
@@ -212,9 +231,12 @@ export default {
             } catch { /* ignore */ }
           }
           msg.retry({ delaySeconds: Math.min(30 * Math.pow(2, attempts), 600) });
+          batchRetried++;
+          console.log("queue.step_end", JSON.stringify({ step: "runJob", msg_id: msg.id, job_id: jobId, ms: Date.now() - stepStart, ok: false, retry: true, error_code: appErr.code }));
         } else {
           // Task #2: attempts >= 3 transitions the job to dead_letter; otherwise failed.
           const finalState = attempts >= 3 ? "dead_letter" : "failed";
+          if (finalState === "dead_letter") batchDeadLettered++; else batchFailed++;
           console.error("Queue ack (permanent)", msg.id, finalState, appErr.code, appErr.message);
           if (jobId) {
             try {
@@ -231,9 +253,15 @@ export default {
             } catch { /* ignore */ }
           }
           msg.ack();
+          batchAcked++;
+          console.log("queue.step_end", JSON.stringify({ step: "runJob", msg_id: msg.id, job_id: jobId, ms: Date.now() - stepStart, ok: false, final_state: finalState, error_code: appErr.code }));
         }
       }
     }
+    console.log("queue.batch_end", JSON.stringify({
+      size: batchSize, swept: batchSwept, acked: batchAcked, retried: batchRetried,
+      failed: batchFailed, dead_lettered: batchDeadLettered, ms: Date.now() - batchStartedAt,
+    }));
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {

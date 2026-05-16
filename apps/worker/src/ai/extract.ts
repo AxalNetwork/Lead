@@ -20,6 +20,14 @@ import { trackAi } from "../analytics/events";
 // AbortSignal, so we race against a timer and surface a uniform
 // "ai_timeout" error. 45s is generous for an 8B-class model on long
 // extraction prompts; embeddings/arbitration use shorter values below.
+//
+// NB: this is a *caller-side* timeout — it bounds how long the worker
+// will wait on the Workers AI binding, but it does NOT cancel the
+// underlying model execution. The binding doesn't expose an
+// AbortSignal as of this revision, so model inference may continue
+// (and bill) for a short tail after we move on. Acceptable today
+// because the queue-level budget + sweeper will reclaim the job; if
+// the binding gains cancellation, swap the race for a real abort.
 async function runAiWithTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | null = null;
   try {
