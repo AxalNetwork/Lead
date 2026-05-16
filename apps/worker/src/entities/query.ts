@@ -68,20 +68,25 @@ export interface SearchResult {
 }
 
 export async function searchEntities(env: Env, f: SearchFilter): Promise<SearchResult> {
+  // IMPORTANT: bind order must match SQL placeholder order. Since the
+  // tag JOINs appear *before* the WHERE clause in the final SQL, their
+  // binds must be pushed first. We build two separate bind arrays and
+  // concatenate them in SQL order at the end.
+  const joinBinds: unknown[] = [];
+  const whereBinds: unknown[] = [];
   const where: string[] = ["s.status = 'active'"];
-  const binds: unknown[] = [];
-  if (f.kind) { where.push("s.kind = ?"); binds.push(f.kind); }
-  if (f.role) { where.push("s.primary_role = ?"); binds.push(f.role); }
-  if (f.country_iso2) { where.push("s.country_iso2 = ?"); binds.push(f.country_iso2.toUpperCase()); }
-  if (typeof f.check_min_usd === "number") { where.push("s.check_size_max_usd >= ?"); binds.push(f.check_min_usd); }
-  if (typeof f.check_max_usd === "number") { where.push("s.check_size_min_usd <= ?"); binds.push(f.check_max_usd); }
+  if (f.kind) { where.push("s.kind = ?"); whereBinds.push(f.kind); }
+  if (f.role) { where.push("s.primary_role = ?"); whereBinds.push(f.role); }
+  if (f.country_iso2) { where.push("s.country_iso2 = ?"); whereBinds.push(f.country_iso2.toUpperCase()); }
+  if (typeof f.check_min_usd === "number") { where.push("s.check_size_max_usd >= ?"); whereBinds.push(f.check_min_usd); }
+  if (typeof f.check_max_usd === "number") { where.push("s.check_size_min_usd <= ?"); whereBinds.push(f.check_max_usd); }
   if (f.has_unicorn) { where.push("s.unicorn_count > 0"); }
-  if (typeof f.min_fit === "number") { where.push("s.fit_max_score >= ?"); binds.push(f.min_fit); }
-  if (typeof f.min_intent === "number") { where.push("s.intent_score >= ?"); binds.push(f.min_intent); }
+  if (typeof f.min_fit === "number") { where.push("s.fit_max_score >= ?"); whereBinds.push(f.min_fit); }
+  if (typeof f.min_intent === "number") { where.push("s.intent_score >= ?"); whereBinds.push(f.min_intent); }
   if (f.q) {
     where.push("(lower(s.display_name) LIKE ? OR lower(s.primary_domain) LIKE ? OR lower(s.primary_email) LIKE ?)");
     const q = `%${f.q.toLowerCase()}%`;
-    binds.push(q, q, q);
+    whereBinds.push(q, q, q);
   }
   // Tag filters require a JOIN per taxonomy so we can intersect.
   const joins: string[] = [];
@@ -90,7 +95,7 @@ export async function searchEntities(env: Env, f: SearchFilter): Promise<SearchR
     if (!slug) continue;
     const alias = `t${++tagJoinIdx}`;
     joins.push(`JOIN entity_tags ${alias} ON ${alias}.entity_id = s.entity_id AND ${alias}.taxonomy = ? AND ${alias}.slug = ?`);
-    binds.push(tax, slug);
+    joinBinds.push(tax, slug);
   }
   const sortCol = (() => {
     switch (f.sort) {
@@ -106,7 +111,7 @@ export async function searchEntities(env: Env, f: SearchFilter): Promise<SearchR
                WHERE ${where.join(" AND ")}
                ORDER BY ${sortCol}, s.entity_id ASC
                LIMIT ? OFFSET ?`;
-  const r = await env.DB.prepare(sql).bind(...binds, limit + 1, offset).all();
+  const r = await env.DB.prepare(sql).bind(...joinBinds, ...whereBinds, limit + 1, offset).all();
   const rows = r.results ?? [];
   const hasMore = rows.length > limit;
   return {
