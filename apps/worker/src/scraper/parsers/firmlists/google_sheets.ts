@@ -893,7 +893,20 @@ async function arbitrateFirmKey(
   knownFirms: Map<string, string>, // norm → display name
 ): Promise<string | null> {
   if (cache.has(norm)) return cache.get(norm) ?? null;
-  const hit = bestFuzzyCandidate(norm, nameKeyByNorm);
+  let hit = bestFuzzyCandidate(norm, nameKeyByNorm);
+
+  // Vectorize fallback: when local fuzzy can't find anything in the
+  // workbook (or only a marginal candidate), embed the raw name and
+  // query VEC_FIRMS. If a returned firm's metadata.name normalizes to
+  // a name we already have in the workbook map, treat it as the
+  // candidate and let aiArbitrate confirm. This gives us cross-tab
+  // resolution for hard variants (e.g. "Acme Cap." ↔ "Acme Capital
+  // Partners LLP") that local edit distance can't span.
+  if (!hit || hit.score < WEAK_FUZZY) {
+    const vecHit = await tryVectorizeFirmHit(env, rawName, nameKeyByNorm);
+    if (vecHit) hit = vecHit;
+  }
+
   if (!hit || hit.score < WEAK_FUZZY) {
     cache.set(norm, null);
     return null;
@@ -909,6 +922,44 @@ async function arbitrateFirmKey(
     // aiArbitrate failures already self-log; treat as no-match.
   }
   cache.set(norm, null);
+  return null;
+}
+
+/** Vectorize-backed cross-tab name resolver. Queries VEC_FIRMS for the
+ *  raw name's embedding, then keeps the top match only if its metadata
+ *  name (or id) normalizes back into the current workbook's firm map.
+ *  Returns a FuzzyHit-shaped result so it slots into the same
+ *  arbitration path as local fuzzy candidates. Best-effort: any
+ *  binding/budget/embed failure returns null and falls through. */
+async function tryVectorizeFirmHit(
+  env: Env,
+  rawName: string,
+  nameKeyByNorm: Map<string, string>,
+): Promise<{ key: string; candidateNorm: string; score: number } | null> {
+  try {
+    const idx = (env as Env & { VEC_FIRMS?: { query: Function } }).VEC_FIRMS;
+    if (!idx) return null;
+    const { aiEmbed } = await import("../../../ai/extract");
+    const { assertBudget } = await import("../../../ai/budget");
+    const budget = await assertBudget(env, "vectorize");
+    if (!budget.ok) return null;
+    const vec = await aiEmbed(env, rawName);
+    if (!vec) return null;
+    const r = await idx.query(vec, { topK: 5, returnMetadata: "all" });
+    const matches: Array<{ score: number; metadata?: Record<string, unknown> }> =
+      (r as { matches?: Array<{ score: number; metadata?: Record<string, unknown> }> })?.matches ?? [];
+    for (const m of matches) {
+      const metaName = String((m.metadata?.name as string | undefined) ?? "");
+      if (!metaName) continue;
+      const candidateNorm = normalizeFirmName(metaName);
+      const key = candidateNorm ? nameKeyByNorm.get(candidateNorm) : undefined;
+      if (key && m.score >= 0.8) {
+        return { key, candidateNorm, score: m.score };
+      }
+    }
+  } catch {
+    // VEC_FIRMS not bound / budget exhausted / network — fall through.
+  }
   return null;
 }
 

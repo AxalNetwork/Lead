@@ -971,6 +971,11 @@ async function processFirmlist(
   // compact `import_notes` array on the fetch_log summary below so it
   // shows up in the job-summary view without a join.
   let notesWritten = 0;
+  // Stable entity_id per source workbook so re-imports update the same
+  // audit thread instead of forking a new entity row per job. `target`
+  // is the sheet URL (e.g. "https://docs.google.com/spreadsheets/d/<id>/edit"),
+  // which uniquely identifies the source.
+  const notesEntityId = `source:${target}`;
   for (const note of result.importNotes ?? []) {
     if (await isCancelled(env, jobId)) break;
     try {
@@ -980,7 +985,7 @@ async function processFirmlist(
          VALUES (?, ?, 'import_notes', ?, ?, 'firmlist_import', ?, ?, ?)`,
       ).bind(
         crypto.randomUUID(),
-        jobId,
+        notesEntityId,
         note.tab,
         note.content,
         target,
