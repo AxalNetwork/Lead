@@ -304,3 +304,162 @@ nav.ads-nav-panel > a.active{color:#fff;background:var(--ads-panel-2)}
   .ads-strip-kpi{grid-template-columns:1fr}
   .ads-page-title{font-size:20px}
 }
+
+/* ============================================================
+ * Dark-theme overrides: fix style.css marketing-theme bleeds
+ * (h1-h6 color:#404040, body color:#606060) inside the dashboard.
+ * Scoped to .ads-body so marketing pages are unaffected.
+ * ============================================================ */
+
+/* Headings */
+.ads-body h1,.ads-body h2,.ads-body h3,
+.ads-body h4,.ads-body h5,.ads-body h6{color:var(--ads-text-strong)}
+
+/* Page title & sub — ensure explicit classes are always readable */
+.ads-body .ads-page-title{color:var(--ads-text-strong)}
+.ads-body .ads-page-sub{color:var(--ads-muted)}
+
+/* Labels, legends, summaries */
+.ads-body label{color:var(--ads-text)}
+.ads-body legend{color:var(--ads-text-strong)}
+.ads-body details>summary{color:var(--ads-text);cursor:pointer}
+
+/* Fieldsets */
+.ads-body fieldset{
+  border:1px solid var(--ads-border);
+  border-radius:var(--ads-r-2,8px);
+  padding:12px 14px;
+  margin:0 0 12px
+}
+
+/* ---- Modern form controls ----
+ * Applies to any input/select/textarea inside .ads-body whether it
+ * uses .ads-field or the older raw <label>Text<input> pattern. The
+ * [type=file] and checkbox/radio are intentionally excluded so they
+ * keep their native appearance. */
+.ads-body input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]),
+.ads-body select,
+.ads-body textarea{
+  background:var(--ads-bg);
+  border:1px solid var(--ads-border);
+  border-radius:8px;
+  color:var(--ads-text);
+  padding:9px 12px;
+  font-size:14px;
+  font-family:inherit;
+  transition:border-color 120ms ease
+}
+.ads-body input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]):focus,
+.ads-body select:focus,
+.ads-body textarea:focus{
+  outline:none;
+  border-color:var(--ads-accent);
+  box-shadow:0 0 0 3px rgba(91,140,255,.18)
+}
+/* Placeholder text */
+.ads-body input::placeholder,.ads-body textarea::placeholder{color:var(--ads-muted);opacity:1}
+/* Select arrow in dark */
+.ads-body select{appearance:auto;-webkit-appearance:auto}
+
+/* Old inline-style pattern: <label>Text<input style="width:100%;padding:6px">
+ * The inline width/padding is overridden; dark background + light text is
+ * guaranteed by the rule above. Make the label stack nicely. */
+.ads-body label:not(.ads-field):not([class]) > input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+.ads-body label:not(.ads-field):not([class]) > select,
+.ads-body label:not(.ads-field):not([class]) > textarea{
+  display:block;
+  width:100%;
+  margin-top:5px
+}
+
+/* Checkbox + radio labels — inline flex so the control sits beside text */
+.ads-body label:has(>input[type="checkbox"]),
+.ads-body label:has(>input[type="radio"]){
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  color:var(--ads-text)
+}
+
+/* ---- Card header utility (used across several pages) ---- */
+.ads-card-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:12px;
+  flex-wrap:wrap;
+  margin-bottom:12px
+}
+.ads-card-head h3,.ads-card-head h4{margin:0;color:var(--ads-text-strong)}
+
+/* ---- Modals: override hardcoded background:#fff ----
+ * .ads-modal__panel already uses var(--ads-panel) from design.css but
+ * many pages override it with an inline style="background:#fff". This
+ * rule raises specificity to beat a single inline style. */
+.ads-body .ads-modal .ads-modal__panel,
+.ads-body .ads-modal > div[style*="background:#fff"],
+.ads-body .ads-modal > form[style*="background:#fff"]{
+  background:var(--ads-panel) !important;
+  color:var(--ads-text) !important;
+  border:1px solid var(--ads-border)
+}
+
+/* Dropzone */
+.ads-body [style*="background:#fafafa"]{
+  background:var(--ads-panel-2) !important;
+}
+.ads-body [style*="border:2px dashed #bbb"]{
+  border-color:var(--ads-border) !important
+}
+
+/* Export menu + inline dropdown panels */
+.ads-export-menu{
+  background:var(--ads-panel);
+  border:1px solid var(--ads-border);
+  border-radius:8px;
+  box-shadow:var(--ads-shadow-2,0 4px 12px rgba(0,0,0,.35));
+  padding:6px 0;
+  color:var(--ads-text)
+}
+.ads-export-menu a,.ads-export-menu button{
+  display:block;
+  width:100%;
+  text-align:left;
+  padding:8px 14px;
+  background:none;
+  border:0;
+  color:var(--ads-text);
+  font-size:13px;
+  cursor:pointer
+}
+.ads-export-menu a:hover,.ads-export-menu button:hover{
+  background:var(--ads-panel-2)
+}
+
+/* Autocomplete pop (relationships page) */
+.ads-pop{
+  background:var(--ads-panel);
+  border:1px solid var(--ads-border);
+  border-radius:8px;
+  box-shadow:var(--ads-shadow-2,0 4px 12px rgba(0,0,0,.35));
+  color:var(--ads-text)
+}
+.ads-pop button{
+  display:block;
+  width:100%;
+  text-align:left;
+  padding:8px 10px;
+  background:none;
+  border:0;
+  font-size:13px;
+  color:var(--ads-text);
+  cursor:pointer
+}
+.ads-pop button:hover{background:var(--ads-panel-2)}
+
+/* Progress bar track */
+.ads-body [style*="background:#f1f1f1"]{background:var(--ads-panel-2) !important}
+
+/* Projects: workspace tab strip */
+.ads-body .ads-tab.active{background:var(--ads-panel-2) !important;border-color:var(--ads-border) !important;color:var(--ads-text-strong) !important}
+.ads-body .ads-tabs{border-color:var(--ads-border) !important}

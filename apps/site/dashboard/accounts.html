@@ -9,9 +9,9 @@ permalink: /dashboard/accounts/
 
 <div class="ads-card">
   <form id="ads-accounts-filters" class="ads-filter-grid ads-filter-grid--6" autocomplete="off">
-    <label>Search<input name="q" placeholder="name or domain" style="width:100%;padding:6px"></label>
-    <label>Status
-      <select name="status" style="width:100%;padding:6px">
+    <label class="ads-field"><span>Search</span><input name="q" placeholder="name or domain"></label>
+    <label class="ads-field"><span>Status</span>
+      <select name="status">
         <option value="">all</option>
         <option value="active">active</option>
         <option value="won">won</option>
@@ -20,27 +20,27 @@ permalink: /dashboard/accounts/
         <option value="disqualified">disqualified</option>
       </select>
     </label>
-    <label>Industry<input name="industry" placeholder="ai, fintech…" style="width:100%;padding:6px"></label>
-    <label>Size
-      <select name="size_band" style="width:100%;padding:6px">
+    <label class="ads-field"><span>Industry</span><input name="industry" placeholder="ai, fintech…"></label>
+    <label class="ads-field"><span>Size</span>
+      <select name="size_band">
         <option value="">all</option>
         <option>1-10</option><option>11-50</option><option>51-200</option>
         <option>201-500</option><option>501-1000</option><option>1001-5000</option><option>5001+</option>
       </select>
     </label>
-    <label>Country (ISO2)<input name="country" maxlength="2" style="width:100%;padding:6px;text-transform:uppercase"></label>
-    <label>Owner email<input name="owner_email" type="email" style="width:100%;padding:6px"></label>
-    <label>Has signal kind
-      <select name="has_signal_kind" id="ads-accts-signal-kind" style="width:100%;padding:6px">
+    <label class="ads-field"><span>Country (ISO2)</span><input name="country" maxlength="2" style="text-transform:uppercase"></label>
+    <label class="ads-field"><span>Owner email</span><input name="owner_email" type="email"></label>
+    <label class="ads-field"><span>Has signal kind</span>
+      <select name="has_signal_kind" id="ads-accts-signal-kind">
         <option value="">any</option>
       </select>
     </label>
-    <label>Signal in last (days)<input name="signal_within_days" type="number" min="0" max="365" style="width:100%;padding:6px"></label>
-    <label>Min intent<input name="min_intent" type="number" min="0" max="100" step="1" style="width:100%;padding:6px"></label>
-    <label>Min fit<input name="min_fit" type="number" min="0" max="100" step="1" style="width:100%;padding:6px"></label>
-    <label>Min account score<input name="min_account_score" type="number" min="0" max="100" step="1" style="width:100%;padding:6px"></label>
-    <label>Sort by
-      <select name="sort" style="width:100%;padding:6px">
+    <label class="ads-field"><span>Signal in last (days)</span><input name="signal_within_days" type="number" min="0" max="365"></label>
+    <label class="ads-field"><span>Min intent</span><input name="min_intent" type="number" min="0" max="100" step="1"></label>
+    <label class="ads-field"><span>Min fit</span><input name="min_fit" type="number" min="0" max="100" step="1"></label>
+    <label class="ads-field"><span>Min account score</span><input name="min_account_score" type="number" min="0" max="100" step="1"></label>
+    <label class="ads-field"><span>Sort by</span>
+      <select name="sort">
         <option value="account_score">account score</option>
         <option value="intent_score">intent score</option>
         <option value="fit_score">fit score</option>
@@ -80,9 +80,8 @@ permalink: /dashboard/accounts/
     <tbody id="ads-accounts-tbody"><tr><td class="ads-muted" colspan="8">Loading…</td></tr></tbody>
   </table>
  </div>
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;font-size:12px">
-    <span class="ads-muted" id="ads-accounts-shown">—</span>
-    <button class="ads-btn ads-btn--ghost" id="ads-accounts-loadmore" hidden>Load more</button>
+  <div style="margin-top:12px;text-align:center">
+    <button class="ads-btn ads-btn--ghost" id="ads-accounts-more" hidden>Load more</button>
   </div>
 </div>
 

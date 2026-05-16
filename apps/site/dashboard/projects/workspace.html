@@ -7,16 +7,14 @@ permalink: /dashboard/projects/workspace/
 <div id="ads-project-root" class="ads-card"><div class="ads-muted">Loading project…</div></div>
 
 <style>
-  .ads-tabs { display:flex; gap:4px; border-bottom:1px solid #e5e9f0; margin-bottom:12px; flex-wrap:wrap }
-  .ads-tab { padding:8px 14px; border:1px solid transparent; border-bottom:none; cursor:pointer; background:transparent; font-size:13px }
-  .ads-tab.active { background:#fff; border-color:#e5e9f0; border-radius:6px 6px 0 0; font-weight:600 }
-  .ads-fitbar { display:inline-block; vertical-align:middle; width:80px; height:6px; background:#eef1f6; border-radius:3px; overflow:hidden }
-  .ads-fitbar > span { display:block; height:100%; background:#5b8cff }
+  .ads-tabs { display:flex; gap:4px; border-bottom:1px solid var(--ads-border); margin-bottom:12px; flex-wrap:wrap }
+  .ads-tab { padding:8px 14px; border:1px solid transparent; border-bottom:none; cursor:pointer; background:transparent; font-size:13px; color:var(--ads-muted) }
+  .ads-tab.active { background:var(--ads-panel-2); border-color:var(--ads-border); border-radius:6px 6px 0 0; font-weight:600; color:var(--ads-text-strong) }
+  .ads-fitbar { display:inline-block; vertical-align:middle; width:80px; height:6px; background:var(--ads-panel-2); border-radius:3px; overflow:hidden }
+  .ads-fitbar > span { display:block; height:100%; background:var(--ads-accent) }
   .ads-filters { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px; font-size:12px }
-  .ads-filters input, .ads-filters select { font-size:12px; padding:3px 6px }
   .ads-edit-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px }
-  .ads-edit-grid label { font-size:12px; display:flex; flex-direction:column; gap:2px }
-  .ads-edit-grid input, .ads-edit-grid textarea, .ads-edit-grid select { font-size:13px; padding:4px 6px }
+  .ads-edit-grid label { font-size:12px; display:flex; flex-direction:column; gap:2px; color:var(--ads-text) }
   .ads-edit-grid .full { grid-column:1/-1 }
 </style>
 
@@ -188,14 +186,14 @@ permalink: /dashboard/projects/workspace/
             const checked = selected[audience].has(key) ? 'checked' : '';
             const openHref = entityOpenHref(m.entity_kind, m.entity_id);
             return `
-            <tr style="border-top:1px solid #eef1f6">
+            <tr style="border-top:1px solid var(--ads-border)">
               <td><input type="checkbox" class="ads-sel" data-key="${key}" data-kind="${m.entity_kind}" data-eid="${m.entity_id}" ${checked}></td>
               <td>${m.rank}</td>
               <td>${m.entity_kind}${country?` <span class="ads-muted" style="font-size:11px">[${esc(country)}]</span>`:''} <code style="font-size:11px">${esc(m.entity_id)}</code></td>
               <td><span class="ads-fitbar"><span style="width:${m.fit_score.toFixed(0)}%"></span></span> ${m.fit_score.toFixed(0)}</td>
               <td style="font-size:11px">P:${m.persona_score.toFixed(0)} S:${m.semantic_score.toFixed(0)} O:${m.overlay_score.toFixed(0)}</td>
               <td style="font-size:12px;max-width:320px">
-                ${explanation ? `<div style="color:#3b4654;margin-bottom:4px"><b>Why:</b> ${esc(explanation)}</div>` : ''}
+                ${explanation ? `<div style="color:var(--ads-text);margin-bottom:4px"><b>Why:</b> ${esc(explanation)}</div>` : ''}
                 ${m.pitch_angle ? `<div><b>Pitch:</b> ${esc(m.pitch_angle)}</div>` : (explanation ? '' : '<span class="ads-muted">—</span>')}
               </td>
               <td style="font-size:11px;max-width:160px">${introTxt}</td>
@@ -275,7 +273,7 @@ permalink: /dashboard/projects/workspace/
     const dlg = document.createElement('div');
     dlg.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:9999';
     dlg.innerHTML = `
-      <div class="ads-card" style="background:#fff;max-width:640px;width:92%;padding:16px">
+      <div class="ads-card" style="max-width:640px;width:92%;padding:16px">
         <h3 style="margin:0 0 8px">Practice pitch</h3>
         <label style="font-size:12px">Subject<input id="ads-pp-s" value="${esc(subject)}" style="width:100%;padding:4px"></label>
         <label style="font-size:12px;display:block;margin-top:6px">Body<textarea id="ads-pp-b" rows="14" style="width:100%;font-family:inherit">${esc(body)}</textarea></label>
@@ -391,7 +389,7 @@ permalink: /dashboard/projects/workspace/
     const r = await fetch(API + '/history', { credentials: 'include' });
     const { history } = await r.json();
     body.innerHTML = '<table style="width:100%;font-size:13px"><thead><tr><th style="text-align:left">When</th><th style="text-align:left">Field</th><th style="text-align:left">Change</th><th style="text-align:left">By</th></tr></thead><tbody>'
-      + (history || []).map((h) => `<tr style="border-top:1px solid #eef1f6"><td>${esc(h.changed_at)}</td><td>${esc(h.field)}${h.audience?' ('+esc(h.audience)+')':''}</td><td>${esc(h.old_value||'')} → ${esc(h.new_value||'')}</td><td>${esc(h.changed_by||'')}</td></tr>`).join('')
+      + (history || []).map((h) => `<tr style="border-top:1px solid var(--ads-border)"><td>${esc(h.changed_at)}</td><td>${esc(h.field)}${h.audience?' ('+esc(h.audience)+')':''}</td><td>${esc(h.old_value||'')} → ${esc(h.new_value||'')}</td><td>${esc(h.changed_by||'')}</td></tr>`).join('')
       + '</tbody></table>';
   }
 

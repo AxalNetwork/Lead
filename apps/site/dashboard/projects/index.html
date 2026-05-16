@@ -29,7 +29,7 @@ permalink: /dashboard/projects/
     }
     const fmt = (n) => Number(n || 0).toLocaleString();
     list.innerHTML = projects.map((p) => `
-      <a href="/dashboard/projects/workspace/?id=${encodeURIComponent(p.id)}" class="ads-project-card" style="display:block;padding:14px;border-bottom:1px solid #eef1f6;color:inherit;text-decoration:none">
+      <a href="/dashboard/projects/workspace/?id=${encodeURIComponent(p.id)}" class="ads-project-card" style="display:block;padding:14px;border-bottom:1px solid var(--ads-border);color:var(--ads-text);text-decoration:none">
         <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline">
           <div>
             <div style="font-weight:600">${p.name}</div>
@@ -52,6 +52,6 @@ permalink: /dashboard/projects/
 </script>
 
 <style>
-  .ads-chip { display:inline-block; padding:2px 8px; border-radius:999px; background:#eef1f6; font-size:12px; color:#37414f }
-  .ads-project-card:hover { background:#f8fafc }
+  .ads-chip { display:inline-block; padding:2px 8px; border-radius:999px; background:var(--ads-panel-2); border:1px solid var(--ads-border); font-size:12px; color:var(--ads-text) }
+  .ads-project-card:hover { background:var(--ads-panel-2) }
 </style>

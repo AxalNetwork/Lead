@@ -13,9 +13,9 @@ permalink: /dashboard/investors/
 
 <div class="ads-card" style="margin-top:16px">
   <form id="ads-investors-filters" class="ads-filter-grid ads-filter-grid--6" autocomplete="off">
-    <label>Search<input name="q" placeholder="name or org" style="width:100%;padding:6px"></label>
-    <label>Kind
-      <select name="kind" style="width:100%;padding:6px">
+    <label class="ads-field"><span>Search</span><input name="q" placeholder="name or org"></label>
+    <label class="ads-field"><span>Kind</span>
+      <select name="kind">
         <option value="">all</option>
         <option value="gp">GP</option><option value="angel">Angel</option>
         <option value="operator">Operator</option><option value="lp">LP</option>
@@ -23,10 +23,10 @@ permalink: /dashboard/investors/
         <option value="associate">Associate</option>
       </select>
     </label>
-    <label>Stage<input name="stage" placeholder="seed, series_a…" style="width:100%;padding:6px"></label>
-    <label>Sector<input name="sector" placeholder="ai, fintech…" style="width:100%;padding:6px"></label>
-    <label>Country (ISO2)<input name="country" maxlength="2" style="width:100%;padding:6px;text-transform:uppercase"></label>
-    <label>Min check ($)<input name="min_check_usd" type="number" min="0" style="width:100%;padding:6px"></label>
+    <label class="ads-field"><span>Stage</span><input name="stage" placeholder="seed, series_a…"></label>
+    <label class="ads-field"><span>Sector</span><input name="sector" placeholder="ai, fintech…"></label>
+    <label class="ads-field"><span>Country (ISO2)</span><input name="country" maxlength="2" style="text-transform:uppercase"></label>
+    <label class="ads-field"><span>Min check ($)</span><input name="min_check_usd" type="number" min="0"></label>
     <div style="grid-column:1/-1;display:flex;gap:8px">
       <button class="ads-btn" type="submit">Apply</button>
       <button class="ads-btn ads-btn--ghost" type="reset">Reset</button>

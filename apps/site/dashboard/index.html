@@ -133,7 +133,7 @@ permalink: /dashboard/
     <!-- Step 1: pick / drop -->
     <div data-step-pane="pick">
       <div id="ads-upload-drop" tabindex="0" role="button" aria-label="Drop a file or click to choose"
-           style="border:2px dashed #bbb;border-radius:8px;padding:32px;text-align:center;background:#fafafa;cursor:pointer">
+           style="border:2px dashed var(--ads-border);border-radius:8px;padding:32px;text-align:center;background:var(--ads-panel-2);cursor:pointer">
         <div style="font-size:14px;font-weight:600;margin-bottom:4px">Drop a file here or click to choose</div>
         <div class="ads-muted" style="font-size:12px">CSV, TSV, XLSX, XLS, ODS, PDF — up to 50 MB</div>
         <input type="file" id="ads-upload-input" accept=".csv,.tsv,.xlsx,.xls,.ods,.pdf" hidden>
@@ -155,7 +155,7 @@ permalink: /dashboard/
         <button type="button" class="ads-btn ads-btn--ghost ads-btn--sm" id="ads-upload-back">&larr; Choose another file</button>
       </div>
       <div id="ads-upload-summary" class="ads-muted" style="font-size:12px;margin-bottom:8px"></div>
-      <div id="ads-upload-map-panel" style="border:1px solid #eee;border-radius:6px;padding:12px;background:#fff"></div>
+      <div id="ads-upload-map-panel" style="border:1px solid var(--ads-border);border-radius:6px;padding:12px;background:var(--ads-panel)"></div>
       <details style="margin-top:8px">
         <summary>Preview rows</summary>
         <div id="ads-upload-preview" style="overflow:auto;margin-top:8px"></div>
@@ -173,7 +173,7 @@ permalink: /dashboard/
     <div data-step-pane="progress" hidden style="margin-top:8px">
       <strong>Importing…</strong>
       <div class="ads-muted" id="ads-upload-progress-meta" style="font-size:12px;margin:4px 0"></div>
-      <div style="background:#f1f1f1;border-radius:4px;height:8px;overflow:hidden;margin:8px 0">
+      <div style="background:var(--ads-panel-2);border-radius:4px;height:8px;overflow:hidden;margin:8px 0">
         <div id="ads-upload-progress-bar" style="height:100%;width:0%;background:#2c7be5;transition:width .3s"></div>
       </div>
       <div id="ads-upload-progress-counts" style="font-size:13px"></div>
@@ -207,7 +207,7 @@ permalink: /dashboard/
 <div class="ads-actions" style="margin:24px 0;position:relative">
   <div class="ads-export-wrap" style="display:inline-block;position:relative">
     <button class="ads-btn ads-btn--ghost" id="ads-export-btn" aria-haspopup="true" aria-expanded="false">Export &#9662;</button>
-    <div id="ads-export-menu" class="ads-export-menu" hidden style="position:absolute;top:100%;left:0;margin-top:4px;min-width:240px;background:#fff;border:1px solid #ddd;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.08);z-index:50;padding:6px 0">
+    <div id="ads-export-menu" class="ads-export-menu" hidden style="position:absolute;top:100%;left:0;margin-top:4px;min-width:240px;z-index:50">
       <div class="ads-muted" style="padding:6px 12px;font-size:11px;text-transform:uppercase;letter-spacing:.05em">Loading presets…</div>
     </div>
   </div>
@@ -215,7 +215,7 @@ permalink: /dashboard/
 </div>
 
 <div id="ads-export-modal" class="ads-modal" hidden style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:200;display:flex;align-items:center;justify-content:center">
-  <div class="ads-modal__panel" style="background:#fff;border-radius:8px;width:min(720px,92vw);max-height:88vh;overflow:auto;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,.2)">
+  <div class="ads-modal__panel" style="border-radius:8px;width:min(720px,92vw);max-height:88vh;overflow:auto;padding:20px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <h3 style="margin:0">Custom Export</h3>
       <button class="ads-btn ads-btn--ghost" id="ads-export-cancel" type="button">&times;</button>
@@ -239,7 +239,7 @@ permalink: /dashboard/
           </select>
         </label>
       </div>
-      <fieldset style="border:1px solid #eee;padding:10px;margin-bottom:12px">
+      <fieldset style="border:1px solid var(--ads-border);border-radius:8px;padding:10px;margin-bottom:12px">
         <legend>Filters (optional)</legend>
         <div class="ads-split-3" style="gap:8px">
           <label>Status <input type="text" id="ads-export-filter-status" placeholder="approved" style="width:100%;padding:4px"></label>
@@ -255,7 +255,7 @@ permalink: /dashboard/
           <strong>Columns (drag to reorder)</strong>
           <span class="ads-muted" id="ads-export-col-count">0 selected</span>
         </div>
-        <ol id="ads-export-cols-selected" style="list-style:none;padding:0;margin:0 0 8px;border:1px solid #eee;border-radius:4px;min-height:40px;background:#fafafa"></ol>
+        <ol id="ads-export-cols-selected" style="list-style:none;padding:0;margin:0 0 8px;border:1px solid var(--ads-border);border-radius:4px;min-height:40px;background:var(--ads-panel-2)"></ol>
         <div style="display:flex;gap:6px">
           <select id="ads-export-cols-available" style="flex:1;padding:6px"></select>
           <button class="ads-btn ads-btn--ghost" type="button" id="ads-export-col-add">Add</button>
