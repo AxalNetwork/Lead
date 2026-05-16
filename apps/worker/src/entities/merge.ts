@@ -33,10 +33,33 @@ async function pickPrimary(env: Env, aId: string, bId: string): Promise<{ primar
 }
 
 async function mergeCore(env: Env, primary: string, secondary: string): Promise<MergeResult> {
-  // Pre-merge dedup: delete secondary rows that would violate the
-  // primary's UNIQUE constraints, so the subsequent UPDATEs don't abort
-  // the batch. This covers channels, tags, and rel_edges (both
-  // src-collision and dst-collision against the primary).
+  // Pre-merge dedup: bring secondary rows into compliance with the
+  // primary's UNIQUE constraints *before* the batch runs, so the
+  // UPDATEs that re-point entity_id don't abort. This covers facts
+  // (partial-unique on current-row per (entity,predicate,source) from
+  // migration 209), channels, tags, and rel_edges (both src-collision
+  // and dst-collision against the primary).
+
+  // Facts: if both entities have an is_current=1 fact for the same
+  // (predicate, source), the secondary's current row would collide
+  // with the primary's after the entity_id rewrite. Flip those
+  // secondary rows to is_current=0 so history is preserved but the
+  // partial UNIQUE index (uq_facts_current_per_pred) holds. We rely
+  // on IFNULL(source,'') for the comparison to match the index's
+  // own key expression.
+  await env.DB.prepare(
+    `UPDATE facts
+        SET is_current = 0
+      WHERE entity_id = ?
+        AND is_current = 1
+        AND EXISTS (
+          SELECT 1 FROM facts p
+           WHERE p.entity_id = ?
+             AND p.is_current = 1
+             AND p.predicate = facts.predicate
+             AND IFNULL(p.source,'') = IFNULL(facts.source,'')
+        )`,
+  ).bind(secondary, primary).run();
   await env.DB.prepare(
     `DELETE FROM channels WHERE entity_id = ? AND (kind, canonical) IN
        (SELECT kind, canonical FROM channels WHERE entity_id = ?)`,
