@@ -310,6 +310,11 @@ async function importUniverse(
   const collection = `explore.${slug}`;
   const seedHints = lookupSeedHints(url);
 
+  // Capture Universe marketing context (title, description, categories,
+  // author) so re-imports can re-tag entities and the dashboard can
+  // surface the explore page provenance without re-fetching the HTML.
+  const universeContext = extractUniverseContext(initial, fetched.html);
+
   // Re-use the same deterministic probe used for plain share links so
   // Universe → embedded sharedBase always lands in the right variant
   // (parser heuristics never decide). Multi-table bases fan out; a
@@ -317,8 +322,81 @@ async function importUniverse(
   const sub = await dispatchShare(env, baseHref, baseParsed, { collection, seedHints });
 
   sub.sourceCollection = collection;
+  // Persist the marketing context on the schema-cache row keyed by
+  // (shareId, '__universe'). Read by Task #6 / dashboard imports view.
+  if (baseParsed.shareId) {
+    await saveUniverseContext(env, baseParsed.shareId, {
+      slug,
+      collection,
+      explore_url: url,
+      shared_base_url: baseHref,
+      ...universeContext,
+    }).catch(() => undefined);
+  }
   if (errors.length) (sub.errors ??= []).push(...errors);
   return sub;
+}
+
+interface UniverseContext {
+  title: string | null;
+  description: string | null;
+  categories: string[];
+  author: string | null;
+}
+
+function extractUniverseContext(initial: unknown, html: string): UniverseContext {
+  let title: string | null = null;
+  let description: string | null = null;
+  let author: string | null = null;
+  const categories = new Set<string>();
+  // 1. Walk __INITIAL_DATA__ for the standard Universe payload shape.
+  walk(initial, (v) => {
+    if (!isObj(v)) return;
+    const o = v as Record<string, unknown>;
+    if (!title && typeof o.title === "string" && o.title.length > 3 && o.title.length < 200) {
+      title = o.title;
+    }
+    if (!description && typeof o.description === "string" && o.description.length > 10) {
+      description = o.description;
+    }
+    if (!author && typeof o.authorName === "string") author = o.authorName;
+    if (!author && isObj(o.author) && typeof (o.author as Record<string, unknown>).name === "string") {
+      author = String((o.author as Record<string, unknown>).name);
+    }
+    if (Array.isArray(o.categories)) {
+      for (const c of o.categories) {
+        if (typeof c === "string") categories.add(c);
+        else if (isObj(c) && typeof (c as Record<string, unknown>).name === "string") {
+          categories.add(String((c as Record<string, unknown>).name));
+        }
+      }
+    }
+  });
+  // 2. Fallback: og: meta tags from the rendered HTML.
+  if (!title) {
+    const m = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
+    if (m) title = decodeEntities(m[1]);
+  }
+  if (!description) {
+    const m = html.match(/<meta[^>]+(?:property=["']og:description["']|name=["']description["'])[^>]+content=["']([^"']+)["']/i);
+    if (m) description = decodeEntities(m[1]);
+  }
+  return { title, description, author, categories: [...categories] };
+}
+
+async function saveUniverseContext(
+  env: Env,
+  shareId: string,
+  context: Record<string, unknown>,
+): Promise<void> {
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `INSERT INTO airtable_share_schema_cache (share_id, table_id, schema_json, context_json, fetched_at)
+     VALUES (?, '__universe', '[]', ?, ?)
+     ON CONFLICT(share_id, table_id) DO UPDATE SET
+       context_json = excluded.context_json,
+       fetched_at   = excluded.fetched_at`,
+  ).bind(shareId, JSON.stringify(context), now).run();
 }
 
 function findUniverseBaseLink(initial: unknown, html: string): string | null {

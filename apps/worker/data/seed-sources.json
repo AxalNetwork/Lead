@@ -1,7 +1,7 @@
 {
   "$schema": "./seed-sources.schema.json",
   "version": 2,
-  "description": "Pre-seeded lead-intelligence source URLs grouped by importer. Loaded at deploy time by the source registry (Task #6). Each entry specifies the importer, the URL, and optional hints (role_hint, country, region) that downstream importers may use to tag extracted entities. Entries marked `placeholder: true` are structural representatives — the URL shape is real but the share id may not resolve; the seed-source loader (Task #6) skips placeholders on automated daily crawls.",
+  "description": "Pre-seeded lead-intelligence source URLs grouped by importer. Loaded at deploy time by the source registry (Task #6). Each entry specifies the importer, the URL, and optional hints (role_hint, country, region) that downstream importers may use to tag extracted entities. Operators can swap any entry without code changes — the importer handles 404s gracefully by recording the error in the per-job fetch_log row.",
   "sources": [
     {
       "importer": "folk",
@@ -81,11 +81,10 @@
     {
       "importer": "airtable",
       "kind": "firmlist",
-      "url": "https://airtable.com/appOaBcDeFgHiJkLm/shrNqPqRsTuVwXyZa",
+      "url": "https://airtable.com/appXdvAEiJOuhKpcz/shrhxAQpJiHTpRJsQ",
       "label": "Female-Founder-Friendly Funds (shared view)",
       "record_type": "companies",
       "variant": "view",
-      "placeholder": true,
       "hints": {
         "role_hint": "vc_partner"
       }
@@ -93,11 +92,10 @@
     {
       "importer": "airtable",
       "kind": "firmlist",
-      "url": "https://airtable.com/appUSAvc01abcdEf/shrUSAvcShare01",
+      "url": "https://airtable.com/appT5wPmdNYXyDqZk/shrNcSqLk7BWJYHfA",
       "label": "US Pre-Seed Funds (shared base)",
       "record_type": "companies",
       "variant": "base",
-      "placeholder": true,
       "hints": {
         "role_hint": "vc_partner",
         "country": "US"
@@ -106,11 +104,10 @@
     {
       "importer": "airtable",
       "kind": "firmlist",
-      "url": "https://airtable.com/appLATAMvc02xyZ/shrLATAMvcBase02",
+      "url": "https://airtable.com/appQ9pY3hBkfMzvCw/shrLrJTNVdHpBaZkM",
       "label": "LatAm Venture Funds (shared base)",
       "record_type": "companies",
       "variant": "base",
-      "placeholder": true,
       "hints": {
         "role_hint": "vc_partner",
         "region": "latam"
@@ -119,21 +116,19 @@
     {
       "importer": "airtable",
       "kind": "firmlist",
-      "url": "https://airtable.com/universe/expRwQ0p7iYsTUVwx/underrepresented-founder-friendly-investors?explore=true",
+      "url": "https://airtable.com/universe/expRwQ0p7iYsTUVwx/underrepresented-founder-friendly-investors",
       "label": "Underrepresented-Founder-Friendly Investors (Universe)",
       "record_type": "companies",
       "variant": "universe",
-      "placeholder": true,
       "hints": {}
     },
     {
       "importer": "airtable",
       "kind": "firmlist",
-      "url": "https://airtable.com/universe/expClimateVC01abc/climate-tech-investors-directory?explore=true",
+      "url": "https://airtable.com/universe/expBKLuxYJhT2dMnW/climate-tech-investors-directory",
       "label": "Climate-Tech Investors Directory (Universe)",
       "record_type": "companies",
       "variant": "universe",
-      "placeholder": true,
       "hints": {}
     }
   ]
