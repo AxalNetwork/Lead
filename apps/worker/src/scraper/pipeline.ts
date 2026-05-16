@@ -717,8 +717,8 @@ async function processFirmlist(
               hq_city: f.hq_city ?? "",
               thesis: f.thesis ?? "",
             },
-            history_source: "folk_share",
-          }).catch((e) => console.warn("folk firm EntityLock failed", upsertRes.firmId, (e as Error).message));
+            history_source: folkImportCtx.source,
+          }).catch((e) => console.warn(`${folkImportCtx.source} firm EntityLock failed`, upsertRes.firmId, (e as Error).message));
         }
         const firmTags: string[] = [];
         if (sourceCollection) firmTags.push(`collection:explore.${sourceCollection.replace(/^explore\./, "")}`);
@@ -816,8 +816,8 @@ async function processFirmlist(
               email: parsedLead.email ?? "",
               source_url: parsedLead.source_url,
             },
-            history_source: "folk_share",
-          }).catch((e) => console.warn("folk lead EntityLock failed", entityId, (e as Error).message));
+            history_source: folkImportCtx.source,
+          }).catch((e) => console.warn(`${folkImportCtx.source} lead EntityLock failed`, entityId, (e as Error).message));
         }
         const personTags = [...(p.tags ?? [])];
         if (sourceCollection) personTags.push(`collection:explore.${sourceCollection.replace(/^explore\./, "")}`);
