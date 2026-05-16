@@ -1,5 +1,6 @@
 import type { FirmlistImporter } from "./types";
 import { importFirms as airtableShare } from "./airtable_share";
+import { importFirms as airtable } from "./airtable";
 import { importFirms as googleSheets } from "./google_sheets";
 import { importFirms as mercury } from "./mercury";
 import { importFirms as openvc } from "./openvc";
@@ -12,6 +13,7 @@ import { importFirms as genericCsvUrl } from "./generic_csv_url";
 import { importFirms as genericJsonld } from "./generic_jsonld";
 
 export const FIRMLIST_IMPORTERS: Record<string, FirmlistImporter> = {
+  airtable,
   airtable_share: airtableShare,
   google_sheets: googleSheets,
   mercury,
@@ -42,7 +44,11 @@ export function selectImporter(url: string): { name: string; importer: FirmlistI
     return { name: "generic_jsonld", importer: genericJsonld };
   }
 
-  if (host === "airtable.com") return { name: "airtable_share", importer: airtableShare };
+  // Task #2: all airtable.com URLs route to the v2 importer (handles
+  // shared views, shared bases, and Universe explore pages). The legacy
+  // `airtable_share` importer remains in the registry for operator
+  // override only.
+  if (host === "airtable.com") return { name: "airtable", importer: airtable };
   if (host === "docs.google.com" && /\/spreadsheets\//.test(path)) return { name: "google_sheets", importer: googleSheets };
   if (host === "mercury.com") return { name: "mercury", importer: mercury };
   if (host === "openvc.app" || host === "api.openvc.app") return { name: "openvc", importer: openvc };

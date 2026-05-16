@@ -665,13 +665,22 @@ async function processFirmlist(
   const firmKeyToEntity = new Map<string, string>();
   const personKeyToEntity = new Map<string, string>();
 
-  // Task #1 acceptance: Folk-share imports must stamp every unified-graph
-  // fact with `source='folk_share'` and `source_kind='import'` (not the
-  // default `firmlist:folk` + `scrape`). For all other firmlist importers
-  // the default scrape provenance applies. Threaded through upsertFirm /
-  // insertLead → syncFirmToEntity / syncLeadToEntity → insertFactsBatch.
+  // Task #1 + #2 acceptance: Folk- and Airtable-share imports must stamp
+  // every unified-graph fact with the canonical share-source label and
+  // `source_kind='import'` (not the default `firmlist:{name}` + `scrape`).
+  // Threaded through upsertFirm / insertLead → syncFirmToEntity /
+  // syncLeadToEntity → insertFactsBatch.
+  //   folk      → source='folk_share', sourceKind='import'
+  //   airtable  → source='airtable_universe' when the importer surfaced a
+  //               sourceCollection (Variant C), else 'airtable_share'
+  // For all other firmlist importers the default scrape provenance applies.
   const folkImportCtx: { source: string; sourceKind: "import" } | null =
-    picked.name === "folk" ? { source: "folk_share", sourceKind: "import" } : null;
+    picked.name === "folk"
+      ? { source: "folk_share", sourceKind: "import" }
+      : picked.name === "airtable"
+        ? { source: result.sourceCollection ? "airtable_universe" : "airtable_share", sourceKind: "import" }
+        : null;
+  const sourceCollection = result.sourceCollection ?? null;
 
   for (const f of result.firms) {
     if (await isCancelled(env, jobId)) break;
@@ -711,7 +720,9 @@ async function processFirmlist(
             history_source: "folk_share",
           }).catch((e) => console.warn("folk firm EntityLock failed", upsertRes.firmId, (e as Error).message));
         }
-        await tagAsFolkImport(env, ent, picked.name, f.source_url ?? target);
+        const firmTags: string[] = [];
+        if (sourceCollection) firmTags.push(`collection:explore.${sourceCollection.replace(/^explore\./, "")}`);
+        await tagAsFolkImport(env, ent, picked.name, f.source_url ?? target, firmTags.length ? firmTags : null);
       }
     }
 
@@ -808,7 +819,9 @@ async function processFirmlist(
             history_source: "folk_share",
           }).catch((e) => console.warn("folk lead EntityLock failed", entityId, (e as Error).message));
         }
-        await tagAsFolkImport(env, entityId, picked.name, p.source_url ?? target, p.tags ?? null);
+        const personTags = [...(p.tags ?? [])];
+        if (sourceCollection) personTags.push(`collection:explore.${sourceCollection.replace(/^explore\./, "")}`);
+        await tagAsFolkImport(env, entityId, picked.name, p.source_url ?? target, personTags.length ? personTags : null);
       }
     }
   }
@@ -838,6 +851,44 @@ async function processFirmlist(
     } catch (e) {
       result.errors = result.errors ?? [];
       result.errors.push(`edge_fail:${edge.from_key}->${edge.to_key}:${(e as Error).message}`);
+    }
+  }
+
+  // Task #2: fan out any free-text URLs the importer surfaced (e.g.
+  // personal sites / Crunchbase links pasted into an Airtable "Notes"
+  // cell) as child `kind='url'` scrape jobs so they get crawled. We
+  // dedupe against the importer-supplied set; the queue layer itself
+  // dedupes by URL within the same parent job.
+  for (const childUrl of result.childUrls ?? []) {
+    if (await isCancelled(env, jobId)) break;
+    if (!isEnqueueable(childUrl)) continue;
+    try {
+      const childId = crypto.randomUUID();
+      const now = new Date().toISOString();
+      const kind = "url" as const;
+      await env.DB.prepare(
+        `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
+         VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
+      ).bind(
+        childId,
+        `firmlist_child:${kind}`,
+        safeHost(childUrl),
+        kind,
+        childUrl,
+        JSON.stringify({ parentJobId: jobId, from: importedFrom }),
+        now,
+        now,
+      ).run();
+      await env.LEAD_QUEUE.send({
+        jobId: childId,
+        kind,
+        target: childUrl,
+        config: { parentJobId: jobId, from: importedFrom },
+      });
+      childJobIds.push(childId);
+    } catch (e) {
+      result.errors = result.errors ?? [];
+      result.errors.push(`child_url_enqueue_fail:${childUrl}:${(e as Error).message}`);
     }
   }
 
@@ -1428,9 +1479,22 @@ async function tagAsFolkImport(
   sourceUrl: string,
   extraTags: string[] | null = null,
 ): Promise<void> {
+  // Task #1 / #2: align the importer-stamped `import_source` fact with
+  // the share-source label used by the rest of the dual-write path. Folk
+  // and Airtable share imports get `source_kind='import'`; everything
+  // else falls back to the legacy `firmlist:{name}` + `scrape` provenance.
   const isFolk = importerName === "folk";
-  const source = isFolk ? "folk_share" : `firmlist:${importerName}`;
-  const sourceKind = isFolk ? "import" : "scrape";
+  const isAirtable = importerName === "airtable";
+  // Airtable Universe explorers stamp `airtable_universe`; plain shared
+  // views/bases stamp `airtable_share`. We disambiguate by looking for a
+  // `collection:explore.*` value inside the tags emitted by the caller.
+  const looksUniverse = isAirtable && (extraTags ?? []).some((t) => /^collection:explore\./i.test(t));
+  const source = isFolk
+    ? "folk_share"
+    : isAirtable
+      ? (looksUniverse ? "airtable_universe" : "airtable_share")
+      : `firmlist:${importerName}`;
+  const sourceKind = (isFolk || isAirtable) ? "import" : "scrape";
   try {
     await insertFact(env, {
       entity_id: entityId,
@@ -1469,7 +1533,12 @@ function mapTagTaxonomy(prefix: string): Taxonomy | null {
     case "country":    return "geo";
     case "sector":     return "sector";
     case "stage":      return "stage";
-    case "tag":        return "tag";
+    case "tag":
+    // Task #2: Airtable Universe explore collections are surfaced as
+    // `collection:explore.{slug}` so the dashboard can filter "all
+    // underrepresented-founder investors", etc. We store them under
+    // the generic `tag` taxonomy.
+    case "collection": return "tag";
     default:           return null;
   }
 }

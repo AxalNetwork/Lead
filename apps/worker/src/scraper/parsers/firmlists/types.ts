@@ -125,6 +125,27 @@ export interface FirmlistImportResult {
    * person; rows without a matching key are silently dropped.
    */
   edges?: EdgeCandidate[];
+  /**
+   * Task #2: free-text URLs surfaced from "Notes" / "About" / "Thesis"
+   * cells in Airtable rows. The pipeline enqueues each as a child
+   * `kind='url'` scrape job so a personal-site or Crunchbase link inside
+   * a notes cell still gets crawled.
+   */
+  childUrls?: string[];
+  /**
+   * Task #2: Airtable Universe explore pages carry a `slug` we encode
+   * as `explore.{slug}`. The pipeline writes this as a `collection` tag
+   * (taxonomy='tag') on every imported entity so the dashboard can
+   * filter "all underrepresented-founder investors", etc.
+   */
+  sourceCollection?: string | null;
+  /**
+   * Task #2: per-table metadata for shared-base imports (Airtable
+   * Variant B). One entry per table fanned out. The dashboard's
+   * mapping UI consumes this to render a tab strip with intent
+   * detection (firms / leads / metrics).
+   */
+  tableTabs?: Array<{ tableId: string; name: string; intent: string; rowCount: number }>;
 }
 
 export type FirmlistImporter = (url: string, env: Env) => Promise<FirmlistImportResult>;
