@@ -1,0 +1,102 @@
+{%- assign p = page.url -%}
+<aside class="ads-rail" id="ads-rail" aria-label="Primary navigation">
+  <a href="/dashboard/" class="ads-rail__brand">
+    <span class="ads-rail__brand-mark" aria-hidden="true"></span>
+    <span>AI Data Signal</span>
+  </a>
+
+  <div class="ads-rail__group">
+    <a class="ads-rail__link {% if p == '/dashboard/' %}active{% endif %}" href="/dashboard/" data-cmdk-nav="Home">
+      <span class="ads-rail__icon" aria-hidden="true">⌂</span><span>Home</span>
+    </a>
+  </div>
+
+  <div class="ads-rail__group">
+    <div class="ads-rail__group-label">Discover</div>
+    <a class="ads-rail__link {% if p contains '/dashboard/investors' %}active{% endif %}" href="/dashboard/investors/" data-cmdk-nav="Investors">
+      <span class="ads-rail__icon">◆</span><span>Investors</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/dashboard/firms' %}active{% endif %}" href="/dashboard/firms/" data-cmdk-nav="Firms">
+      <span class="ads-rail__icon">◇</span><span>Firms</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/dashboard/companies' %}active{% endif %}" href="/dashboard/companies/" data-cmdk-nav="Companies">
+      <span class="ads-rail__icon">▣</span><span>Companies</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/dashboard/accounts' %}active{% endif %}" href="/dashboard/accounts/" data-cmdk-nav="Customers">
+      <span class="ads-rail__icon">◍</span><span>Customers</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/dashboard/buyer' %}active{% endif %}" href="/dashboard/accounts/" data-cmdk-nav="Founders">
+      <span class="ads-rail__icon">◐</span><span>Founders</span>
+    </a>
+  </div>
+
+  <div class="ads-rail__group">
+    <div class="ads-rail__group-label">Workspace</div>
+    <a class="ads-rail__link {% if p contains '/dashboard/personas' %}active{% endif %}" href="/dashboard/personas/" data-cmdk-nav="Personas">
+      <span class="ads-rail__icon">☉</span><span>Personas</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/dashboard/projects' %}active{% endif %}" href="/dashboard/projects/" data-cmdk-nav="Projects">
+      <span class="ads-rail__icon">▤</span><span>Projects</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/dashboard/campaigns' %}active{% endif %}" href="/dashboard/campaigns/" data-cmdk-nav="Campaigns">
+      <span class="ads-rail__icon">✉</span><span>Campaigns</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/dashboard/review' %}active{% endif %}" href="/dashboard/review/" data-cmdk-nav="Review queue">
+      <span class="ads-rail__icon">✓</span><span>Review</span>
+    </a>
+  </div>
+
+  <div class="ads-rail__group">
+    <div class="ads-rail__group-label">Imports &amp; Sources</div>
+    <a class="ads-rail__link {% if p contains '/dashboard/imports' %}active{% endif %}" href="/dashboard/imports/" data-cmdk-nav="File imports">
+      <span class="ads-rail__icon">⇧</span><span>File imports</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/dashboard/uploads' %}active{% endif %}" href="/dashboard/uploads/" data-cmdk-nav="Past uploads">
+      <span class="ads-rail__icon">▥</span><span>Past uploads</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/dashboard/crawlers' %}active{% endif %}" href="/dashboard/crawlers/" data-cmdk-nav="Crawlers">
+      <span class="ads-rail__icon">◎</span><span>Crawlers</span>
+    </a>
+  </div>
+
+  <div class="ads-rail__group">
+    <div class="ads-rail__group-label">Analytics</div>
+    <a class="ads-rail__link {% if p == '/dashboard/analytics/' %}active{% endif %}" href="/dashboard/analytics/" data-cmdk-nav="Pipeline KPIs">
+      <span class="ads-rail__icon">▦</span><span>Pipeline KPIs</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/dashboard/analytics-firms' %}active{% endif %}" href="/dashboard/analytics-firms/" data-cmdk-nav="Firm analytics">
+      <span class="ads-rail__icon">▥</span><span>Firm analytics</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/dashboard/segments' %}active{% endif %}" href="/dashboard/segments/" data-cmdk-nav="Segments">
+      <span class="ads-rail__icon">◈</span><span>Segments</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/dashboard/icps' %}active{% endif %}" href="/dashboard/icps/" data-cmdk-nav="ICPs">
+      <span class="ads-rail__icon">◫</span><span>ICPs</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/dashboard/relationships' %}active{% endif %}" href="/dashboard/relationships/" data-cmdk-nav="Relationships">
+      <span class="ads-rail__icon">⟁</span><span>Relationships</span>
+    </a>
+  </div>
+
+  <div class="ads-rail__group">
+    <div class="ads-rail__group-label">Admin</div>
+    <a class="ads-rail__link {% if p contains '/dashboard/health' %}active{% endif %}" href="/dashboard/health/" data-cmdk-nav="Health">
+      <span class="ads-rail__icon">♥</span><span>Health</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/dashboard/errors' %}active{% endif %}" href="/dashboard/errors/" data-cmdk-nav="Errors">
+      <span class="ads-rail__icon">⚠</span><span>Errors</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/dashboard/jobs' %}active{% endif %}" href="/dashboard/jobs/" data-cmdk-nav="Jobs">
+      <span class="ads-rail__icon">≡</span><span>Jobs</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/dashboard/compliance' %}active{% endif %}" href="/dashboard/compliance/" data-cmdk-nav="Compliance">
+      <span class="ads-rail__icon">§</span><span>Compliance</span>
+    </a>
+  </div>
+
+  <div class="ads-rail__spacer"></div>
+  <div class="ads-rail__footer">
+    <span>v2 UI</span>
+  </div>
+</aside>
+<div class="ads-rail-backdrop" id="ads-rail-backdrop" aria-hidden="true"></div>

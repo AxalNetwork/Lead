@@ -1,0 +1,13 @@
+{%- assign code = include.code | default: "ERR" -%}
+<div class="ads-empty-state" role="alert">
+  <div class="ads-empty-state__art" style="background:rgba(255,93,108,.15);color:var(--ads-danger)" aria-hidden="true">!</div>
+  <h3 class="ads-empty-state__title">{{ include.title | default: "Something went wrong" }}</h3>
+  <p class="ads-empty-state__body">
+    <span class="ads-pill err" style="margin-right:6px">{{ code }}</span>
+    {{ include.body | default: "We couldn't load this section. Try again, or report it." }}
+  </p>
+  <div style="display:inline-flex;gap:8px">
+    {% if include.retry_id %}<button class="ads-btn" type="button" id="{{ include.retry_id }}">Retry</button>{% endif %}
+    <a class="ads-btn ads-btn--ghost" href="/dashboard/errors/?code={{ code }}">Report &amp; investigate</a>
+  </div>
+</div>

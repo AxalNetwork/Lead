@@ -263,7 +263,7 @@
     var prev = e.target.closest("button[data-icp-preview]");
     if (prev) { previewIcp(prev.getAttribute("data-icp-preview")); return; }
     var del = e.target.closest("button[data-icp-del]");
-    if (del) { if (!confirm("Delete this ICP?")) return; await api("/api/icp/" + encodeURIComponent(del.getAttribute("data-icp-del")), { method: "DELETE" }); loadList(); return; }
+    if (del) { if (!(await window.ADS.ui.confirm({ title: "Delete ICP?", body: "Saved matches that reference this ICP will lose their link.", confirmLabel: "Delete", danger: true }))) return; await api("/api/icp/" + encodeURIComponent(del.getAttribute("data-icp-del")), { method: "DELETE" }); loadList(); return; }
     var make = e.target.closest("#ads-icp-make-campaign");
     if (make && CURRENT_ID) {
       var name = prompt("Campaign name?");
@@ -271,7 +271,7 @@
       try {
         var c = await api("/api/campaigns", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name, icp_id: CURRENT_ID, channel: "email" }) });
         window.location.href = "/dashboard/campaigns/?id=" + encodeURIComponent(c.id);
-      } catch (err) { alert("Failed: " + err.message); }
+      } catch (err) { window.ADS.ui.toast({ message: "Failed: " + err.message, kind: "err" }); }
     }
   });
 

@@ -1,0 +1,8 @@
+<div class="ads-empty-state" role="status">
+  <div class="ads-empty-state__art" aria-hidden="true">{{ include.icon | default: "○" }}</div>
+  <h3 class="ads-empty-state__title">{{ include.title | default: "Nothing here yet" }}</h3>
+  <p class="ads-empty-state__body">{{ include.body | default: "Once data lands, it'll show up here." }}</p>
+  {% if include.cta_href and include.cta_label %}
+    <a class="ads-btn" href="{{ include.cta_href }}">{{ include.cta_label }}</a>
+  {% endif %}
+</div>

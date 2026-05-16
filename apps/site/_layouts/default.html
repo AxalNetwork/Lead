@@ -1,76 +1,58 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
   <title>{% if page.title %}{{ page.title }} — {% endif %}{{ site.title }}</title>
   <link rel="icon" type="image/webp" href="/assets/images/favicon.webp">
+  <link rel="preconnect" href="{{ site.api_base }}" crossorigin>
+  <link rel="dns-prefetch" href="{{ site.api_base }}">
   <link rel="stylesheet" href="/assets/css/bootstrap.min.css">
   <link rel="stylesheet" href="/assets/css/plugins.css">
   <link rel="stylesheet" href="/assets/css/style.css">
-  <link rel="stylesheet" href="/assets/css/dashboard.css">
-  <style>
-    @media (max-width:768px){
-      body.ads-body{padding-left:env(safe-area-inset-left,0);padding-right:env(safe-area-inset-right,0)}
-      body.ads-body .container,body.ads-body .container-fluid{padding-left:0;padding-right:0;max-width:100%}
-    }
-  </style>
+  <link rel="stylesheet" href="/assets/css/design.css?v={{ site.time | date: '%s' }}">
+  <link rel="stylesheet" href="/assets/css/dashboard.css?v={{ site.time | date: '%s' }}">
+  <script>
+    // Apply persisted theme synchronously to avoid FOUC.
+    (function () {
+      try {
+        var t = localStorage.getItem("ads.theme") || "auto";
+        var resolved = t;
+        if (t === "auto") resolved = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", resolved);
+        var r = localStorage.getItem("ads.rail") || "expanded";
+        document.documentElement.setAttribute("data-rail-pre", r);
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body class="ads-body">
-  <header class="ads-topbar">
-    <div class="ads-topbar__inner">
-      <a href="/dashboard/" class="ads-brand">AI Data Signal</a>
-      <div class="ads-topbar__spacer"></div>
-      <div class="ads-user">
-        <span id="ads-user-email" class="ads-user__email">…</span>
-        <a href="https://axalnetwork.cloudflareaccess.com/cdn-cgi/access/logout" class="ads-user__logout">Sign out</a>
-      </div>
-      <button type="button"
-              id="ads-nav-toggle"
-              class="ads-nav-toggle"
-              aria-label="Open navigation menu"
-              aria-expanded="false"
-              aria-controls="ads-nav-panel">
-        <span class="ads-nav-toggle__bar"></span>
-        <span class="ads-nav-toggle__bar"></span>
-        <span class="ads-nav-toggle__bar"></span>
-      </button>
-      <nav id="ads-nav-panel"
-           class="ads-nav-panel"
-           aria-labelledby="ads-nav-toggle"
-           hidden>
-        <a href="/dashboard/" class="{% if page.url == '/dashboard/' %}active{% endif %}">Dashboard</a>
-        <a href="/dashboard/jobs/" class="{% if page.url == '/dashboard/jobs/' %}active{% endif %}">Jobs</a>
-        <a href="/dashboard/review/" class="{% if page.url == '/dashboard/review/' %}active{% endif %}">Review</a>
-        <a href="/dashboard/firms/" class="{% if page.url == '/dashboard/firms/' %}active{% endif %}">Firms</a>
-        <a href="/dashboard/investors/" class="{% if page.url contains '/dashboard/investors' %}active{% endif %}">Investors</a>
-        <a href="/dashboard/companies/" class="{% if page.url contains '/dashboard/companies' %}active{% endif %}">Companies</a>
-        <a href="/dashboard/accounts/" class="{% if page.url contains '/dashboard/accounts' %}active{% endif %}">Accounts</a>
-        <a href="/dashboard/crawlers/" class="{% if page.url contains '/dashboard/crawlers' %}active{% endif %}">Crawlers</a>
-        <a href="/dashboard/analytics/" class="{% if page.url == '/dashboard/analytics/' %}active{% endif %}">Analytics</a>
-        <a href="/dashboard/analytics-firms/" class="{% if page.url == '/dashboard/analytics-firms/' %}active{% endif %}">Firm Analytics</a>
-        <a href="/dashboard/segments/" class="{% if page.url == '/dashboard/segments/' %}active{% endif %}">Segments</a>
-        <a href="/dashboard/icps/" class="{% if page.url == '/dashboard/icps/' %}active{% endif %}">ICPs</a>
-        <a href="/dashboard/personas/" class="{% if page.url contains '/dashboard/personas' %}active{% endif %}">Personas</a>
-        <a href="/dashboard/projects/" class="{% if page.url contains '/dashboard/projects' %}active{% endif %}">Projects</a>
-        <a href="/dashboard/campaigns/" class="{% if page.url == '/dashboard/campaigns/' %}active{% endif %}">Campaigns</a>
-        <a href="/dashboard/compliance/" class="{% if page.url == '/dashboard/compliance/' %}active{% endif %}">Compliance</a>
-        <a href="/dashboard/errors/" class="{% if page.url == '/dashboard/errors/' %}active{% endif %}">Errors</a>
-        <a href="/dashboard/health/" class="{% if page.url == '/dashboard/health/' %}active{% endif %}">Health</a>
-        <a href="/">Home</a>
-      </nav>
+  <div class="ads-shell" id="ads-shell" data-rail="expanded">
+    {% include shell/sidenav.html %}
+    <div class="ads-shell__main">
+      {% include shell/topbar.html %}
+      <main class="ads-main" id="ads-main" tabindex="-1">
+        {{ content }}
+      </main>
     </div>
-  </header>
-  <main class="ads-main">
-    {{ content }}
-  </main>
-  <script src="/assets/js/jquery.min.js"></script>
-  <script src="/assets/js/nav.js"></script>
-  <script src="/assets/js/dashboard.js"></script>
-  <script src="/assets/js/charts.js"></script>
-  <script src="/assets/js/dashboard_charts.js"></script>
-  <script src="/assets/js/analytics.js"></script>
+  </div>
+  <script>
+    (function () {
+      var pre = document.documentElement.getAttribute("data-rail-pre");
+      var s = document.getElementById("ads-shell");
+      if (s && pre) s.setAttribute("data-rail", pre);
+    })();
+    window.ADS = window.ADS || {};
+    window.ADS.API = "{{ site.api_base }}";
+  </script>
+  <script src="/assets/js/jquery.min.js" defer></script>
+  <script src="/assets/js/ui.js?v={{ site.time | date: '%s' }}" defer></script>
+  <script src="/assets/js/cmdk.js?v={{ site.time | date: '%s' }}" defer></script>
+  <script src="/assets/js/dashboard.js?v={{ site.time | date: '%s' }}" defer></script>
+  <script src="/assets/js/charts.js" defer></script>
+  <script src="/assets/js/dashboard_charts.js" defer></script>
+  <script src="/assets/js/analytics.js" defer></script>
   {% if site.cf_web_analytics_token != "" %}
   <script defer src="https://static.cloudflareinsights.com/beacon.min.js"
     data-cf-beacon='{"token":"{{ site.cf_web_analytics_token }}"}'></script>

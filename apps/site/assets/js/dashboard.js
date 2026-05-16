@@ -1124,9 +1124,9 @@
           });
         });
         menu.querySelectorAll(".ads-export-del").forEach(function (b) {
-          b.addEventListener("click", function (e) {
+          b.addEventListener("click", async function (e) {
             e.preventDefault(); e.stopPropagation();
-            if (!confirm("Delete this template?")) return;
+            if (!(await window.ADS.ui.confirm({ title: "Delete export template?", body: "This template will no longer appear in the export menu.", confirmLabel: "Delete", danger: true }))) return;
             fetch(API_BASE + "/api/exports/templates/" + b.dataset.id, { method: "DELETE", credentials: "include" })
               .then(function () { loadExportMenu(); });
           });

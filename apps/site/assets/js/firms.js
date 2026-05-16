@@ -171,9 +171,9 @@
         return '<li style="margin:4px 0;display:flex;justify-content:space-between;align-items:center"><a href="?' + esc(v.querystring) + '">' + esc(v.name) + '</a><button class="ads-view-del" data-id="' + v.id + '" style="background:none;border:none;color:#a00;cursor:pointer">&times;</button></li>';
       }).join("");
       ul.querySelectorAll(".ads-view-del").forEach(function (b) {
-        b.addEventListener("click", function (e) {
+        b.addEventListener("click", async function (e) {
           e.preventDefault();
-          if (!confirm("Delete this view?")) return;
+          if (!(await window.ADS.ui.confirm({ title: "Delete saved view?", body: "This filter will be removed from your saved views.", confirmLabel: "Delete", danger: true }))) return;
           fetch(API_BASE + "/api/saved-filters/" + b.dataset.id, { method: "DELETE", credentials: "include" }).then(loadViews);
         });
       });

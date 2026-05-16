@@ -1,0 +1,28 @@
+<header class="ads-topbar">
+  <button type="button" id="ads-rail-toggle" class="ads-rail-toggle" aria-label="Toggle navigation"
+          aria-controls="ads-rail" aria-expanded="true">
+    <span aria-hidden="true">☰</span>
+  </button>
+  <div class="ads-topbar__title">{{ page.title | default: "Dashboard" }}</div>
+  <div class="ads-topbar__spacer"></div>
+
+  <button type="button" id="ads-cmdk-trigger" class="ads-topbar__btn" aria-label="Open command palette"
+          aria-keyshortcuts="Control+K Meta+K">
+    <span aria-hidden="true">🔍</span>
+    <span>Search</span>
+    <span class="ads-kbd" aria-hidden="true">⌘K</span>
+  </button>
+
+  <button type="button" id="ads-theme-toggle" class="ads-topbar__btn" aria-label="Toggle color theme">
+    <span id="ads-theme-icon" aria-hidden="true">◐</span>
+  </button>
+
+  <button type="button" id="ads-notify-btn" class="ads-topbar__btn" aria-label="Notifications" title="Notifications (coming soon)">
+    <span aria-hidden="true">🔔</span>
+  </button>
+
+  <a href="https://axalnetwork.cloudflareaccess.com/cdn-cgi/access/logout"
+     class="ads-avatar" id="ads-user-avatar"
+     aria-label="Sign out" title="Sign out"
+     data-user-email="">·</a>
+</header>

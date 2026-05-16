@@ -107,7 +107,7 @@
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       }).then(function () { window.location.reload(); })
-        .catch(function (err) { alert("Save failed: " + err.message); });
+        .catch(function (err) { window.ADS.ui.toast({ message: "Save failed: " + err.message, kind: "err" }); });
     };
   }
 
@@ -115,8 +115,8 @@
     root.querySelector('[data-act="edit"]').addEventListener("click", function () { openEditModal(firm); });
     root.querySelector('[data-act="find-team"]').addEventListener("click", function () {
       api("/api/firms/" + firm.id + "/crawl-team", { method: "POST" })
-        .then(function (r) { alert("Team crawl queued (job " + r.job_id + ")."); })
-        .catch(function (e) { alert("Failed: " + e.message); });
+        .then(function (r) { window.ADS.ui.toast({ message: "Team crawl queued (job " + r.job_id + ").", kind: "ok" }); })
+        .catch(function (e) { window.ADS.ui.toast({ message: "Failed: " + e.message, kind: "err" }); });
     });
     root.querySelector('[data-act="add-person"]').addEventListener("click", function () {
       var leadId = prompt("Existing lead ID (UUID):"); if (!leadId) return;
@@ -124,7 +124,7 @@
       api("/api/firms/" + firm.id + "/people", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lead_id: leadId, role: role }),
-      }).then(function () { window.location.reload(); }).catch(function (e) { alert("Failed: " + e.message); });
+      }).then(function () { window.location.reload(); }).catch(function (e) { window.ADS.ui.toast({ message: "Failed: " + e.message, kind: "err" }); });
     });
     root.querySelector('[data-act="enrich"]').addEventListener("click", function () {
       Promise.all([
@@ -132,10 +132,10 @@
         Promise.all((firm.people || []).filter(function (p) { return p.id; }).map(function (p) {
           return api("/api/leads/" + p.id + "/enrich", { method: "POST" }).catch(function () { return null; });
         })),
-      ]).then(function () { alert("Enrich queued for " + (firm.people || []).length + " person(s)."); });
+      ]).then(function () { window.ADS.ui.toast({ message: "Enrich queued for " + (firm.people || []).length + " person(s).", kind: "ok" }); });
     });
-    root.querySelector('[data-act="archive"]').addEventListener("click", function () {
-      if (!confirm("Archive this firm?")) return;
+    root.querySelector('[data-act="archive"]').addEventListener("click", async function () {
+      if (!(await window.ADS.ui.confirm({ title: "Archive firm?", body: "This firm and its team will be hidden from search and lists.", confirmLabel: "Archive", danger: true }))) return;
       api("/api/firms/" + firm.id, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "archived" }),

@@ -1,0 +1,4 @@
+{%- assign rows = include.rows | default: 5 -%}
+<div class="ads-skel-rows" aria-busy="true" aria-live="polite">
+  {% for i in (1..rows) %}<div class="ads-skel" style="height:14px;width:{{ 60 | plus: forloop.index | times: 4 }}%"></div>{% endfor %}
+</div>

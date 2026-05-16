@@ -81,7 +81,7 @@
   go.addEventListener("click", function () {
     var srcId = Number(fromInput.dataset.entityId);
     var dstId = Number(toInput.dataset.entityId);
-    if (!Number.isFinite(srcId)) { alert("Pick a 'from' entity first."); return; }
+    if (!Number.isFinite(srcId)) { window.ADS.ui.toast({ message: "Pick a 'from' entity first.", kind: "warn" }); return; }
     if (Number.isFinite(dstId)) showPath(srcId, dstId);
     else showSubgraph(srcId);
   });

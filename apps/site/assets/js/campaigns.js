@@ -58,16 +58,16 @@
         var c = await api("/api/campaigns", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name, icp_id: icp }) });
         loadList();
         loadDetail(c.id);
-      } catch (err) { alert("Failed: " + err.message); }
+      } catch (err) { window.ADS.ui.toast({ message: "Failed: " + err.message, kind: "err" }); }
       return;
     }
     var prev = e.target.closest("#ads-camp-preview");
     if (prev && CURRENT) {
       try {
         var p = await api("/api/campaigns/" + encodeURIComponent(CURRENT) + "/preview");
-        alert("Matched " + p.matched + " leads. Refreshing members…");
+        window.ADS.ui.toast({ message: "Matched " + p.matched + " leads. Refreshing members…", kind: "ok" });
         loadDetail(CURRENT);
-      } catch (err) { alert("Failed: " + err.message); }
+      } catch (err) { window.ADS.ui.toast({ message: "Failed: " + err.message, kind: "err" }); }
       return;
     }
     var exp = e.target.closest("#ads-camp-export");
@@ -83,7 +83,7 @@
         a.download = "campaign-" + CURRENT.slice(0, 8) + "." + (fmt === "json" ? "json" : "csv");
         a.click();
         loadDetail(CURRENT);
-      } catch (err) { alert("Export failed: " + err.message); }
+      } catch (err) { window.ADS.ui.toast({ message: "Export failed: " + err.message, kind: "err" }); }
     }
   });
 

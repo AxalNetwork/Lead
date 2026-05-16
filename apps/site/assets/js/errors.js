@@ -288,7 +288,7 @@
     $("ads-err-modal-resolve-cluster").addEventListener("click", async (ev) => {
       const id = ev.currentTarget.dataset.errId;
       const msg = $("ads-err-modal-msg");
-      if (!confirm("Mark every open error in this (code, host) cluster as resolved?")) return;
+      if (!(await window.ADS.ui.confirm({ title: "Resolve entire cluster?", body: "Every open error in this (code, host) cluster will be marked resolved." }))) return;
       msg.textContent = "Resolving cluster…";
       try {
         const r = await jpost("/api/errors/" + id + "/resolve", { cluster: true });

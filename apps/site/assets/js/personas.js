@@ -186,8 +186,9 @@
       });
     });
 
-    btnArchive.addEventListener("click", function () {
-      if (!id || !confirm("Archive this persona? Match rows will be deleted.")) return;
+    btnArchive.addEventListener("click", async function () {
+      if (!id) return;
+      if (!(await window.ADS.ui.confirm({ title: "Archive persona?", body: "Match rows will be deleted. This can't be undone.", confirmLabel: "Archive", danger: true }))) return;
       fetchJson("/api/personas/" + encodeURIComponent(id), { method: "DELETE" }).then(function (r) {
         if (!r.ok) { setMsg("archive failed", "#a33"); return; }
         location.href = "/dashboard/personas/";

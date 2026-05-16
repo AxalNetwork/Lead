@@ -269,12 +269,12 @@
 
   function rerun(id) {
     apiFetch("/api/uploads/" + encodeURIComponent(id) + "/rerun", { method: "POST" })
-      .then(loadList).catch(function (e) { alert("Rerun failed: " + e.message); });
+      .then(loadList).catch(function (e) { window.ADS.ui.toast({ message: "Rerun failed: " + e.message, kind: "err" }); });
   }
-  function del(id) {
-    if (!confirm("Delete this upload? This removes the file and the file_imports row.")) return;
+  async function del(id) {
+    if (!(await window.ADS.ui.confirm({ title: "Delete upload?", body: "This removes the file and the file_imports row. The import history will be lost.", confirmLabel: "Delete", danger: true }))) return;
     apiFetch("/api/uploads/" + encodeURIComponent(id), { method: "DELETE" })
-      .then(loadList).catch(function (e) { alert("Delete failed: " + e.message); });
+      .then(loadList).catch(function (e) { window.ADS.ui.toast({ message: "Delete failed: " + e.message, kind: "err" }); });
   }
 
   // ---- Wiring ----

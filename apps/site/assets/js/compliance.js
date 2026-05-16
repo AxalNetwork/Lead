@@ -55,7 +55,7 @@
       var fd = new FormData(form);
       var body = { email: fd.get("email") || undefined, phone: fd.get("phone") || undefined, linkedin_url: fd.get("linkedin_url") || undefined };
       if (!body.email && !body.phone && !body.linkedin_url) { showMsg(form, "Provide at least one identifier.", "err"); return; }
-      if (!confirm("Erase all matching leads' PII and add identifiers to DNC?")) return;
+      if (!(await window.ADS.ui.confirmDestructive({ title: "Erase PII and DNC?", body: "All matching leads' PII will be erased and identifiers added to the Do-Not-Contact list. This is irreversible.", confirmText: "ERASE", confirmLabel: "Erase & DNC" }))) return;
       showMsg(form, "Erasing…");
       try {
         var r = await api("/api/gdpr/erase", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -72,9 +72,9 @@
     var rm = e.target.closest("button[data-dnc-rm]");
     if (!rm) return;
     var parts = rm.getAttribute("data-dnc-rm").split("|");
-    if (!confirm("Remove " + parts[0] + " " + parts[1] + " from DNC?")) return;
+    if (!(await window.ADS.ui.confirm({ title: "Remove from DNC?", body: parts[0] + " " + parts[1] + " will be removed from the Do-Not-Contact list." }))) return;
     try { await api("/api/compliance/dnc", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: parts[0], value: parts[1] }) }); loadDnc(); }
-    catch (err) { alert("Failed: " + err.message); }
+    catch (err) { window.ADS.ui.toast({ message: "Failed: " + err.message, kind: "err" }); }
   });
 
   document.addEventListener("DOMContentLoaded", function () {

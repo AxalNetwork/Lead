@@ -4,10 +4,19 @@ title: Dashboard
 permalink: /dashboard/
 ---
 
-<h1 class="ads-page-title">Admin Dashboard</h1>
+<h1 class="ads-page-title">Today</h1>
 <p class="ads-page-sub">Live overview of your lead intelligence pipeline.</p>
 
-<div class="ads-card ads-scrape" id="ads-scrape-panel">
+<div class="ads-card" style="margin-bottom:18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+  <div style="flex:1;min-width:200px">
+    <strong>Need to import data or start a crawl?</strong>
+    <div class="ads-muted" style="font-size:12px;margin-top:2px">All upload, scrape, and discovery tools live under Imports &amp; Sources.</div>
+  </div>
+  <a class="ads-btn" href="/dashboard/imports/">Open Imports &rarr;</a>
+  <a class="ads-btn ads-btn--ghost" href="/dashboard/jobs/">View jobs</a>
+</div>
+
+<div class="ads-card ads-scrape" id="ads-scrape-panel" hidden>
   <div class="ads-scrape__head">
     <h3>Start Scrape</h3>
     <div class="ads-tabs" role="tablist">

@@ -1,0 +1,193 @@
+---
+layout: default
+title: File imports
+permalink: /dashboard/imports/
+---
+
+<h1 class="ads-page-title">Imports &amp; Sources</h1>
+<p class="ads-page-sub">Spreadsheets, PDFs, link trees, and discovered partners — kick off a job here.</p>
+
+<div class="ads-card ads-scrape" id="ads-scrape-panel">
+  <div class="ads-scrape__head">
+    <h3>Start a job</h3>
+    <div class="ads-tabs" role="tablist">
+      <button type="button" class="ads-tab active" data-tab="single" role="tab">Single URL</button>
+      <button type="button" class="ads-tab" data-tab="linktree" role="tab">Link tree / list</button>
+      <button type="button" class="ads-tab" data-tab="bulk" role="tab">Bulk paste</button>
+      <button type="button" class="ads-tab" data-tab="discover" role="tab">Discover partners</button>
+      <button type="button" class="ads-tab" data-tab="firmlist" role="tab">Import firms from list</button>
+      <button type="button" class="ads-tab" data-tab="upload" role="tab">Import file (CSV/XLSX/PDF)</button>
+    </div>
+  </div>
+
+  <form class="ads-tab-panel active" data-tab="single" id="ads-form-single" autocomplete="off">
+    <label class="ads-field">
+      <span>URL</span>
+      <input type="url" name="target" placeholder="https://example.com/team" required>
+    </label>
+    <label class="ads-field">
+      <span>Job name (optional)</span>
+      <input type="text" name="name" placeholder="example.com /team page">
+    </label>
+    <div class="ads-form-actions">
+      <button type="submit" class="ads-btn">Scrape</button>
+      <span class="ads-form-msg" data-msg></span>
+    </div>
+  </form>
+
+  <form class="ads-tab-panel" data-tab="linktree" id="ads-form-linktree" autocomplete="off">
+    <label class="ads-field">
+      <span>List / link-tree URL</span>
+      <input type="url" name="target" placeholder="https://linktr.ee/handle or https://example.com/people" required>
+    </label>
+    <label class="ads-field">
+      <span>Parser hint (optional)</span>
+      <select name="parser">
+        <option value="">auto-detect</option>
+        <option value="linktree">linktree</option>
+        <option value="generic_list">generic list page</option>
+      </select>
+    </label>
+    <div class="ads-form-actions">
+      <button type="submit" class="ads-btn">Scrape link tree</button>
+      <span class="ads-form-msg" data-msg></span>
+    </div>
+  </form>
+
+  <form class="ads-tab-panel" data-tab="discover" id="ads-form-discover" autocomplete="off">
+    <label class="ads-field">
+      <span>Firm domain (e.g. sequoiacap.com)</span>
+      <input type="text" name="firmDomain" placeholder="sequoiacap.com">
+    </label>
+    <label class="ads-field">
+      <span>— or persona search</span>
+      <input type="text" name="persona" placeholder='e.g. "venture partner"'>
+    </label>
+    <label class="ads-field">
+      <span>Country (optional, persona only)</span>
+      <input type="text" name="country" placeholder="United States">
+    </label>
+    <div class="ads-form-actions">
+      <button type="submit" class="ads-btn">Discover</button>
+      <span class="ads-form-msg" data-msg></span>
+    </div>
+    <div class="ads-discover-results" id="ads-discover-candidates" style="margin-top:16px"></div>
+  </form>
+
+  <form class="ads-tab-panel" data-tab="firmlist" id="ads-form-firmlist" autocomplete="off">
+    <label class="ads-field">
+      <span>Firm-list URL(s) — one per line, max 50</span>
+      <textarea name="urls" rows="5" placeholder="https://mercury.com/investor-database&#10;https://docs.google.com/spreadsheets/d/.../edit#gid=0&#10;https://airtable.com/appXXX/shrYYY/viwZZZ" required></textarea>
+    </label>
+    <label class="ads-field">
+      <span>Importer (optional, auto-detect by default)</span>
+      <select name="importer">
+        <option value="">auto-detect</option>
+        <option value="airtable_share">Airtable share</option>
+        <option value="google_sheets">Google Sheets</option>
+        <option value="mercury">Mercury investor DB</option>
+        <option value="openvc">OpenVC</option>
+        <option value="folk_app">Folk share</option>
+        <option value="nyc_founder_guide">NYC Founder Guide</option>
+        <option value="versatilevc">VersatileVC</option>
+        <option value="generic_csv_url">Generic CSV / TSV</option>
+        <option value="generic_jsonld">Generic (JSON-LD ItemList)</option>
+      </select>
+    </label>
+    <div class="ads-form-actions">
+      <button type="submit" class="ads-btn">Import firms</button>
+      <span class="ads-form-msg" data-msg></span>
+    </div>
+    <details class="ads-field" style="margin-top:12px">
+      <summary>Paste rows (NFX Signal manual entry)</summary>
+      <p class="ads-muted" style="font-size:12px;margin:8px 0">Signal.nfx.com is login-gated and cannot be auto-scraped. Paste rows as JSON: <code>[{"name":"Acme Capital","url":"https://signal.nfx.com/...","website":"https://acme.vc"}, ...]</code></p>
+      <textarea name="nfx_paste" rows="6" placeholder='[{"name":"Acme Capital","website":"https://acme.vc"}]'></textarea>
+      <div class="ads-form-actions" style="margin-top:8px">
+        <button type="button" class="ads-btn ads-btn--ghost" id="ads-nfx-submit">Submit pasted rows</button>
+        <span class="ads-form-msg" data-msg-nfx></span>
+      </div>
+    </details>
+    <div class="ads-card" style="margin-top:16px" id="ads-firmlist-history-wrap">
+      <div class="ads-card-head">
+        <h3>Recent imports</h3>
+        <button type="button" class="ads-btn ads-btn--ghost" id="ads-firmlist-refresh">Refresh</button>
+      </div>
+      <div class="ads-strip" id="ads-firmlist-totals"></div>
+      <div id="ads-firmlist-by-importer" style="margin-top:8px"></div>
+      <div id="ads-firmlist-history" style="margin-top:8px"></div>
+    </div>
+  </form>
+
+  <div class="ads-tab-panel" data-tab="upload" id="ads-upload-flow" data-step="pick">
+    <p class="ads-muted" style="margin-top:0">Spreadsheet (CSV, TSV, XLSX, XLS, ODS) or PDF report. Headers auto-mapped; you confirm before import. URLs found in the file are auto-queued as scrape jobs. PDF tables that look like a portfolio are written to <code>firm_portfolio</code>.</p>
+
+    <div data-step-pane="pick">
+      <div id="ads-upload-drop" tabindex="0" role="button" aria-label="Drop a file or click to choose"
+           style="border:2px dashed var(--ads-border);border-radius:8px;padding:32px;text-align:center;background:var(--ads-panel-2);cursor:pointer">
+        <div style="font-size:14px;font-weight:600;margin-bottom:4px">Drop a file here or click to choose</div>
+        <div class="ads-muted" style="font-size:12px">CSV, TSV, XLSX, XLS, ODS, PDF — up to 50 MB</div>
+        <input type="file" id="ads-upload-input" accept=".csv,.tsv,.xlsx,.xls,.ods,.pdf" hidden>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px">
+        <input type="checkbox" id="ads-upload-scrape-urls" checked>
+        Auto-queue scrape jobs for URLs found in the file
+      </label>
+      <div class="ads-form-actions" style="margin-top:8px">
+        <a class="ads-btn ads-btn--ghost ads-btn--sm" href="/dashboard/uploads/">Manage past uploads &rarr;</a>
+        <span class="ads-form-msg" id="ads-upload-msg"></span>
+      </div>
+    </div>
+
+    <div data-step-pane="map" hidden style="margin-top:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <strong>Confirm column map</strong>
+        <button type="button" class="ads-btn ads-btn--ghost ads-btn--sm" id="ads-upload-back">&larr; Choose another file</button>
+      </div>
+      <div id="ads-upload-summary" class="ads-muted" style="font-size:12px;margin-bottom:8px"></div>
+      <div id="ads-upload-map-panel" style="border:1px solid var(--ads-border);border-radius:6px;padding:12px;background:var(--ads-panel)"></div>
+      <details style="margin-top:8px">
+        <summary>Preview rows</summary>
+        <div id="ads-upload-preview" style="overflow:auto;margin-top:8px"></div>
+      </details>
+      <details style="margin-top:8px">
+        <summary id="ads-upload-urls-summary">URLs found</summary>
+        <div id="ads-upload-urls" style="margin-top:8px;max-height:160px;overflow:auto;font-family:var(--ads-font-mono);font-size:12px"></div>
+      </details>
+      <div class="ads-form-actions" style="margin-top:12px">
+        <button type="button" class="ads-btn" id="ads-upload-confirm-inline">Confirm &amp; import</button>
+      </div>
+    </div>
+
+    <div data-step-pane="progress" hidden style="margin-top:8px">
+      <strong>Importing…</strong>
+      <div class="ads-muted" id="ads-upload-progress-meta" style="font-size:12px;margin:4px 0"></div>
+      <div style="background:var(--ads-panel-2);border-radius:4px;height:8px;overflow:hidden;margin:8px 0">
+        <div id="ads-upload-progress-bar" style="height:100%;width:0%;background:var(--ads-accent);transition:width .3s"></div>
+      </div>
+      <div id="ads-upload-progress-counts" style="font-size:13px"></div>
+      <div class="ads-form-actions" style="margin-top:12px">
+        <button type="button" class="ads-btn ads-btn--ghost" id="ads-upload-new">Upload another file</button>
+        <a class="ads-btn ads-btn--ghost" href="/dashboard/uploads/">Manage uploads &rarr;</a>
+      </div>
+    </div>
+  </div>
+
+  <form class="ads-tab-panel" data-tab="bulk" id="ads-form-bulk" autocomplete="off">
+    <label class="ads-field">
+      <span>One URL per line (max 100)</span>
+      <textarea name="targets" rows="6" placeholder="https://a.com/team&#10;https://b.com/about&#10;https://c.com/staff" required></textarea>
+    </label>
+    <div class="ads-form-actions">
+      <button type="submit" class="ads-btn">Queue all</button>
+      <span class="ads-form-msg" data-msg></span>
+    </div>
+  </form>
+</div>
+
+<div class="ads-card ads-active" id="ads-active-jobs-card">
+  <div class="ads-active__head">
+    <h3>Active jobs</h3>
+    <span class="ads-muted" id="ads-active-meta">Polling every 3s</span>
+  </div>
+  <div id="ads-active-jobs">{% include components/empty.html title="No active jobs" body="Start a job above and it'll appear here in real time." icon="≡" %}</div>
+</div>
