@@ -24,7 +24,10 @@ import { applyHints, awaitHostSlot, importKey, type AggregatorHints } from "./_b
  */
 
 const REST_BASE = "https://en.wikipedia.org/api/rest_v1/page/html/";
-const INFOBOX_FETCH_CAP_DEFAULT = 50; // override via env.AGG_WIKIPEDIA_INFOBOX_CAP
+// Per Task #3 done-criteria the importer must enrich ≥200 firms with
+// Infobox fields per run, so the default is set well above that bar.
+// Override via env.AGG_WIKIPEDIA_INFOBOX_CAP when running smaller lists.
+const INFOBOX_FETCH_CAP_DEFAULT = 300;
 
 export async function importFirms(url: string, env: Env, hints?: AggregatorHints): Promise<FirmlistImportResult> {
   const title = wikiTitleFromUrl(url);
@@ -112,7 +115,7 @@ async function fetchRestHtml(title: string): Promise<string | null> {
 function readInfoboxCap(env: Env): number {
   const raw = (env as unknown as Record<string, string | undefined>).AGG_WIKIPEDIA_INFOBOX_CAP;
   const n = raw ? Number(raw) : NaN;
-  if (Number.isFinite(n) && n > 0) return Math.min(n, 500);
+  if (Number.isFinite(n) && n > 0) return Math.min(n, 1000);
   return INFOBOX_FETCH_CAP_DEFAULT;
 }
 

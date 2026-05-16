@@ -700,7 +700,14 @@ async function processFirmlist(
       ? { source: "folk_share", sourceKind: "import" }
       : picked.name === "airtable"
         ? { source: result.sourceCollection ? "airtable_universe" : "airtable_share", sourceKind: "import" }
-        : null;
+        // Task #3: Wikipedia is a citable reference dataset — every
+        // record cites its article URL as evidence_url. Stamp
+        // `source='wikipedia'` + `source_kind='import'` so the unified
+        // facts/tags carry the Wikipedia provenance rather than the
+        // default `firmlist:wikipedia` + `scrape` labels.
+        : picked.name === "wikipedia"
+          ? { source: "wikipedia", sourceKind: "import" }
+          : null;
   const sourceCollection = result.sourceCollection ?? null;
 
   for (const f of result.firms) {
@@ -1668,6 +1675,7 @@ async function tagAsFolkImport(
   // else falls back to the legacy `firmlist:{name}` + `scrape` provenance.
   const isFolk = importerName === "folk";
   const isAirtable = importerName === "airtable";
+  const isWikipedia = importerName === "wikipedia";
   // Airtable Universe explorers stamp `airtable_universe`; plain shared
   // views/bases stamp `airtable_share`. We disambiguate by looking for a
   // `collection:explore.*` value inside the tags emitted by the caller.
@@ -1676,8 +1684,10 @@ async function tagAsFolkImport(
     ? "folk_share"
     : isAirtable
       ? (looksUniverse ? "airtable_universe" : "airtable_share")
-      : `firmlist:${importerName}`;
-  const sourceKind = (isFolk || isAirtable) ? "import" : "scrape";
+      : isWikipedia
+        ? "wikipedia"
+        : `firmlist:${importerName}`;
+  const sourceKind = (isFolk || isAirtable || isWikipedia) ? "import" : "scrape";
   try {
     await insertFact(env, {
       entity_id: entityId,

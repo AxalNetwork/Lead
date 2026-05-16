@@ -365,6 +365,22 @@
       "label": "Wikipedia — List of private equity firms",
       "record_type": "companies",
       "hints": { "role_hint": "pe" }
+    },
+    {
+      "importer": "wikipedia",
+      "kind": "firmlist",
+      "url": "https://en.wikipedia.org/wiki/List_of_corporate_venture_capital_firms",
+      "label": "Wikipedia — List of corporate venture capital firms",
+      "record_type": "companies",
+      "hints": { "role_hint": "cvc" }
+    },
+    {
+      "importer": "wikipedia",
+      "kind": "firmlist",
+      "url": "https://en.wikipedia.org/wiki/List_of_unicorn_startup_companies",
+      "label": "Wikipedia — List of unicorn startup companies",
+      "record_type": "companies",
+      "hints": {}
     }
   ]
 }

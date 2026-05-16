@@ -52,7 +52,7 @@ AGG_CLIMATESCAPE_MAX_PAGES = "8"
 # Task #3: Wikipedia importer follows up to N firm articles per import
 # to extract Infobox AUM/founded/HQ fields. Bounded so a 500-firm list
 # doesn't trigger 500 fetches.
-AGG_WIKIPEDIA_INFOBOX_CAP = "60"
+AGG_WIKIPEDIA_INFOBOX_CAP = "300"
 
 [[d1_databases]]
 binding = "DB"
