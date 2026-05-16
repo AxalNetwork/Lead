@@ -48,11 +48,21 @@ entitiesRoute.get("/resolve", async (c) => {
   if (!table || !ref) return c.json({ error: "table_and_ref_required" }, 400);
   const allowed = new Set(["firms", "investors", "companies", "accounts", "buyers", "leads", "people"]);
   if (!allowed.has(table)) return c.json({ error: "unsupported_table" }, 400);
-  const row = await c.env.DB.prepare(
-    `SELECT entity_id FROM entity_legacy_map WHERE legacy_table = ?1 AND legacy_id = ?2 LIMIT 1`,
-  ).bind(table, String(ref)).first<{ entity_id: string }>();
-  if (!row || !row.entity_id) return c.json({ error: "not_found", table, ref }, 404);
-  return c.json({ entity_id: row.entity_id, table, ref });
+  // Investor profiles are person-investors persisted under the `leads`
+  // backfill path (no investor backfill exists). Try the canonical key
+  // first, then fall back so investor detail pages can mount the News
+  // tab without an extra investor backfill migration.
+  const candidates: Array<string> = table === "investors" ? ["investors", "leads", "firms"] : [table];
+  let entityId: string | null = null;
+  let matchedTable: string | null = null;
+  for (const t of candidates) {
+    const row = await c.env.DB.prepare(
+      `SELECT entity_id FROM entity_legacy_map WHERE legacy_table = ?1 AND legacy_id = ?2 LIMIT 1`,
+    ).bind(t, String(ref)).first<{ entity_id: string }>();
+    if (row?.entity_id) { entityId = row.entity_id; matchedTable = t; break; }
+  }
+  if (!entityId) return c.json({ error: "not_found", table, ref }, 404);
+  return c.json({ entity_id: entityId, table, ref, matched_table: matchedTable });
 });
 
 entitiesRoute.get("/:id", async (c) => {
