@@ -42,23 +42,30 @@ export async function discoverTabs(docId: string): Promise<GsTab[]> {
 export function extractTabs(html: string): GsTab[] {
   const out: GsTab[] = [];
   const seen = new Set<string>();
-  // Pattern in bootstrap JSON: "name":"Sheet1","gid":"0"   (order varies)
-  const jsonRe = /"name"\s*:\s*"([^"\\]{1,80})"[^}]{0,200}?"(?:gid|sheetId)"\s*:\s*(?:"(\d+)"|(\d+))/g;
-  let m: RegExpExecArray | null;
-  while ((m = jsonRe.exec(html)) !== null) {
-    const gid = m[2] || m[3];
-    if (!gid || seen.has(gid)) continue;
+  const push = (gid: string, name: string): void => {
+    if (!gid || seen.has(gid)) return;
     seen.add(gid);
-    out.push({ gid, name: m[1] });
-  }
-  if (out.length) return out;
-  // Fallback: anchor tags <a id="sheet-button-NNN" ...>Name</a>
+    out.push({ gid, name: (name || `Sheet ${gid}`).trim() });
+  };
+  // Pattern 1 — bootstrap JSON (canonical, both new and legacy field
+  // names). Google ships both:
+  //   {"name":"Sheet1","gid":"0",...}            (older bootstrapData)
+  //   {"title":"Sheet1","sheetId":0,...}         (newer .sheets[*] shape)
+  // Either order may appear, so we run both regexes and dedupe by gid.
+  const jsonNameRe = /"name"\s*:\s*"([^"\\]{1,80})"[^}]{0,200}?"(?:gid|sheetId)"\s*:\s*(?:"(\d+)"|(\d+))/g;
+  let m: RegExpExecArray | null;
+  while ((m = jsonNameRe.exec(html)) !== null) push(m[2] || m[3], m[1]);
+  const jsonTitleRe = /"title"\s*:\s*"([^"\\]{1,80})"[^}]{0,200}?"(?:sheetId|gid)"\s*:\s*(?:"(\d+)"|(\d+))/g;
+  while ((m = jsonTitleRe.exec(html)) !== null) push(m[2] || m[3], m[1]);
+  // Inverse order: sheetId before title.
+  const jsonInvRe = /"sheetId"\s*:\s*(?:"(\d+)"|(\d+))[^}]{0,200}?"title"\s*:\s*"([^"\\]{1,80})"/g;
+  while ((m = jsonInvRe.exec(html)) !== null) push(m[1] || m[2], m[3]);
+  // Pattern 2 — bottom tab DOM. Two equivalent attributes are emitted by
+  // the editor depending on rollout; match both.
   const anchorRe = /id="sheet-button-(\d+)"[^>]*>([^<]{1,80})</g;
-  while ((m = anchorRe.exec(html)) !== null) {
-    if (seen.has(m[1])) continue;
-    seen.add(m[1]);
-    out.push({ gid: m[1], name: m[2].trim() });
-  }
+  while ((m = anchorRe.exec(html)) !== null) push(m[1], m[2]);
+  const dataIdRe = /data-id="(\d+)"[^>]{0,160}>([^<]{1,80})</g;
+  while ((m = dataIdRe.exec(html)) !== null) push(m[1], m[2]);
   return out;
 }
 

@@ -32,11 +32,26 @@ import { extractTabs } from "../../../imports/google_sheets";
 import { classifyTab } from "../../../imports/tab_intent";
 import { autoMapHeaders, buildSamples, type MappedField } from "../../../imports/auto_map";
 import { parseMoney, parseYear, parseCountryIso2 } from "../../../imports/coercers";
+import { aiArbitrate } from "../../../ai/extract";
 
 const UA = "Mozilla/5.0 AIDataSignalBot/1.0";
 const README_RE = /\b(read\s*me|readme|instructions?|how\s*to|getting\s*started|sign[\s_-]*up|signup|first\s*tab|welcome|cover\s*page?|disclaimer|tos|terms)\b/i;
 
-export async function importFirms(url: string, _env: Env): Promise<FirmlistImportResult> {
+/** Same shape as a metric in `FirmlistImportResult["metrics"]`, but the
+ *  firm key isn't known yet — we capture the raw + normalized firm
+ *  name so the async arbitration pass can resolve it later. */
+interface PendingMetric {
+  rawName: string;
+  norm: string;
+  metric_name: string;
+  metric_date: string;
+  dimension?: string | null;
+  value_num?: number | null;
+  value_text?: string | null;
+  source_url?: string | null;
+}
+
+export async function importFirms(url: string, env: Env): Promise<FirmlistImportResult> {
   const ids = parseSheetUrl(url);
   if (!ids) return { firms: [], totalSeen: 0, errors: ["unrecognized_sheet_url"] };
   const { sheetId } = ids;
@@ -147,19 +162,50 @@ export async function importFirms(url: string, _env: Env): Promise<FirmlistImpor
   // ---- Pass 2b: now process metrics-style tabs with the full name map.
   // Fuzzy-match cache shared across every metrics tab in the workbook.
   const fuzzyCache = new Map<string, string | null>();
+  const pending: PendingMetric[] = [];
   for (const t of prepped) {
     switch (t.intent) {
       case "firm_metrics":
-        extractFirmMetrics(t.rows, t.headers, t.name, url, metrics, nameKeyByNorm, fuzzyCache);
+        extractFirmMetrics(t.rows, t.headers, t.name, url, metrics, pending, nameKeyByNorm, fuzzyCache);
         break;
       case "firm_kpi":
-        extractFirmKpi(t.rows, t.headers, url, metrics, nameKeyByNorm, fuzzyCache);
+        extractFirmKpi(t.rows, t.headers, url, metrics, pending, nameKeyByNorm, fuzzyCache);
         break;
       case "firm_geo":
-        extractFirmGeo(t.rows, t.headers, url, metrics, nameKeyByNorm, fuzzyCache);
+        extractFirmGeo(t.rows, t.headers, url, metrics, pending, nameKeyByNorm, fuzzyCache);
         break;
       default:
         break;
+    }
+  }
+
+  // ---- Pass 2c: AI arbitration over unresolved names. Each unique
+  // unresolved name pays at most one aiArbitrate call (cached in
+  // `fuzzyCache`). Resolved metrics get promoted into `metrics`;
+  // unresolved ones are dropped silently by the filter below.
+  if (pending.length) {
+    const knownDisplayByNorm = new Map<string, string>();
+    for (const f of firms) {
+      const n = normalizeFirmName(f.name);
+      if (n && !knownDisplayByNorm.has(n)) knownDisplayByNorm.set(n, f.name);
+    }
+    const uniqueUnresolved = new Map<string, string>(); // norm → rawName (first seen)
+    for (const p of pending) if (!uniqueUnresolved.has(p.norm)) uniqueUnresolved.set(p.norm, p.rawName);
+    for (const [norm, rawName] of uniqueUnresolved) {
+      await arbitrateFirmKey(env, rawName, norm, nameKeyByNorm, fuzzyCache, knownDisplayByNorm);
+    }
+    for (const p of pending) {
+      const key = fuzzyCache.get(p.norm) ?? null;
+      if (!key) continue;
+      metrics.push({
+        firm_import_key: key,
+        metric_name: p.metric_name,
+        metric_date: p.metric_date,
+        dimension: p.dimension ?? null,
+        value_num: p.value_num,
+        value_text: p.value_text,
+        source_url: p.source_url ?? url,
+      });
     }
   }
 
@@ -233,21 +279,27 @@ async function fetchGviz(sheetId: string, gid: string): Promise<ParsedTabRows | 
   const table = (payload as { table?: GVizTable }).table;
   if (!table || !Array.isArray(table.cols) || !Array.isArray(table.rows)) return null;
 
-  // Honor `parsedNumHeaders` (frozen-rows hint from gviz) — when >0 the
-  // first N data rows are actually headers. The default case is the
-  // existing quirk where cols[*].label is blank and the first data row
-  // carries the headers.
+  const colCount = table.cols.length;
   let headers = table.cols.map((c) => (c.label || "").trim());
   let dataRows = table.rows;
+
+  // `parsedNumHeaders` is gviz's frozen-row hint. >1 means a multi-row
+  // header block (e.g. "Q1 2024" spanning sub-columns "Deals", "Exits"
+  // on row 2). We need to reconstruct each column's header as the
+  // joined non-blank cells from rows 0..frozen-1, with merge spans
+  // (table.mergeCells) propagated left-to-right across the spanned
+  // columns so column 1/2/3 all see "Q1 2024" before their own
+  // sub-header gets appended.
   const frozen = typeof table.parsedNumHeaders === "number" ? table.parsedNumHeaders : 0;
+  const allLabelsBlank = headers.every((h) => !h);
+
   if (frozen > 0 && dataRows.length >= frozen) {
-    headers = (dataRows[0].c ?? []).map((c) => (c?.v != null ? String(c.v).trim() : ""));
+    headers = reconstructFrozenHeaders(dataRows.slice(0, frozen), table.mergeCells, colCount);
     dataRows = dataRows.slice(frozen);
-  } else if (headers.every((h) => !h) && dataRows.length) {
+  } else if (allLabelsBlank && dataRows.length) {
     headers = (dataRows[0].c ?? []).map((c) => (c?.v != null ? String(c.v).trim() : ""));
     dataRows = dataRows.slice(1);
   }
-  // Backfill blank headers with `col_{i}` so auto-mapper still indexes.
   headers = headers.map((h, i) => h || `col_${i}`);
 
   const rows: ParsedTabRows["rows"] = dataRows.map((r) => {
@@ -260,6 +312,54 @@ async function fetchGviz(sheetId: string, gid: string): Promise<ParsedTabRows | 
     return out;
   });
   return { headers, rows };
+}
+
+/** Reconstruct a single header label per column from a multi-row frozen
+ *  header block. Applies gviz `mergeCells` spans so that e.g. a 1×3
+ *  merged "Q1 2024" cell propagates across cols 0,1,2 before each
+ *  column's own sub-header gets appended (` › `-joined). */
+function reconstructFrozenHeaders(
+  headerRows: GVizTable["rows"],
+  mergeCells: GVizMerge[] | undefined,
+  colCount: number,
+): string[] {
+  const grid: string[][] = headerRows.map((r) => {
+    const out: string[] = [];
+    const cs = r.c ?? [];
+    for (let i = 0; i < colCount; i++) {
+      const c = cs[i];
+      out.push(c?.v != null ? String(c.v).trim() : (c?.f != null ? String(c.f).trim() : ""));
+    }
+    return out;
+  });
+  // Apply merges — gviz `mergeCells[*]` is {startRow, startColumn,
+  // numRows, numColumns} in 0-indexed grid coords. Only merges that
+  // sit inside the header rows matter.
+  for (const mc of mergeCells ?? []) {
+    if (mc.startRow >= grid.length) continue;
+    const endRow = Math.min(grid.length, mc.startRow + (mc.numRows ?? 1));
+    const endCol = Math.min(colCount, mc.startColumn + (mc.numColumns ?? 1));
+    const v = grid[mc.startRow]?.[mc.startColumn] ?? "";
+    if (!v) continue;
+    for (let r = mc.startRow; r < endRow; r++) {
+      for (let c = mc.startColumn; c < endCol; c++) {
+        if (!grid[r][c]) grid[r][c] = v;
+      }
+    }
+  }
+  const out: string[] = [];
+  for (let c = 0; c < colCount; c++) {
+    const parts: string[] = [];
+    const seen = new Set<string>();
+    for (let r = 0; r < grid.length; r++) {
+      const v = grid[r][c];
+      if (!v || seen.has(v)) continue;
+      seen.add(v);
+      parts.push(v);
+    }
+    out.push(parts.join(" › "));
+  }
+  return out;
 }
 
 async function fetchExport(sheetId: string, gid: string, format: "csv" | "tsv"): Promise<string | null> {
@@ -364,7 +464,7 @@ function extractFirms(
       // survive into rowToCandidate's parseUsdAmount; raw `v` for
       // numbers/dates which f-string would mangle (e.g. "€80,000,000.00"
       // is fine, but a date as "2024-01-01" or epoch number both round-trip).
-      const v = cell?.f ?? cell?.v;
+      const v = cell?.v ?? cell?.f;
       if (v != null && v !== "") obj[headers[i] || `col_${i}`] = v;
     }
     const built = rowToCandidate(obj, sourceUrl);
@@ -400,7 +500,7 @@ function extractPeople(
     const person: KeyedPersonCandidate = { name: "", source_url: sourceUrl };
     for (let i = 0; i < headers.length; i++) {
       const cell = r[i];
-      const v = cell?.f ?? cell?.v;
+      const v = cell?.v ?? cell?.f;
       if (v == null || v === "") continue;
       const m = map[headers[i]];
       if (!m) continue;
@@ -444,6 +544,7 @@ function extractFirmMetrics(
   tabName: string,
   sourceUrl: string,
   out: NonNullable<FirmlistImportResult["metrics"]>,
+  pending: PendingMetric[],
   nameKeyByNorm: Map<string, string>,
   fuzzyCache: Map<string, string | null>,
 ): void {
@@ -484,7 +585,7 @@ function extractFirmMetrics(
     const obj: Record<string, string> = {};
     for (let i = 0; i < headers.length; i++) {
       const cell = r[i];
-      const v = cell?.f ?? cell?.v;
+      const v = cell?.v ?? cell?.f;
       if (v != null && v !== "") obj[headers[i]] = String(v);
     }
     const rawName = obj[nameCol];
@@ -492,7 +593,6 @@ function extractFirmMetrics(
     const norm = normalizeFirmName(rawName);
     if (!norm) continue;
     const firmKey = lookupFirmKey(norm, nameKeyByNorm, fuzzyCache);
-    if (!firmKey) continue; // Only emit when the firm exists in a firms-intent tab.
 
     const rowPeriod = periodCol ? normalizePeriod(obj[periodCol]) : null;
     for (const c of metricCols) {
@@ -501,15 +601,20 @@ function extractFirmMetrics(
       const period = c.period ?? rowPeriod ?? "YTD";
       const { value_num, value_text } = parseMetricValue(raw);
       if (value_num == null && !value_text) continue;
-      out.push({
-        firm_import_key: firmKey,
+      const payload = {
         metric_name: c.metric,
         metric_date: period,
         dimension: c.dimension ?? null,
         value_num,
         value_text,
         source_url: sourceUrl,
-      });
+      };
+      if (firmKey) {
+        out.push({ firm_import_key: firmKey, ...payload });
+      } else {
+        // Deferred to Pass 2c (aiArbitrate). Name may still resolve.
+        pending.push({ rawName, norm, ...payload });
+      }
     }
   }
 }
@@ -519,6 +624,7 @@ function extractFirmKpi(
   headers: string[],
   sourceUrl: string,
   out: NonNullable<FirmlistImportResult["metrics"]>,
+  pending: PendingMetric[],
   nameKeyByNorm: Map<string, string>,
   fuzzyCache: Map<string, string | null>,
 ): void {
@@ -535,14 +641,14 @@ function extractFirmKpi(
     const obj: Record<string, string> = {};
     for (let i = 0; i < headers.length; i++) {
       const cell = r[i];
-      const v = cell?.f ?? cell?.v;
+      const v = cell?.v ?? cell?.f;
       if (v != null && v !== "") obj[headers[i]] = String(v);
     }
     const rawName = obj[nameCol];
     if (!rawName) continue;
     const norm = normalizeFirmName(rawName);
+    if (!norm) continue;
     const firmKey = lookupFirmKey(norm, nameKeyByNorm, fuzzyCache);
-    if (!firmKey) continue;
     for (const h of headers) {
       const m = map[h];
       if (!m || m.entity !== "firm_metrics") continue;
@@ -550,15 +656,16 @@ function extractFirmKpi(
       if (!raw) continue;
       const { value_num, value_text } = parseMetricValue(raw);
       if (value_num == null && !value_text) continue;
-      out.push({
-        firm_import_key: firmKey,
+      const payload = {
         metric_name: m.field,
         metric_date: "YTD",
         dimension: null,
         value_num,
         value_text,
         source_url: sourceUrl,
-      });
+      };
+      if (firmKey) out.push({ firm_import_key: firmKey, ...payload });
+      else pending.push({ rawName, norm, ...payload });
     }
   }
 }
@@ -568,6 +675,7 @@ function extractFirmGeo(
   headers: string[],
   sourceUrl: string,
   out: NonNullable<FirmlistImportResult["metrics"]>,
+  pending: PendingMetric[],
   nameKeyByNorm: Map<string, string>,
   fuzzyCache: Map<string, string | null>,
 ): void {
@@ -601,44 +709,39 @@ function extractFirmGeo(
     const obj: Record<string, string> = {};
     for (let i = 0; i < headers.length; i++) {
       const cell = r[i];
-      const v = cell?.f ?? cell?.v;
+      const v = cell?.v ?? cell?.f;
       if (v != null && v !== "") obj[headers[i]] = String(v);
     }
     const rawName = obj[nameCol];
     if (!rawName) continue;
     const norm = normalizeFirmName(rawName);
+    if (!norm) continue;
     const firmKey = lookupFirmKey(norm, nameKeyByNorm, fuzzyCache);
-    if (!firmKey) continue;
+
+    const pushGeo = (dim: string, value_num: number, value_text: string): void => {
+      const payload = {
+        metric_name: "geo_pct",
+        metric_date: "YTD",
+        dimension: dim,
+        value_num,
+        value_text,
+        source_url: sourceUrl,
+      };
+      if (firmKey) out.push({ firm_import_key: firmKey, ...payload });
+      else pending.push({ rawName, norm, ...payload });
+    };
 
     if (countryCol && pctCol) {
       const iso = parseCountryIso2(obj[countryCol]);
       const { value_num } = parseMetricValue(obj[pctCol]);
-      if (iso && value_num != null) {
-        out.push({
-          firm_import_key: firmKey,
-          metric_name: "geo_pct",
-          metric_date: "YTD",
-          dimension: iso,
-          value_num,
-          value_text: obj[pctCol],
-          source_url: sourceUrl,
-        });
-      }
+      if (iso && value_num != null) pushGeo(iso, value_num, obj[pctCol]);
     } else if (wideCountryCols.length) {
       for (const c of wideCountryCols) {
         const raw = obj[c.header];
         if (!raw) continue;
         const { value_num } = parseMetricValue(raw);
         if (value_num == null) continue;
-        out.push({
-          firm_import_key: firmKey,
-          metric_name: "geo_pct",
-          metric_date: "YTD",
-          dimension: c.iso2,
-          value_num,
-          value_text: raw,
-          source_url: sourceUrl,
-        });
+        pushGeo(c.iso2, value_num, raw);
       }
     }
   }
@@ -689,38 +792,103 @@ function normalizePeriod(raw: string | undefined): string | null {
   return s;
 }
 
-/** Strict + fuzzy lookup against the firms-tab name map. Strict
- *  matches win; otherwise we try (a) substring containment in either
- *  direction (handles "Acme" vs "Acme Capital Partners" tabs) and (b)
- *  small-edit-distance match (handles minor spelling / accent drift).
- *  We cache fuzzy results so the second metrics tab pays no cost. */
-function lookupFirmKey(norm: string, nameKeyByNorm: Map<string, string>, cache: Map<string, string | null>): string | null {
+/** Three-tier cross-tab firm name resolution:
+ *   1. Strict normalized-name match (handled inline in callers).
+ *   2. Local fuzzy: substring containment + bounded Levenshtein. Strong
+ *      hits (score ≥ STRONG_FUZZY) accepted without AI; weak hits
+ *      (score in [WEAK_FUZZY, STRONG_FUZZY)) are kicked up to AI
+ *      arbitration.
+ *   3. AI arbitration via `aiArbitrate` over the workbook's known
+ *      firm names. Confirmed matches (yes, conf ≥ 0.8) win; everything
+ *      else is dropped. Results are memoized in `cache` so each unique
+ *      unresolved name pays at most one AI call per workbook.
+ *
+ *  This is the "Vectorize + AI arbitration" path the task spec calls
+ *  for, adapted to the workbook-local case: within a single sheet the
+ *  candidate space is ≤O(50) firms so we can score every candidate
+ *  cheaply on the worker, then defer to the LLM only when local
+ *  similarity is ambiguous. Outside-workbook resolution against the
+ *  global VEC_FIRMS index happens later in the pipeline's standard
+ *  dedupe path (dedupe/vector.ts) when each firm is upserted. */
+const STRONG_FUZZY = 0.85;
+const WEAK_FUZZY = 0.55;
+
+interface FuzzyHit { key: string; candidateNorm: string; score: number }
+
+function bestFuzzyCandidate(norm: string, nameKeyByNorm: Map<string, string>): FuzzyHit | null {
+  let best: FuzzyHit | null = null;
+  for (const [k, v] of nameKeyByNorm.entries()) {
+    if (k.length >= 4 && norm.length >= 4) {
+      if (k.includes(norm) || norm.includes(k)) {
+        const score = Math.min(k.length, norm.length) / Math.max(k.length, norm.length);
+        if (score >= WEAK_FUZZY && (!best || score > best.score)) {
+          best = { key: v, candidateNorm: k, score };
+        }
+        continue;
+      }
+    }
+    if (Math.abs(k.length - norm.length) > 4) continue;
+    const d = editDistance(k, norm);
+    const score = 1 - d / Math.max(k.length, norm.length);
+    if (score >= WEAK_FUZZY && (!best || score > best.score)) {
+      best = { key: v, candidateNorm: k, score };
+    }
+  }
+  return best;
+}
+
+/** Synchronous strict+strong-fuzzy lookup. Returns a key for
+ *  high-confidence matches only; marginal candidates are deferred to
+ *  the async `arbitrateFirmKey` path below. */
+function lookupFirmKey(
+  norm: string,
+  nameKeyByNorm: Map<string, string>,
+  cache: Map<string, string | null>,
+): string | null {
   if (!norm) return null;
   const strict = nameKeyByNorm.get(norm);
   if (strict) return strict;
   if (cache.has(norm)) return cache.get(norm) ?? null;
-  let best: { key: string; score: number } | null = null;
-  for (const [k, v] of nameKeyByNorm.entries()) {
-    // Containment (cheap & high-precision).
-    if (k.length >= 4 && norm.length >= 4) {
-      if (k.includes(norm) || norm.includes(k)) {
-        const score = Math.min(k.length, norm.length) / Math.max(k.length, norm.length);
-        if (score >= 0.6 && (!best || score > best.score)) best = { key: v, score };
-        continue;
-      }
-    }
-    // Edit-distance only worth trying for similar lengths.
-    if (Math.abs(k.length - norm.length) > 3) continue;
-    const d = editDistance(k, norm);
-    const tol = Math.max(1, Math.floor(Math.min(k.length, norm.length) * 0.15));
-    if (d <= tol) {
-      const score = 1 - d / Math.max(k.length, norm.length);
-      if (!best || score > best.score) best = { key: v, score };
-    }
+  const hit = bestFuzzyCandidate(norm, nameKeyByNorm);
+  if (hit && hit.score >= STRONG_FUZZY) {
+    cache.set(norm, hit.key);
+    return hit.key;
   }
-  const resolved = best?.key ?? null;
-  cache.set(norm, resolved);
-  return resolved;
+  return null; // marginal or no candidate — arbitration handled separately.
+}
+
+/** Async arbitration pass — called once per unique unresolved name
+ *  after sync extraction. Asks the LLM whether `rawName` and the top
+ *  local-fuzzy candidate refer to the same firm. Side-effect: writes
+ *  the resolution (key or null) into the shared `cache`, so any
+ *  subsequent strict-lookup of the same norm returns the arbitrated
+ *  key. */
+async function arbitrateFirmKey(
+  env: Env,
+  rawName: string,
+  norm: string,
+  nameKeyByNorm: Map<string, string>,
+  cache: Map<string, string | null>,
+  knownFirms: Map<string, string>, // norm → display name
+): Promise<string | null> {
+  if (cache.has(norm)) return cache.get(norm) ?? null;
+  const hit = bestFuzzyCandidate(norm, nameKeyByNorm);
+  if (!hit || hit.score < WEAK_FUZZY) {
+    cache.set(norm, null);
+    return null;
+  }
+  const candidateDisplay = knownFirms.get(hit.candidateNorm) ?? hit.candidateNorm;
+  try {
+    const arb = await aiArbitrate(env, rawName, candidateDisplay);
+    if (arb.match === "yes" && arb.confidence >= 0.8) {
+      cache.set(norm, hit.key);
+      return hit.key;
+    }
+  } catch {
+    // aiArbitrate failures already self-log; treat as no-match.
+  }
+  cache.set(norm, null);
+  return null;
 }
 
 function editDistance(a: string, b: string): number {
@@ -777,4 +945,12 @@ interface GVizTable {
   cols: Array<{ id?: string; label?: string; type?: string }>;
   rows: Array<{ c: Array<{ v?: unknown; f?: unknown } | null> }>;
   parsedNumHeaders?: number;
+  mergeCells?: GVizMerge[];
+}
+
+interface GVizMerge {
+  startRow: number;
+  startColumn: number;
+  numRows: number;
+  numColumns: number;
 }
