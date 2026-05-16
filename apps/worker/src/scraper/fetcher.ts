@@ -269,7 +269,10 @@ async function tier1Browser(env: Env, url: string, opts: FetchOptions): Promise<
       }
       const resp = await page.goto(url, {
         waitUntil: "networkidle0",
-        timeout: opts.timeoutMs ?? 30_000,
+        // Task #2: 15s browser-nav ceiling per spec policy. Per-job
+        // budget + queue sweep are the outer safety net; this keeps
+        // any single navigation predictable.
+        timeout: opts.timeoutMs ?? 15_000,
       });
       const html = await page.content();
       const status = resp?.status() ?? 200;
@@ -316,7 +319,8 @@ async function tier2Proxy(env: Env, url: string, opts: FetchOptions): Promise<Fe
     headers.Authorization = `Basic ${btoa(env.PROXY_AUTH)}`;
   }
   const ctl = new AbortController();
-  const tm = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 30_000);
+  // Task #2: 20s fetch ceiling per spec policy.
+  const tm = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 20_000);
   try {
     const proxied = `${env.PROXY_URL}${env.PROXY_URL.includes("?") ? "&" : "?"}url=${encodeURIComponent(url)}`;
     const res = await fetch(proxied, { method: "GET", headers, redirect: "follow", signal: ctl.signal });
@@ -368,7 +372,8 @@ async function tier3ScrapingApi(env: Env, url: string, opts: FetchOptions): Prom
       break;
   }
   const ctl = new AbortController();
-  const tm = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 60_000);
+  // Task #2: 20s fetch ceiling per spec policy (scraper APIs were 60s).
+  const tm = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 20_000);
   try {
     const res = await fetch(endpoint, { method: "GET", signal: ctl.signal });
     const html = await res.text();
@@ -605,8 +610,9 @@ export async function fetchBytes(
   }
   // Task #2: hard timeout on the binary fetch path. Without this, a
   // hung PDF download could stall the queue invocation indefinitely.
+  // 20s ceiling per spec policy.
   const ctl = new AbortController();
-  const tm = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 60_000);
+  const tm = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 20_000);
   try {
     const res = await fetch(url, {
       method: "GET",
@@ -625,7 +631,7 @@ export async function fetchBytes(
     clearTimeout(tm);
     const durationMs = Date.now() - start;
     const aborted = (e as Error).name === "AbortError";
-    const reason = aborted ? `fetch_timeout:${opts.timeoutMs ?? 60_000}ms` : `fetch_error:${(e as Error).message}`;
+    const reason = aborted ? `fetch_timeout:${opts.timeoutMs ?? 20_000}ms` : `fetch_error:${(e as Error).message}`;
     await logAttempt(env, opts.jobId, host, url, { tier: 0, status: 0, bytes: 0, blockReason: reason, durationMs });
     return { ok: false, bytes: new ArrayBuffer(0), status: 0, contentType: "", blockReason: reason, durationMs };
   }
