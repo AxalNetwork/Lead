@@ -10,7 +10,6 @@
 // the affected facts using the spec formula.
 
 import type { Env } from "../types";
-import type { NewsItemRow, MentionResolved } from "./enrich";
 import { getReputability, REPUTABILITY_DEFAULT } from "./reputability";
 
 const SUPPORTED_PREDICATES = [
