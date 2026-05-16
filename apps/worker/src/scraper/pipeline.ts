@@ -817,12 +817,21 @@ async function processFirmlist(
       const srcEntity = personKeyToEntity.get(edge.from_key) ?? firmKeyToEntity.get(edge.from_key) ?? null;
       const dstEntity = personKeyToEntity.get(edge.to_key) ?? firmKeyToEntity.get(edge.to_key) ?? null;
       if (!srcEntity || !dstEntity) continue;
-      await env.DB.prepare(
-        `INSERT INTO rel_edges (id, src_entity_id, dst_entity_id, kind, source)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(src_entity_id, dst_entity_id, kind, IFNULL(valid_from,'')) DO NOTHING`,
+      // `uq_rel_edges_quad` is an EXPRESSION unique index over
+      // (src_entity_id, dst_entity_id, kind, IFNULL(valid_from,'')).
+      // SQLite/D1 only accepts column-list conflict targets in UPSERT,
+      // not expressions — use `INSERT OR IGNORE` so the engine resolves
+      // the collision against any matching unique constraint (the
+      // expression index counts).
+      const er = await env.DB.prepare(
+        `INSERT OR IGNORE INTO rel_edges (id, src_entity_id, dst_entity_id, kind, source)
+         VALUES (?, ?, ?, ?, ?)`,
       ).bind(crypto.randomUUID(), srcEntity, dstEntity, edge.kind, importedFrom).run();
-      edgesCreated += 1;
+      // D1's `meta.changes` reports rows affected by the statement.
+      // For `INSERT OR IGNORE` a skipped duplicate yields `changes === 0`,
+      // so we only count edges actually persisted on this run. Avoids
+      // job-summary inflation on idempotent Folk re-imports.
+      if ((er.meta?.changes ?? 0) > 0) edgesCreated += 1;
     } catch (e) {
       result.errors = result.errors ?? [];
       result.errors.push(`edge_fail:${edge.from_key}->${edge.to_key}:${(e as Error).message}`);

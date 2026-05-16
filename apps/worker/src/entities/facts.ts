@@ -47,9 +47,22 @@ export async function insertFact(env: Env, f: FactInput): Promise<string | null>
     await enqueueSummaryRebuild(env, f.entity_id);
     return id;
   } catch (e) {
-    // UNIQUE(hash) collision = exact-replay observation; ignore.
+    // UNIQUE(hash) collision = exact-replay observation. Task #1
+    // requires re-imports of the same Folk row to refresh `observed_at`
+    // so freshness queries reflect when we last *saw* the fact, even
+    // when nothing about the value changed. We update the existing row
+    // (matched by hash) instead of writing a new one.
     const msg = (e as Error).message || "";
-    if (/UNIQUE/i.test(msg)) return null;
+    if (/UNIQUE/i.test(msg)) {
+      try {
+        await env.DB.prepare(
+          "UPDATE facts SET observed_at = ? WHERE hash = ?",
+        ).bind(now, hash).run();
+      } catch (uErr) {
+        console.warn("insertFact observed_at refresh failed", (uErr as Error).message);
+      }
+      return null;
+    }
     throw e;
   }
 }
