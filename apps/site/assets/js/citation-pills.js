@@ -164,7 +164,16 @@
           cache.delete(factId);
           if (competing) cache.delete(competing);
           overlay.remove();
-          decorate(); // refresh badges
+          // Reset decorated nodes so decorate() re-fetches and re-renders pills/badges live.
+          document.querySelectorAll('.ads-fact[data-fact-id="' + factId + '"]').forEach(function (n) {
+            n.removeAttribute("data-cite-done");
+            n.querySelectorAll(".ads-cite-pill, [data-cite-icon]").forEach(function (el) { el.remove(); });
+          });
+          if (competing) document.querySelectorAll('.ads-fact[data-fact-id="' + competing + '"]').forEach(function (n) {
+            n.removeAttribute("data-cite-done");
+            n.querySelectorAll(".ads-cite-pill, [data-cite-icon]").forEach(function (el) { el.remove(); });
+          });
+          decorate();
         } catch (e) { alert("Resolve failed: " + e.message); }
       });
     });

@@ -22,7 +22,8 @@ export const factsCitationsRoute = new Hono<{ Bindings: Env; Variables: { email:
 
 newsRoute.get("/entity/:id", async (c) => {
   const id = c.req.param("id");
-  const limit = Math.min(Number(c.req.query("limit") ?? "50"), 200);
+  const limit = Math.min(Math.max(Number(c.req.query("limit") ?? "50"), 1), 200);
+  const offset = Math.max(Number(c.req.query("offset") ?? "0"), 0);
   const minRep = Number(c.req.query("min_rep") ?? "0");
   const topic = c.req.query("topic")?.toLowerCase() ?? null;
   const sentiment = c.req.query("sentiment") ?? null; // 'pos' | 'neg' | 'neutral'
@@ -31,6 +32,9 @@ newsRoute.get("/entity/:id", async (c) => {
   if (sentiment === "pos") sentFilter = "AND (nem.sentiment_about_entity > 0.2 OR ni.sentiment > 0.2)";
   else if (sentiment === "neg") sentFilter = "AND (nem.sentiment_about_entity < -0.2 OR ni.sentiment < -0.2)";
   else if (sentiment === "neutral") sentFilter = "AND COALESCE(nem.sentiment_about_entity, ni.sentiment, 0) BETWEEN -0.2 AND 0.2";
+
+  const topicClause = topic ? "AND (lower(ni.title) LIKE ? OR lower(ni.summary) LIKE ?)" : "";
+  const baseBind: unknown[] = topic ? [id, minRep, `%${topic}%`, `%${topic}%`] : [id, minRep];
 
   const rows = await c.env.DB.prepare(
     `SELECT ni.id, ni.url, ni.host, ni.title, ni.headline, ni.byline, ni.published_at,
@@ -41,12 +45,24 @@ newsRoute.get("/entity/:id", async (c) => {
        JOIN news_items ni ON ni.id = nem.news_item_id
       WHERE nem.entity_id = ?
         AND ni.source_reputability >= ?
-        ${topic ? "AND (lower(ni.title) LIKE ? OR lower(ni.summary) LIKE ?)" : ""}
+        ${topicClause}
         ${sentFilter}
       ORDER BY COALESCE(ni.published_at, ni.fetched_at) DESC
-      LIMIT ?`,
-  ).bind(...(topic ? [id, minRep, `%${topic}%`, `%${topic}%`, limit] : [id, minRep, limit])).all();
-  return c.json({ items: rows.results ?? [] });
+      LIMIT ? OFFSET ?`,
+  ).bind(...baseBind, limit, offset).all();
+
+  const totalRow = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n
+       FROM news_entity_mentions nem
+       JOIN news_items ni ON ni.id = nem.news_item_id
+      WHERE nem.entity_id = ?
+        AND ni.source_reputability >= ?
+        ${topicClause}
+        ${sentFilter}`,
+  ).bind(...baseBind).first<{ n: number }>();
+  const total = totalRow?.n ?? 0;
+  const next_offset = offset + limit < total ? offset + limit : null;
+  return c.json({ items: rows.results ?? [], meta: { total, limit, offset, next_offset } });
 });
 
 // ----------------- /api/news/item/:id -----------------
