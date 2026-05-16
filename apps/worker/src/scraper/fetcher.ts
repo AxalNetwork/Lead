@@ -601,21 +601,29 @@ export async function fetchBytes(
     }
     await waitForRateLimit(env, host, Math.max(opts.minIntervalMs ?? 4000, robots.crawlDelayMs));
   }
+  // Task #2: hard timeout on the binary fetch path. Without this, a
+  // hung PDF download could stall the queue invocation indefinitely.
+  const ctl = new AbortController();
+  const tm = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 60_000);
   try {
     const res = await fetch(url, {
       method: "GET",
       headers: { ...buildHeaders(), Accept: "application/pdf,*/*" },
       redirect: "follow",
+      signal: ctl.signal,
     });
     const buf = await res.arrayBuffer();
     const ct = res.headers.get("Content-Type") ?? "";
     const blockReason = res.ok ? null : `status_${res.status}`;
     const durationMs = Date.now() - start;
+    clearTimeout(tm);
     await logAttempt(env, opts.jobId, host, url, { tier: 0, status: res.status, bytes: buf.byteLength, blockReason, durationMs });
     return { ok: res.ok, bytes: buf, status: res.status, contentType: ct, blockReason, durationMs };
   } catch (e) {
+    clearTimeout(tm);
     const durationMs = Date.now() - start;
-    const reason = `fetch_error:${(e as Error).message}`;
+    const aborted = (e as Error).name === "AbortError";
+    const reason = aborted ? `fetch_timeout:${opts.timeoutMs ?? 60_000}ms` : `fetch_error:${(e as Error).message}`;
     await logAttempt(env, opts.jobId, host, url, { tier: 0, status: 0, bytes: 0, blockReason: reason, durationMs });
     return { ok: false, bytes: new ArrayBuffer(0), status: 0, contentType: "", blockReason: reason, durationMs };
   }

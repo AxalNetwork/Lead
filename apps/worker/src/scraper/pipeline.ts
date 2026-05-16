@@ -72,8 +72,14 @@ async function markRunning(env: Env, jobId: string): Promise<void> {
 }
 
 async function markFailed(env: Env, jobId: string, error: string, costMs: number): Promise<void> {
+  // Task #2: never overwrite a terminal state set by the sweeper or
+  // operator (timed_out / cancelled / dead_letter). The status filter
+  // here is what guarantees that a worker that finally throws after
+  // having been swept stays terminal under its true cause.
   await env.DB.prepare(
-    "UPDATE jobs SET status = 'failed', error = ?, finished_at = ?, cost_ms = COALESCE(cost_ms,0) + ? WHERE id = ?",
+    `UPDATE jobs SET status = 'failed', error = ?, finished_at = ?,
+            cost_ms = COALESCE(cost_ms,0) + ?
+       WHERE id = ? AND status IN ('queued','running')`,
   )
     .bind(error.slice(0, 1000), new Date().toISOString(), costMs, jobId)
     .run();

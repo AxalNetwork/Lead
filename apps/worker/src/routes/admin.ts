@@ -158,6 +158,10 @@ admin.post("/repair-pipeline", async (c) => {
   let summariesEnq = 0;
   let rolesAdded = 0;
   let entitiesBackfilled = 0;
+  // Task #2: structured per-phase failure list. Any non-empty list
+  // flips the run to `failed` so a half-completed repair never reports
+  // success to the operator.
+  const phaseErrors: Array<{ phase: string; message: string }> = [];
   let errorMsg: string | null = null;
 
   try {
@@ -166,15 +170,15 @@ admin.post("/repair-pipeline", async (c) => {
 
     // (2) Backfill legacy-only records (leads/firms/companies/accounts/
     // buyers that have no `u_entities` row + `entity_legacy_map` entry
-    // yet). Without this, the role-insert phases below cannot attach
-    // roles for invisible legacy records. The existing
-    // `backfillAll` helper is idempotent (uses sync*ToEntity which
-    // upserts on the legacy key) and pages 200/table/batch.
+    // yet). The existing `backfillAll` helper is idempotent (uses
+    // sync*ToEntity which upserts on the legacy key) and pages
+    // 200/table/batch. A failure here is recorded as a phase error
+    // and the overall run is marked failed.
     try {
       const progress = await backfillAll(c.env, { batches: 5 });
       for (const p of progress) entitiesBackfilled += p.synced;
     } catch (e) {
-      console.warn("repair-pipeline backfillAll failed", (e as Error).message);
+      phaseErrors.push({ phase: "backfill", message: (e as Error).message });
     }
 
     // (3) Re-enqueue summary rebuilds for any entity whose latest fact /
@@ -240,36 +244,49 @@ admin.post("/repair-pipeline", async (c) => {
       },
     ];
     for (const p of phases) {
-      const r = await c.env.DB.prepare(p.sql).run().catch(() => null);
-      rolesAdded += Number(r?.meta?.changes ?? 0);
+      try {
+        const r = await c.env.DB.prepare(p.sql).run();
+        rolesAdded += Number(r.meta?.changes ?? 0);
+      } catch (e) {
+        phaseErrors.push({ phase: `role:${p.label}`, message: (e as Error).message });
+      }
     }
   } catch (e) {
     errorMsg = (e as Error).message;
   }
 
   const finishedAt = new Date().toISOString();
+  // Roll any per-phase error into the run's status. Whether or not the
+  // top-level try threw, a non-empty phaseErrors list means the run
+  // did not fully converge and must be reported as failed.
+  const combinedError =
+    errorMsg ??
+    (phaseErrors.length ? `phase_errors:${JSON.stringify(phaseErrors)}` : null);
+  const failed = Boolean(combinedError);
+
   await c.env.DB.prepare(
     `UPDATE repair_runs
         SET finished_at = ?, status = ?, stuck_swept = ?, roles_added = ?, summaries_enq = ?, error = ?
       WHERE id = ?`,
   ).bind(
     finishedAt,
-    errorMsg ? "failed" : "succeeded",
+    failed ? "failed" : "succeeded",
     stuckSwept,
     rolesAdded,
     summariesEnq,
-    errorMsg,
+    combinedError,
     runId,
   ).run();
 
   return c.json({
-    ok: !errorMsg,
+    ok: !failed,
     run_id: runId,
     entities_backfilled: entitiesBackfilled,
+    phase_errors: phaseErrors,
     stuck_swept: stuckSwept,
     roles_added: rolesAdded,
     summaries_enqueued: summariesEnq,
-    error: errorMsg,
+    error: combinedError,
   });
 });
 
