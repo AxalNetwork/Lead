@@ -49,8 +49,10 @@ function perEntityCap(env: Env): number {
 }
 
 async function todayPersistedCountForEntity(env: Env, entityId: string): Promise<number> {
+  // Count DISTINCT articles per entity per day so that articles with many
+  // mentions don't inflate the daily cap (was COUNT(*) over mentions).
   const row = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM news_entity_mentions nem
+    `SELECT COUNT(DISTINCT nem.news_item_id) AS n FROM news_entity_mentions nem
        JOIN news_items ni ON ni.id = nem.news_item_id
       WHERE nem.entity_id = ? AND date(ni.fetched_at) = date('now')`,
   ).bind(entityId).first<{ n: number }>();

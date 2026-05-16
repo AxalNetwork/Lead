@@ -9,7 +9,7 @@ export interface LoadedEntity {
   id: string;
   kind: string;
   roles: Array<{ role: string; is_primary: number; confidence: number }>;
-  facts: Array<{ id: string; predicate: string; value_text: string | null; value_number: number | null; value_json: unknown; value_entity_id: string | null; source: string | null; source_kind: string; confidence: number; observed_at: string; is_current: number }>;
+  facts: Array<{ id: string; predicate: string; value_text: string | null; value_number: number | null; value_json: unknown; value_entity_id: string | null; source: string | null; source_kind: string; confidence: number; verified_score: number | null; observed_at: string; is_current: number }>;
   channels: Array<{ kind: string; canonical: string; display: string | null; is_primary: number; is_verified: number; is_dnc: number }>;
   tags: Array<{ taxonomy: string; slug: string; weight: number }>;
   summary: Record<string, unknown> | null;
@@ -22,7 +22,7 @@ export async function loadEntity(env: Env, id: string, opts?: { includeNonCurren
   const factWhere = opts?.includeNonCurrent ? "" : " AND is_current = 1";
   const [roles, facts, channels, tags, summary] = await Promise.all([
     env.DB.prepare(`SELECT role, is_primary, confidence FROM entity_roles WHERE entity_id = ?`).bind(id).all(),
-    env.DB.prepare(`SELECT id, predicate, value_text, value_number, value_json, value_entity_id, source, source_kind, confidence, observed_at, is_current FROM facts WHERE entity_id = ?${factWhere} ORDER BY observed_at DESC LIMIT 500`).bind(id).all(),
+    env.DB.prepare(`SELECT id, predicate, value_text, value_number, value_json, value_entity_id, source, source_kind, confidence, verified_score, observed_at, is_current FROM facts WHERE entity_id = ?${factWhere} ORDER BY observed_at DESC LIMIT 500`).bind(id).all(),
     env.DB.prepare(`SELECT kind, canonical, display, is_primary, is_verified, is_dnc FROM channels WHERE entity_id = ?`).bind(id).all(),
     env.DB.prepare(`SELECT taxonomy, slug, weight FROM entity_tags WHERE entity_id = ?`).bind(id).all(),
     env.DB.prepare(`SELECT * FROM entity_summary WHERE entity_id = ?`).bind(id).first(),
