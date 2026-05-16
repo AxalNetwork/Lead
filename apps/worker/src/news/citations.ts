@@ -111,51 +111,59 @@ export async function persistCitationsForMention(
         ORDER BY confidence DESC LIMIT 1`,
     ).bind(entityId, claim.predicate).first<{ id: string; value_text: string | null; value_number: number | null }>();
 
+    // Build the per-claim mutation set and commit it atomically via DB.batch
+    // so a mid-claim failure leaves no partial fact/citation residue.
+    const stmts: D1PreparedStatement[] = [];
     let factId: string;
     let contradicts: 0 | 1 = 0;
 
     if (existing && valuesAgree(existing, claim)) {
-      // Confirming citation — attach to the existing fact.
       factId = existing.id;
     } else if (existing) {
-      // Contradicting evidence: the new article disagrees with the prior fact.
-      // Mark the PRIOR fact's citation as contradicting (1), but the citation
-      // on the newly-created competing fact SUPPORTS that competing fact (0).
-      await insertCitation(env, existing.id, newsItemId, claim.quote, 1);
+      // Contradicting evidence: cite the prior fact as contradicted AND
+      // insert a competing new fact (supported by this article).
+      stmts.push(citationStmt(env, existing.id, newsItemId, claim.quote, 1));
+      const built = await buildFactInsert(env, entityId, claim, evidence_url);
+      factId = built.id;
+      if (built.stmt) stmts.push(built.stmt);
       touched.push({ fact_id: existing.id, contradicts: 1 });
-      factId = await insertFact(env, entityId, claim, evidence_url);
     } else {
-      // No prior fact — create one, cite from this article (supporting).
-      factId = await insertFact(env, entityId, claim, evidence_url);
+      const built = await buildFactInsert(env, entityId, claim, evidence_url);
+      factId = built.id;
+      if (built.stmt) stmts.push(built.stmt);
     }
-    await insertCitation(env, factId, newsItemId, claim.quote, contradicts);
+    stmts.push(citationStmt(env, factId, newsItemId, claim.quote, contradicts));
+    try {
+      await env.DB.batch(stmts);
+    } catch {
+      // Hash collision on facts insert (UNIQUE) means the fact already
+      // exists — re-resolve and just write the citation alone.
+      const built = await buildFactInsert(env, entityId, claim, evidence_url);
+      await env.DB.batch([citationStmt(env, built.id, newsItemId, claim.quote, contradicts)]);
+      factId = built.id;
+    }
     touched.push({ fact_id: factId, contradicts });
   }
   return touched;
 }
 
-async function insertFact(env: Env, entityId: string, claim: Claim, evidence_url: string): Promise<string> {
-  const id = crypto.randomUUID();
+async function buildFactInsert(env: Env, entityId: string, claim: Claim, evidence_url: string): Promise<{ id: string; stmt: D1PreparedStatement | null }> {
   const hash = await sha256Hex(`${entityId}|${claim.predicate}|${claim.value_text ?? claim.value_number}|news|${evidence_url}`);
-  try {
-    await env.DB.prepare(
-      `INSERT INTO facts(id, entity_id, predicate, value_text, value_number, source_kind, source, evidence_url, confidence, hash, is_current)
-       VALUES(?, ?, ?, ?, ?, 'news', 'news.ingest', ?, 0.6, ?, 1)`,
-    ).bind(id, entityId, claim.predicate, claim.value_text, claim.value_number, evidence_url, hash).run();
-    return id;
-  } catch {
-    // Dedupe collision on hash — find the existing fact and return it.
-    const existing = await env.DB.prepare(`SELECT id FROM facts WHERE hash = ? LIMIT 1`).bind(hash).first<{ id: string }>();
-    return existing?.id ?? id;
-  }
+  const existing = await env.DB.prepare(`SELECT id FROM facts WHERE hash = ? LIMIT 1`).bind(hash).first<{ id: string }>();
+  if (existing?.id) return { id: existing.id, stmt: null };
+  const id = crypto.randomUUID();
+  const stmt = env.DB.prepare(
+    `INSERT INTO facts(id, entity_id, predicate, value_text, value_number, source_kind, source, evidence_url, confidence, hash, is_current)
+     VALUES(?, ?, ?, ?, ?, 'news', 'news.ingest', ?, 0.6, ?, 1)`,
+  ).bind(id, entityId, claim.predicate, claim.value_text, claim.value_number, evidence_url, hash);
+  return { id, stmt };
 }
 
-async function insertCitation(env: Env, factId: string, newsItemId: string, quote: string, contradicts: 0 | 1): Promise<void> {
-  const id = crypto.randomUUID();
-  await env.DB.prepare(
+function citationStmt(env: Env, factId: string, newsItemId: string, quote: string, contradicts: 0 | 1): D1PreparedStatement {
+  return env.DB.prepare(
     `INSERT OR IGNORE INTO fact_citations(id, fact_id, news_item_id, quote, contradicts)
      VALUES(?, ?, ?, ?, ?)`,
-  ).bind(id, factId, newsItemId, quote.slice(0, 500), contradicts).run();
+  ).bind(crypto.randomUUID(), factId, newsItemId, quote.slice(0, 500), contradicts);
 }
 
 // Recompute facts.verified_score per the Task #2 formula:
@@ -203,16 +211,18 @@ export async function recomputeVerifiedScore(env: Env, factId: string): Promise<
       }
     }
   }
-  const distinctReputable = Math.min(1, hostSet.size / 3); // 3+ distinct reputable sources saturates
-  const score = Math.max(0, Math.min(1,
-    0.30 * distinctReputable +
+  // Apply the spec formula LITERALLY then clamp. Counts are used as-is
+  // (each reputable source contributes 0.30, each positive-sentiment citation
+  // 0.05, each contradicting citation -0.10). Final clamp keeps it in [0,1].
+  const raw =
+    0.30 * hostSet.size +
     0.20 * hasPrimary +
     0.20 * hasGov +
     0.15 * (archiveCount > 0 ? 1 : 0) +
     0.10 * recencyMax +
-    0.05 * Math.min(1, positiveSent / 3) -
-    0.10 * Math.min(1, contradicting / 2)
-  ));
+    0.05 * positiveSent -
+    0.10 * contradicting;
+  const score = Math.max(0, Math.min(1, raw));
   await env.DB.prepare(`UPDATE facts SET verified_score = ? WHERE id = ?`).bind(score, factId).run();
   return score;
 }
