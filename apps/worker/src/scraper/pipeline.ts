@@ -1870,6 +1870,28 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
       await env.DB.prepare(
         `INSERT INTO job_state_transitions (job_id, from_state, to_state, reason, changed_by) VALUES (?, 'running', 'timed_out', 'budget_exceeded', 'in_run_deadline')`,
       ).bind(jobId).run().catch(() => undefined);
+      // Task #2: emit an error_log row so analytics/alerts count
+      // in-run timeouts the same way they count sweep-path timeouts.
+      try {
+        const { AppError } = await import("../errors.js");
+        const { logError } = await import("../db/error_log.js");
+        await logError(env, {
+          err: new AppError({
+            code: "workflow_step_failed",
+            kind: "permanent",
+            message: "job exceeded budget_ms; in-run deadline fired",
+            retryable: false,
+            context: {
+              reason: "budget_exceeded",
+              swept_by: "in_run_deadline",
+              token: "workflow.step_failed",
+              budget_ms: budgetMs,
+            },
+          }),
+          job_id: jobId,
+          step: "pipeline.deadline",
+        });
+      } catch { /* swallow */ }
     } catch { /* swallow — sweeper is a backstop */ }
     return true;
   };
@@ -1941,11 +1963,20 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
         return processSingleUrl(env, jobId, msg.target, msg.config);
       }
     }, { meta: { target: msg.target, kind: msg.kind } });
+    let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
     const deadlinePromise: Promise<"__deadline__"> = new Promise((resolve) => {
       const remaining = Math.max(0, deadline - Date.now());
-      setTimeout(() => resolve("__deadline__"), remaining);
+      deadlineTimer = setTimeout(() => resolve("__deadline__"), remaining);
     });
-    const raced = await Promise.race([executorPromise, deadlinePromise]);
+    let raced: Awaited<typeof executorPromise> | "__deadline__";
+    try {
+      raced = await Promise.race([executorPromise, deadlinePromise]);
+    } finally {
+      // Clear the deadline timer when the executor wins so we don't
+      // leak it into the runtime's tail (avoids timer churn under
+      // high throughput).
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+    }
     if (raced === "__deadline__") {
       await enforceDeadline();
       return;

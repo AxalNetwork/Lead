@@ -132,6 +132,15 @@ admin.post("/clear-stuck-jobs", async (c) => {
     // `timed_out` is reserved for rows that actually began running.
     // Operators reading the dashboard should treat both as terminal
     // outcomes of the same sweep.
+    //
+    // RUNBOOK: This is intentional divergence from the spec's
+    // "ack-and-drop everything" phrasing. Cloudflare Queues offers no
+    // remote-ack API, so we instead rely on (a) the state-machine
+    // transition above making the row terminal, and (b) the queue
+    // consumer's `pipeline.isCancelled()` returning true for both
+    // `cancelled` and `timed_out` so a delayed delivery short-circuits
+    // immediately and acks. End result is equivalent to ack-and-drop
+    // for operators: no further side-effects, no further retries.
     const r2 = await c.env.DB.prepare(
       `UPDATE jobs
           SET status = 'cancelled',
