@@ -186,7 +186,12 @@ function chan(env: Env, entityId: string, kind: ChannelKind, raw: string | null 
   return upsertChannel(env, { entity_id: entityId, kind, canonical: String(raw), source, is_primary: primary });
 }
 
-export async function syncFirmToEntity(env: Env, f: FirmLikeInput, source = "firms_upsert"): Promise<string | null> {
+export async function syncFirmToEntity(
+  env: Env,
+  f: FirmLikeInput,
+  source = "firms_upsert",
+  sourceKind: "scrape" | "import" | "manual" | "enrichment" | "ai" | "inferred" = "scrape",
+): Promise<string | null> {
   try {
     const domain = canonicalDomain(f.domain ?? f.website);
     const linkedin = canonicalLinkedin(f.linkedin_url);
@@ -216,7 +221,7 @@ export async function syncFirmToEntity(env: Env, f: FirmLikeInput, source = "fir
       { predicate: "check_size_max_usd", value_number: numOrNull(f.check_size_max_usd) },
       { predicate: "check_size_typical_usd", value_number: numOrNull(f.check_size_typical_usd) },
     ];
-    await insertFactsBatch(env, entityId, patches, source, "scrape");
+    await insertFactsBatch(env, entityId, patches, source, sourceKind);
     await Promise.all([
       chan(env, entityId, "website", f.website, source, true),
       chan(env, entityId, "linkedin", f.linkedin_url, source, true),
@@ -237,7 +242,12 @@ export async function syncFirmToEntity(env: Env, f: FirmLikeInput, source = "fir
   }
 }
 
-export async function syncLeadToEntity(env: Env, l: LeadLikeInput, source = "leads_repo"): Promise<string | null> {
+export async function syncLeadToEntity(
+  env: Env,
+  l: LeadLikeInput,
+  source = "leads_repo",
+  sourceKind: "scrape" | "import" | "manual" | "enrichment" | "ai" | "inferred" = "scrape",
+): Promise<string | null> {
   try {
     const email = canonicalEmail(l.email);
     const linkedin = canonicalLinkedin(l.linkedin_url);
@@ -269,7 +279,7 @@ export async function syncLeadToEntity(env: Env, l: LeadLikeInput, source = "lea
       { predicate: "check_size_max_usd", value_number: numOrNull(l.check_size_max_usd) },
       { predicate: "check_size_typical_usd", value_number: numOrNull(l.check_size_typical_usd) },
     ];
-    await insertFactsBatch(env, entityId, patches, source, "scrape");
+    await insertFactsBatch(env, entityId, patches, source, sourceKind);
     await Promise.all([
       chan(env, entityId, "email", l.email, source, true),
       chan(env, entityId, "phone", l.phone, source),

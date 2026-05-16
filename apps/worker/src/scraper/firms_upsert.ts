@@ -36,8 +36,13 @@ const SCALAR_FIELDS = [
   "lead_or_co", "portfolio_count", "founded_year", "team_size",
   "linkedin_url", "crunchbase_url", "twitter_handle",
   "signal_nfx_url", "openvc_url", "pitchbook_url",
-  "contact_email", "submission_url", "source_url",
+  "contact_email", "submission_url",
 ] as const;
+
+// `source_url` is intentionally excluded from SCALAR_FIELDS — Task #1
+// requires that re-imports from different Folk shares union the
+// provenance URLs at the firm row level rather than fill-if-empty. The
+// merge path below comma-joins distinct values (mirrors `imported_from`).
 
 const ARRAY_FIELDS: Array<{ key: keyof FirmCandidate; column: string }> = [
   { key: "geo_focus", column: "geo_focus_json" },
@@ -57,6 +62,13 @@ export async function upsertFirm(
   env: Env,
   candidate: FirmCandidate,
   importedFrom: string,
+  /**
+   * Task #1: optional dual-write provenance override. Folk-share imports
+   * pass `{ source: 'folk_share', sourceKind: 'import' }` so the firm's
+   * unified-graph facts carry import provenance instead of the default
+   * `source_kind='scrape'`.
+   */
+  importCtx?: { source?: string; sourceKind?: "scrape" | "import" | "manual" | "enrichment" | "ai" | "inferred" },
 ): Promise<UpsertResult> {
   const name = candidate.name?.trim();
   if (!name) throw new Error("upsertFirm: candidate.name required");
@@ -112,7 +124,7 @@ export async function upsertFirm(
       stages_json: candidate.stages ? JSON.stringify(candidate.stages) : null,
       geo_focus_json: candidate.geo_focus ? JSON.stringify(candidate.geo_focus) : null,
       kind: candidate.kind ?? null,
-    }, importedFrom);
+    }, importCtx?.source ?? importedFrom, importCtx?.sourceKind ?? "scrape");
   } catch (e) {
     console.warn("dualwrite syncFirmToEntity failed", result.firmId, (e as Error).message);
   }
@@ -142,6 +154,7 @@ async function insertNew(
       vals.push(JSON.stringify(uniqStringArray(v)));
     }
   }
+  if (c.source_url) { cols.push("source_url"); vals.push(c.source_url); }
   if (c.socials) { cols.push("socials_json"); vals.push(JSON.stringify(c.socials)); }
   if (c.notes)   { cols.push("notes");        vals.push(c.notes); }
 
@@ -198,6 +211,22 @@ async function mergeInto(
   if (!importedFromExisting.split(",").includes(importedFrom)) {
     sets.push("imported_from = ?");
     binds.push(importedFromExisting ? `${importedFromExisting},${importedFrom}` : importedFrom);
+  }
+  // Task #1: union source_url across re-imports. Folk shares (Top-300,
+  // FR VCs, etc.) each have their own share URL; re-importing the same
+  // firm from a second share must preserve evidence of both shares
+  // rather than fill-if-empty (which would silently drop the second
+  // URL). Mirrors the imported_from comma-join pattern above; the
+  // unified graph still gets one channel/fact per share via dualwrite.
+  const newSourceUrl = (c as unknown as Record<string, unknown>).source_url;
+  if (typeof newSourceUrl === "string" && newSourceUrl) {
+    const existingSourceUrl = (existing.source_url as string | null) ?? "";
+    const parts = existingSourceUrl ? existingSourceUrl.split(",").map((s) => s.trim()).filter(Boolean) : [];
+    if (!parts.includes(newSourceUrl)) {
+      parts.push(newSourceUrl);
+      sets.push("source_url = ?");
+      binds.push(parts.join(","));
+    }
   }
   // Always bump last_modified on every dedupe hit — even when no field
   // deltas applied — so reruns leave a verifiable timestamp trail.

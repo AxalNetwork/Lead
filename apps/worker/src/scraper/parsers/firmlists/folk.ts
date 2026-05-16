@@ -79,8 +79,14 @@ export async function importFirms(url: string, env: Env): Promise<FirmlistImport
   let domRows: FolkRecord[] = [];
   let phaseBHtml = "";
 
+  // Task #1: Folk's internal share API path uses the bootstrap `share.id`,
+  // which may differ from the share-URL tail (especially for shares whose
+  // public slug was renamed or rotated). Prefer the bootstrap value when
+  // available; fall back to URL tail when Phase A failed.
+  const apiShareId = bootstrap?.shareId ?? parsed.shareId;
+
   try {
-    const b = await browserHarvest(env, url, parsed.shareId, errors);
+    const b = await browserHarvest(env, url, apiShareId, errors);
     captured.push(...b.batches);
     domRows = b.domRows;
     phaseBHtml = b.html;

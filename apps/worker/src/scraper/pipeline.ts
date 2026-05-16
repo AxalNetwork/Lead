@@ -14,6 +14,7 @@ import { canonicalEmail, canonicalLinkedin } from "../entities/normalize";
 import { addTag } from "../entities/tags";
 import { insertFact } from "../entities/facts";
 import type { Taxonomy } from "../entities/model";
+import { withEntityLock } from "../do/EntityLock";
 import { buildSeedUrls, type FetchedPage } from "./firmcrawl/pathProbes";
 import { extractPeopleFromPage, nameKeyOf, type ExtractedPerson } from "./firmcrawl/personExtract";
 import { aiExtractPeople } from "../ai/extract";
@@ -156,6 +157,14 @@ async function insertLead(
   parserName: string,
   jobId: string,
   fetchedFrom: "live" | "wayback" = "live",
+  /**
+   * Task #1: when an importer (e.g. Folk) needs facts written with a
+   * dedicated provenance label (`source='folk_share'`,
+   * `source_kind='import'`) instead of the default scrape provenance.
+   * Threaded down to `LeadsRepo.insert` → `syncLeadToEntity` →
+   * `insertFactsBatch`.
+   */
+  importCtx: { source?: string; sourceKind?: "scrape" | "import" | "manual" | "enrichment" | "ai" | "inferred" } | null = null,
 ): Promise<string | null> {
   const incoming = leadToIncoming(parsed, parserName);
 
@@ -247,7 +256,7 @@ async function insertLead(
   if (dnc.hit) (lead as unknown as Record<string, unknown>).do_not_contact = 1;
 
   const repo = new LeadsRepo(env.DB, env);
-  await repo.insert(lead);
+  await repo.insert(lead, importCtx ?? undefined);
 
   if (decision.action === "needs_review") {
     await recordReview(env.DB, decision.candidate.id, id, decision.score, decision.reasons);
@@ -656,11 +665,19 @@ async function processFirmlist(
   const firmKeyToEntity = new Map<string, string>();
   const personKeyToEntity = new Map<string, string>();
 
+  // Task #1 acceptance: Folk-share imports must stamp every unified-graph
+  // fact with `source='folk_share'` and `source_kind='import'` (not the
+  // default `firmlist:folk` + `scrape`). For all other firmlist importers
+  // the default scrape provenance applies. Threaded through upsertFirm /
+  // insertLead → syncFirmToEntity / syncLeadToEntity → insertFactsBatch.
+  const folkImportCtx: { source: string; sourceKind: "import" } | null =
+    picked.name === "folk" ? { source: "folk_share", sourceKind: "import" } : null;
+
   for (const f of result.firms) {
     if (await isCancelled(env, jobId)) break;
     let upsertRes: { firmId: number; action: "created" | "updated" | "unchanged"; website: string | null; domain: string | null };
     try {
-      upsertRes = await upsertFirm(env, f, importedFrom);
+      upsertRes = await upsertFirm(env, f, importedFrom, folkImportCtx ?? undefined);
     } catch (e) {
       // Skip individual upsert failures — a bad row shouldn't kill the import.
       result.errors = result.errors ?? [];
@@ -675,6 +692,24 @@ async function processFirmlist(
       const ent = await getLegacyEntityId(env, "firms", upsertRes.firmId);
       if (ent) {
         firmKeyToEntity.set(fKey, ent);
+        // Task #1: route Folk-imported firms through the EntityLock DO
+        // so per-entity merges are serialized (concurrent imports of the
+        // same firm from two Folk shares can't clobber each other) and
+        // so the Vectorize + AI-Search indices are refreshed with the
+        // freshest name/website/city for the unified record.
+        if (folkImportCtx) {
+          await withEntityLock(env, "firm", String(upsertRes.firmId), "merge_firm", {
+            id: String(upsertRes.firmId),
+            fields: {
+              name: f.name,
+              website: upsertRes.website ?? "",
+              hq_country_iso2: f.hq_country_iso2 ?? "",
+              hq_city: f.hq_city ?? "",
+              thesis: f.thesis ?? "",
+            },
+            history_source: "folk_share",
+          }).catch((e) => console.warn("folk firm EntityLock failed", upsertRes.firmId, (e as Error).message));
+        }
         await tagAsFolkImport(env, ent, picked.name, f.source_url ?? target);
       }
     }
@@ -734,7 +769,7 @@ async function processFirmlist(
     };
     let leadId: string | null;
     try {
-      leadId = await insertLead(env, parsedLead, importedFrom, jobId, "live");
+      leadId = await insertLead(env, parsedLead, importedFrom, jobId, "live", folkImportCtx ?? null);
     } catch (e) {
       result.errors = result.errors ?? [];
       result.errors.push(`person_insert_fail:${p.name}:${(e as Error).message}`);
@@ -754,6 +789,22 @@ async function processFirmlist(
       if (!entityId) entityId = await resolvePersonEntityId(env, p.email ?? null, p.linkedin_url ?? null);
       if (entityId) {
         personKeyToEntity.set(pKey, entityId);
+        // Task #1: route Folk-imported people through the EntityLock DO
+        // (mirrors the firm path above). Only fires for newly-created
+        // rows — when dedupe merged the evidence into an existing lead
+        // the merge already passed through EntityLock via the dedupe
+        // pipeline, so re-locking here would be redundant.
+        if (folkImportCtx && leadId) {
+          await withEntityLock(env, "lead", leadId, "merge_lead", {
+            id: leadId,
+            fields: {
+              name: parsedLead.name,
+              email: parsedLead.email ?? "",
+              source_url: parsedLead.source_url,
+            },
+            history_source: "folk_share",
+          }).catch((e) => console.warn("folk lead EntityLock failed", leadId, (e as Error).message));
+        }
         await tagAsFolkImport(env, entityId, picked.name, p.source_url ?? target, p.tags ?? null);
       }
     }

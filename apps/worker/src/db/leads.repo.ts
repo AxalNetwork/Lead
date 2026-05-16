@@ -64,7 +64,17 @@ export class LeadsRepo {
     return r ?? null;
   }
 
-  async insert(lead: Lead): Promise<void> {
+  async insert(
+    lead: Lead,
+    /**
+     * Task #1: optional dual-write provenance override. When an importer
+     * needs the unified-graph facts to bear a non-default source label
+     * (e.g. Folk shares with `source='folk_share'`, `source_kind='import'`),
+     * the caller threads `{ source, sourceKind }` here and we forward to
+     * `syncLeadToEntity`.
+     */
+    importCtx?: { source?: string; sourceKind?: "scrape" | "import" | "manual" | "enrichment" | "ai" | "inferred" },
+  ): Promise<void> {
     const rec = lead as unknown as Record<string, unknown>;
     const cols = Object.keys(rec);
     const placeholders = cols.map(() => "?").join(", ");
@@ -75,8 +85,14 @@ export class LeadsRepo {
       .run();
     // Task #4: dual-write into the unified entity graph (best-effort).
     if (this.fullEnv) {
-      try { await syncLeadToEntity(this.fullEnv, lead as never, "leads_repo_insert"); }
-      catch (e) { console.warn("dualwrite syncLeadToEntity (insert) failed", lead.id, (e as Error).message); }
+      try {
+        await syncLeadToEntity(
+          this.fullEnv,
+          lead as never,
+          importCtx?.source ?? "leads_repo_insert",
+          importCtx?.sourceKind ?? "scrape",
+        );
+      } catch (e) { console.warn("dualwrite syncLeadToEntity (insert) failed", lead.id, (e as Error).message); }
     }
   }
 
