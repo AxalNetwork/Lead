@@ -156,11 +156,16 @@
         var factId = btn.getAttribute("data-fact-id");
         var competing = btn.getAttribute("data-competing") || null;
         try {
-          await fetch(API + "/api/facts/" + encodeURIComponent(factId) + "/resolve-dispute", {
+          var res = await fetch(API + "/api/facts/" + encodeURIComponent(factId) + "/resolve-dispute", {
             method: "POST", credentials: "include",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ competing_fact_id: competing, decision: "canonical" }),
           });
+          if (!res.ok) {
+            var msg = "HTTP " + res.status;
+            try { var j = await res.json(); msg = j.message || j.error || msg; } catch (_) {}
+            throw new Error(msg);
+          }
           cache.delete(factId);
           if (competing) cache.delete(competing);
           overlay.remove();
