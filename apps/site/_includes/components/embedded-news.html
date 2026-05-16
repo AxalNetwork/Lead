@@ -1,0 +1,57 @@
+{% comment %}
+  Task #2: Embedded News & citations panel for every profile detail page.
+  Requires `include.table` (firms|investors|companies|accounts|buyers|leads).
+  Resolves the page's id/ref query param to a u_entities.id via
+  /api/entities/resolve and mounts window.ADS.News.mount() in-place.
+{% endcomment %}
+<section id="ads-embedded-news-section" class="ads-card" style="margin-top:16px;padding:12px">
+  <h3 style="margin:0 0 8px;font-size:14px">News & citations</h3>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+    <button id="ads-news-refresh" class="ads-btn" type="button">Refresh now</button>
+    <button id="ads-news-dispatch" class="ads-btn" type="button">Queue refresh</button>
+    <label style="font-size:12px">Min rep:
+      <select id="ads-news-min-rep" style="margin-left:6px">
+        <option value="0">All</option><option value="0.5">≥0.5</option>
+        <option value="0.7" selected>≥0.7</option><option value="0.9">≥0.9</option>
+      </select></label>
+    <label style="font-size:12px">Sentiment:
+      <select id="ads-news-sent" style="margin-left:6px">
+        <option value="">Any</option><option value="pos">Positive</option>
+        <option value="neutral">Neutral</option><option value="neg">Negative</option>
+      </select></label>
+    <input id="ads-news-topic" type="text" placeholder="Topic filter…" style="padding:4px 8px;font-size:12px">
+    <button id="ads-news-apply" class="ads-btn" type="button" style="font-size:12px;padding:4px 10px">Apply</button>
+  </div>
+  <div class="ads-form-msg" id="ads-news-msg" style="margin-bottom:6px"></div>
+  <h4 style="margin:8px 0 4px;font-size:13px">Timeline <span class="ads-muted" id="ads-news-count" style="font-size:11px"></span></h4>
+  <div id="ads-news-timeline"><div class="ads-loading">Loading…</div></div>
+  <h4 style="margin:12px 0 4px;font-size:13px">Verified facts <span class="ads-muted" style="font-size:11px">(hover a value for citations)</span></h4>
+  <div id="ads-news-facts"><div class="ads-loading">…</div></div>
+  <h4 style="margin:12px 0 4px;font-size:13px">Coverage</h4>
+  <div id="ads-news-coverage"><div class="ads-loading">…</div></div>
+</section>
+<script src="/assets/js/news-tab.js?v={{ site.time | date: '%s' }}"></script>
+<script>
+  (function () {
+    var TABLE = {{ include.table | jsonify }};
+    document.addEventListener("DOMContentLoaded", async function () {
+      var p = new URLSearchParams(window.location.search);
+      var ref = p.get("id") || p.get("ref");
+      if (!ref) { document.getElementById("ads-news-timeline").innerHTML = '<div class="ads-muted">No entity ref.</div>'; return; }
+      try {
+        var API = (window.ADS_API_BASE || "https://api.aidatasignal.com").replace(/\/+$/, "");
+        var r = await fetch(API + "/api/entities/resolve?table=" + encodeURIComponent(TABLE) + "&ref=" + encodeURIComponent(ref), { credentials: "include" });
+        var j = r.ok ? await r.json() : null;
+        if (!j || !j.entity_id) {
+          document.getElementById("ads-news-timeline").innerHTML = '<div class="ads-muted">No unified entity mapped for this record yet.</div>';
+          return;
+        }
+        if (window.ADS && window.ADS.News) {
+          window.ADS.News.mount({ rootId: "ads-embedded-news-section", entityId: j.entity_id, minRep: 0.7 });
+        }
+      } catch (e) {
+        document.getElementById("ads-news-timeline").innerHTML = '<div class="ads-muted">News unavailable: ' + e.message + '</div>';
+      }
+    });
+  })();
+</script>

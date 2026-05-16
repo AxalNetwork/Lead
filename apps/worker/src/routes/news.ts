@@ -218,11 +218,31 @@ factsCitationsRoute.post("/:id/resolve-dispute", async (c) => {
     `INSERT INTO fact_dispute_resolutions(id, fact_id, competing_fact_id, decision, notes, resolved_by)
      VALUES(?, ?, ?, ?, ?, ?)`,
   ).bind(resId, factId, body.competing_fact_id ?? null, decision, body.notes ?? null, actor).run();
-  if (decision === "canonical" && body.competing_fact_id) {
-    // Demote the competing fact: is_current=0, supersedes pointer.
+  if (decision === "canonical") {
+    if (body.competing_fact_id) {
+      // Explicit competing fact id provided — demote just that one.
+      await c.env.DB.prepare(
+        `UPDATE facts SET is_current = 0, supersedes_fact_id = ? WHERE id = ?`,
+      ).bind(factId, body.competing_fact_id).run();
+    } else {
+      // "Keep current as canonical" with no specific competing id: demote
+      // every OTHER current fact sharing the same (entity_id, predicate) so
+      // only the chosen fact remains is_current=1. Guarantees a single
+      // canonical fact after resolution.
+      const f = await c.env.DB.prepare(
+        `SELECT entity_id, predicate FROM facts WHERE id = ? LIMIT 1`,
+      ).bind(factId).first<{ entity_id: string; predicate: string }>();
+      if (f?.entity_id && f.predicate) {
+        await c.env.DB.prepare(
+          `UPDATE facts SET is_current = 0, supersedes_fact_id = ?
+            WHERE entity_id = ? AND predicate = ? AND id <> ? AND is_current = 1`,
+        ).bind(factId, f.entity_id, f.predicate, factId).run();
+      }
+    }
+    // Ensure the chosen fact itself is marked current.
     await c.env.DB.prepare(
-      `UPDATE facts SET is_current = 0, supersedes_fact_id = ? WHERE id = ?`,
-    ).bind(factId, body.competing_fact_id).run();
+      `UPDATE facts SET is_current = 1, supersedes_fact_id = NULL WHERE id = ?`,
+    ).bind(factId).run();
   }
   // Task #2: append a record to entity_history so the audit trail captures
   // every dispute resolution per the unified entity-history pattern.
