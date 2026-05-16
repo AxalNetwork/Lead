@@ -54,8 +54,10 @@
     return `<span style="display:inline-block;background:${bg};color:#fff;font-size:11px;padding:2px 6px;border-radius:3px;font-weight:600">${esc(s)}</span>`;
   }
 
-  function filterRow(row, q, importer, statusFilter) {
+  function filterRow(row, q, importer, statusFilter, category, region) {
     if (importer && row.importer !== importer) return false;
+    if (category && row.category !== category) return false;
+    if (region && row.region !== region) return false;
     if (statusFilter === "enabled" && !row.enabled) return false;
     if (statusFilter === "disabled" && row.enabled) return false;
     if (statusFilter === "archived" && row.last_run_status !== "archived") return false;
@@ -71,11 +73,26 @@
     return true;
   }
 
+  function refreshFacets() {
+    const cats = [...new Set(allItems.map((r) => r.category).filter(Boolean))].sort();
+    const regs = [...new Set(allItems.map((r) => r.region).filter(Boolean))].sort();
+    function fill(id, vals) {
+      const el = $(id); if (!el) return;
+      const cur = el.value;
+      el.innerHTML = `<option value="">all</option>` + vals.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join("");
+      if (vals.includes(cur)) el.value = cur;
+    }
+    fill("ads-src-category", cats);
+    fill("ads-src-region", regs);
+  }
+
   function renderList() {
     const q = $("ads-src-q").value.trim();
     const importer = $("ads-src-importer").value;
     const statusFilter = $("ads-src-status").value;
-    const rows = allItems.filter((r) => filterRow(r, q, importer, statusFilter));
+    const category = $("ads-src-category") ? $("ads-src-category").value : "";
+    const region = $("ads-src-region") ? $("ads-src-region").value : "";
+    const rows = allItems.filter((r) => filterRow(r, q, importer, statusFilter, category, region));
     if (rows.length === 0) {
       $("ads-src-list").innerHTML = `<div class="ads-muted" style="padding:16px">No sources match.</div>`;
       return;
@@ -153,6 +170,7 @@
     try {
       const j = await jget("/api/sources/");
       allItems = j.items || [];
+      refreshFacets();
       renderStats(j.stats);
       renderList();
     } catch (e) {
@@ -183,7 +201,7 @@
             <td style="padding:4px">${Number(r.records_seen || 0)}</td>
             <td style="padding:4px">${Number(r.records_created || 0)}</td>
             <td style="padding:4px">${Number(r.records_updated || 0)}</td>
-            <td style="padding:4px">${Number(r.records_errors || 0)}${r.error_message ? ` <span class="ads-muted" title="${esc(r.error_message)}">⚠</span>` : ""}</td>
+            <td style="padding:4px">${Number(r.records_errors || 0)}${r.error_message ? ` <span class="ads-muted" title="${esc(r.error_message)}">⚠</span>` : ""}${r.job_id && (Number(r.records_errors || 0) > 0 || r.status === "failed") ? ` <a href="/dashboard/errors/?job_id=${esc(r.job_id)}" target="_blank" rel="noopener" title="View error log entries for this run">log</a>` : ""}</td>
             <td style="padding:4px">${esc(r.trigger || "")}</td>
           </tr>`).join("")}
           </tbody></table>`;
@@ -200,6 +218,15 @@
         <dt class="ads-muted">Consecutive failures</dt><dd style="margin:0">${Number(row.consecutive_failures || 0)}</dd>
         ${row.notes ? `<dt class="ads-muted">Notes</dt><dd style="margin:0">${esc(row.notes)}</dd>` : ""}
       </dl>
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:flex-end">
+        <label class="ads-field" style="flex:1;min-width:180px"><span>Override importer</span>
+          <select id="ads-src-drawer-importer">
+            ${["folk","airtable","notion","google_sheets","openvc","mountside_ventures","nfx_signal","wikipedia","vcsheet","vcstack","landscape_vc","climatescape","mercury","versatilevc","jvca","golden_egg_check","map_of_the_money","founders_next_move","nyc_founder_guide","failory","generic_html","generic_jsonld"]
+              .map((n) => `<option value="${esc(n)}"${n === row.importer ? " selected" : ""}>${esc(n)}</option>`).join("")}
+          </select>
+        </label>
+        <button class="ads-btn ads-btn--ghost" data-d="save-importer">Save override</button>
+      </div>
       <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
         <button class="ads-btn" data-d="run">Run now</button>
         <button class="ads-btn ads-btn--ghost" data-d="toggle">${row.enabled ? "Disable" : "Enable"}</button>
@@ -214,6 +241,12 @@
         try {
           if (a === "run") await jsend("POST", `/api/sources/${row.id}/run`);
           else if (a === "toggle") await jsend("PATCH", `/api/sources/${row.id}`, { enabled: !row.enabled });
+          else if (a === "save-importer") {
+            const sel = document.getElementById("ads-src-drawer-importer");
+            const next = sel ? sel.value : row.importer;
+            if (!next || next === row.importer) return;
+            await jsend("PATCH", `/api/sources/${row.id}`, { importer: next });
+          }
           else if (a === "archive") {
             if (!confirm("Archive this source? Run history is preserved.")) return;
             await jsend("DELETE", `/api/sources/${row.id}`);
@@ -296,6 +329,8 @@
     $("ads-src-q").addEventListener("input", renderList);
     $("ads-src-importer").addEventListener("change", renderList);
     $("ads-src-status").addEventListener("change", renderList);
+    if ($("ads-src-category")) $("ads-src-category").addEventListener("change", renderList);
+    if ($("ads-src-region")) $("ads-src-region").addEventListener("change", renderList);
     $("ads-src-run-all").addEventListener("click", async () => {
       if (!confirm("Enqueue all due sources?")) return;
       try { const j = await jsend("POST", "/api/sources/run-all", {}); alert(`Queued ${j.queued} run(s)${j.throttled ? " (throttled)" : ""}.`); await reload(); }
@@ -303,7 +338,12 @@
     });
     $("ads-src-bootstrap").addEventListener("click", async () => {
       if (!confirm("Populate the registry from seed-sources.json? (idempotent)")) return;
-      try { const j = await jsend("POST", "/api/sources/bootstrap"); alert(`Bootstrap: ${j.created || 0} created, ${j.updated || 0} updated.`); await reload(); }
+      try {
+        const j = await jsend("POST", "/api/sources/bootstrap");
+        const errs = Array.isArray(j.errors) ? j.errors.length : 0;
+        alert(`Bootstrap: ${j.created || 0} created, ${j.existing || 0} already present, ${errs} errored (of ${j.total || 0} seeds).`);
+        await reload();
+      }
       catch (e) { alert("Bootstrap failed: " + e.message); }
     });
     reload();

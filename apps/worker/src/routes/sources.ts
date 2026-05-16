@@ -22,6 +22,8 @@ sources.get("/", async (c) => {
   const importer = c.req.query("importer");
   const status = c.req.query("status");
   const due = c.req.query("due");
+  const category = c.req.query("category");
+  const region = c.req.query("region");
   const limit = Math.min(Number(c.req.query("limit") ?? "500"), 1000);
 
   const where: string[] = [];
@@ -30,6 +32,8 @@ sources.get("/", async (c) => {
   else if (enabled === "0" || enabled === "false") { where.push("enabled = 0"); }
   if (importer) { where.push("importer = ?"); args.push(importer); }
   if (status) { where.push("last_run_status = ?"); args.push(status); }
+  if (category) { where.push("category = ?"); args.push(category); }
+  if (region) { where.push("region = ?"); args.push(region); }
   if (due === "1" || due === "true") {
     where.push("enabled = 1 AND (next_run_after IS NULL OR datetime(next_run_after) <= datetime('now'))");
   }

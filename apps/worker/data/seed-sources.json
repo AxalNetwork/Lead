@@ -351,6 +351,33 @@
       "hints": {}
     },
     {
+      "importer": "nfx_signal",
+      "kind": "firmlist",
+      "url": "https://signal.nfx.com/investor-lists/top-seed-vc-investors",
+      "label": "NFX Signal — Top Seed VC Investors (login-gated, paste-only)",
+      "record_type": "people",
+      "hints": { "role_hint": "vc_partner", "stage": "seed" },
+      "schedule_cron": "0 4 * * 1"
+    },
+    {
+      "importer": "nfx_signal",
+      "kind": "firmlist",
+      "url": "https://signal.nfx.com/investor-lists/top-pre-seed-investors",
+      "label": "NFX Signal — Top Pre-Seed Investors (login-gated, paste-only)",
+      "record_type": "people",
+      "hints": { "role_hint": "vc_partner", "stage": "pre_seed" },
+      "schedule_cron": "0 4 * * 1"
+    },
+    {
+      "importer": "nfx_signal",
+      "kind": "firmlist",
+      "url": "https://signal.nfx.com/investor-lists/top-investors-in-saas-startups",
+      "label": "NFX Signal — Top SaaS Investors (login-gated, paste-only)",
+      "record_type": "people",
+      "hints": { "role_hint": "vc_partner", "sector": "saas" },
+      "schedule_cron": "0 4 * * 1"
+    },
+    {
       "importer": "wikipedia",
       "kind": "firmlist",
       "url": "https://en.wikipedia.org/wiki/List_of_venture_capital_firms",
