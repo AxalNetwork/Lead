@@ -3,7 +3,7 @@ import { fetchPage } from "../../fetcher";
 import { decodeEntities } from "../../html";
 import type { FirmCandidate, FirmlistImportResult } from "./types";
 import { rowToCandidate } from "./_helpers";
-import { detectSignupWall } from "./aggregators/_base";
+import { awaitHostSlot, detectSignupWall } from "./aggregators/_base";
 
 /**
  * OpenVC importer (openvc.app investor list pages).
@@ -28,6 +28,8 @@ export async function importFirms(url: string, env: Env): Promise<FirmlistImport
 
   for (let page = 1; page <= MAX_PAGES; page++) {
     const pageUrl = appendPageParam(url, page);
+    // Task #2: ≤ 1 req / 3s per host pacing for paginated aggregators.
+    await awaitHostSlot(env, pageUrl);
     const fetched = await fetchPage(env, pageUrl, { forceBrowser: true });
     if (!fetched.ok) {
       errors.push(`page_${page}_fetch_failed:${fetched.blockReason ?? "unknown"}`);

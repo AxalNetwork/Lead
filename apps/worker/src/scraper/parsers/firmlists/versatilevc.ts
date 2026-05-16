@@ -20,25 +20,36 @@ export async function importFirms(url: string, env: Env): Promise<FirmlistImport
   if (!fetched.ok) return { firms: [], totalSeen: 0, errors: [`fetch_failed:${fetched.blockReason ?? "unknown"}`] };
 
   const anchors = extractAnchors(fetched.html, url);
+  // Task #2: always collect downloadable file links (PDF / XLSX /
+  // Google-Sheet) on the page and enqueue them as child URL jobs —
+  // even when a CSV is also present. VersatileVC's `/free` page
+  // typically lists multiple downloadable resources alongside the
+  // primary CSV.
+  const childUrls: string[] = [];
+  for (const a of anchors) {
+    if (/\.(pdf|xlsx?|ods)(\?|#|$)/i.test(a.href)) childUrls.push(a.href);
+    else if (/docs\.google\.com\/spreadsheets\//i.test(a.href)) childUrls.push(a.href);
+  }
+  const dedupedChildren = [...new Set(childUrls)];
+
   const csvLink = anchors.find((a) => /\.(csv|tsv)(\?|#|$)/i.test(a.href));
   if (csvLink) {
     const r = await importGenericCsv(csvLink.href, env);
     // Stamp the page URL as the source so re-runs from the page URL still
     // dedupe correctly with re-runs from the underlying CSV URL.
     const firms: FirmCandidate[] = r.firms.map((f) => ({ ...f, source_url: url }));
-    return { firms, totalSeen: r.totalSeen, errors: r.errors };
-  }
-
-  // Task #2: surface any PDF / XLSX / Google-Sheet links on the page as
-  // child URL jobs so the downstream pipeline crawls them too.
-  const childUrls: string[] = [];
-  for (const a of anchors) {
-    if (/\.(pdf|xlsx?|ods)(\?|#|$)/i.test(a.href)) childUrls.push(a.href);
-    else if (/docs\.google\.com\/spreadsheets\//i.test(a.href)) childUrls.push(a.href);
+    return {
+      firms,
+      totalSeen: r.totalSeen,
+      errors: r.errors,
+      childUrls: dedupedChildren.length ? dedupedChildren : undefined,
+    };
   }
 
   // Fallback: page-as-list scrape using the same heuristics as the NYC guide.
   const fallback = await importNyc(url, env);
-  if (childUrls.length) fallback.childUrls = [...new Set([...(fallback.childUrls ?? []), ...childUrls])];
+  if (dedupedChildren.length) {
+    fallback.childUrls = [...new Set([...(fallback.childUrls ?? []), ...dedupedChildren])];
+  }
   return fallback;
 }

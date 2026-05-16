@@ -167,6 +167,30 @@
       "hints": { "role_hint": "vc_partner" }
     },
     {
+      "importer": "openvc",
+      "kind": "firmlist",
+      "url": "https://www.openvc.app/blog/africa-vc-list",
+      "label": "OpenVC — Africa investor list",
+      "record_type": "companies",
+      "hints": { "role_hint": "vc_partner", "region": "africa" }
+    },
+    {
+      "importer": "openvc",
+      "kind": "firmlist",
+      "url": "https://www.openvc.app/blog/europe-vc-list",
+      "label": "OpenVC — Europe investor list",
+      "record_type": "companies",
+      "hints": { "role_hint": "vc_partner", "region": "europe" }
+    },
+    {
+      "importer": "openvc",
+      "kind": "firmlist",
+      "url": "https://www.openvc.app/blog/pre-seed-vc-list",
+      "label": "OpenVC — Pre-seed investor list",
+      "record_type": "companies",
+      "hints": { "role_hint": "vc_partner", "stage": "pre_seed" }
+    },
+    {
       "importer": "mercury",
       "kind": "firmlist",
       "url": "https://mercury.com/investor-database",

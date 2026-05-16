@@ -48,6 +48,22 @@ export async function importFirms(url: string, env: Env, hints?: AggregatorHints
         const cand = rowToCandidate(toRow(r), pageUrl);
         if (!cand) continue;
         (cand.candidate as { import_key?: string }).import_key = importKey("landscape_vc", name);
+        // Task #2: preserve the landscape.vc sector taxonomy as
+        // `sector:{slug}` tags so the pipeline writes them to
+        // `entity_tags`. Stage tags surfaced similarly.
+        const tags: string[] = [];
+        const sectors = Array.isArray(r.sectors) ? r.sectors : (typeof r.sectors === "string" ? r.sectors.split(/[,;]/) : []);
+        for (const s of sectors) {
+          const slug = String(s).trim().toLowerCase().replace(/\s+/g, "_");
+          if (slug) tags.push(`sector:${slug}`);
+        }
+        const stages = Array.isArray(r.stages) ? r.stages : (typeof r.stages === "string" ? r.stages.split(/[,;]/) : []);
+        for (const s of stages) {
+          const slug = String(s).trim().toLowerCase().replace(/\s+/g, "_");
+          if (slug) tags.push(`stage:${slug}`);
+        }
+        if (typeof r.type === "string" && r.type.trim()) tags.push(`role:${r.type.toLowerCase().replace(/\s+/g, "_")}`);
+        if (tags.length) (cand.candidate as { tags?: string[] }).tags = tags;
         firms.push(cand.candidate);
         added += 1;
       }
