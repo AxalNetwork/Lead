@@ -94,28 +94,32 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
     // import operates on the EXACT data the operator reviewed (no re-OCR,
     // no model-output drift). Fall back to re-parsing source bytes only
     // when the snapshot is missing (TTL expiry / legacy uploads).
-    let tables: ParsedTable[] = [];
+    // Map<tabIndex, ParsedTable> preserves the original parse-time tab
+    // identity so DB tab_index lookups stay aligned even when intermediate
+    // tabs lack headers (e.g. notes-only tabs).
+    let tablesByIdx = new Map<number, ParsedTable>();
     const snapRaw = await env.SCRAPE_CACHE.get(`upload_rows:${importId}`);
     const headerSnapRaw = await env.SCRAPE_CACHE.get(`upload_tab_previews:${importId}`);
     if (snapRaw && headerSnapRaw) {
       try {
         const tabRowsSnap = JSON.parse(snapRaw) as Record<string, Array<Record<string, string>>>;
         const tabHeadersSnap = JSON.parse(headerSnapRaw) as Record<string, { headers: string[] }>;
-        const indices = Object.keys(tabRowsSnap).map((k) => parseInt(k, 10)).filter((n) => !Number.isNaN(n)).sort((a, b) => a - b);
-        for (const i of indices) {
-          const headers = tabHeadersSnap[String(i)]?.headers ?? [];
-          if (!headers.length) continue;
-          tables.push({ headers, rows: tabRowsSnap[String(i)] ?? [] });
+        for (const k of Object.keys(tabRowsSnap)) {
+          const i = parseInt(k, 10);
+          if (Number.isNaN(i)) continue;
+          const headers = tabHeadersSnap[k]?.headers ?? [];
+          tablesByIdx.set(i, { headers, rows: tabRowsSnap[k] ?? [] });
         }
-      } catch { tables = []; }
+      } catch { tablesByIdx = new Map(); }
     }
-    if (!tables.length) {
+    if (tablesByIdx.size === 0) {
       const obj = await env.UPLOADS.get(row.r2_key);
       if (!obj) throw new Error("upload_object_missing");
       const bytes = await obj.arrayBuffer();
-      tables = await parseAllTables(bytes, row, env);
+      const reparsed = await parseAllTables(bytes, row, env);
+      reparsed.forEach((t, i) => tablesByIdx.set(i, t));
     }
-    if (!tables.length) throw new Error("no_table_found");
+    if (tablesByIdx.size === 0) throw new Error("no_table_found");
 
     // Load per-tab routing rows (set by parse.ts, possibly overridden by
     // confirm-map). Fall back to single-tab legacy path when missing.
@@ -135,8 +139,19 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
     /** Firm-id resolved from filename for portfolio/metrics fallback. */
     let fallbackFirmId: number | null = null;
 
-    for (let i = 0; i < tables.length; i++) {
-      const t = tables[i];
+    // Iterate by DB tab_index so per-tab intents/maps route to the right
+    // snapshot tab even if an earlier tab is empty. Fail fast if the DB
+    // references a tab_index the snapshot doesn't have.
+    const dbTabIndices = tabRows.map((r) => r.tab_index).sort((a, b) => a - b);
+    const allIndices = dbTabIndices.length
+      ? dbTabIndices
+      : Array.from(tablesByIdx.keys()).sort((a, b) => a - b);
+    for (const i of allIndices) {
+      const t = tablesByIdx.get(i);
+      if (!t) {
+        // DB has a tab the snapshot doesn't — refuse to misroute silently.
+        throw new Error(`tab_snapshot_missing:${i}`);
+      }
       const tabRow = tabRows.find((r) => r.tab_index === i);
       const intent: TabIntent = (tabRow?.intent ?? "firms") as TabIntent;
       const subkind = tabRow?.intent_subkind ?? null;
