@@ -13,9 +13,9 @@ permalink: /dashboard/companies/
 
 <div class="ads-card" style="margin-top:16px">
   <form id="ads-companies-filters" class="ads-filter-grid ads-filter-grid--6" autocomplete="off">
-    <label>Search<input name="q" placeholder="name or domain" style="width:100%;padding:6px"></label>
-    <label>Status
-      <select name="status" style="width:100%;padding:6px">
+    <label class="ads-field"><span>Search</span><input name="q" placeholder="name or domain"></label>
+    <label class="ads-field"><span>Status</span>
+      <select name="status">
         <option value="">all</option>
         <option value="active">active</option>
         <option value="acquired">acquired</option>
@@ -24,10 +24,10 @@ permalink: /dashboard/companies/
         <option value="stealth">stealth</option>
       </select>
     </label>
-    <label>Stage<input name="stage" placeholder="seed, series_a…" style="width:100%;padding:6px"></label>
-    <label>Sector<input name="sector" placeholder="ai, fintech…" style="width:100%;padding:6px"></label>
-    <label>Country (ISO2)<input name="country" maxlength="2" style="width:100%;padding:6px;text-transform:uppercase"></label>
-    <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" name="unicorn" value="1"> Unicorn only</label>
+    <label class="ads-field"><span>Stage</span><input name="stage" placeholder="seed, series_a…"></label>
+    <label class="ads-field"><span>Sector</span><input name="sector" placeholder="ai, fintech…"></label>
+    <label class="ads-field"><span>Country (ISO2)</span><input name="country" maxlength="2" style="text-transform:uppercase"></label>
+    <label class="ads-field" style="display:flex;align-items:center;gap:6px"><span><input type="checkbox" name="unicorn" value="1"> Unicorn only</span></label>
     <div style="grid-column:1/-1;display:flex;gap:8px">
       <button class="ads-btn" type="submit">Apply</button>
       <button class="ads-btn ads-btn--ghost" type="reset">Reset</button>
