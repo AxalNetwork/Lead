@@ -426,7 +426,7 @@
         + 'style="padding:4px 10px;border:1px solid #ccc;background:#fafafa;border-radius:4px;font-size:12px;cursor:pointer">'
         + 'Save as template</button>'
         // Re-run pass without re-invoking the vision model (uses cached AI
-        // results in KV so we don't burn neurons just to re-classify).
+        // results in KV so the re-run uses cached vision output only).
         + '<button type="button" id="ads-upload-rerun-skip-ocr" '
         + 'style="padding:4px 10px;border:1px solid #ccc;background:#fafafa;border-radius:4px;font-size:12px;cursor:pointer">'
         + 'Re-run (skip OCR)</button>'

@@ -80,9 +80,16 @@ export async function processParseFile(env: Env, importId: string, config: Parse
     let primaryRows = -1;
     for (let i = 0; i < tables.length; i++) {
       const t = tables[i];
-      const cls = classifyTab(t.sheetName ?? null, t.headers);
-      const samples = buildSamples(t.headers, t.rows);
-      const auto = autoMapHeaders(t.headers, samples);
+      // Synthetic tab-strip-only tab (vision/pdfjs detected the sheet name
+      // but no table) — persist as notes intent so the UI shows it.
+      const isNotesPlaceholder = t.headers.length === 1 && t.headers[0] === "__notes__";
+      const cls = isNotesPlaceholder
+        ? { intent: "notes" as TabIntent, confidence: 1, subkind: null }
+        : classifyTab(t.sheetName ?? null, t.headers);
+      const samples = isNotesPlaceholder ? {} : buildSamples(t.headers, t.rows);
+      const auto = isNotesPlaceholder
+        ? { map: {}, confidence: {} }
+        : autoMapHeaders(t.headers, samples);
       const columnMap: Record<string, string> = {};
       for (const [h, m] of Object.entries(auto.map)) {
         columnMap[h] = m ? `${m.entity}.${m.field}` : "__skip__";
@@ -95,7 +102,7 @@ export async function processParseFile(env: Env, importId: string, config: Parse
         intentConfidence: cls.confidence,
         intentSubkind: cls.subkind ?? null,
         rowCount: t.rows.length,
-        headers: t.headers,
+        headers: isNotesPlaceholder ? [] : t.headers,
         columnMap,
         mapConfidence: auto.confidence,
       });

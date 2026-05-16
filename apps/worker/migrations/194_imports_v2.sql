@@ -37,8 +37,10 @@ CREATE INDEX IF NOT EXISTS idx_fit_intent ON file_import_tabs(intent);
 CREATE TABLE IF NOT EXISTS firm_metrics (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   firm_id INTEGER NOT NULL REFERENCES firms(id) ON DELETE CASCADE,
-  metric TEXT NOT NULL,           -- aum_usd|deals_count|exits_count|new_funds|fund_size_usd|geo_pct|stage_pct|sector_pct
-  period TEXT,                    -- e.g. '2024' | '2024-Q3' | '2024-03' | 'YTD'
+  metric_name TEXT NOT NULL,      -- aum_usd|deals_count|exits_count|new_funds|fund_size_usd|geo_pct|stage_pct|sector_pct
+  metric_date TEXT NOT NULL,      -- ISO-ish date / period: 'YYYY-MM-DD'|'YYYY-MM'|'YYYY-Q#'|'YYYY'|'YTD'
+  metric TEXT,                    -- legacy alias of metric_name (kept for compat with v1 readers)
+  period TEXT,                    -- legacy alias of metric_date
   dimension TEXT,                 -- for breakdowns: country iso2, stage name, sector
   value_num REAL,                 -- numeric value
   value_text TEXT,                -- raw text (e.g. "$1.2B")
@@ -47,9 +49,10 @@ CREATE TABLE IF NOT EXISTS firm_metrics (
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_firm_metrics
-  ON firm_metrics(firm_id, metric, COALESCE(period,''), COALESCE(dimension,''));
+  ON firm_metrics(firm_id, metric_name, metric_date, COALESCE(dimension,''));
 CREATE INDEX IF NOT EXISTS idx_firm_metrics_firm ON firm_metrics(firm_id);
-CREATE INDEX IF NOT EXISTS idx_firm_metrics_metric ON firm_metrics(metric);
+CREATE INDEX IF NOT EXISTS idx_firm_metrics_metric ON firm_metrics(metric_name);
+CREATE INDEX IF NOT EXISTS idx_firm_metrics_date ON firm_metrics(metric_date);
 
 -- Reusable column mapping templates. Auto-applied on next upload whose
 -- source_signature matches. Operator-curated.

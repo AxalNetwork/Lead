@@ -356,6 +356,18 @@ export async function extractTablesFromImagePdf(env: Env, bytes: ArrayBuffer, op
       }
     }
   }
+  // Persist tab-strip-only tabs (README/SIGNUP-like) as zero-row notes
+  // entries so file_import_tabs reflects EVERY workbook tab, not only the
+  // ones with extractable tables. parse.ts maps __notes__ → intent='notes'.
+  const usedNames = new Set<string>(
+    out.map((t) => (t.sheetName ?? "").toLowerCase()).filter(Boolean),
+  );
+  for (const n of [...visionTabNames, ...pdfTabNames]) {
+    const k = n.toLowerCase();
+    if (!k || usedNames.has(k)) continue;
+    usedNames.add(k);
+    out.push({ headers: ["__notes__"], rows: [], sheetName: n, confidence: 0.5 });
+  }
   return out;
 }
 

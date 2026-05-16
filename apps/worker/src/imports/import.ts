@@ -90,10 +90,31 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
     .run();
 
   try {
-    const obj = await env.UPLOADS.get(row.r2_key);
-    if (!obj) throw new Error("upload_object_missing");
-    const bytes = await obj.arrayBuffer();
-    const tables = await parseAllTables(bytes, row, env);
+    // Prefer the parse-time row snapshot persisted to KV by parse.ts so the
+    // import operates on the EXACT data the operator reviewed (no re-OCR,
+    // no model-output drift). Fall back to re-parsing source bytes only
+    // when the snapshot is missing (TTL expiry / legacy uploads).
+    let tables: ParsedTable[] = [];
+    const snapRaw = await env.SCRAPE_CACHE.get(`upload_rows:${importId}`);
+    const headerSnapRaw = await env.SCRAPE_CACHE.get(`upload_tab_previews:${importId}`);
+    if (snapRaw && headerSnapRaw) {
+      try {
+        const tabRowsSnap = JSON.parse(snapRaw) as Record<string, Array<Record<string, string>>>;
+        const tabHeadersSnap = JSON.parse(headerSnapRaw) as Record<string, { headers: string[] }>;
+        const indices = Object.keys(tabRowsSnap).map((k) => parseInt(k, 10)).filter((n) => !Number.isNaN(n)).sort((a, b) => a - b);
+        for (const i of indices) {
+          const headers = tabHeadersSnap[String(i)]?.headers ?? [];
+          if (!headers.length) continue;
+          tables.push({ headers, rows: tabRowsSnap[String(i)] ?? [] });
+        }
+      } catch { tables = []; }
+    }
+    if (!tables.length) {
+      const obj = await env.UPLOADS.get(row.r2_key);
+      if (!obj) throw new Error("upload_object_missing");
+      const bytes = await obj.arrayBuffer();
+      tables = await parseAllTables(bytes, row, env);
+    }
     if (!tables.length) throw new Error("no_table_found");
 
     // Load per-tab routing rows (set by parse.ts, possibly overridden by
@@ -601,10 +622,12 @@ async function insertMetricsForRow(
   // Dimension: hq_country_iso2 wins for geo, then sectors[0]/stages[0].
   const dimension = pickDimension(fields, intent);
   let inserted = 0;
+  // Time-series schema: keyed on (firm_id, metric_name, metric_date, dimension).
+  // metric/period kept populated as legacy aliases for v1 readers.
   const stmt = env.DB.prepare(
     `INSERT OR REPLACE INTO firm_metrics
-      (firm_id, metric, period, dimension, value_num, value_text, source_url, imported_from)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      (firm_id, metric_name, metric_date, metric, period, dimension, value_num, value_text, source_url, imported_from)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const stmts: D1PreparedStatement[] = [];
   // Union of fields + numericOverrides keys so coerced-only metrics (e.g.
@@ -623,7 +646,8 @@ async function insertMetricsForRow(
     }
     if (num == null) continue;
     const metric = canonMetric(k, intent);
-    stmts.push(stmt.bind(firmId, metric, period, dimension, num, String(fields[k] ?? num).slice(0, 200), sourceUrl, importedFrom));
+    const metricDate = period ?? "YTD";
+    stmts.push(stmt.bind(firmId, metric, metricDate, metric, metricDate, dimension, num, String(fields[k] ?? num).slice(0, 200), sourceUrl, importedFrom));
     inserted++;
     if (stmts.length >= 50) {
       try { await env.DB.batch(stmts.splice(0)); } catch { /* ignore */ }
