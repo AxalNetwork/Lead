@@ -65,6 +65,7 @@ export async function importFirms(url: string, _env: Env): Promise<FirmlistImpor
   const firms: KeyedFirmCandidate[] = [];
   const people: KeyedPersonCandidate[] = [];
   const metrics: NonNullable<FirmlistImportResult["metrics"]> = [];
+  const importNotes: NonNullable<FirmlistImportResult["importNotes"]> = [];
   const errors: string[] = [];
   const tableTabs: NonNullable<FirmlistImportResult["tableTabs"]> = [];
   let totalSeen = 0;
@@ -104,11 +105,18 @@ export async function importFirms(url: string, _env: Env): Promise<FirmlistImpor
     }
     if (README_RE.test(tab.name) || looksLikeProseTab(headers, rows)) {
       tableTabs.push({ tableId: tab.gid, name: tab.name, intent: "notes", rowCount: rows.length });
+      const content = collectProseContent(headers, rows);
+      if (content) importNotes.push({ tab: tab.name, content });
       continue;
     }
     const cls = classifyTab(tab.name, headers);
     totalSeen += rows.length;
     tableTabs.push({ tableId: tab.gid, name: tab.name, intent: cls.intent, rowCount: rows.length });
+    if (cls.intent === "notes") {
+      const content = collectProseContent(headers, rows);
+      if (content) importNotes.push({ tab: tab.name, content });
+      continue;
+    }
     prepped.push({ gid: tab.gid, name: tab.name, intent: cls.intent, subkind: cls.subkind, headers, rows });
   }
 
@@ -137,16 +145,18 @@ export async function importFirms(url: string, _env: Env): Promise<FirmlistImpor
     }
   }
   // ---- Pass 2b: now process metrics-style tabs with the full name map.
+  // Fuzzy-match cache shared across every metrics tab in the workbook.
+  const fuzzyCache = new Map<string, string | null>();
   for (const t of prepped) {
     switch (t.intent) {
       case "firm_metrics":
-        extractFirmMetrics(t.rows, t.headers, t.name, url, metrics, nameKeyByNorm);
+        extractFirmMetrics(t.rows, t.headers, t.name, url, metrics, nameKeyByNorm, fuzzyCache);
         break;
       case "firm_kpi":
-        extractFirmKpi(t.rows, t.headers, url, metrics, nameKeyByNorm);
+        extractFirmKpi(t.rows, t.headers, url, metrics, nameKeyByNorm, fuzzyCache);
         break;
       case "firm_geo":
-        extractFirmGeo(t.rows, t.headers, url, metrics, nameKeyByNorm);
+        extractFirmGeo(t.rows, t.headers, url, metrics, nameKeyByNorm, fuzzyCache);
         break;
       default:
         break;
@@ -162,10 +172,26 @@ export async function importFirms(url: string, _env: Env): Promise<FirmlistImpor
     firms: firms as FirmCandidate[],
     people: people as PersonCandidate[],
     metrics: resolvedMetrics,
+    importNotes: importNotes.length ? importNotes : undefined,
     totalSeen,
     tableTabs,
     errors: errors.length ? errors : undefined,
   };
+}
+
+/** Aggregate prose-like cell content from a notes tab into one body. */
+function collectProseContent(headers: string[], rows: ParsedTabRows["rows"]): string {
+  const lines: string[] = [];
+  if (headers.some((h) => !/^col_\d+$/.test(h) && h.length > 0)) {
+    lines.push(headers.join(" | "));
+  }
+  for (const r of rows) {
+    const cells = r.map((c) => (c?.v != null ? String(c.v) : (c?.f != null ? String(c.f) : "")));
+    const joined = cells.filter((c) => c.trim().length).join(" | ").trim();
+    if (joined) lines.push(joined);
+    if (lines.length > 200) break; // hard cap so we don't dump megabytes
+  }
+  return lines.join("\n").slice(0, 16_000);
 }
 
 // ---- Per-tab fetch -------------------------------------------------------
@@ -419,6 +445,7 @@ function extractFirmMetrics(
   sourceUrl: string,
   out: NonNullable<FirmlistImportResult["metrics"]>,
   nameKeyByNorm: Map<string, string>,
+  fuzzyCache: Map<string, string | null>,
 ): void {
   // Locate firm-name column, period column, and metric value columns.
   const samples = buildSamples(
@@ -464,7 +491,7 @@ function extractFirmMetrics(
     if (!rawName) continue;
     const norm = normalizeFirmName(rawName);
     if (!norm) continue;
-    const firmKey = nameKeyByNorm.get(norm);
+    const firmKey = lookupFirmKey(norm, nameKeyByNorm, fuzzyCache);
     if (!firmKey) continue; // Only emit when the firm exists in a firms-intent tab.
 
     const rowPeriod = periodCol ? normalizePeriod(obj[periodCol]) : null;
@@ -493,6 +520,7 @@ function extractFirmKpi(
   sourceUrl: string,
   out: NonNullable<FirmlistImportResult["metrics"]>,
   nameKeyByNorm: Map<string, string>,
+  fuzzyCache: Map<string, string | null>,
 ): void {
   // KPI tabs are snapshots — write each mapped metric with period=YTD.
   const samples = buildSamples(
@@ -513,7 +541,7 @@ function extractFirmKpi(
     const rawName = obj[nameCol];
     if (!rawName) continue;
     const norm = normalizeFirmName(rawName);
-    const firmKey = nameKeyByNorm.get(norm);
+    const firmKey = lookupFirmKey(norm, nameKeyByNorm, fuzzyCache);
     if (!firmKey) continue;
     for (const h of headers) {
       const m = map[h];
@@ -541,6 +569,7 @@ function extractFirmGeo(
   sourceUrl: string,
   out: NonNullable<FirmlistImportResult["metrics"]>,
   nameKeyByNorm: Map<string, string>,
+  fuzzyCache: Map<string, string | null>,
 ): void {
   // Geo tabs come in two shapes:
   //   (a) Long: firm | country | pct
@@ -578,7 +607,7 @@ function extractFirmGeo(
     const rawName = obj[nameCol];
     if (!rawName) continue;
     const norm = normalizeFirmName(rawName);
-    const firmKey = nameKeyByNorm.get(norm);
+    const firmKey = lookupFirmKey(norm, nameKeyByNorm, fuzzyCache);
     if (!firmKey) continue;
 
     if (countryCol && pctCol) {
@@ -658,6 +687,58 @@ function normalizePeriod(raw: string | undefined): string | null {
     return String(y);
   }
   return s;
+}
+
+/** Strict + fuzzy lookup against the firms-tab name map. Strict
+ *  matches win; otherwise we try (a) substring containment in either
+ *  direction (handles "Acme" vs "Acme Capital Partners" tabs) and (b)
+ *  small-edit-distance match (handles minor spelling / accent drift).
+ *  We cache fuzzy results so the second metrics tab pays no cost. */
+function lookupFirmKey(norm: string, nameKeyByNorm: Map<string, string>, cache: Map<string, string | null>): string | null {
+  if (!norm) return null;
+  const strict = nameKeyByNorm.get(norm);
+  if (strict) return strict;
+  if (cache.has(norm)) return cache.get(norm) ?? null;
+  let best: { key: string; score: number } | null = null;
+  for (const [k, v] of nameKeyByNorm.entries()) {
+    // Containment (cheap & high-precision).
+    if (k.length >= 4 && norm.length >= 4) {
+      if (k.includes(norm) || norm.includes(k)) {
+        const score = Math.min(k.length, norm.length) / Math.max(k.length, norm.length);
+        if (score >= 0.6 && (!best || score > best.score)) best = { key: v, score };
+        continue;
+      }
+    }
+    // Edit-distance only worth trying for similar lengths.
+    if (Math.abs(k.length - norm.length) > 3) continue;
+    const d = editDistance(k, norm);
+    const tol = Math.max(1, Math.floor(Math.min(k.length, norm.length) * 0.15));
+    if (d <= tol) {
+      const score = 1 - d / Math.max(k.length, norm.length);
+      if (!best || score > best.score) best = { key: v, score };
+    }
+  }
+  const resolved = best?.key ?? null;
+  cache.set(norm, resolved);
+  return resolved;
+}
+
+function editDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  let prev = new Array<number>(b.length + 1);
+  let curr = new Array<number>(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    const tmp = prev; prev = curr; curr = tmp;
+  }
+  return prev[b.length];
 }
 
 function normalizeFirmName(name: string | null | undefined): string {

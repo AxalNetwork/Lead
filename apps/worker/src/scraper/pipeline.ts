@@ -913,17 +913,17 @@ async function processFirmlist(
     const firmId = firmKeyToLegacyId.get(metric.firm_import_key);
     if (!firmId) continue;
     try {
-      const mr = await env.DB.prepare(
-        `INSERT INTO firm_metrics
+      // `uq_firm_metrics` is an EXPRESSION unique index over
+      // (firm_id, metric_name, metric_date, COALESCE(dimension,'')).
+      // SQLite/D1 UPSERT conflict targets only accept column-lists, not
+      // expressions, so we use the same INSERT-OR-IGNORE-then-UPDATE
+      // pattern this file already uses for `rel_edges` (the unique
+      // expression index still resolves the IGNORE collision).
+      const ir = await env.DB.prepare(
+        `INSERT OR IGNORE INTO firm_metrics
            (firm_id, metric_name, metric_date, metric, period, dimension,
             value_num, value_text, source_url, imported_from)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(firm_id, metric_name, metric_date, COALESCE(dimension,''))
-         DO UPDATE SET
-           value_num = excluded.value_num,
-           value_text = excluded.value_text,
-           source_url = excluded.source_url,
-           imported_from = excluded.imported_from`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).bind(
         firmId,
         metric.metric_name,
@@ -936,10 +936,61 @@ async function processFirmlist(
         metric.source_url ?? target,
         importedFrom,
       ).run();
-      if ((mr.meta?.changes ?? 0) > 0) metricsWritten += 1;
+      if ((ir.meta?.changes ?? 0) > 0) {
+        metricsWritten += 1;
+      } else {
+        // Existing row — refresh value + provenance. Use IS for
+        // dimension since SQL `=` mismatches NULL on the long-format
+        // dimension-less rows.
+        await env.DB.prepare(
+          `UPDATE firm_metrics
+              SET value_num = ?, value_text = ?, source_url = ?, imported_from = ?
+            WHERE firm_id = ? AND metric_name = ? AND metric_date = ?
+              AND IFNULL(dimension,'') = IFNULL(?, '')`,
+        ).bind(
+          metric.value_num ?? null,
+          metric.value_text ?? null,
+          metric.source_url ?? target,
+          importedFrom,
+          firmId,
+          metric.metric_name,
+          metric.metric_date,
+          metric.dimension ?? null,
+        ).run();
+      }
     } catch (e) {
       result.errors = result.errors ?? [];
       result.errors.push(`metric_fail:${metric.firm_import_key}:${metric.metric_name}:${(e as Error).message}`);
+    }
+  }
+
+  // Task #3: persist any README / Instructions / prose-tab content the
+  // importer captured. We write one `entity_history` row per notes
+  // tab (action='import_notes') so the operator can read the source
+  // workbook's original prose from the dashboard, and also surface a
+  // compact `import_notes` array on the fetch_log summary below so it
+  // shows up in the job-summary view without a join.
+  let notesWritten = 0;
+  for (const note of result.importNotes ?? []) {
+    if (await isCancelled(env, jobId)) break;
+    try {
+      await env.DB.prepare(
+        `INSERT INTO entity_history
+           (id, entity_id, action, predicate, new_value, source, evidence_url, changed_by, changed_at)
+         VALUES (?, ?, 'import_notes', ?, ?, 'firmlist_import', ?, ?, ?)`,
+      ).bind(
+        crypto.randomUUID(),
+        jobId,
+        note.tab,
+        note.content,
+        target,
+        importedFrom,
+        new Date().toISOString(),
+      ).run();
+      notesWritten += 1;
+    } catch (e) {
+      result.errors = result.errors ?? [];
+      result.errors.push(`note_fail:${note.tab}:${(e as Error).message}`);
     }
   }
 
@@ -1006,6 +1057,11 @@ async function processFirmlist(
       source_collection: sourceCollection,
       stubs_created: (result.stubEntities ?? []).length,
       metrics_written: metricsWritten,
+      notes_written: notesWritten,
+      import_notes: (result.importNotes ?? []).slice(0, 8).map((n) => ({
+        tab: n.tab,
+        preview: n.content.slice(0, 200),
+      })),
       errors: (result.errors ?? []).slice(0, 20),
     }),
     Date.now() - start,

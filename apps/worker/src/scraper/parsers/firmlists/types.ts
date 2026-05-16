@@ -171,6 +171,14 @@ export interface FirmlistImportResult {
     value_text?: string | null;
     source_url?: string | null;
   }>;
+  /**
+   * Task #3: free-text content from README / Instructions / signup /
+   * prose-heavy first tabs that the importer chose not to parse as
+   * data. The pipeline persists each entry as a row in
+   * `entity_history` (action='import_notes') so the operator can read
+   * the original workbook prose from the dashboard.
+   */
+  importNotes?: Array<{ tab: string; content: string }>;
 }
 
 export type FirmlistImporter = (url: string, env: Env) => Promise<FirmlistImportResult>;
