@@ -65,11 +65,27 @@ async function markRunning(env: Env, jobId: string): Promise<void> {
   // running time, not enqueue time. Legacy `started_at` (NOT NULL,
   // used by many list queries) is left alone. The migration-193
   // state-machine trigger still gates the status transition itself.
-  await env.DB.prepare(
-    "UPDATE jobs SET status = 'running', running_started_at = ? WHERE id = ? AND status = 'queued'",
-  )
-    .bind(new Date().toISOString(), jobId)
-    .run();
+  //
+  // Defensive: if migration 214 hasn't applied yet (column missing),
+  // ALTER it in-place once and retry. Avoids `D1_ERROR: no such
+  // column: running_started_at` flooding the error log during the
+  // deploy window when the queue is draining stale messages.
+  const now = new Date().toISOString();
+  try {
+    await env.DB.prepare(
+      "UPDATE jobs SET status = 'running', running_started_at = ? WHERE id = ? AND status = 'queued'",
+    ).bind(now, jobId).run();
+  } catch (e) {
+    const msg = (e as Error).message ?? "";
+    if (msg.includes("no such column: running_started_at")) {
+      try { await env.DB.exec("ALTER TABLE jobs ADD COLUMN running_started_at TEXT"); } catch { /* race: another worker added it */ }
+      await env.DB.prepare(
+        "UPDATE jobs SET status = 'running', running_started_at = ? WHERE id = ? AND status = 'queued'",
+      ).bind(now, jobId).run();
+    } else {
+      throw e;
+    }
+  }
 }
 
 async function markFailed(env: Env, jobId: string, error: string, costMs: number): Promise<void> {
