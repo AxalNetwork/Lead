@@ -8,6 +8,9 @@ import { ensureRoleTaxonomySeeded } from "./prospects/seedRoles";
 // Task #5: source registry — drives the 6h cron + nightly staleness sweep.
 import { enqueueSourceRun, sweepStaleEntities, type SourceRow } from "./sources/registry";
 import { loadSeedSources } from "./sources/seed_loader";
+// Task #2: periodic stuck-job sweeper. Guarantees timeout convergence
+// even when queue traffic is too low to trigger the batch-head sweep.
+import { sweepStuckJobs } from "./routes/admin";
 
 interface LegacySourceRow {
   id: string;
@@ -31,6 +34,15 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
   // directly so dev environments without workflows still produce signals.
   if (event && (event as ScheduledEvent).cron === "0 * * * *") {
     ctx.waitUntil((async () => {
+      // Task #2: hourly stuck-job sweep. Cheap (one indexed UPDATE) and
+      // independent of queue traffic, so a quiet queue can still
+      // converge on `timed_out` for any over-budget running rows.
+      try {
+        const swept = await sweepStuckJobs(env);
+        if (swept > 0) console.log("hourly sweepStuckJobs", swept);
+      } catch (e) {
+        console.warn("hourly sweepStuckJobs failed", (e as Error).message);
+      }
       try {
         if (env.WF_CRAWL_SIGNALS) {
           await env.WF_CRAWL_SIGNALS.create({ params: {} });
