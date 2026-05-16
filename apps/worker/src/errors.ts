@@ -289,6 +289,30 @@ export function classify(err: unknown): { code: ErrCode; kind: ErrorKind; retrya
   const msg = (err instanceof Error ? err.message : String(err ?? "")).toLowerCase();
   if (!msg) return null;
 
+  // Pipeline-level fetch/scrape sentinels. These reasons are bubbled up
+  // from the scraper as plain `Error("fetch_failed:<reason>:status=<n>")`
+  // (see scraper/pipeline.ts). They are expected operational outcomes —
+  // not real internal errors — so we map them to typed codes the queue
+  // can dead-letter without paging.
+  if (msg.includes("scraping_api_not_configured") ||
+      msg.includes("proxy_not_configured") ||
+      msg.includes("browser_binding_unavailable") ||
+      msg.includes("puppeteer_module_missing")) {
+    return { code: "config_missing", kind: "config", retryable: false };
+  }
+  if (msg.includes("gated_source_use_manual_paste") ||
+      msg.includes("robots_disallowed") ||
+      msg.includes("tos_blocked")) {
+    return { code: "scrape_blocked", kind: "permanent", retryable: false };
+  }
+  if (msg.includes("no_table_found")) {
+    return { code: "parse_error", kind: "validation", retryable: false };
+  }
+  if (msg.startsWith("fetch_failed:") || msg.includes(":fetch_failed:")) {
+    // Generic fetch_failed without a more specific token → upstream/permanent.
+    return { code: "scrape_blocked", kind: "permanent", retryable: false };
+  }
+
   // Network / fetch.
   if (msg.includes("aborted") || msg.includes("timeout") || msg.includes("timed out")) {
     return { code: "fetch.timeout", kind: "transient", retryable: true };
