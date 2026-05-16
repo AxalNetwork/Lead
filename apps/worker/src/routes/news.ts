@@ -1,6 +1,6 @@
 // Task #2: News + facts-citations API.
 //
-//   GET  /api/news/entity/:id?limit=&topic=&min_rep=&sentiment=
+//   GET  /api/news/entity/:id?limit=&topic=&min_rep=&sentiment=&from=&to=
 //   GET  /api/news/item/:id
 //   GET  /api/news/coverage
 //   POST /api/news/refresh/:entityId         { wiki?, archive?, max? }
@@ -27,6 +27,9 @@ newsRoute.get("/entity/:id", async (c) => {
   const minRep = Number(c.req.query("min_rep") ?? "0");
   const topic = c.req.query("topic")?.toLowerCase() ?? null;
   const sentiment = c.req.query("sentiment") ?? null; // 'pos' | 'neg' | 'neutral'
+  // ISO date strings (YYYY-MM-DD or full ISO timestamp). Both inclusive.
+  const from = c.req.query("from") ?? null;
+  const to = c.req.query("to") ?? null;
 
   let sentFilter = "";
   if (sentiment === "pos") sentFilter = "AND (nem.sentiment_about_entity > 0.2 OR ni.sentiment > 0.2)";
@@ -34,7 +37,14 @@ newsRoute.get("/entity/:id", async (c) => {
   else if (sentiment === "neutral") sentFilter = "AND COALESCE(nem.sentiment_about_entity, ni.sentiment, 0) BETWEEN -0.2 AND 0.2";
 
   const topicClause = topic ? "AND (lower(ni.title) LIKE ? OR lower(ni.summary) LIKE ?)" : "";
-  const baseBind: unknown[] = topic ? [id, minRep, `%${topic}%`, `%${topic}%`] : [id, minRep];
+  // Date filter is applied against COALESCE(published_at, fetched_at) so
+  // articles missing a publication date still respect the operator window.
+  const fromClause = from ? "AND COALESCE(ni.published_at, ni.fetched_at) >= ?" : "";
+  const toClause = to ? "AND COALESCE(ni.published_at, ni.fetched_at) <= ?" : "";
+  const baseBind: unknown[] = [id, minRep];
+  if (topic) baseBind.push(`%${topic}%`, `%${topic}%`);
+  if (from) baseBind.push(from);
+  if (to) baseBind.push(to);
 
   const rows = await c.env.DB.prepare(
     `SELECT ni.id, ni.url, ni.host, ni.title, ni.headline, ni.byline, ni.published_at,
@@ -46,6 +56,8 @@ newsRoute.get("/entity/:id", async (c) => {
       WHERE nem.entity_id = ?
         AND ni.source_reputability >= ?
         ${topicClause}
+        ${fromClause}
+        ${toClause}
         ${sentFilter}
       ORDER BY COALESCE(ni.published_at, ni.fetched_at) DESC
       LIMIT ? OFFSET ?`,
@@ -58,6 +70,8 @@ newsRoute.get("/entity/:id", async (c) => {
       WHERE nem.entity_id = ?
         AND ni.source_reputability >= ?
         ${topicClause}
+        ${fromClause}
+        ${toClause}
         ${sentFilter}`,
   ).bind(...baseBind).first<{ n: number }>();
   const total = totalRow?.n ?? 0;
