@@ -53,7 +53,7 @@ id = "302eb1a32ae64ce588dee452e14b3217"
 # Per-host rate limit + 24h scrape cache
 [[kv_namespaces]]
 binding = "SCRAPE_CACHE"
-id = "302eb1a32ae64ce588dee452e14b3217"
+id = "fe0a5d907b9841f98914f3076500e75d"
 
 # Raw HTML archive (one object per fetched URL/day)
 [[r2_buckets]]
