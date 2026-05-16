@@ -147,6 +147,22 @@ async function mergeCore(env: Env, primary: string, secondary: string): Promise<
   const tagsMoved = Number(results[2]?.meta?.changes ?? 0);
   const edgesRewritten = Number(results[4]?.meta?.changes ?? 0) + Number(results[5]?.meta?.changes ?? 0);
 
+  // Enrich the audit rows with per-predicate movement counts so the
+  // history table carries enough provenance to reconstruct what the
+  // merge actually moved (not just "merge happened").
+  const evidence = JSON.stringify({
+    facts_moved: factsMoved,
+    channels_moved: channelsMoved,
+    tags_moved: tagsMoved,
+    edges_rewritten: edgesRewritten,
+    legacy_remap_changes: Number(results[6]?.meta?.changes ?? 0),
+    secondary_summary_deleted: Number(results[8]?.meta?.changes ?? 0),
+  });
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE entity_history SET new_value = ? WHERE id = ?`).bind(evidence, auditPrimaryId),
+    env.DB.prepare(`UPDATE entity_history SET new_value = ? WHERE id = ?`).bind(evidence, auditSecondaryId),
+  ]);
+
   // Rebuild the primary's summary; secondary row was already deleted in
   // the batch above so the queue worker has nothing to do for it.
   await enqueueSummaryRebuild(env, primary);
