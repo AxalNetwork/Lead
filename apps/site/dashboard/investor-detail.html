@@ -8,7 +8,13 @@ permalink: /dashboard/investors/detail/
 <div id="ads-investor-detail-root">
   <p><a href="/dashboard/investors/">&larr; All investors</a></p>
   <div id="ads-investor-detail"><div class="ads-loading">Loading…</div></div>
+  <p style="margin-top:8px"><a class="ads-btn ads-btn--ghost" id="ads-investor-news-link" href="#">News & citations</a></p>
 </div>
 
 <script src="/assets/js/investors.js"></script>
-<script>document.addEventListener("DOMContentLoaded", function(){ if (window.adsRenderInvestorDetail) window.adsRenderInvestorDetail(); });</script>
+<script src="/assets/js/citation-pills.js?v={{ site.time | date: '%s' }}" defer></script>
+<script>document.addEventListener("DOMContentLoaded", function(){
+  if (window.adsRenderInvestorDetail) window.adsRenderInvestorDetail();
+  var p = new URLSearchParams(window.location.search), id = p.get("id") || p.get("ref");
+  if (id) document.getElementById("ads-investor-news-link").href = "/dashboard/news/?table=investors&ref=" + encodeURIComponent(id);
+});</script>

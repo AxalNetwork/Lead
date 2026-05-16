@@ -66,9 +66,14 @@ async function loadReputability(): Promise<Record<string, number>> {
     // (documentation only) and coerce the remaining keys to numbers.
     const mod = (await import("../../data/source-reputability.json")) as unknown as { default: Record<string, unknown> };
     const out: Record<string, number> = {};
+    // Task #2 backward-compat: entries are now `{score,tier,country,notes}`
+    // objects in source-reputability.json; legacy bare numbers still accepted.
     for (const [k, v] of Object.entries(mod.default ?? {})) {
       if (k.startsWith("_")) continue;
       if (typeof v === "number") out[k] = v;
+      else if (v && typeof v === "object" && typeof (v as { score?: unknown }).score === "number") {
+        out[k] = (v as { score: number }).score;
+      }
     }
     reputabilityMap = out;
   } catch {

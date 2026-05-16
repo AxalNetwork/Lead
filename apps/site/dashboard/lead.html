@@ -55,3 +55,11 @@ permalink: /dashboard/lead/
 <script src="/assets/js/vendor/force-graph.js?v={{ site.time | date: '%s' }}"></script>
 <script src="/assets/js/relationship-graph.js?v={{ site.time | date: '%s' }}"></script>
 <script src="/assets/js/lead.js?v={{ site.time | date: '%s' }}"></script>
+<script src="/assets/js/citation-pills.js?v={{ site.time | date: '%s' }}" defer></script>
+<script>document.addEventListener("DOMContentLoaded", function(){
+  var p = new URLSearchParams(window.location.search), id = p.get("id") || p.get("ref");
+  if (!id) return;
+  var nav = document.createElement("p"); nav.style.marginTop = "8px";
+  nav.innerHTML = '<a class="ads-btn ads-btn--ghost" href="/dashboard/news/?table=leads&ref=' + encodeURIComponent(id) + '">News & citations</a>';
+  document.body.appendChild(nav);
+});</script>

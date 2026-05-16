@@ -33,4 +33,10 @@ permalink: /dashboard/buyers/detail/
   .ads-chip { display:inline-block; padding:2px 6px; background:#eef2fb; border-radius:10px; font-size:11px; margin:0 2px 2px 0; }
 </style>
 
+<p style="margin-top:8px"><a class="ads-btn ads-btn--ghost" id="ads-buyer-news-link" href="#">News & citations</a></p>
 <script src="/assets/js/buyer-detail.js?v={{ site.time | date: '%s' }}"></script>
+<script src="/assets/js/citation-pills.js?v={{ site.time | date: '%s' }}" defer></script>
+<script>document.addEventListener("DOMContentLoaded", function(){
+  var p = new URLSearchParams(window.location.search), id = p.get("id") || p.get("ref");
+  if (id) document.getElementById("ads-buyer-news-link").href = "/dashboard/news/?table=buyers&ref=" + encodeURIComponent(id);
+});</script>

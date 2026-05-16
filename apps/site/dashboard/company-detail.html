@@ -7,8 +7,14 @@ permalink: /dashboard/companies/detail/
 <div id="ads-company-detail-root">
   <p><a href="/dashboard/companies/">&larr; All companies</a></p>
   <div id="ads-company-detail"><div class="ads-loading">Loading…</div></div>
+  <p style="margin-top:8px"><a class="ads-btn ads-btn--ghost" id="ads-company-news-link" href="#">News & citations</a></p>
 </div>
 
 <link rel="stylesheet" href="/assets/css/investor-tabs.css">
 <script src="/assets/js/companies.js"></script>
-<script>document.addEventListener("DOMContentLoaded", function(){ if (window.adsRenderCompanyDetail) window.adsRenderCompanyDetail(); });</script>
+<script src="/assets/js/citation-pills.js?v={{ site.time | date: '%s' }}" defer></script>
+<script>document.addEventListener("DOMContentLoaded", function(){
+  if (window.adsRenderCompanyDetail) window.adsRenderCompanyDetail();
+  var p = new URLSearchParams(window.location.search), id = p.get("id") || p.get("ref");
+  if (id) document.getElementById("ads-company-news-link").href = "/dashboard/news/?table=companies&ref=" + encodeURIComponent(id);
+});</script>
