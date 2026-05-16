@@ -456,6 +456,19 @@ admin.get("/queue-health", async (c) => {
       ORDER BY n DESC LIMIT 10`,
   ).bind(now).all<{ step: string; code: string; n: number }>().catch(() => null);
 
+  // Task #2: over-budget alarm. Counts running rows that have been
+  // over their budget for >90s; an operational invariant — should
+  // always be 0 thanks to in-run deadline + batch-head + hourly
+  // sweep. Non-zero indicates one of the sweep paths is failing.
+  const overBudgetGraceSec = 90;
+  const overBudget = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM jobs
+      WHERE status = 'running'
+        AND running_started_at IS NOT NULL
+        AND budget_ms IS NOT NULL
+        AND ((strftime('%s', ?) - strftime('%s', running_started_at)) * 1000 - budget_ms) > ?`,
+  ).bind(now, overBudgetGraceSec * 1000).first<{ n: number }>().catch(() => null);
+
   // Summary-rebuild lag: entities whose entity_summary is stale.
   const rebuildLag = await c.env.DB.prepare(
     `SELECT COUNT(*) AS n FROM u_entities e
@@ -477,6 +490,10 @@ admin.get("/queue-health", async (c) => {
     p95_running_age_ms: pct(95),
     rebuild_lag: rebuildLag?.n ?? 0,
     top_failures_24h: topFailures?.results ?? [],
+    // alarm: invariant — should always be 0; non-zero means a sweep
+    // path is failing and operators should investigate immediately.
+    over_budget_alarm: overBudget?.n ?? 0,
+    over_budget_grace_sec: overBudgetGraceSec,
     last_repair: lastRepair ?? null,
   });
 });

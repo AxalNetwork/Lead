@@ -18,8 +18,13 @@ import { trackAi } from "../analytics/events";
 
 // Task #2: hard timeout for Workers AI calls. The binding does not accept
 // AbortSignal, so we race against a timer and surface a uniform
-// "ai_timeout" error. 45s is generous for an 8B-class model on long
-// extraction prompts; embeddings/arbitration use shorter values below.
+// "ai_timeout" error.
+//
+// POLICY: one canonical 30s ceiling for any single AI call (constant
+// `AI_TIMEOUT_MS` below). This is well below the 90s default job
+// budget, so even three serial AI calls fit inside a single job's
+// wall-clock ceiling. Short-form purposes (embeddings, arbitration)
+// use `AI_TIMEOUT_SHORT_MS` (20s) since they're trivially smaller.
 //
 // NB: this is a *caller-side* timeout — it bounds how long the worker
 // will wait on the Workers AI binding, but it does NOT cancel the
@@ -28,6 +33,8 @@ import { trackAi } from "../analytics/events";
 // (and bill) for a short tail after we move on. Acceptable today
 // because the queue-level budget + sweeper will reclaim the job; if
 // the binding gains cancellation, swap the race for a real abort.
+const AI_TIMEOUT_MS = 30_000;
+const AI_TIMEOUT_SHORT_MS = 20_000;
 async function runAiWithTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | null = null;
   try {
@@ -121,7 +128,7 @@ export async function aiExtractPeople(env: Env, html: string, jobId?: string): P
           { role: "user", content: `Extract people from this team-page text. ${c}` },
         ],
         response_format: { type: "json_schema", json_schema: PERSON_SCHEMA },
-      }), 45_000, "extract_people")) as { response?: string; people?: AiExtractedPerson[] };
+      }), AI_TIMEOUT_MS, "extract_people")) as { response?: string; people?: AiExtractedPerson[] };
       const parsed = parsePeopleResponse(res);
       people = parsed.filter((p) => (p.confidence ?? 0) >= MIN_CONFIDENCE);
     } catch (e) {
@@ -230,7 +237,7 @@ export async function aiExtractTablesFromPdfPages(env: Env, pageTexts: string[])
             { role: "user", content: `PDF page text:\n${text}` },
           ],
           response_format: { type: "json_schema", json_schema: TABLE_SCHEMA },
-        }), 60_000, "extract_tables")) as { response?: string; tables?: AiExtractedTable[] };
+        }), AI_TIMEOUT_MS, "extract_tables")) as { response?: string; tables?: AiExtractedTable[] };
         pageTables = parseTablesResponse(res);
       } catch (e) {
         console.warn("aiExtractTablesFromPdfPages failed", (e as Error).message);
@@ -288,7 +295,7 @@ export async function aiEmbed(env: Env, text: string): Promise<number[] | null> 
   if (!(await limitAi(env))) return null;
   const t0 = Date.now();
   try {
-    const res = (await runAiWithTimeout(env.AI.run(model, { text: [text] }), 20_000, "embed")) as { data?: number[][] };
+    const res = (await runAiWithTimeout(env.AI.run(model, { text: [text] }), AI_TIMEOUT_SHORT_MS, "embed")) as { data?: number[][] };
     const vec = Array.isArray(res?.data?.[0]) ? res.data![0] : null;
     if (!vec) return null;
     trackAi(env, { purpose: "embedding", model, ms: Date.now() - t0, neurons: estimateNeurons(text.length) });
@@ -320,7 +327,7 @@ export async function aiArbitrate(env: Env, candidateA: string, candidateB: stri
         { role: "user", content: `A: ${candidateA}\nB: ${candidateB}` },
       ],
       response_format: { type: "json_object" },
-    }), 30_000, "arbitrate")) as { response?: string };
+    }), AI_TIMEOUT_SHORT_MS, "arbitrate")) as { response?: string };
     const out = parseArbResponse(res);
     trackAi(env, { purpose: "arbitration", model, ms: Date.now() - t0, neurons: estimateNeurons(candidateA.length + candidateB.length) });
     await aiCachePut(env, cacheKey, out);
