@@ -63,7 +63,13 @@ export async function sweepStuckJobs(env: Env): Promise<number> {
     ).bind(now).all<{ id: string }>();
     for (const row of swept_rows.results ?? []) {
       await logError(env, {
-        err: new AppError("budget_exceeded", "job exceeded budget_ms; swept by admin.sweep", { retryable: false }),
+        err: new AppError({
+          code: "workflow_step_failed",
+          kind: "permanent",
+          message: "job exceeded budget_ms; swept by admin.sweep",
+          retryable: false,
+          context: { reason: "budget_exceeded", swept_by: "admin.sweep" },
+        }),
         job_id: row.id,
         step: "admin.sweep",
       }).catch(() => undefined);
