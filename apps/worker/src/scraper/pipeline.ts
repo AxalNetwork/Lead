@@ -692,13 +692,14 @@ async function processFirmlist(
       const ent = await getLegacyEntityId(env, "firms", upsertRes.firmId);
       if (ent) {
         firmKeyToEntity.set(fKey, ent);
-        // Task #1: route Folk-imported firms through the EntityLock DO
-        // so per-entity merges are serialized (concurrent imports of the
-        // same firm from two Folk shares can't clobber each other) and
-        // so the Vectorize + AI-Search indices are refreshed with the
-        // freshest name/website/city for the unified record.
+        // Task #1: route Folk-imported firms through the EntityLock DO.
+        // The DO is keyed by the unified entity id (`firm:{entityId}`)
+        // so concurrent imports of the same firm — even via two
+        // different Folk shares whose legacy `firms.id` rows happen to
+        // differ — serialize against each other. The body's `id` still
+        // carries the legacy firm id for the merge SQL + vector refresh.
         if (folkImportCtx) {
-          await withEntityLock(env, "firm", String(upsertRes.firmId), "merge_firm", {
+          await withEntityLock(env, "firm", ent, "merge_firm", {
             id: String(upsertRes.firmId),
             fields: {
               name: f.name,
@@ -789,21 +790,23 @@ async function processFirmlist(
       if (!entityId) entityId = await resolvePersonEntityId(env, p.email ?? null, p.linkedin_url ?? null);
       if (entityId) {
         personKeyToEntity.set(pKey, entityId);
-        // Task #1: route Folk-imported people through the EntityLock DO
-        // (mirrors the firm path above). Only fires for newly-created
-        // rows — when dedupe merged the evidence into an existing lead
-        // the merge already passed through EntityLock via the dedupe
-        // pipeline, so re-locking here would be redundant.
-        if (folkImportCtx && leadId) {
-          await withEntityLock(env, "lead", leadId, "merge_lead", {
-            id: leadId,
+        // Task #1: route Folk-imported people through the EntityLock DO,
+        // keyed by the unified entity id (`lead:{entityId}`). This
+        // serializes both newly-created and merged person rows — the
+        // dedupe path already locks during the merge itself, but a
+        // subsequent Folk re-import of an already-merged row would
+        // otherwise race with concurrent enrichment jobs writing to the
+        // same unified entity.
+        if (folkImportCtx) {
+          await withEntityLock(env, "lead", entityId, "merge_lead", {
+            id: leadId ?? entityId,
             fields: {
               name: parsedLead.name,
               email: parsedLead.email ?? "",
               source_url: parsedLead.source_url,
             },
             history_source: "folk_share",
-          }).catch((e) => console.warn("folk lead EntityLock failed", leadId, (e as Error).message));
+          }).catch((e) => console.warn("folk lead EntityLock failed", entityId, (e as Error).message));
         }
         await tagAsFolkImport(env, entityId, picked.name, p.source_url ?? target, p.tags ?? null);
       }

@@ -538,9 +538,12 @@ function toFirmCandidate(
     cand.check_size_typical_usd = range.typical;
   }
   if (!cand.domain && !cand.website) {
-    // Quality gate (upsertFirm rejects domain+website-less rows).
-    cand.website = `https://search.folk.app/share/${encodeURIComponent(String(name))}`;
-    cand.domain = null;
+    // Task #1 quality gate: never fabricate a placeholder website. A
+    // synthetic `search.folk.app/share/{name}` URL would canonicalize to
+    // the same domain across unrelated firms and collapse them into a
+    // single u_entities org via resolveOrCreate. We instead skip the
+    // row; upsertFirm would have rejected it anyway.
+    return null;
   }
   return cand;
 }
@@ -768,12 +771,15 @@ function extractCompanyLink(r: FolkRecord, map: Map<string, FolkField>): Company
 function buildOrgStub(link: CompanyLink, sourceUrl: string): KeyedFirmCandidate | null {
   if (!link.name?.trim()) return null;
   const website = link.website ?? (link.domain ? `https://${link.domain}` : null);
-  // upsertFirm requires domain OR website — synthesize a placeholder so
-  // the row still creates an entity. Downstream enrichment will refine.
-  const placeholderWebsite = website ?? `https://search.folk.app/share/${encodeURIComponent(link.name)}`;
+  // Task #1: never fabricate a synthetic website/domain. Without a real
+  // domain or URL upsertFirm cannot dedupe (and a placeholder URL would
+  // canonicalize multiple unrelated orgs to the same u_entities row).
+  // Skip the stub — the person→org edge for this row is dropped, but
+  // the person itself is still imported with `org:{name}` text.
+  if (!website && !link.domain) return null;
   return {
     name: link.name.trim(),
-    website: placeholderWebsite,
+    website,
     domain: link.domain,
     source_url: sourceUrl,
   };
