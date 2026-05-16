@@ -152,15 +152,19 @@ newsRoute.post("/refresh/:entityId", async (c) => {
 
 newsRoute.post("/refresh/:entityId/dispatch", async (c) => {
   const entityId = c.req.param("entityId");
+  // Mirror inline-refresh body shape so dispatch and inline behave the
+  // same when operators pass {wiki, archive, max}.
+  const body = (await c.req.json().catch(() => ({}))) as { wiki?: boolean; archive?: boolean; max?: number };
+  const opts = { wiki: body.wiki, archive: body.archive, max: body.max };
   if (c.env.WF_REFRESH_NEWS) {
     try {
-      const wf = await c.env.WF_REFRESH_NEWS.create({ params: { entityId, triggered_by: c.get("email") } });
+      const wf = await c.env.WF_REFRESH_NEWS.create({ params: { entityId, triggered_by: c.get("email"), ...opts } });
       return c.json({ ok: true, workflow_id: wf.id, dispatched: true });
     } catch (e) {
       return c.json({ ok: false, error: (e as Error).message }, 500);
     }
   }
-  const r = await refreshEntityNews(c.env, entityId);
+  const r = await refreshEntityNews(c.env, entityId, { wiki: opts.wiki, archive: opts.archive, maxArticles: opts.max });
   return c.json({ ok: true, dispatched: false, ...r });
 });
 

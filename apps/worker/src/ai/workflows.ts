@@ -209,11 +209,11 @@ export class RefreshNewsWorkflow {
   env: Env;
   ctx: ExecutionContext;
   constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
-  async run(event: WorkflowEvent<{ entityId: string; triggered_by?: string }>, step: WorkflowStep): Promise<{ ok: true; entityId: string; persisted: number; mentions: number; citations: number }> {
-    const { entityId } = event.payload;
+  async run(event: WorkflowEvent<{ entityId: string; triggered_by?: string; wiki?: boolean; archive?: boolean; max?: number }>, step: WorkflowStep): Promise<{ ok: true; entityId: string; persisted: number; mentions: number; citations: number }> {
+    const { entityId, wiki, archive, max } = event.payload;
     const { refreshEntityNews } = await import("../news/refresh");
     const r = await step.do("refresh", { retries: { limit: 1, backoff: "exponential" } }, async () => {
-      return await refreshEntityNews(this.env, entityId);
+      return await refreshEntityNews(this.env, entityId, { wiki, archive, maxArticles: max });
     });
     return { ok: true, entityId, persisted: r.persisted, mentions: r.mentions, citations: r.citations };
   }
