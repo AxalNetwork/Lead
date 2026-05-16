@@ -19,6 +19,8 @@ import { Hono } from "hono";
 import type { Env } from "../types";
 import { backfillAll } from "../entities/backfill";
 import { enqueueSummaryRebuild } from "../entities/summaryQueue";
+import { logError } from "../db/error_log";
+import { AppError } from "../errors";
 
 export const admin = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
@@ -52,6 +54,20 @@ export async function sweepStuckJobs(env: Env): Promise<number> {
        SELECT id, 'running', 'timed_out', 'budget_exceeded', 'admin.sweep'
          FROM jobs WHERE status = 'timed_out' AND finished_at = ?`,
     ).bind(now).run().catch(() => undefined);
+    // Task #2: also emit one error_log row per swept job so the
+    // existing failure-analytics/alerting (driven off error_log)
+    // surfaces sweep-induced timeouts at the same fidelity as a
+    // normal failed job.
+    const swept_rows = await env.DB.prepare(
+      `SELECT id FROM jobs WHERE status = 'timed_out' AND finished_at = ?`,
+    ).bind(now).all<{ id: string }>();
+    for (const row of swept_rows.results ?? []) {
+      await logError(env, {
+        err: new AppError("budget_exceeded", "job exceeded budget_ms; swept by admin.sweep", { retryable: false }),
+        job_id: row.id,
+        step: "admin.sweep",
+      }).catch(() => undefined);
+    }
   }
   return swept;
 }
