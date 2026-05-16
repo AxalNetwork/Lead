@@ -226,8 +226,23 @@ admin.post("/repair-pipeline", async (c) => {
     // 200/table/batch. A failure here is recorded as a phase error
     // and the overall run is marked failed.
     try {
-      const progress = await backfillAll(c.env, { batches: 5 });
-      for (const p of progress) entitiesBackfilled += p.synced;
+      // Task #2: loop backfillAll to completion (until every table
+      // returns next_offset:null) rather than capping at 5 batches.
+      // Each batch is 200 rows/table, so a full pass over a large
+      // dataset is bounded but predictable. We cap the outer iteration
+      // at 50 (=10k rows/table) per request to keep a single
+      // /repair-pipeline call within Workers CPU budget; operators can
+      // re-invoke until backfill_remaining == 0 in /queue-health.
+      const maxLoops = 50;
+      for (let loop = 0; loop < maxLoops; loop++) {
+        const progress = await backfillAll(c.env, { batches: 1 });
+        let any = false;
+        for (const p of progress) {
+          entitiesBackfilled += p.synced;
+          if (p.next_offset != null && p.scanned > 0) any = true;
+        }
+        if (!any) break;
+      }
     } catch (e) {
       phaseErrors.push({ phase: "backfill", message: (e as Error).message });
     }
@@ -456,6 +471,23 @@ admin.get("/queue-health", async (c) => {
       ORDER BY n DESC LIMIT 10`,
   ).bind(now).all<{ step: string; code: string; n: number }>().catch(() => null);
 
+  // Task #2: backfill / repair residual drift — exposes how many
+  // legacy rows still lack a u_entities mapping, plus how many active
+  // entities still lack any entity_roles row. Operators run
+  // /api/admin/repair-pipeline until both reach 0. Cheap COUNT
+  // queries against legacy tables left-joined to entity_legacy_map.
+  const backfillRemaining = await c.env.DB.prepare(
+    `SELECT
+       (SELECT COUNT(*) FROM firms     f LEFT JOIN entity_legacy_map m ON m.legacy_table='firms'     AND m.legacy_id=f.id WHERE m.entity_id IS NULL) AS firms_missing,
+       (SELECT COUNT(*) FROM companies c LEFT JOIN entity_legacy_map m ON m.legacy_table='companies' AND m.legacy_id=c.id WHERE m.entity_id IS NULL) AS companies_missing,
+       (SELECT COUNT(*) FROM leads     l LEFT JOIN entity_legacy_map m ON m.legacy_table='leads'     AND m.legacy_id=l.id WHERE m.entity_id IS NULL) AS leads_missing`,
+  ).first<{ firms_missing: number; companies_missing: number; leads_missing: number }>().catch(() => null);
+  const rolesRemaining = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM u_entities e
+      WHERE e.status='active'
+        AND NOT EXISTS (SELECT 1 FROM entity_roles r WHERE r.entity_id = e.id)`,
+  ).first<{ n: number }>().catch(() => null);
+
   // Task #2: over-budget alarm. Counts running rows that have been
   // over their budget for >90s; an operational invariant — should
   // always be 0 thanks to in-run deadline + batch-head + hourly
@@ -494,6 +526,15 @@ admin.get("/queue-health", async (c) => {
     // path is failing and operators should investigate immediately.
     over_budget_alarm: overBudget?.n ?? 0,
     over_budget_grace_sec: overBudgetGraceSec,
+    // Task #2: residual drift counters. Should converge to 0 after
+    // /api/admin/repair-pipeline finishes. Non-zero on a fresh repair
+    // run = re-invoke (or dataset is huge; check repair_runs.synced).
+    backfill_remaining: {
+      firms: backfillRemaining?.firms_missing ?? 0,
+      companies: backfillRemaining?.companies_missing ?? 0,
+      leads: backfillRemaining?.leads_missing ?? 0,
+    },
+    roles_remaining: rolesRemaining?.n ?? 0,
     last_repair: lastRepair ?? null,
   });
 });
