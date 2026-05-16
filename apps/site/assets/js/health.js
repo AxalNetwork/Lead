@@ -80,7 +80,7 @@
   document.addEventListener("DOMContentLoaded", () => {
     $("ads-health-refresh").addEventListener("click", load);
     const sweep = $("ads-health-sweep");
-    if (sweep) sweep.addEventListener("click", () => callAdmin("/api/admin/clear-stuck-jobs", "Sweep"));
+    if (sweep) sweep.addEventListener("click", () => callAdmin("/api/admin/clear-stuck-jobs?older_than_hours=1", "Sweep"));
     const repair = $("ads-health-repair");
     if (repair) repair.addEventListener("click", () => callAdmin("/api/admin/repair-pipeline", "Repair"));
     load();

@@ -218,8 +218,12 @@ export default {
           console.error("Queue ack (permanent)", msg.id, finalState, appErr.code, appErr.message);
           if (jobId) {
             try {
+              // Task #2: guard against clobbering terminal states set by
+              // the sweeper or operator (timed_out / cancelled /
+              // dead_letter). Mirrors the same guard in pipeline.markFailed.
               await env.DB.prepare(
-                `UPDATE jobs SET status = ?, retry_count = ?, last_error_code = ?, last_error_at = ?, finished_at = COALESCE(finished_at, ?) WHERE id = ?`,
+                `UPDATE jobs SET status = ?, retry_count = ?, last_error_code = ?, last_error_at = ?, finished_at = COALESCE(finished_at, ?)
+                  WHERE id = ? AND status IN ('queued','running')`,
               ).bind(finalState, attempts, appErr.code, now, now, jobId).run();
               await env.DB.prepare(
                 `INSERT INTO job_state_transitions (job_id, from_state, to_state, reason, changed_by) VALUES (?, NULL, ?, ?, 'queue')`,
