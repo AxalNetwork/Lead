@@ -41,9 +41,9 @@ export async function sweepStuckJobs(env: Env): Promise<number> {
            finished_at = ?,
            error = COALESCE(error, 'budget_exceeded')
      WHERE status = 'running'
-       AND started_at IS NOT NULL
+       AND running_started_at IS NOT NULL
        AND budget_ms IS NOT NULL
-       AND (strftime('%s', ?) - strftime('%s', started_at)) * 1000 > budget_ms`,
+       AND (strftime('%s', ?) - strftime('%s', running_started_at)) * 1000 > budget_ms`,
   ).bind(now, now).run();
   const swept = Number(r.meta?.changes ?? 0);
   if (swept > 0) {
@@ -115,8 +115,8 @@ admin.post("/clear-stuck-jobs", async (c) => {
               finished_at = COALESCE(finished_at, ?),
               error = COALESCE(error, 'age_exceeded')
         WHERE status = 'running'
-          AND started_at IS NOT NULL
-          AND (strftime('%s', ?) - strftime('%s', started_at)) > ?`,
+          AND running_started_at IS NOT NULL
+          AND (strftime('%s', ?) - strftime('%s', running_started_at)) > ?`,
     ).bind(now, now, cutoffSec).run();
     runningTimedOut = Number(r1.meta?.changes ?? 0);
     // Age-based queued -> cancelled (one-time backlog drain). Allowed
@@ -360,12 +360,12 @@ admin.get("/queue-health", async (c) => {
   const stuck = await c.env.DB.prepare(
     `SELECT COUNT(*) AS n FROM jobs
       WHERE status = 'running'
-        AND started_at IS NOT NULL
+        AND running_started_at IS NOT NULL
         AND budget_ms IS NOT NULL
-        AND (strftime('%s', ?) - strftime('%s', started_at)) * 1000 > budget_ms`,
+        AND (strftime('%s', ?) - strftime('%s', running_started_at)) * 1000 > budget_ms`,
   ).bind(now).first<{ n: number }>();
   const oldest = await c.env.DB.prepare(
-    `SELECT MIN(started_at) AS s FROM jobs WHERE status = 'running'`,
+    `SELECT MIN(running_started_at) AS s FROM jobs WHERE status = 'running' AND running_started_at IS NOT NULL`,
   ).first<{ s: string | null }>();
   const ageMs = oldest?.s
     ? (Date.parse(now) - Date.parse(oldest.s))
@@ -374,8 +374,8 @@ admin.get("/queue-health", async (c) => {
   // Task #2: p50/p95 age of currently-running jobs (in ms). SQLite has
   // no PERCENTILE_CONT, so we pull the age list and pick the indices.
   const ages = await c.env.DB.prepare(
-    `SELECT (strftime('%s', ?) - strftime('%s', started_at)) * 1000 AS ms
-       FROM jobs WHERE status = 'running' AND started_at IS NOT NULL
+    `SELECT (strftime('%s', ?) - strftime('%s', running_started_at)) * 1000 AS ms
+       FROM jobs WHERE status = 'running' AND running_started_at IS NOT NULL
        ORDER BY ms ASC`,
   ).bind(now).all<{ ms: number }>();
   const ageList = (ages.results ?? []).map((r) => Number(r.ms ?? 0));

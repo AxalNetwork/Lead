@@ -5,6 +5,18 @@
 --    applied at INSERT time when callers don't specify their own budget.
 ALTER TABLE jobs ADD COLUMN budget_ms INTEGER;
 
+-- `running_started_at` is the canonical anchor for the budget clock. The
+-- legacy `started_at` column is `NOT NULL` and historically stamped at
+-- enqueue time, so we cannot use it: under backlog its age reflects
+-- queued time, not running time. New `running_started_at` is nullable
+-- and stamped only on the queued -> running transition by
+-- `markRunning`. Backfill for in-flight rows uses `started_at` so the
+-- sweeper has a sensible anchor for pre-existing running jobs.
+ALTER TABLE jobs ADD COLUMN running_started_at TEXT;
+UPDATE jobs SET running_started_at = started_at
+ WHERE running_started_at IS NULL
+   AND status IN ('running','succeeded','failed','timed_out','cancelled','dead_letter');
+
 -- Backfill historical rows so the sweeper has a sensible ceiling for any
 -- pre-existing `running` job. Default budget per kind:
 --   firmlist            5 minutes
@@ -20,7 +32,7 @@ END
 WHERE budget_ms IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_jobs_running_started
-  ON jobs(status, started_at) WHERE status = 'running';
+  ON jobs(status, running_started_at) WHERE status = 'running';
 
 -- AFTER INSERT trigger: when a caller doesn't set `budget_ms`, default it
 -- by `kind`. This catches every INSERT INTO jobs callsite (replay,

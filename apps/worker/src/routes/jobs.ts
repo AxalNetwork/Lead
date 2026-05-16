@@ -48,14 +48,15 @@ jobs.post("/", async (c) => {
         : body.kind === "firm_team_crawl"
           ? 120000
           : 90000;
-  // Task #2: do NOT set `started_at` on queued rows — the budget clock
-  // must measure running time only. `markRunning` stamps it on the
-  // queued -> running transition.
+  // Task #2: legacy `started_at` is NOT NULL (migration 001) and used by
+  // many list/index queries — keep stamping it at enqueue time. The
+  // budget clock instead uses `running_started_at`, which is NULL until
+  // the queued -> running transition where `markRunning` stamps it.
   await c.env.DB.prepare(
-    `INSERT INTO jobs (id, name, source, status, kind, target, config_json, budget_ms, started_at, created_at)
-     VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, NULL, ?)`,
+    `INSERT INTO jobs (id, name, source, status, kind, target, config_json, budget_ms, started_at, running_started_at, created_at)
+     VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, NULL, ?)`,
   )
-    .bind(id, name, source, body.kind, target, JSON.stringify(config), budgetMs, now)
+    .bind(id, name, source, body.kind, target, JSON.stringify(config), budgetMs, now, now)
     .run();
 
   const msg: JobMessage = { jobId: id, kind: body.kind, target, config };
