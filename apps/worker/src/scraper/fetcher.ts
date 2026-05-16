@@ -448,6 +448,7 @@ function shouldEscalate(reason: string | null): boolean {
     reason === "status_522" ||
     reason === "status_524" ||
     reason.startsWith("fetch_error") ||
+    reason.startsWith("fetch_timeout") ||
     reason.startsWith("proxy_error") ||
     reason.startsWith("scraping_api_error") ||
     reason.startsWith("browser_error")

@@ -1885,6 +1885,15 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
       await env.DB.prepare(
         `INSERT INTO job_state_transitions (job_id, from_state, to_state, reason, changed_by) VALUES (?, 'running', 'timed_out', 'budget_exceeded', 'in_run_deadline')`,
       ).bind(jobId).run().catch(() => undefined);
+      // Task #2: explicit queue-step telemetry so the deadline path
+      // doesn't masquerade as ok:true in queue.step_end (the outer
+      // queue handler still emits ok:true on normal return, but
+      // ops/alerts can grep for queue.step_deadline to reconcile).
+      console.log("queue.step_deadline", JSON.stringify({
+        job_id: jobId, ok: false, final_state: "timed_out",
+        error_code: "workflow_step_failed", reason: "budget_exceeded",
+        budget_ms: budgetMs,
+      }));
       // Task #2: emit an error_log row so analytics/alerts count
       // in-run timeouts the same way they count sweep-path timeouts.
       try {
