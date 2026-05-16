@@ -664,6 +664,10 @@ async function processFirmlist(
   // populated for importers that emit `import_key` (e.g. Folk).
   const firmKeyToEntity = new Map<string, string>();
   const personKeyToEntity = new Map<string, string>();
+  // Task #3: track legacy firm id keyed by import_key so the metrics
+  // loop (Google Sheets Stats/Monthly/Geos tabs) can write firm_metrics
+  // rows without re-querying entity_legacy_map.
+  const firmKeyToLegacyId = new Map<string, number>();
 
   // Task #1 + #2 acceptance: Folk- and Airtable-share imports must stamp
   // every unified-graph fact with the canonical share-source label and
@@ -698,6 +702,7 @@ async function processFirmlist(
     else unchanged += 1;
     const fKey = (f as unknown as { import_key?: string }).import_key;
     if (fKey) {
+      firmKeyToLegacyId.set(fKey, upsertRes.firmId);
       const ent = await getLegacyEntityId(env, "firms", upsertRes.firmId);
       if (ent) {
         firmKeyToEntity.set(fKey, ent);
@@ -896,6 +901,48 @@ async function processFirmlist(
     }
   }
 
+  // Task #3: write firm_metrics rows surfaced by importers that
+  // parse non-row data (Google Sheets Stats/Monthly/Geos tabs). Each
+  // metric carries an `firm_import_key` that must match a firm
+  // upserted earlier in this run — orphans are silently dropped.
+  // Dedupe via the `uq_firm_metrics` unique index (firm_id,
+  // metric_name, metric_date, COALESCE(dimension,'')).
+  let metricsWritten = 0;
+  for (const metric of result.metrics ?? []) {
+    if (await isCancelled(env, jobId)) break;
+    const firmId = firmKeyToLegacyId.get(metric.firm_import_key);
+    if (!firmId) continue;
+    try {
+      const mr = await env.DB.prepare(
+        `INSERT INTO firm_metrics
+           (firm_id, metric_name, metric_date, metric, period, dimension,
+            value_num, value_text, source_url, imported_from)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(firm_id, metric_name, metric_date, COALESCE(dimension,''))
+         DO UPDATE SET
+           value_num = excluded.value_num,
+           value_text = excluded.value_text,
+           source_url = excluded.source_url,
+           imported_from = excluded.imported_from`,
+      ).bind(
+        firmId,
+        metric.metric_name,
+        metric.metric_date,
+        metric.metric_name, // legacy alias
+        metric.metric_date, // legacy alias
+        metric.dimension ?? null,
+        metric.value_num ?? null,
+        metric.value_text ?? null,
+        metric.source_url ?? target,
+        importedFrom,
+      ).run();
+      if ((mr.meta?.changes ?? 0) > 0) metricsWritten += 1;
+    } catch (e) {
+      result.errors = result.errors ?? [];
+      result.errors.push(`metric_fail:${metric.firm_import_key}:${metric.metric_name}:${(e as Error).message}`);
+    }
+  }
+
   // Task #2: fan out any free-text URLs the importer surfaced (e.g.
   // personal sites / Crunchbase links pasted into an Airtable "Notes"
   // cell) as child `kind='url'` scrape jobs so they get crawled. We
@@ -958,6 +1005,7 @@ async function processFirmlist(
       table_tabs: (result.tableTabs ?? []).slice(0, 32),
       source_collection: sourceCollection,
       stubs_created: (result.stubEntities ?? []).length,
+      metrics_written: metricsWritten,
       errors: (result.errors ?? []).slice(0, 20),
     }),
     Date.now() - start,

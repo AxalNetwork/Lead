@@ -130,6 +130,33 @@
       "record_type": "companies",
       "variant": "universe",
       "hints": {}
+    },
+    {
+      "importer": "google_sheets",
+      "kind": "firmlist",
+      "url": "https://docs.google.com/spreadsheets/d/1cRdFZhXLqat04xe7qO-p48wXQ00GWJyrzgHSb3YVIp0/edit",
+      "label": "Multi-tab VC workbook (List + Stats + Geos)",
+      "record_type": "companies",
+      "variant": "workbook",
+      "hints": {}
+    },
+    {
+      "importer": "google_sheets",
+      "kind": "firmlist",
+      "url": "https://docs.google.com/spreadsheets/d/1tugiIXvkprHMrtLX15GC5ZryXX2g0y3RQzmP7B2KCFw/edit",
+      "label": "Government & public funds workbook",
+      "record_type": "companies",
+      "variant": "workbook",
+      "hints": {}
+    },
+    {
+      "importer": "google_sheets",
+      "kind": "firmlist",
+      "url": "https://docs.google.com/spreadsheets/d/1BqNO7l4kXRhjG5jcB89FwRlhuRKBwBKtV7ZHwwLjPhk/edit",
+      "label": "VC time-series workbook (Monthly + Yearly)",
+      "record_type": "companies",
+      "variant": "workbook",
+      "hints": {}
     }
   ]
 }

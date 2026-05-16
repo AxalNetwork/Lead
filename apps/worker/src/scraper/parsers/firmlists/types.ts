@@ -154,6 +154,23 @@ export interface FirmlistImportResult {
    * instead of being dropped at resolution time.
    */
   stubEntities?: Array<{ import_key: string; kind: "firm" | "person"; name: string }>;
+  /**
+   * Task #3: firm time-series / KPI / geo facts emitted by importers
+   * that surface non-row data (Google Sheets Stats/Monthly/Geos tabs,
+   * Airtable metric tables, etc.). `firm_import_key` must match the
+   * `import_key` on a returned firm — the pipeline resolves it to a
+   * legacy `firms.id` and writes one row per metric into `firm_metrics`
+   * (idempotent via the `uq_firm_metrics` unique index).
+   */
+  metrics?: Array<{
+    firm_import_key: string;
+    metric_name: string;            // aum_usd|deals_count|exits_count|new_funds|fund_size_usd|geo_pct|stage_pct|sector_pct
+    metric_date: string;            // YYYY | YYYY-MM | YYYY-Q# | YYYY-MM-DD | YTD
+    dimension?: string | null;      // country iso2, stage, sector — blank for plain time-series
+    value_num?: number | null;
+    value_text?: string | null;
+    source_url?: string | null;
+  }>;
 }
 
 export type FirmlistImporter = (url: string, env: Env) => Promise<FirmlistImportResult>;
