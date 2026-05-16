@@ -39,6 +39,23 @@
     return m ? Number(m[1]) : null;
   }
 
+  function getRefParams() {
+    var qs = window.location.search;
+    var t = /[?&]table=([^&]+)/.exec(qs);
+    var r = /[?&]ref=([^&]+)/.exec(qs);
+    return t && r ? { table: decodeURIComponent(t[1]), ref: decodeURIComponent(r[1]) } : null;
+  }
+
+  // Resolve (table, ref) -> entity_id by hitting /api/dd/scores/by-ref.
+  // When no entity row exists yet we surface a helpful message instead of
+  // a 404 spinner so the operator knows to seed the entity first.
+  async function resolveRef(ref) {
+    var j = await api('/api/dd/scores/by-ref?table=' + encodeURIComponent(ref.table)
+      + '&ids=' + encodeURIComponent(ref.ref));
+    var hit = j && j.items && j.items[ref.ref];
+    return hit ? hit.entity_id : null;
+  }
+
   function renderScore(s) {
     if (!s) return '<div class="ads-muted">Not scanned yet.</div>';
     var comp = (function () { try { return JSON.parse(s.components_json || '{}'); } catch (e) { return {}; } })();
@@ -152,16 +169,29 @@
       .finally(function () { btn.disabled = false; });
   }
 
-  document.addEventListener("DOMContentLoaded", function () {
-    var id = getEntityId();
-    if (!id) {
-      $("ads-dd-e-score").innerHTML = '<div class="ads-muted">Add <code>?entity=&lt;id&gt;</code> to the URL.</div>';
-      return;
-    }
+  function startWith(id) {
     loadScore(id);
     loadFindings(id);
     loadRuns(id);
     $("ads-dd-e-scan").addEventListener("click", function () { runScan(id, false); });
     $("ads-dd-e-dispatch").addEventListener("click", function () { runScan(id, true); });
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    var id = getEntityId();
+    if (id) { startWith(id); return; }
+    var ref = getRefParams();
+    if (ref) {
+      $("ads-dd-e-score").innerHTML = '<div class="ads-loading">Resolving entity…</div>';
+      resolveRef(ref).then(function (resolved) {
+        if (resolved) { startWith(resolved); return; }
+        $("ads-dd-e-score").innerHTML = '<div class="ads-muted">No entity row exists yet for '
+          + esc(ref.table) + ' #' + esc(ref.ref) + '. Run a derive pass to create one, then return here.</div>';
+      }).catch(function (e) {
+        $("ads-dd-e-score").innerHTML = '<div class="ads-error">' + esc(e.message) + '</div>';
+      });
+      return;
+    }
+    $("ads-dd-e-score").innerHTML = '<div class="ads-muted">Add <code>?entity=&lt;id&gt;</code> or <code>?table=firms&amp;ref=&lt;id&gt;</code> to the URL.</div>';
   });
 })();

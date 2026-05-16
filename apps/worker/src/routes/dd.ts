@@ -170,6 +170,39 @@ ddRoute.get("/scores", async (c) => {
   return c.json({ items: r.results ?? [] });
 });
 
+// Lookup risk scores for a batch of source rows (e.g. firms, investors,
+// companies, accounts, leads) so list/detail pages can render risk badges
+// without first asking for the entity id.  Returns a map keyed by ref_id
+// containing { entity_id, risk_band, risk_score } for rows that have been
+// scanned at least once.
+ddRoute.get("/scores/by-ref", async (c) => {
+  const table = String(c.req.query("table") ?? "");
+  const idsRaw = String(c.req.query("ids") ?? "").trim();
+  const ALLOWED = new Set(["firms","companies","leads","accounts","investors","buyers","users"]);
+  if (!ALLOWED.has(table)) return c.json({ error: "bad_table", allowed: [...ALLOWED] }, 400);
+  if (!idsRaw) return c.json({ items: {} });
+  const ids = idsRaw.split(",").map((s) => s.trim()).filter(Boolean).slice(0, 500);
+  if (!ids.length) return c.json({ items: {} });
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = await c.env.DB.prepare(
+    `SELECT e.ref_id, e.id AS entity_id, r.risk_band, r.risk_score, r.trust_score, r.last_scan_at
+       FROM entities e
+       LEFT JOIN entity_risk_scores r ON r.entity_id = e.id
+      WHERE e.ref_table = ? AND e.ref_id IN (${placeholders})`,
+  ).bind(table, ...ids).all<{ ref_id: string; entity_id: number; risk_band: string | null; risk_score: number | null; trust_score: number | null; last_scan_at: string | null }>();
+  const items: Record<string, { entity_id: number; risk_band: string | null; risk_score: number | null; trust_score: number | null; last_scan_at: string | null }> = {};
+  for (const row of rows.results ?? []) {
+    items[String(row.ref_id)] = {
+      entity_id: row.entity_id,
+      risk_band: row.risk_band,
+      risk_score: row.risk_score,
+      trust_score: row.trust_score,
+      last_scan_at: row.last_scan_at,
+    };
+  }
+  return c.json({ items });
+});
+
 ddRoute.get("/scores/:entityId", async (c) => {
   const id = Number(c.req.param("entityId"));
   if (!Number.isFinite(id) || id <= 0) return c.json({ error: "bad_id" }, 400);

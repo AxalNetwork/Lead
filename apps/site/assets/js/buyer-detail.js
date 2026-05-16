@@ -28,6 +28,16 @@
     strip.querySelector('[data-k="seniority"]').textContent = b.seniority || "—";
     strip.querySelector('[data-k="is_decision_maker"]').textContent = b.is_decision_maker ? "yes" : "no";
     document.getElementById("ads-buyer-name").textContent = b.name || b.title || b.id;
+    var ddLink = document.getElementById("ads-buyer-dd");
+    if (!ddLink) {
+      ddLink = document.createElement("a");
+      ddLink.id = "ads-buyer-dd";
+      ddLink.className = "ads-btn ads-btn--ghost";
+      ddLink.style.cssText = "margin-left:8px;font-size:12px;vertical-align:middle";
+      ddLink.textContent = "Due diligence";
+      document.getElementById("ads-buyer-name").appendChild(ddLink);
+    }
+    ddLink.href = "/dashboard/dd-entity/?table=buyers&ref=" + encodeURIComponent(b.id);
     document.getElementById("ads-buyer-sub").textContent = [b.title, b.department, b.role_slug].filter(Boolean).join(" · ") || "—";
   }
   function renderOverview(b) {

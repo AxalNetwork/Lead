@@ -45,6 +45,8 @@
     byKey("aum").textContent = fmtMoney(firm.aum_usd);
     byKey("lead_or_co").textContent = firm.lead_or_co || "—";
     if (firm.website) { var a = byKey("website"); a.textContent = firm.website.replace(/^https?:\/\//, ""); a.href = firm.website; }
+    var ddLink = byKey("dd-link");
+    if (ddLink) ddLink.href = "/dashboard/dd-entity/?table=firms&ref=" + encodeURIComponent(firm.id);
 
     byKey("thesis").textContent = firm.thesis || "—";
     byKey("stages").textContent = fmtArr(firm.stages_json) || "—";

@@ -75,7 +75,7 @@
 
   function rowFor(f, col) {
     switch (col) {
-      case "name": return '<a href="/dashboard/firms/detail/?id=' + f.id + '">' + esc(f.name) + '</a>';
+      case "name": return '<span data-dd-ref="' + esc(f.id) + '"><a href="/dashboard/firms/detail/?id=' + f.id + '">' + esc(f.name) + '</a><span data-dd-slot></span></span>';
       case "kind": return esc(f.kind || "");
       case "hq": return esc([f.hq_city, f.hq_country_iso2].filter(Boolean).join(", "));
       case "stages": return esc(fmtArr(f.stages_json));
@@ -132,6 +132,7 @@
     document.getElementById("ads-firms-shown").textContent = state.items.length + " row" + (state.items.length === 1 ? "" : "s");
     var more = document.getElementById("ads-firms-loadmore");
     more.hidden = !state.nextCursor;
+    if (window.ADS_DDBadge) window.ADS_DDBadge.decorate("firms", tbody);
   }
 
   function api(path, opts) { return fetch(API_BASE + path, Object.assign({ credentials: "include" }, opts || {})).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }); }

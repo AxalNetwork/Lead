@@ -189,6 +189,16 @@
     strip.querySelector('[data-k="fit_score"]').textContent = fmt(a.fit_score);
     strip.querySelector('[data-k="status"]').textContent = a.status;
     document.getElementById("ads-acct-name").textContent = a.name;
+    var ddLink = document.getElementById("ads-acct-dd");
+    if (!ddLink) {
+      ddLink = document.createElement("a");
+      ddLink.id = "ads-acct-dd";
+      ddLink.className = "ads-btn ads-btn--ghost";
+      ddLink.style.cssText = "margin-left:8px;font-size:12px;vertical-align:middle";
+      ddLink.textContent = "Due diligence";
+      document.getElementById("ads-acct-name").appendChild(ddLink);
+    }
+    ddLink.href = "/dashboard/dd-entity/?table=accounts&ref=" + encodeURIComponent(a.id);
     document.getElementById("ads-acct-sub").textContent = [a.industry, a.size_band, a.hq_city, a.hq_country_iso2].filter(Boolean).join(" · ") || "—";
   }
   var personasLoaded = false;
