@@ -624,6 +624,11 @@ async function processDiscover(
   config: Record<string, unknown> | undefined,
 ): Promise<{ leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number }> {
   const start = Date.now();
+  // Task #2: early cancel gate so a swept/cancelled queued row that
+  // gets delivered after sweep is side-effect free (no candidate fetch).
+  if (await isCancelled(env, jobId)) {
+    return { leadsFound: 0, pagesFetched: 0, pagesBlocked: 0, captchaHits: 0, costMs: 0 };
+  }
   const mode = (config?.mode as string | undefined) ?? "firm";
   const candidates = mode === "persona"
     ? await discoverByPersona(env, String(config?.persona ?? target), config?.country as string | undefined)
@@ -650,6 +655,11 @@ async function processFirmlist(
   config: Record<string, unknown> = {},
 ): Promise<{ leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number }> {
   const start = Date.now();
+  // Task #2: early cancel gate — importers can be expensive (Folk/Airtable
+  // share fetches, Wikipedia table parsing); skip entirely if swept.
+  if (await isCancelled(env, jobId)) {
+    return { leadsFound: 0, pagesFetched: 0, pagesBlocked: 0, captchaHits: 0, costMs: 0 };
+  }
   const hint = typeof config.importer === "string" ? config.importer : null;
   const explicit = hint && Object.prototype.hasOwnProperty.call(FIRMLIST_IMPORTERS, hint)
     ? { name: hint, importer: FIRMLIST_IMPORTERS[hint] }
@@ -1505,6 +1515,11 @@ async function processFirmTeamCrawl(
   let leadsFound = 0;
   let pagesBlocked = 0;
   let captchaHits = 0;
+  // Task #2: early cancel gate — buildSeedUrls actively probes the
+  // firm's website (Tier-0 fetches); skip entirely if swept.
+  if (await isCancelled(env, jobId)) {
+    return { leadsFound: 0, pagesFetched: 0, pagesBlocked: 0, captchaHits: 0, costMs: 0, result: { cancelled: true } };
+  }
 
   // Spec contract: target = String(firmId). Fall back to config.firmId for
   // backward compat with any legacy queued jobs.

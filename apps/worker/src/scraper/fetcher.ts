@@ -210,7 +210,9 @@ async function tier0Direct(_env: Env, url: string, opts: FetchOptions): Promise<
       bytes: 0,
       durationMs: Date.now() - start,
       tier: 0,
-      blockReason: `fetch_error:${(e as Error).message}`,
+      blockReason: (e as Error).name === "AbortError"
+        ? `fetch_timeout:${(e as Error).message}`
+        : `fetch_error:${(e as Error).message}`,
       fetched_from: "live",
     };
   } finally {
