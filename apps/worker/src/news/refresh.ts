@@ -95,7 +95,7 @@ export async function refreshEntityNews(env: Env, entityId: string, opts: { arch
         const fetched = await fetchAndSanitize(cand.url);
         if (!fetched) {
           // Still link the entity to the stub via mention (low confidence).
-          await linkMention(env, persisted.id, ent.id, cand.title ?? "", 0.6, 0);
+          await linkMention(env, persisted.id, ent.id, cand.title ?? "", 0.75, 1);
           result.mentions++;
           continue;
         }
@@ -119,7 +119,7 @@ export async function refreshEntityNews(env: Env, entityId: string, opts: { arch
         // refreshed news for) even if NER missed it, with confidence 0.7.
         const subjectMention = enriched.mentions.find((m) => m.entity_id === ent.id);
         if (!subjectMention) {
-          await linkMention(env, persisted.id, ent.id, cand.title ?? "", 0.7, 1);
+          await linkMention(env, persisted.id, ent.id, cand.title ?? "", 0.75, 1);
           result.mentions++;
         }
         for (const m of enriched.mentions) {

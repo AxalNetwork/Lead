@@ -1,290 +1,1180 @@
 {
   "_comment": "Per-domain reputability for news/citations (Task #2) and adverse-media (Task #3). Score 0..1, tier in {primary,major,mid,blog,tabloid,ugc,regulator,wiki}. Unknown domains default to 0.4. Seeded into source_reputability table on first boot.",
-  "_schema": { "host": { "score": 0.0, "tier": "string", "country": "ISO-3166-1 alpha-2 or null" } },
-
-  "reuters.com":               { "score": 0.95, "tier": "primary", "country": "GB" },
-  "apnews.com":                { "score": 0.95, "tier": "primary", "country": "US" },
-  "bbc.com":                   { "score": 0.92, "tier": "primary", "country": "GB" },
-  "bbc.co.uk":                 { "score": 0.92, "tier": "primary", "country": "GB" },
-  "wsj.com":                   { "score": 0.92, "tier": "primary", "country": "US" },
-  "ft.com":                    { "score": 0.92, "tier": "primary", "country": "GB" },
-  "nytimes.com":               { "score": 0.92, "tier": "primary", "country": "US" },
-  "washingtonpost.com":        { "score": 0.9,  "tier": "primary", "country": "US" },
-  "bloomberg.com":             { "score": 0.92, "tier": "primary", "country": "US" },
-  "theguardian.com":           { "score": 0.88, "tier": "major",   "country": "GB" },
-  "economist.com":             { "score": 0.9,  "tier": "primary", "country": "GB" },
-  "lemonde.fr":                { "score": 0.88, "tier": "major",   "country": "FR" },
-  "lefigaro.fr":               { "score": 0.82, "tier": "major",   "country": "FR" },
-  "spiegel.de":                { "score": 0.85, "tier": "major",   "country": "DE" },
-  "handelsblatt.com":          { "score": 0.85, "tier": "major",   "country": "DE" },
-  "faz.net":                   { "score": 0.85, "tier": "major",   "country": "DE" },
-  "nikkei.com":                { "score": 0.9,  "tier": "primary", "country": "JP" },
-  "japantimes.co.jp":          { "score": 0.85, "tier": "major",   "country": "JP" },
-  "scmp.com":                  { "score": 0.82, "tier": "major",   "country": "HK" },
-  "globalnews.ca":             { "score": 0.78, "tier": "major",   "country": "CA" },
-  "theglobeandmail.com":       { "score": 0.85, "tier": "major",   "country": "CA" },
-  "cbc.ca":                    { "score": 0.85, "tier": "major",   "country": "CA" },
-  "abc.net.au":                { "score": 0.85, "tier": "major",   "country": "AU" },
-  "smh.com.au":                { "score": 0.82, "tier": "major",   "country": "AU" },
-  "afr.com":                   { "score": 0.85, "tier": "major",   "country": "AU" },
-  "elpais.com":                { "score": 0.85, "tier": "major",   "country": "ES" },
-  "corriere.it":               { "score": 0.82, "tier": "major",   "country": "IT" },
-  "haaretz.com":               { "score": 0.85, "tier": "major",   "country": "IL" },
-  "aljazeera.com":             { "score": 0.78, "tier": "major",   "country": "QA" },
-
-  "forbes.com":                { "score": 0.7,  "tier": "mid",     "country": "US" },
-  "fortune.com":               { "score": 0.75, "tier": "mid",     "country": "US" },
-  "cnbc.com":                  { "score": 0.78, "tier": "mid",     "country": "US" },
-  "cnn.com":                   { "score": 0.75, "tier": "mid",     "country": "US" },
-  "nbcnews.com":               { "score": 0.78, "tier": "mid",     "country": "US" },
-  "cbsnews.com":               { "score": 0.78, "tier": "mid",     "country": "US" },
-  "abcnews.go.com":            { "score": 0.78, "tier": "mid",     "country": "US" },
-  "foxnews.com":               { "score": 0.6,  "tier": "mid",     "country": "US" },
-  "usatoday.com":              { "score": 0.72, "tier": "mid",     "country": "US" },
-  "latimes.com":               { "score": 0.82, "tier": "major",   "country": "US" },
-  "axios.com":                 { "score": 0.78, "tier": "mid",     "country": "US" },
-  "politico.com":              { "score": 0.85, "tier": "major",   "country": "US" },
-  "propublica.org":            { "score": 0.92, "tier": "primary", "country": "US" },
-  "icij.org":                  { "score": 0.92, "tier": "primary", "country": "US" },
-  "theintercept.com":          { "score": 0.78, "tier": "mid",     "country": "US" },
-  "thehill.com":               { "score": 0.72, "tier": "mid",     "country": "US" },
-  "vox.com":                   { "score": 0.7,  "tier": "mid",     "country": "US" },
-  "businessinsider.com":       { "score": 0.6,  "tier": "mid",     "country": "US" },
-  "marketwatch.com":           { "score": 0.7,  "tier": "mid",     "country": "US" },
-  "barrons.com":               { "score": 0.82, "tier": "major",   "country": "US" },
-  "ftadvisor.com":             { "score": 0.78, "tier": "mid",     "country": "GB" },
-  "morningstar.com":           { "score": 0.78, "tier": "mid",     "country": "US" },
-  "investing.com":             { "score": 0.55, "tier": "mid",     "country": "IL" },
-  "yahoo.com":                 { "score": 0.5,  "tier": "mid",     "country": "US" },
-  "msn.com":                   { "score": 0.45, "tier": "mid",     "country": "US" },
-
-  "techcrunch.com":            { "score": 0.7,  "tier": "mid",     "country": "US" },
-  "theverge.com":              { "score": 0.7,  "tier": "mid",     "country": "US" },
-  "wired.com":                 { "score": 0.7,  "tier": "mid",     "country": "US" },
-  "arstechnica.com":           { "score": 0.72, "tier": "mid",     "country": "US" },
-  "engadget.com":              { "score": 0.65, "tier": "mid",     "country": "US" },
-  "venturebeat.com":           { "score": 0.6,  "tier": "mid",     "country": "US" },
-  "theinformation.com":        { "score": 0.8,  "tier": "major",   "country": "US" },
-  "pitchbook.com":             { "score": 0.82, "tier": "major",   "country": "US" },
-  "crunchbase.com":            { "score": 0.72, "tier": "mid",     "country": "US" },
-  "protocol.com":              { "score": 0.65, "tier": "mid",     "country": "US" },
-  "sifted.eu":                 { "score": 0.7,  "tier": "mid",     "country": "GB" },
-  "stratechery.com":           { "score": 0.7,  "tier": "blog",    "country": "US" },
-  "platformer.news":           { "score": 0.7,  "tier": "blog",    "country": "US" },
-
-  "sec.gov":                   { "score": 1.0,  "tier": "regulator", "country": "US" },
-  "justice.gov":               { "score": 1.0,  "tier": "regulator", "country": "US" },
-  "fbi.gov":                   { "score": 1.0,  "tier": "regulator", "country": "US" },
-  "fincen.gov":                { "score": 1.0,  "tier": "regulator", "country": "US" },
-  "treasury.gov":              { "score": 1.0,  "tier": "regulator", "country": "US" },
-  "state.gov":                 { "score": 1.0,  "tier": "regulator", "country": "US" },
-  "congress.gov":              { "score": 1.0,  "tier": "regulator", "country": "US" },
-  "cftc.gov":                  { "score": 1.0,  "tier": "regulator", "country": "US" },
-  "finra.org":                 { "score": 1.0,  "tier": "regulator", "country": "US" },
-  "federalreserve.gov":        { "score": 1.0,  "tier": "regulator", "country": "US" },
-  "courtlistener.com":         { "score": 0.9,  "tier": "primary",   "country": "US" },
-  "pacer.gov":                 { "score": 1.0,  "tier": "regulator", "country": "US" },
-  "opencorporates.com":        { "score": 0.85, "tier": "primary",   "country": "GB" },
-  "companieshouse.gov.uk":     { "score": 1.0,  "tier": "regulator", "country": "GB" },
-  "fca.org.uk":                { "score": 1.0,  "tier": "regulator", "country": "GB" },
-  "gov.uk":                    { "score": 1.0,  "tier": "regulator", "country": "GB" },
-  "europa.eu":                 { "score": 1.0,  "tier": "regulator", "country": "EU" },
-  "ec.europa.eu":              { "score": 1.0,  "tier": "regulator", "country": "EU" },
-  "esma.europa.eu":            { "score": 1.0,  "tier": "regulator", "country": "EU" },
-  "un.org":                    { "score": 1.0,  "tier": "regulator", "country": null },
-  "imf.org":                   { "score": 0.95, "tier": "regulator", "country": null },
-  "worldbank.org":             { "score": 0.95, "tier": "regulator", "country": null },
-  "oecd.org":                  { "score": 0.95, "tier": "regulator", "country": null },
-
-  "en.wikipedia.org":          { "score": 0.95, "tier": "primary",   "country": null, "notes": "Treated as primary citation per Task #2 — surfaced as 'primary' badge in UI." },
-  "wikipedia.org":             { "score": 0.95, "tier": "primary",   "country": null, "notes": "Treated as primary citation per Task #2 — surfaced as 'primary' badge in UI." },
-  "wikidata.org":              { "score": 0.9,  "tier": "wiki",      "country": null },
-  "wikinews.org":              { "score": 0.6,  "tier": "wiki",      "country": null },
-
-  "prnewswire.com":            { "score": 0.55, "tier": "mid",       "country": "US", "notes": "press release wire" },
-  "businesswire.com":          { "score": 0.55, "tier": "mid",       "country": "US", "notes": "press release wire" },
-  "globenewswire.com":         { "score": 0.5,  "tier": "mid",       "country": "US", "notes": "press release wire" },
-  "prweb.com":                 { "score": 0.4,  "tier": "mid",       "country": "US", "notes": "press release wire" },
-  "newswire.com":              { "score": 0.4,  "tier": "mid",       "country": "US", "notes": "press release wire" },
-
-  "medium.com":                { "score": 0.35, "tier": "blog",      "country": "US" },
-  "substack.com":              { "score": 0.4,  "tier": "blog",      "country": "US" },
-  "ghost.io":                  { "score": 0.35, "tier": "blog",      "country": null },
-  "wordpress.com":             { "score": 0.3,  "tier": "blog",      "country": null },
-  "blogspot.com":              { "score": 0.25, "tier": "blog",      "country": null },
-  "linkedin.com":              { "score": 0.45, "tier": "ugc",       "country": "US" },
-  "twitter.com":               { "score": 0.3,  "tier": "ugc",       "country": "US" },
-  "x.com":                     { "score": 0.3,  "tier": "ugc",       "country": "US" },
-  "reddit.com":                { "score": 0.25, "tier": "ugc",       "country": "US" },
-  "facebook.com":              { "score": 0.2,  "tier": "ugc",       "country": "US" },
-  "youtube.com":               { "score": 0.3,  "tier": "ugc",       "country": "US" },
-  "tiktok.com":                { "score": 0.15, "tier": "ugc",       "country": "US" },
-
-  "dailymail.co.uk":           { "score": 0.25, "tier": "tabloid",   "country": "GB" },
-  "thesun.co.uk":              { "score": 0.2,  "tier": "tabloid",   "country": "GB" },
-  "mirror.co.uk":              { "score": 0.3,  "tier": "tabloid",   "country": "GB" },
-  "nypost.com":                { "score": 0.4,  "tier": "tabloid",   "country": "US" },
-  "tmz.com":                   { "score": 0.2,  "tier": "tabloid",   "country": "US" },
-  "bild.de":                   { "score": 0.3,  "tier": "tabloid",   "country": "DE" },
-
-  "coindesk.com":              { "score": 0.65, "tier": "mid",       "country": "US" },
-  "cointelegraph.com":         { "score": 0.55, "tier": "mid",       "country": "US" },
-  "theblock.co":               { "score": 0.7,  "tier": "mid",       "country": "US" },
-  "decrypt.co":                { "score": 0.6,  "tier": "mid",       "country": "US" },
-
-  "scientificamerican.com":    { "score": 0.88, "tier": "major",     "country": "US" },
-  "nature.com":                { "score": 0.95, "tier": "primary",   "country": "GB" },
-  "science.org":               { "score": 0.95, "tier": "primary",   "country": "US" },
-  "thelancet.com":             { "score": 0.95, "tier": "primary",   "country": "GB" },
-  "nejm.org":                  { "score": 0.95, "tier": "primary",   "country": "US" },
-
-  "latimes.com":               { "score": 0.85, "tier": "major",   "country": "US" },
-  "usatoday.com":              { "score": 0.78, "tier": "major",   "country": "US" },
-  "npr.org":                   { "score": 0.88, "tier": "major",   "country": "US" },
-  "pbs.org":                   { "score": 0.85, "tier": "major",   "country": "US" },
-  "axios.com":                 { "score": 0.78, "tier": "mid",     "country": "US" },
-  "politico.com":              { "score": 0.8,  "tier": "major",   "country": "US" },
-  "thehill.com":               { "score": 0.72, "tier": "mid",     "country": "US" },
-  "rollcall.com":              { "score": 0.78, "tier": "mid",     "country": "US" },
-  "businessinsider.com":       { "score": 0.7,  "tier": "mid",     "country": "US" },
-  "marketwatch.com":           { "score": 0.78, "tier": "mid",     "country": "US" },
-  "barrons.com":               { "score": 0.85, "tier": "major",   "country": "US" },
-  "investors.com":             { "score": 0.7,  "tier": "mid",     "country": "US" },
-  "morningstar.com":           { "score": 0.78, "tier": "mid",     "country": "US" },
-  "seekingalpha.com":          { "score": 0.5,  "tier": "blog",    "country": "US" },
-  "americanbanker.com":        { "score": 0.85, "tier": "major",   "country": "US" },
-  "law360.com":                { "score": 0.85, "tier": "major",   "country": "US" },
-  "courthousenews.com":        { "score": 0.78, "tier": "mid",     "country": "US" },
-  "reason.com":                { "score": 0.7,  "tier": "mid",     "country": "US" },
-  "theatlantic.com":           { "score": 0.82, "tier": "major",   "country": "US" },
-  "newyorker.com":             { "score": 0.85, "tier": "major",   "country": "US" },
-  "vox.com":                   { "score": 0.7,  "tier": "mid",     "country": "US" },
-  "slate.com":                 { "score": 0.7,  "tier": "mid",     "country": "US" },
-  "time.com":                  { "score": 0.8,  "tier": "major",   "country": "US" },
-  "newsweek.com":              { "score": 0.65, "tier": "mid",     "country": "US" },
-  "propublica.org":            { "score": 0.92, "tier": "primary", "country": "US" },
-  "icij.org":                  { "score": 0.92, "tier": "primary", "country": "US" },
-  "bbc.co.in":                 { "score": 0.85, "tier": "major",   "country": "IN" },
-  "thehindu.com":              { "score": 0.82, "tier": "major",   "country": "IN" },
-  "indianexpress.com":         { "score": 0.8,  "tier": "major",   "country": "IN" },
-  "livemint.com":              { "score": 0.78, "tier": "mid",     "country": "IN" },
-  "economictimes.indiatimes.com": { "score": 0.78, "tier": "mid",  "country": "IN" },
-  "moneycontrol.com":          { "score": 0.7,  "tier": "mid",     "country": "IN" },
-  "channelnewsasia.com":       { "score": 0.82, "tier": "major",   "country": "SG" },
-  "straitstimes.com":          { "score": 0.82, "tier": "major",   "country": "SG" },
-  "bangkokpost.com":           { "score": 0.78, "tier": "mid",     "country": "TH" },
-  "jakartaglobe.id":           { "score": 0.7,  "tier": "mid",     "country": "ID" },
-  "rappler.com":               { "score": 0.78, "tier": "mid",     "country": "PH" },
-  "koreaherald.com":           { "score": 0.78, "tier": "mid",     "country": "KR" },
-  "koreatimes.co.kr":          { "score": 0.78, "tier": "mid",     "country": "KR" },
-  "yna.co.kr":                 { "score": 0.82, "tier": "major",   "country": "KR" },
-  "asahi.com":                 { "score": 0.85, "tier": "major",   "country": "JP" },
-  "mainichi.jp":               { "score": 0.85, "tier": "major",   "country": "JP" },
-  "yomiuri.co.jp":             { "score": 0.85, "tier": "major",   "country": "JP" },
-  "kyodonews.net":             { "score": 0.85, "tier": "major",   "country": "JP" },
-  "english.kyodonews.net":     { "score": 0.85, "tier": "major",   "country": "JP" },
-  "caixinglobal.com":          { "score": 0.82, "tier": "major",   "country": "CN" },
-  "xinhuanet.com":             { "score": 0.6,  "tier": "mid",     "country": "CN" },
-  "chinadaily.com.cn":         { "score": 0.6,  "tier": "mid",     "country": "CN" },
-  "globaltimes.cn":            { "score": 0.5,  "tier": "mid",     "country": "CN" },
-  "rt.com":                    { "score": 0.35, "tier": "low",     "country": "RU" },
-  "tass.com":                  { "score": 0.55, "tier": "mid",     "country": "RU" },
-  "themoscowtimes.com":        { "score": 0.78, "tier": "mid",     "country": "RU" },
-  "kyivindependent.com":       { "score": 0.82, "tier": "major",   "country": "UA" },
-  "novayagazeta.eu":           { "score": 0.82, "tier": "major",   "country": "RU" },
-  "elmundo.es":                { "score": 0.82, "tier": "major",   "country": "ES" },
-  "abc.es":                    { "score": 0.78, "tier": "mid",     "country": "ES" },
-  "lavanguardia.com":          { "score": 0.78, "tier": "mid",     "country": "ES" },
-  "publico.pt":                { "score": 0.78, "tier": "mid",     "country": "PT" },
-  "rtp.pt":                    { "score": 0.82, "tier": "major",   "country": "PT" },
-  "repubblica.it":             { "score": 0.8,  "tier": "major",   "country": "IT" },
-  "lastampa.it":               { "score": 0.78, "tier": "mid",     "country": "IT" },
-  "ilsole24ore.com":           { "score": 0.85, "tier": "major",   "country": "IT" },
-  "sueddeutsche.de":           { "score": 0.85, "tier": "major",   "country": "DE" },
-  "zeit.de":                   { "score": 0.85, "tier": "major",   "country": "DE" },
-  "tagesschau.de":             { "score": 0.88, "tier": "major",   "country": "DE" },
-  "dw.com":                    { "score": 0.85, "tier": "major",   "country": "DE" },
-  "nzz.ch":                    { "score": 0.85, "tier": "major",   "country": "CH" },
-  "swissinfo.ch":              { "score": 0.82, "tier": "major",   "country": "CH" },
-  "lesechos.fr":               { "score": 0.85, "tier": "major",   "country": "FR" },
-  "liberation.fr":             { "score": 0.8,  "tier": "major",   "country": "FR" },
-  "france24.com":              { "score": 0.82, "tier": "major",   "country": "FR" },
-  "rfi.fr":                    { "score": 0.82, "tier": "major",   "country": "FR" },
-  "nrc.nl":                    { "score": 0.85, "tier": "major",   "country": "NL" },
-  "volkskrant.nl":             { "score": 0.82, "tier": "major",   "country": "NL" },
-  "dn.se":                     { "score": 0.85, "tier": "major",   "country": "SE" },
-  "svd.se":                    { "score": 0.82, "tier": "major",   "country": "SE" },
-  "vg.no":                     { "score": 0.78, "tier": "mid",     "country": "NO" },
-  "aftenposten.no":            { "score": 0.85, "tier": "major",   "country": "NO" },
-  "hs.fi":                     { "score": 0.82, "tier": "major",   "country": "FI" },
-  "yle.fi":                    { "score": 0.85, "tier": "major",   "country": "FI" },
-  "politiken.dk":              { "score": 0.82, "tier": "major",   "country": "DK" },
-  "jyllands-posten.dk":        { "score": 0.78, "tier": "mid",     "country": "DK" },
-  "irishtimes.com":            { "score": 0.85, "tier": "major",   "country": "IE" },
-  "rte.ie":                    { "score": 0.85, "tier": "major",   "country": "IE" },
-  "independent.co.uk":         { "score": 0.78, "tier": "mid",     "country": "GB" },
-  "thetimes.co.uk":            { "score": 0.85, "tier": "major",   "country": "GB" },
-  "telegraph.co.uk":           { "score": 0.82, "tier": "major",   "country": "GB" },
-  "thisismoney.co.uk":         { "score": 0.7,  "tier": "mid",     "country": "GB" },
-  "cityam.com":                { "score": 0.7,  "tier": "mid",     "country": "GB" },
-  "skynews.com":               { "score": 0.8,  "tier": "major",   "country": "GB" },
-  "channel4.com":              { "score": 0.85, "tier": "major",   "country": "GB" },
-  "itv.com":                   { "score": 0.82, "tier": "major",   "country": "GB" },
-  "metro.co.uk":               { "score": 0.55, "tier": "mid",     "country": "GB" },
-  "dailymail.co.uk":           { "score": 0.45, "tier": "tabloid", "country": "GB" },
-  "thesun.co.uk":              { "score": 0.35, "tier": "tabloid", "country": "GB" },
-  "mirror.co.uk":              { "score": 0.45, "tier": "tabloid", "country": "GB" },
-  "nypost.com":                { "score": 0.5,  "tier": "tabloid", "country": "US" },
-  "dailywire.com":             { "score": 0.45, "tier": "low",     "country": "US" },
-  "breitbart.com":             { "score": 0.3,  "tier": "low",     "country": "US" },
-  "infowars.com":              { "score": 0.1,  "tier": "low",     "country": "US" },
-  "rt.fr":                     { "score": 0.35, "tier": "low",     "country": "RU" },
-  "sputniknews.com":           { "score": 0.3,  "tier": "low",     "country": "RU" },
-  "reddit.com":                { "score": 0.2,  "tier": "ugc",     "country": null },
-  "twitter.com":               { "score": 0.2,  "tier": "ugc",     "country": null },
-  "x.com":                     { "score": 0.2,  "tier": "ugc",     "country": null },
-  "medium.com":                { "score": 0.3,  "tier": "ugc",     "country": null },
-  "substack.com":              { "score": 0.4,  "tier": "blog",    "country": null },
-  "linkedin.com":              { "score": 0.35, "tier": "ugc",     "country": null },
-  "facebook.com":              { "score": 0.15, "tier": "ugc",     "country": null },
-  "youtube.com":               { "score": 0.25, "tier": "ugc",     "country": null },
-  "wikipedia.org":             { "score": 0.7,  "tier": "wiki",    "country": null },
-  "en.wikipedia.org":          { "score": 0.95, "tier": "primary", "country": null },
-  "wikidata.org":              { "score": 0.85, "tier": "wiki",    "country": null },
-  "wikinews.org":              { "score": 0.7,  "tier": "wiki",    "country": null },
-  "en.wikinews.org":           { "score": 0.7,  "tier": "wiki",    "country": null },
-
-  "ecb.europa.eu":             { "score": 1.0,  "tier": "regulator", "country": "EU" },
-  "europa.eu":                 { "score": 0.95, "tier": "regulator", "country": "EU" },
-  "ec.europa.eu":              { "score": 0.95, "tier": "regulator", "country": "EU" },
-  "esma.europa.eu":            { "score": 1.0,  "tier": "regulator", "country": "EU" },
-  "eba.europa.eu":             { "score": 1.0,  "tier": "regulator", "country": "EU" },
-  "fca.org.uk":                { "score": 1.0,  "tier": "regulator", "country": "GB" },
-  "bankofengland.co.uk":       { "score": 1.0,  "tier": "regulator", "country": "GB" },
-  "hmrc.gov.uk":               { "score": 0.95, "tier": "regulator", "country": "GB" },
-  "gov.uk":                    { "score": 0.95, "tier": "regulator", "country": "GB" },
-  "ofac.treasury.gov":         { "score": 1.0,  "tier": "regulator", "country": "US" },
-  "fincen.gov":                { "score": 1.0,  "tier": "regulator", "country": "US" },
-  "ftc.gov":                   { "score": 1.0,  "tier": "regulator", "country": "US" },
-  "occ.gov":                   { "score": 1.0,  "tier": "regulator", "country": "US" },
-  "fdic.gov":                  { "score": 1.0,  "tier": "regulator", "country": "US" },
-  "federalreserve.gov":        { "score": 1.0,  "tier": "regulator", "country": "US" },
-  "irs.gov":                   { "score": 0.95, "tier": "regulator", "country": "US" },
-  "uscourts.gov":              { "score": 1.0,  "tier": "regulator", "country": "US" },
-  "ic3.gov":                   { "score": 0.95, "tier": "regulator", "country": "US" },
-  "fbi.gov":                   { "score": 0.95, "tier": "regulator", "country": "US" },
-  "interpol.int":              { "score": 1.0,  "tier": "regulator", "country": null },
-  "europol.europa.eu":         { "score": 1.0,  "tier": "regulator", "country": "EU" },
-  "un.org":                    { "score": 0.95, "tier": "regulator", "country": null },
-  "imf.org":                   { "score": 0.95, "tier": "regulator", "country": null },
-  "worldbank.org":             { "score": 0.95, "tier": "regulator", "country": null },
-  "oecd.org":                  { "score": 0.95, "tier": "regulator", "country": null },
-  "bis.org":                   { "score": 0.95, "tier": "regulator", "country": null },
-  "fatf-gafi.org":             { "score": 1.0,  "tier": "regulator", "country": null },
-
-  "techmeme.com":              { "score": 0.55, "tier": "blog",    "country": "US" },
-  "hackernews.com":            { "score": 0.4,  "tier": "ugc",     "country": null },
-  "news.ycombinator.com":      { "score": 0.4,  "tier": "ugc",     "country": null },
-  "github.com":                { "score": 0.6,  "tier": "mid",     "country": null },
-  "githubblog.com":            { "score": 0.6,  "tier": "blog",    "country": null }
+  "_schema": {
+    "host": {
+      "score": 0,
+      "tier": "string",
+      "country": "ISO-3166-1 alpha-2 or null"
+    }
+  },
+  "reuters.com": {
+    "score": 0.95,
+    "tier": "primary",
+    "country": "GB"
+  },
+  "apnews.com": {
+    "score": 0.95,
+    "tier": "primary",
+    "country": "US"
+  },
+  "bbc.com": {
+    "score": 0.92,
+    "tier": "primary",
+    "country": "GB"
+  },
+  "bbc.co.uk": {
+    "score": 0.92,
+    "tier": "primary",
+    "country": "GB"
+  },
+  "wsj.com": {
+    "score": 0.92,
+    "tier": "primary",
+    "country": "US"
+  },
+  "ft.com": {
+    "score": 0.92,
+    "tier": "primary",
+    "country": "GB"
+  },
+  "nytimes.com": {
+    "score": 0.92,
+    "tier": "primary",
+    "country": "US"
+  },
+  "washingtonpost.com": {
+    "score": 0.9,
+    "tier": "primary",
+    "country": "US"
+  },
+  "bloomberg.com": {
+    "score": 0.92,
+    "tier": "primary",
+    "country": "US"
+  },
+  "theguardian.com": {
+    "score": 0.88,
+    "tier": "major",
+    "country": "GB"
+  },
+  "economist.com": {
+    "score": 0.9,
+    "tier": "primary",
+    "country": "GB"
+  },
+  "lemonde.fr": {
+    "score": 0.88,
+    "tier": "major",
+    "country": "FR"
+  },
+  "lefigaro.fr": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "FR"
+  },
+  "spiegel.de": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "DE"
+  },
+  "handelsblatt.com": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "DE"
+  },
+  "faz.net": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "DE"
+  },
+  "nikkei.com": {
+    "score": 0.9,
+    "tier": "primary",
+    "country": "JP"
+  },
+  "japantimes.co.jp": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "JP"
+  },
+  "scmp.com": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "HK"
+  },
+  "globalnews.ca": {
+    "score": 0.78,
+    "tier": "major",
+    "country": "CA"
+  },
+  "theglobeandmail.com": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "CA"
+  },
+  "cbc.ca": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "CA"
+  },
+  "abc.net.au": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "AU"
+  },
+  "smh.com.au": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "AU"
+  },
+  "afr.com": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "AU"
+  },
+  "elpais.com": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "ES"
+  },
+  "corriere.it": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "IT"
+  },
+  "haaretz.com": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "IL"
+  },
+  "aljazeera.com": {
+    "score": 0.78,
+    "tier": "major",
+    "country": "QA"
+  },
+  "forbes.com": {
+    "score": 0.7,
+    "tier": "mid",
+    "country": "US"
+  },
+  "fortune.com": {
+    "score": 0.75,
+    "tier": "mid",
+    "country": "US"
+  },
+  "cnbc.com": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "US"
+  },
+  "cnn.com": {
+    "score": 0.75,
+    "tier": "mid",
+    "country": "US"
+  },
+  "nbcnews.com": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "US"
+  },
+  "cbsnews.com": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "US"
+  },
+  "abcnews.go.com": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "US"
+  },
+  "foxnews.com": {
+    "score": 0.6,
+    "tier": "mid",
+    "country": "US"
+  },
+  "usatoday.com": {
+    "score": 0.78,
+    "tier": "major",
+    "country": "US"
+  },
+  "latimes.com": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "US"
+  },
+  "axios.com": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "US"
+  },
+  "politico.com": {
+    "score": 0.8,
+    "tier": "major",
+    "country": "US"
+  },
+  "propublica.org": {
+    "score": 0.92,
+    "tier": "primary",
+    "country": "US"
+  },
+  "icij.org": {
+    "score": 0.92,
+    "tier": "primary",
+    "country": "US"
+  },
+  "theintercept.com": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "US"
+  },
+  "thehill.com": {
+    "score": 0.72,
+    "tier": "mid",
+    "country": "US"
+  },
+  "vox.com": {
+    "score": 0.7,
+    "tier": "mid",
+    "country": "US"
+  },
+  "businessinsider.com": {
+    "score": 0.7,
+    "tier": "mid",
+    "country": "US"
+  },
+  "marketwatch.com": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "US"
+  },
+  "barrons.com": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "US"
+  },
+  "ftadvisor.com": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "GB"
+  },
+  "morningstar.com": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "US"
+  },
+  "investing.com": {
+    "score": 0.55,
+    "tier": "mid",
+    "country": "IL"
+  },
+  "yahoo.com": {
+    "score": 0.5,
+    "tier": "mid",
+    "country": "US"
+  },
+  "msn.com": {
+    "score": 0.45,
+    "tier": "mid",
+    "country": "US"
+  },
+  "techcrunch.com": {
+    "score": 0.7,
+    "tier": "mid",
+    "country": "US"
+  },
+  "theverge.com": {
+    "score": 0.7,
+    "tier": "mid",
+    "country": "US"
+  },
+  "wired.com": {
+    "score": 0.7,
+    "tier": "mid",
+    "country": "US"
+  },
+  "arstechnica.com": {
+    "score": 0.72,
+    "tier": "mid",
+    "country": "US"
+  },
+  "engadget.com": {
+    "score": 0.65,
+    "tier": "mid",
+    "country": "US"
+  },
+  "venturebeat.com": {
+    "score": 0.6,
+    "tier": "mid",
+    "country": "US"
+  },
+  "theinformation.com": {
+    "score": 0.8,
+    "tier": "major",
+    "country": "US"
+  },
+  "pitchbook.com": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "US"
+  },
+  "crunchbase.com": {
+    "score": 0.72,
+    "tier": "mid",
+    "country": "US"
+  },
+  "protocol.com": {
+    "score": 0.65,
+    "tier": "mid",
+    "country": "US"
+  },
+  "sifted.eu": {
+    "score": 0.7,
+    "tier": "mid",
+    "country": "GB"
+  },
+  "stratechery.com": {
+    "score": 0.7,
+    "tier": "blog",
+    "country": "US"
+  },
+  "platformer.news": {
+    "score": 0.7,
+    "tier": "blog",
+    "country": "US"
+  },
+  "sec.gov": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "US"
+  },
+  "justice.gov": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "US"
+  },
+  "fbi.gov": {
+    "score": 0.95,
+    "tier": "regulator",
+    "country": "US"
+  },
+  "fincen.gov": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "US"
+  },
+  "treasury.gov": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "US"
+  },
+  "state.gov": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "US"
+  },
+  "congress.gov": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "US"
+  },
+  "cftc.gov": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "US"
+  },
+  "finra.org": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "US"
+  },
+  "federalreserve.gov": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "US"
+  },
+  "courtlistener.com": {
+    "score": 0.9,
+    "tier": "primary",
+    "country": "US"
+  },
+  "pacer.gov": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "US"
+  },
+  "opencorporates.com": {
+    "score": 0.85,
+    "tier": "primary",
+    "country": "GB"
+  },
+  "companieshouse.gov.uk": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "GB"
+  },
+  "fca.org.uk": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "GB"
+  },
+  "gov.uk": {
+    "score": 0.95,
+    "tier": "regulator",
+    "country": "GB"
+  },
+  "europa.eu": {
+    "score": 0.95,
+    "tier": "regulator",
+    "country": "EU"
+  },
+  "ec.europa.eu": {
+    "score": 0.95,
+    "tier": "regulator",
+    "country": "EU"
+  },
+  "esma.europa.eu": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "EU"
+  },
+  "un.org": {
+    "score": 0.95,
+    "tier": "regulator",
+    "country": null
+  },
+  "imf.org": {
+    "score": 0.95,
+    "tier": "regulator",
+    "country": null
+  },
+  "worldbank.org": {
+    "score": 0.95,
+    "tier": "regulator",
+    "country": null
+  },
+  "oecd.org": {
+    "score": 0.95,
+    "tier": "regulator",
+    "country": null
+  },
+  "en.wikipedia.org": {
+    "score": 0.95,
+    "tier": "primary",
+    "country": null
+  },
+  "wikipedia.org": {
+    "score": 0.7,
+    "tier": "wiki",
+    "country": null
+  },
+  "wikidata.org": {
+    "score": 0.85,
+    "tier": "wiki",
+    "country": null
+  },
+  "wikinews.org": {
+    "score": 0.7,
+    "tier": "wiki",
+    "country": null
+  },
+  "prnewswire.com": {
+    "score": 0.55,
+    "tier": "mid",
+    "country": "US",
+    "notes": "press release wire"
+  },
+  "businesswire.com": {
+    "score": 0.55,
+    "tier": "mid",
+    "country": "US",
+    "notes": "press release wire"
+  },
+  "globenewswire.com": {
+    "score": 0.5,
+    "tier": "mid",
+    "country": "US",
+    "notes": "press release wire"
+  },
+  "prweb.com": {
+    "score": 0.4,
+    "tier": "mid",
+    "country": "US",
+    "notes": "press release wire"
+  },
+  "newswire.com": {
+    "score": 0.4,
+    "tier": "mid",
+    "country": "US",
+    "notes": "press release wire"
+  },
+  "medium.com": {
+    "score": 0.3,
+    "tier": "ugc",
+    "country": null
+  },
+  "substack.com": {
+    "score": 0.4,
+    "tier": "blog",
+    "country": null
+  },
+  "ghost.io": {
+    "score": 0.35,
+    "tier": "blog",
+    "country": null
+  },
+  "wordpress.com": {
+    "score": 0.3,
+    "tier": "blog",
+    "country": null
+  },
+  "blogspot.com": {
+    "score": 0.25,
+    "tier": "blog",
+    "country": null
+  },
+  "linkedin.com": {
+    "score": 0.35,
+    "tier": "ugc",
+    "country": null
+  },
+  "twitter.com": {
+    "score": 0.2,
+    "tier": "ugc",
+    "country": null
+  },
+  "x.com": {
+    "score": 0.2,
+    "tier": "ugc",
+    "country": null
+  },
+  "reddit.com": {
+    "score": 0.2,
+    "tier": "ugc",
+    "country": null
+  },
+  "facebook.com": {
+    "score": 0.15,
+    "tier": "ugc",
+    "country": null
+  },
+  "youtube.com": {
+    "score": 0.25,
+    "tier": "ugc",
+    "country": null
+  },
+  "tiktok.com": {
+    "score": 0.15,
+    "tier": "ugc",
+    "country": "US"
+  },
+  "dailymail.co.uk": {
+    "score": 0.45,
+    "tier": "tabloid",
+    "country": "GB"
+  },
+  "thesun.co.uk": {
+    "score": 0.35,
+    "tier": "tabloid",
+    "country": "GB"
+  },
+  "mirror.co.uk": {
+    "score": 0.45,
+    "tier": "tabloid",
+    "country": "GB"
+  },
+  "nypost.com": {
+    "score": 0.5,
+    "tier": "tabloid",
+    "country": "US"
+  },
+  "tmz.com": {
+    "score": 0.2,
+    "tier": "tabloid",
+    "country": "US"
+  },
+  "bild.de": {
+    "score": 0.3,
+    "tier": "tabloid",
+    "country": "DE"
+  },
+  "coindesk.com": {
+    "score": 0.65,
+    "tier": "mid",
+    "country": "US"
+  },
+  "cointelegraph.com": {
+    "score": 0.55,
+    "tier": "mid",
+    "country": "US"
+  },
+  "theblock.co": {
+    "score": 0.7,
+    "tier": "mid",
+    "country": "US"
+  },
+  "decrypt.co": {
+    "score": 0.6,
+    "tier": "mid",
+    "country": "US"
+  },
+  "scientificamerican.com": {
+    "score": 0.88,
+    "tier": "major",
+    "country": "US"
+  },
+  "nature.com": {
+    "score": 0.95,
+    "tier": "primary",
+    "country": "GB"
+  },
+  "science.org": {
+    "score": 0.95,
+    "tier": "primary",
+    "country": "US"
+  },
+  "thelancet.com": {
+    "score": 0.95,
+    "tier": "primary",
+    "country": "GB"
+  },
+  "nejm.org": {
+    "score": 0.95,
+    "tier": "primary",
+    "country": "US"
+  },
+  "npr.org": {
+    "score": 0.88,
+    "tier": "major",
+    "country": "US"
+  },
+  "pbs.org": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "US"
+  },
+  "rollcall.com": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "US"
+  },
+  "investors.com": {
+    "score": 0.7,
+    "tier": "mid",
+    "country": "US"
+  },
+  "seekingalpha.com": {
+    "score": 0.5,
+    "tier": "blog",
+    "country": "US"
+  },
+  "americanbanker.com": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "US"
+  },
+  "law360.com": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "US"
+  },
+  "courthousenews.com": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "US"
+  },
+  "reason.com": {
+    "score": 0.7,
+    "tier": "mid",
+    "country": "US"
+  },
+  "theatlantic.com": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "US"
+  },
+  "newyorker.com": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "US"
+  },
+  "slate.com": {
+    "score": 0.7,
+    "tier": "mid",
+    "country": "US"
+  },
+  "time.com": {
+    "score": 0.8,
+    "tier": "major",
+    "country": "US"
+  },
+  "newsweek.com": {
+    "score": 0.65,
+    "tier": "mid",
+    "country": "US"
+  },
+  "bbc.co.in": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "IN"
+  },
+  "thehindu.com": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "IN"
+  },
+  "indianexpress.com": {
+    "score": 0.8,
+    "tier": "major",
+    "country": "IN"
+  },
+  "livemint.com": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "IN"
+  },
+  "economictimes.indiatimes.com": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "IN"
+  },
+  "moneycontrol.com": {
+    "score": 0.7,
+    "tier": "mid",
+    "country": "IN"
+  },
+  "channelnewsasia.com": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "SG"
+  },
+  "straitstimes.com": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "SG"
+  },
+  "bangkokpost.com": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "TH"
+  },
+  "jakartaglobe.id": {
+    "score": 0.7,
+    "tier": "mid",
+    "country": "ID"
+  },
+  "rappler.com": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "PH"
+  },
+  "koreaherald.com": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "KR"
+  },
+  "koreatimes.co.kr": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "KR"
+  },
+  "yna.co.kr": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "KR"
+  },
+  "asahi.com": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "JP"
+  },
+  "mainichi.jp": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "JP"
+  },
+  "yomiuri.co.jp": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "JP"
+  },
+  "kyodonews.net": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "JP"
+  },
+  "english.kyodonews.net": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "JP"
+  },
+  "caixinglobal.com": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "CN"
+  },
+  "xinhuanet.com": {
+    "score": 0.6,
+    "tier": "mid",
+    "country": "CN"
+  },
+  "chinadaily.com.cn": {
+    "score": 0.6,
+    "tier": "mid",
+    "country": "CN"
+  },
+  "globaltimes.cn": {
+    "score": 0.5,
+    "tier": "mid",
+    "country": "CN"
+  },
+  "rt.com": {
+    "score": 0.35,
+    "tier": "low",
+    "country": "RU"
+  },
+  "tass.com": {
+    "score": 0.55,
+    "tier": "mid",
+    "country": "RU"
+  },
+  "themoscowtimes.com": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "RU"
+  },
+  "kyivindependent.com": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "UA"
+  },
+  "novayagazeta.eu": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "RU"
+  },
+  "elmundo.es": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "ES"
+  },
+  "abc.es": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "ES"
+  },
+  "lavanguardia.com": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "ES"
+  },
+  "publico.pt": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "PT"
+  },
+  "rtp.pt": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "PT"
+  },
+  "repubblica.it": {
+    "score": 0.8,
+    "tier": "major",
+    "country": "IT"
+  },
+  "lastampa.it": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "IT"
+  },
+  "ilsole24ore.com": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "IT"
+  },
+  "sueddeutsche.de": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "DE"
+  },
+  "zeit.de": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "DE"
+  },
+  "tagesschau.de": {
+    "score": 0.88,
+    "tier": "major",
+    "country": "DE"
+  },
+  "dw.com": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "DE"
+  },
+  "nzz.ch": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "CH"
+  },
+  "swissinfo.ch": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "CH"
+  },
+  "lesechos.fr": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "FR"
+  },
+  "liberation.fr": {
+    "score": 0.8,
+    "tier": "major",
+    "country": "FR"
+  },
+  "france24.com": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "FR"
+  },
+  "rfi.fr": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "FR"
+  },
+  "nrc.nl": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "NL"
+  },
+  "volkskrant.nl": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "NL"
+  },
+  "dn.se": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "SE"
+  },
+  "svd.se": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "SE"
+  },
+  "vg.no": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "NO"
+  },
+  "aftenposten.no": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "NO"
+  },
+  "hs.fi": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "FI"
+  },
+  "yle.fi": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "FI"
+  },
+  "politiken.dk": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "DK"
+  },
+  "jyllands-posten.dk": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "DK"
+  },
+  "irishtimes.com": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "IE"
+  },
+  "rte.ie": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "IE"
+  },
+  "independent.co.uk": {
+    "score": 0.78,
+    "tier": "mid",
+    "country": "GB"
+  },
+  "thetimes.co.uk": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "GB"
+  },
+  "telegraph.co.uk": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "GB"
+  },
+  "thisismoney.co.uk": {
+    "score": 0.7,
+    "tier": "mid",
+    "country": "GB"
+  },
+  "cityam.com": {
+    "score": 0.7,
+    "tier": "mid",
+    "country": "GB"
+  },
+  "skynews.com": {
+    "score": 0.8,
+    "tier": "major",
+    "country": "GB"
+  },
+  "channel4.com": {
+    "score": 0.85,
+    "tier": "major",
+    "country": "GB"
+  },
+  "itv.com": {
+    "score": 0.82,
+    "tier": "major",
+    "country": "GB"
+  },
+  "metro.co.uk": {
+    "score": 0.55,
+    "tier": "mid",
+    "country": "GB"
+  },
+  "dailywire.com": {
+    "score": 0.45,
+    "tier": "low",
+    "country": "US"
+  },
+  "breitbart.com": {
+    "score": 0.3,
+    "tier": "low",
+    "country": "US"
+  },
+  "infowars.com": {
+    "score": 0.1,
+    "tier": "low",
+    "country": "US"
+  },
+  "rt.fr": {
+    "score": 0.35,
+    "tier": "low",
+    "country": "RU"
+  },
+  "sputniknews.com": {
+    "score": 0.3,
+    "tier": "low",
+    "country": "RU"
+  },
+  "en.wikinews.org": {
+    "score": 0.7,
+    "tier": "wiki",
+    "country": null
+  },
+  "ecb.europa.eu": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "EU"
+  },
+  "eba.europa.eu": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "EU"
+  },
+  "bankofengland.co.uk": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "GB"
+  },
+  "hmrc.gov.uk": {
+    "score": 0.95,
+    "tier": "regulator",
+    "country": "GB"
+  },
+  "ofac.treasury.gov": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "US"
+  },
+  "ftc.gov": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "US"
+  },
+  "occ.gov": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "US"
+  },
+  "fdic.gov": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "US"
+  },
+  "irs.gov": {
+    "score": 0.95,
+    "tier": "regulator",
+    "country": "US"
+  },
+  "uscourts.gov": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "US"
+  },
+  "ic3.gov": {
+    "score": 0.95,
+    "tier": "regulator",
+    "country": "US"
+  },
+  "interpol.int": {
+    "score": 1,
+    "tier": "regulator",
+    "country": null
+  },
+  "europol.europa.eu": {
+    "score": 1,
+    "tier": "regulator",
+    "country": "EU"
+  },
+  "bis.org": {
+    "score": 0.95,
+    "tier": "regulator",
+    "country": null
+  },
+  "fatf-gafi.org": {
+    "score": 1,
+    "tier": "regulator",
+    "country": null
+  },
+  "techmeme.com": {
+    "score": 0.55,
+    "tier": "blog",
+    "country": "US"
+  },
+  "hackernews.com": {
+    "score": 0.4,
+    "tier": "ugc",
+    "country": null
+  },
+  "news.ycombinator.com": {
+    "score": 0.4,
+    "tier": "ugc",
+    "country": null
+  },
+  "github.com": {
+    "score": 0.6,
+    "tier": "mid",
+    "country": null
+  },
+  "githubblog.com": {
+    "score": 0.6,
+    "tier": "blog",
+    "country": null
+  }
 }
