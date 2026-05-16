@@ -104,7 +104,7 @@ async function upsertWikiNewsItem(env: Env, title: string, articleUrl: string, s
   const id = crypto.randomUUID();
   await env.DB.prepare(
     `INSERT INTO news_items(id, url, host, title, headline, source_name, source_reputability, language, summary, fetched_at, archive_url, archive_date)
-     VALUES(?, ?, 'en.wikipedia.org', ?, ?, 'Wikipedia', 0.85, 'en', ?, datetime('now'), ?, datetime('now'))`,
+     VALUES(?, ?, 'en.wikipedia.org', ?, ?, 'Wikipedia', 0.95, 'en', ?, datetime('now'), ?, datetime('now'))`,
   ).bind(id, articleUrl, title, title, summary.slice(0, 500), articleUrl).run();
   return id;
 }
@@ -150,7 +150,7 @@ export async function crossReferenceEntity(env: Env, entityId: string, displayNa
         // Wikipedia facts carry a +0.15 verified_score bonus baked in.
         await env.DB.prepare(
           `INSERT INTO facts(id, entity_id, predicate, value_text, source_kind, source, evidence_url, confidence, hash, is_current, verified_score)
-           VALUES(?, ?, ?, ?, 'wikipedia', 'wikipedia.infobox', ?, 0.85, ?, 1, 0.15)`,
+           VALUES(?, ?, ?, ?, 'wikipedia', 'wikipedia.infobox', ?, 0.95, ?, 1, 0.15)`,
         ).bind(factId, entityId, predicate, r.value, articleUrl, hash).run();
         factsAdded++;
       } catch {

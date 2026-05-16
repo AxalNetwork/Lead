@@ -197,16 +197,38 @@ factsCitationsRoute.post("/:id/resolve-dispute", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { competing_fact_id?: string; decision?: "canonical" | "rejected" | "merged"; notes?: string };
   const decision = body.decision ?? "canonical";
   const resId = crypto.randomUUID();
+  const actor = c.get("email") ?? null;
   await c.env.DB.prepare(
     `INSERT INTO fact_dispute_resolutions(id, fact_id, competing_fact_id, decision, notes, resolved_by)
      VALUES(?, ?, ?, ?, ?, ?)`,
-  ).bind(resId, factId, body.competing_fact_id ?? null, decision, body.notes ?? null, c.get("email") ?? null).run();
+  ).bind(resId, factId, body.competing_fact_id ?? null, decision, body.notes ?? null, actor).run();
   if (decision === "canonical" && body.competing_fact_id) {
     // Demote the competing fact: is_current=0, supersedes pointer.
     await c.env.DB.prepare(
       `UPDATE facts SET is_current = 0, supersedes_fact_id = ? WHERE id = ?`,
     ).bind(factId, body.competing_fact_id).run();
   }
+  // Task #2: append a record to entity_history so the audit trail captures
+  // every dispute resolution per the unified entity-history pattern.
+  try {
+    const fact = await c.env.DB.prepare(
+      `SELECT entity_id, predicate FROM facts WHERE id = ?1 LIMIT 1`,
+    ).bind(factId).first<{ entity_id: string; predicate: string }>();
+    if (fact?.entity_id) {
+      await c.env.DB.prepare(
+        `INSERT INTO entity_history (id, entity_id, action, predicate, old_value, new_value, source, evidence_url, changed_by, related_entity_id)
+         VALUES (?, ?, 'fact_dispute_resolved', ?, ?, ?, 'news:dispute', ?, ?, NULL)`,
+      ).bind(
+        crypto.randomUUID(),
+        fact.entity_id,
+        fact.predicate ?? null,
+        body.competing_fact_id ?? null,                              // old_value: demoted fact id
+        JSON.stringify({ decision, canonical_fact_id: factId, notes: body.notes ?? null }),
+        "/api/facts/" + factId + "/resolve-dispute",
+        actor,
+      ).run();
+    }
+  } catch (e) { console.warn("entity_history fact_dispute_resolved skipped", (e as Error).message); }
   const score = await recomputeVerifiedScore(c.env, factId);
   return c.json({ ok: true, resolution_id: resId, verified_score: score });
 });

@@ -172,6 +172,37 @@
     await loadTimeline(state);
     var cov = host.querySelector(state.sel.coverage);
     if (cov) loadCoverage(cov);
+    var factsHost = host.querySelector("#ads-news-facts");
+    if (factsHost) loadVerifiedFacts(factsHost, state.entityId);
+  }
+
+  // Task #2: render the entity's facts with `data-fact-id` so
+  // citation-pills.js can decorate them with hover/dispute popovers.
+  async function loadVerifiedFacts(host, entityId) {
+    try {
+      var ent = await api("/api/entities/" + encodeURIComponent(entityId));
+      var facts = (ent && ent.facts) || [];
+      if (!facts.length) { host.innerHTML = '<div class="ads-muted" style="font-size:13px">No facts yet — run a refresh to extract verified claims.</div>'; return; }
+      host.innerHTML = '<table class="ads-table" style="width:100%;font-size:13px">' +
+        '<thead><tr><th>Predicate</th><th>Value</th><th>Source</th><th>Verified</th></tr></thead><tbody>' +
+        facts.map(function (f) {
+          var v = f.value == null ? "—" : String(f.value);
+          var verified = f.verified_score == null ? "—" : Number(f.verified_score).toFixed(2);
+          return "<tr>" +
+            "<td>" + esc(f.predicate || "") + "</td>" +
+            '<td><span class="ads-fact" data-fact-id="' + esc(f.id) + '">' + esc(v) + "</span></td>" +
+            "<td>" + esc(f.source_kind || "") + "</td>" +
+            "<td>" + verified + "</td>" +
+          "</tr>";
+        }).join("") +
+        "</tbody></table>";
+      // Re-trigger citation-pill decoration after innerHTML swap.
+      if (window.ADS && window.ADS.CitationPills && window.ADS.CitationPills.decorate) {
+        window.ADS.CitationPills.decorate(host);
+      }
+    } catch (e) {
+      host.innerHTML = '<div class="ads-muted">Facts unavailable: ' + esc(e.message) + "</div>";
+    }
   }
 
   async function mountStandalone() {

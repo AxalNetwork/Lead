@@ -136,6 +136,23 @@ export async function enrichLead(env: Env, leadId: string, opts: EnrichOptions =
   // Best-effort: don't fail enrichment if tagging hits a transient error.
   try { await tagLead(env, lead.id, { source: "enrichment:tagger" }); } catch { /* non-fatal */ }
 
+  // Task #2: trigger news refresh for the unified entity backing this lead.
+  // Best-effort: prefer the workflow binding (so it runs out-of-band), fall
+  // back to an inline refresh for dev environments without workflows.
+  try {
+    const map = await env.DB.prepare(
+      `SELECT entity_id FROM entity_legacy_map WHERE legacy_table = 'leads' AND legacy_id = ?1 LIMIT 1`,
+    ).bind(String(lead.id)).first<{ entity_id: string }>();
+    if (map?.entity_id) {
+      if (env.WF_REFRESH_NEWS) {
+        await env.WF_REFRESH_NEWS.create({ params: { entityId: map.entity_id, triggered_by: "enrich:" + lead.id } });
+      } else {
+        const { refreshEntityNews } = await import("../news/refresh");
+        await refreshEntityNews(env, map.entity_id, { maxArticles: 15 });
+      }
+    }
+  } catch (e) { console.warn("enrich news refresh skipped", lead.id, (e as Error).message); }
+
   return {
     leadId: lead.id,
     providers_called: called,

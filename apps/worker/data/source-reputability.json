@@ -98,8 +98,8 @@
   "worldbank.org":             { "score": 0.95, "tier": "regulator", "country": null },
   "oecd.org":                  { "score": 0.95, "tier": "regulator", "country": null },
 
-  "en.wikipedia.org":          { "score": 0.85, "tier": "wiki",      "country": null },
-  "wikipedia.org":             { "score": 0.85, "tier": "wiki",      "country": null },
+  "en.wikipedia.org":          { "score": 0.95, "tier": "primary",   "country": null, "notes": "Treated as primary citation per Task #2 — surfaced as 'primary' badge in UI." },
+  "wikipedia.org":             { "score": 0.95, "tier": "primary",   "country": null, "notes": "Treated as primary citation per Task #2 — surfaced as 'primary' badge in UI." },
   "wikidata.org":              { "score": 0.9,  "tier": "wiki",      "country": null },
   "wikinews.org":              { "score": 0.6,  "tier": "wiki",      "country": null },
 
