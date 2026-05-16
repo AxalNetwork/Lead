@@ -5,6 +5,7 @@
 import type { Env } from "../types";
 import type { FactInput } from "./model";
 import { sha256 } from "./normalize";
+import { enqueueSummaryRebuild } from "./summaryQueue";
 
 export async function insertFact(env: Env, f: FactInput): Promise<string | null> {
   if (!f.entity_id || !f.predicate) return null;
@@ -39,6 +40,11 @@ export async function insertFact(env: Env, f: FactInput): Promise<string | null>
       f.valid_to ?? null,
       hash,
     ).run();
+    // Centralized rebuild guarantee: every successful fact insert
+    // enqueues a summary rebuild for the owning entity. This keeps the
+    // "fact INSERT → rebuild within ~5s" SLO honest regardless of which
+    // caller wrote the fact (dual-write, merge, manual admin, etc.).
+    await enqueueSummaryRebuild(env, f.entity_id);
     return id;
   } catch (e) {
     // UNIQUE(hash) collision = exact-replay observation; ignore.

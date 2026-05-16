@@ -89,13 +89,23 @@ export async function searchEntities(env: Env, f: SearchFilter): Promise<SearchR
     whereBinds.push(q, q, q);
   }
   // Tag filters require a JOIN per taxonomy so we can intersect.
+  // NOTE: `has_role` is *not* a tag — roles live in entity_roles
+  // (addRole writes there, not entity_tags). The previous JOIN on
+  // entity_tags taxonomy='role' returned empty results for every
+  // wrapper helper (listFirms, listInvestors, listCompanies,
+  // listAccounts, listBuyers, listFounders). We now JOIN entity_roles
+  // directly for role membership.
   const joins: string[] = [];
   let tagJoinIdx = 0;
-  for (const [tax, slug] of [["sector", f.sector], ["stage", f.stage], ["geo", f.geo], ["role", f.has_role]] as const) {
+  for (const [tax, slug] of [["sector", f.sector], ["stage", f.stage], ["geo", f.geo]] as const) {
     if (!slug) continue;
     const alias = `t${++tagJoinIdx}`;
     joins.push(`JOIN entity_tags ${alias} ON ${alias}.entity_id = s.entity_id AND ${alias}.taxonomy = ? AND ${alias}.slug = ?`);
     joinBinds.push(tax, slug);
+  }
+  if (f.has_role) {
+    joins.push(`JOIN entity_roles er ON er.entity_id = s.entity_id AND er.role = ?`);
+    joinBinds.push(f.has_role);
   }
   const sortCol = (() => {
     switch (f.sort) {
