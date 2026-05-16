@@ -84,6 +84,15 @@ admin.post("/clear-stuck-jobs", async (c) => {
   // Default behavior: budget-based sweep of `running` rows only.
   // With `older_than_hours`: also age-based sweep `running` rows to
   // `timed_out` AND cancel queued rows older than the cutoff.
+  //
+  // In-flight queue messages whose row was just swept are NOT acked
+  // here — Cloudflare Queues doesn't expose a remote ack API. Instead,
+  // the consumer self-short-circuits: `pipeline.isCancelled()` returns
+  // true for both `cancelled` and `timed_out`, so the next status
+  // check inside runJob returns immediately, and the queue catch-path
+  // UPDATE is gated on `status IN ('queued','running')` so the final
+  // ack cannot overwrite the swept terminal state. This gives the
+  // equivalent of an ack-and-drop without needing direct purge.
   const body = (await c.req.json().catch(() => null)) as
     | { older_than_hours?: number }
     | null;
@@ -264,6 +273,34 @@ admin.post("/repair-pipeline", async (c) => {
                  JOIN entity_legacy_map m ON m.entity_id = e.id AND m.legacy_table = 'companies'
                 WHERE NOT EXISTS (SELECT 1 FROM entity_roles r WHERE r.entity_id = e.id AND r.role = 'company')`,
       },
+      // Modern-only entities (no entity_legacy_map row) still need a
+      // role so they appear in /api/investors|companies|firms. Fall
+      // back to inferring role from `u_entities.kind` for any entity
+      // that ends the prior phases with zero roles.
+      {
+        label: "kind_fallback_person",
+        sql: `INSERT OR IGNORE INTO entity_roles (entity_id, role, is_primary, source, confidence)
+               SELECT e.id, 'prospect', 0, 'repair_kind_fallback', 0.5
+                 FROM u_entities e
+                WHERE e.kind = 'person'
+                  AND NOT EXISTS (SELECT 1 FROM entity_roles r WHERE r.entity_id = e.id)`,
+      },
+      {
+        label: "kind_fallback_firm",
+        sql: `INSERT OR IGNORE INTO entity_roles (entity_id, role, is_primary, source, confidence)
+               SELECT e.id, 'firm', 1, 'repair_kind_fallback', 0.5
+                 FROM u_entities e
+                WHERE e.kind = 'firm'
+                  AND NOT EXISTS (SELECT 1 FROM entity_roles r WHERE r.entity_id = e.id)`,
+      },
+      {
+        label: "kind_fallback_company",
+        sql: `INSERT OR IGNORE INTO entity_roles (entity_id, role, is_primary, source, confidence)
+               SELECT e.id, 'company', 1, 'repair_kind_fallback', 0.5
+                 FROM u_entities e
+                WHERE e.kind = 'company'
+                  AND NOT EXISTS (SELECT 1 FROM entity_roles r WHERE r.entity_id = e.id)`,
+      },
     ];
     for (const p of phases) {
       try {
@@ -333,6 +370,39 @@ admin.get("/queue-health", async (c) => {
   const ageMs = oldest?.s
     ? (Date.parse(now) - Date.parse(oldest.s))
     : 0;
+
+  // Task #2: p50/p95 age of currently-running jobs (in ms). SQLite has
+  // no PERCENTILE_CONT, so we pull the age list and pick the indices.
+  const ages = await c.env.DB.prepare(
+    `SELECT (strftime('%s', ?) - strftime('%s', started_at)) * 1000 AS ms
+       FROM jobs WHERE status = 'running' AND started_at IS NOT NULL
+       ORDER BY ms ASC`,
+  ).bind(now).all<{ ms: number }>();
+  const ageList = (ages.results ?? []).map((r) => Number(r.ms ?? 0));
+  const pct = (p: number): number => {
+    if (!ageList.length) return 0;
+    const i = Math.min(ageList.length - 1, Math.floor((p / 100) * ageList.length));
+    return Math.max(0, ageList[i] ?? 0);
+  };
+
+  // Top error_log step failures in the last 24h — operator-readable
+  // rollup of which steps are misbehaving right now.
+  const topFailures = await c.env.DB.prepare(
+    `SELECT step, code, COUNT(*) AS n
+       FROM error_log
+      WHERE created_at >= datetime(?, '-1 day')
+      GROUP BY step, code
+      ORDER BY n DESC LIMIT 10`,
+  ).bind(now).all<{ step: string; code: string; n: number }>().catch(() => null);
+
+  // Summary-rebuild lag: entities whose entity_summary is stale.
+  const rebuildLag = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM u_entities e
+        LEFT JOIN entity_summary s ON s.entity_id = e.id
+       WHERE e.status = 'active'
+         AND (s.updated_at IS NULL OR s.updated_at < e.updated_at)`,
+  ).first<{ n: number }>().catch(() => null);
+
   const lastRepair = await c.env.DB.prepare(
     `SELECT id, started_at, finished_at, status, stuck_swept, roles_added, summaries_enq
        FROM repair_runs ORDER BY started_at DESC LIMIT 1`,
@@ -342,6 +412,10 @@ admin.get("/queue-health", async (c) => {
     running: running?.n ?? 0,
     stuck: stuck?.n ?? 0,
     oldest_running_age_ms: Math.max(0, ageMs),
+    p50_running_age_ms: pct(50),
+    p95_running_age_ms: pct(95),
+    rebuild_lag: rebuildLag?.n ?? 0,
+    top_failures_24h: topFailures?.results ?? [],
     last_repair: lastRepair ?? null,
   });
 });
