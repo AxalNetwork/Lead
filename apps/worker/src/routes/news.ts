@@ -214,57 +214,69 @@ factsCitationsRoute.post("/:id/resolve-dispute", async (c) => {
   const decision = body.decision ?? "canonical";
   const resId = crypto.randomUUID();
   const actor = c.get("email") ?? null;
-  await c.env.DB.prepare(
+
+  // Load canonical fact for validation + audit. Reject unknown ids early.
+  const canonical = await c.env.DB.prepare(
+    `SELECT id, entity_id, predicate FROM facts WHERE id = ? LIMIT 1`,
+  ).bind(factId).first<{ id: string; entity_id: string; predicate: string }>();
+  if (!canonical) return c.json({ error: "fact_not_found" }, 404);
+
+  // Validate competing_fact_id belongs to the SAME (entity_id, predicate)
+  // family as the canonical fact. Prevents parameter-tampering that would
+  // otherwise demote an unrelated fact.
+  if (body.competing_fact_id) {
+    const comp = await c.env.DB.prepare(
+      `SELECT id, entity_id, predicate FROM facts WHERE id = ? LIMIT 1`,
+    ).bind(body.competing_fact_id).first<{ id: string; entity_id: string; predicate: string }>();
+    if (!comp) return c.json({ error: "competing_fact_not_found" }, 404);
+    if (comp.entity_id !== canonical.entity_id || comp.predicate !== canonical.predicate || comp.id === canonical.id) {
+      return c.json({ error: "competing_fact_mismatch", message: "competing_fact_id must share entity_id+predicate with the canonical fact" }, 400);
+    }
+  }
+
+  // Atomic batch: resolution row + fact updates + entity_history append.
+  const stmts: D1PreparedStatement[] = [];
+  stmts.push(c.env.DB.prepare(
     `INSERT INTO fact_dispute_resolutions(id, fact_id, competing_fact_id, decision, notes, resolved_by)
      VALUES(?, ?, ?, ?, ?, ?)`,
-  ).bind(resId, factId, body.competing_fact_id ?? null, decision, body.notes ?? null, actor).run();
+  ).bind(resId, factId, body.competing_fact_id ?? null, decision, body.notes ?? null, actor));
+
   if (decision === "canonical") {
     if (body.competing_fact_id) {
-      // Explicit competing fact id provided — demote just that one.
-      await c.env.DB.prepare(
+      stmts.push(c.env.DB.prepare(
         `UPDATE facts SET is_current = 0, supersedes_fact_id = ? WHERE id = ?`,
-      ).bind(factId, body.competing_fact_id).run();
+      ).bind(factId, body.competing_fact_id));
     } else {
-      // "Keep current as canonical" with no specific competing id: demote
-      // every OTHER current fact sharing the same (entity_id, predicate) so
-      // only the chosen fact remains is_current=1. Guarantees a single
-      // canonical fact after resolution.
-      const f = await c.env.DB.prepare(
-        `SELECT entity_id, predicate FROM facts WHERE id = ? LIMIT 1`,
-      ).bind(factId).first<{ entity_id: string; predicate: string }>();
-      if (f?.entity_id && f.predicate) {
-        await c.env.DB.prepare(
-          `UPDATE facts SET is_current = 0, supersedes_fact_id = ?
-            WHERE entity_id = ? AND predicate = ? AND id <> ? AND is_current = 1`,
-        ).bind(factId, f.entity_id, f.predicate, factId).run();
-      }
+      // "Keep current as canonical": demote every OTHER current fact in the
+      // same (entity_id, predicate) family so a single canonical remains.
+      stmts.push(c.env.DB.prepare(
+        `UPDATE facts SET is_current = 0, supersedes_fact_id = ?
+          WHERE entity_id = ? AND predicate = ? AND id <> ? AND is_current = 1`,
+      ).bind(factId, canonical.entity_id, canonical.predicate, factId));
     }
-    // Ensure the chosen fact itself is marked current.
-    await c.env.DB.prepare(
+    stmts.push(c.env.DB.prepare(
       `UPDATE facts SET is_current = 1, supersedes_fact_id = NULL WHERE id = ?`,
-    ).bind(factId).run();
+    ).bind(factId));
   }
-  // Task #2: append a record to entity_history so the audit trail captures
-  // every dispute resolution per the unified entity-history pattern.
+
+  stmts.push(c.env.DB.prepare(
+    `INSERT INTO entity_history (id, entity_id, action, predicate, old_value, new_value, source, evidence_url, changed_by, related_entity_id)
+     VALUES (?, ?, 'fact_dispute_resolved', ?, ?, ?, 'news:dispute', ?, ?, NULL)`,
+  ).bind(
+    crypto.randomUUID(),
+    canonical.entity_id,
+    canonical.predicate ?? null,
+    body.competing_fact_id ?? null,
+    JSON.stringify({ decision, canonical_fact_id: factId, notes: body.notes ?? null }),
+    "/api/facts/" + factId + "/resolve-dispute",
+    actor,
+  ));
+
   try {
-    const fact = await c.env.DB.prepare(
-      `SELECT entity_id, predicate FROM facts WHERE id = ?1 LIMIT 1`,
-    ).bind(factId).first<{ entity_id: string; predicate: string }>();
-    if (fact?.entity_id) {
-      await c.env.DB.prepare(
-        `INSERT INTO entity_history (id, entity_id, action, predicate, old_value, new_value, source, evidence_url, changed_by, related_entity_id)
-         VALUES (?, ?, 'fact_dispute_resolved', ?, ?, ?, 'news:dispute', ?, ?, NULL)`,
-      ).bind(
-        crypto.randomUUID(),
-        fact.entity_id,
-        fact.predicate ?? null,
-        body.competing_fact_id ?? null,                              // old_value: demoted fact id
-        JSON.stringify({ decision, canonical_fact_id: factId, notes: body.notes ?? null }),
-        "/api/facts/" + factId + "/resolve-dispute",
-        actor,
-      ).run();
-    }
-  } catch (e) { console.warn("entity_history fact_dispute_resolved skipped", (e as Error).message); }
+    await c.env.DB.batch(stmts);
+  } catch (e) {
+    return c.json({ error: "resolve_failed", message: (e as Error).message }, 500);
+  }
   const score = await recomputeVerifiedScore(c.env, factId);
   return c.json({ ok: true, resolution_id: resId, verified_score: score });
 });
