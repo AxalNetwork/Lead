@@ -1842,6 +1842,37 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
   await markRunning(env, jobId);
 
   const start = Date.now();
+  // Task #2: in-run wall-clock deadline. The queue-batch-head and
+  // hourly cron sweeps catch over-budget jobs eventually, but a quiet
+  // queue could leave one running long past its 90s ceiling. Look up
+  // `budget_ms` once at start; when exceeded mid-run, transition to
+  // `timed_out` immediately and short-circuit the executor.
+  const budgetRow = await env.DB.prepare(
+    `SELECT budget_ms FROM jobs WHERE id = ?`,
+  ).bind(jobId).first<{ budget_ms: number | null }>().catch(() => null);
+  const budgetMs = budgetRow?.budget_ms ?? 90_000;
+  const deadline = start + budgetMs;
+  const enforceDeadline = async (): Promise<boolean> => {
+    if (Date.now() <= deadline) return false;
+    // Transition to terminal `timed_out` and stamp finished_at. The
+    // migration-193 state machine allows running -> timed_out. Guard
+    // on `status = 'running'` so a sweep/operator-set terminal state
+    // can't be clobbered.
+    try {
+      const now = new Date().toISOString();
+      await env.DB.prepare(
+        `UPDATE jobs
+            SET status = 'timed_out',
+                finished_at = COALESCE(finished_at, ?),
+                error = COALESCE(error, 'budget_exceeded')
+          WHERE id = ? AND status = 'running'`,
+      ).bind(now, jobId).run();
+      await env.DB.prepare(
+        `INSERT INTO job_state_transitions (job_id, from_state, to_state, reason, changed_by) VALUES (?, 'running', 'timed_out', 'budget_exceeded', 'in_run_deadline')`,
+      ).bind(jobId).run().catch(() => undefined);
+    } catch { /* swallow — sweeper is a backstop */ }
+    return true;
+  };
   // ----- Task #22: file-import lifecycle ------------------------------------
   // parse_file / import_file jobs don't produce leads/pages metrics. Their
   // detailed lifecycle lives on file_imports. We just mark the jobs row
@@ -1893,7 +1924,11 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
     const { timedStep } = await import("../db/error_log.js");
     const stepName = `pipeline:${msg.kind}`;
     let totals: { leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number; result?: Record<string, unknown> };
-    totals = await timedStep(env, jobId, stepName, async () => {
+    // Race the executor against the wall-clock deadline. If the
+    // deadline fires first we mark `timed_out` and return immediately;
+    // the underlying executor promise is left to settle (caller-side
+    // timeout, same semantics as Workers AI bound).
+    const executorPromise = timedStep(env, jobId, stepName, async () => {
       if (msg.kind === "linktree" || msg.kind === "profile_list") {
         return processLinktree(env, jobId, msg.target, msg.config);
       } else if (msg.kind === "discover") {
@@ -1906,6 +1941,16 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
         return processSingleUrl(env, jobId, msg.target, msg.config);
       }
     }, { meta: { target: msg.target, kind: msg.kind } });
+    const deadlinePromise: Promise<"__deadline__"> = new Promise((resolve) => {
+      const remaining = Math.max(0, deadline - Date.now());
+      setTimeout(() => resolve("__deadline__"), remaining);
+    });
+    const raced = await Promise.race([executorPromise, deadlinePromise]);
+    if (raced === "__deadline__") {
+      await enforceDeadline();
+      return;
+    }
+    totals = raced as typeof totals;
 
     if (await isCancelled(env, jobId)) {
       await env.DB.prepare(
