@@ -68,7 +68,13 @@ export async function sweepStuckJobs(env: Env): Promise<number> {
           kind: "permanent",
           message: "job exceeded budget_ms; swept by admin.sweep",
           retryable: false,
-          context: { reason: "budget_exceeded", swept_by: "admin.sweep" },
+          // `token` is the normalized analytics key (`workflow.step_failed`);
+          // `code` stays in the closed ErrCode union (`workflow_step_failed`).
+          context: {
+            reason: "budget_exceeded",
+            swept_by: "admin.sweep",
+            token: "workflow.step_failed",
+          },
         }),
         job_id: row.id,
         step: "admin.sweep",
@@ -120,7 +126,12 @@ admin.post("/clear-stuck-jobs", async (c) => {
     ).bind(now, now, cutoffSec).run();
     runningTimedOut = Number(r1.meta?.changes ?? 0);
     // Age-based queued -> cancelled (one-time backlog drain). Allowed
-    // by the migration-193 state machine.
+    // by the migration-193 state machine. Note: queued rows go to
+    // `cancelled` (not `timed_out`) because the migration-193 state
+    // machine only permits `queued -> cancelled|running|dead_letter`.
+    // `timed_out` is reserved for rows that actually began running.
+    // Operators reading the dashboard should treat both as terminal
+    // outcomes of the same sweep.
     const r2 = await c.env.DB.prepare(
       `UPDATE jobs
           SET status = 'cancelled',
