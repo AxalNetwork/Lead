@@ -86,7 +86,9 @@
     var p = "/api/news/entity/" + encodeURIComponent(state.entityId) +
             "?limit=100&min_rep=" + encodeURIComponent(state.minRep || 0) +
             (state.topic ? "&topic=" + encodeURIComponent(state.topic) : "") +
-            (state.sentiment ? "&sentiment=" + encodeURIComponent(state.sentiment) : "");
+            (state.sentiment ? "&sentiment=" + encodeURIComponent(state.sentiment) : "") +
+            (state.from ? "&from=" + encodeURIComponent(state.from) : "") +
+            (state.to ? "&to=" + encodeURIComponent(state.to) : "");
     var data = await api(p);
     var items = (data && data.items) || [];
     var html = items.length
@@ -145,6 +147,8 @@
       minRep: opts.minRep || 0.7,
       topic: opts.topic || "",
       sentiment: opts.sentiment || "",
+      from: opts.from || "",
+      to: opts.to || "",
       sel: opts.selectors || {
         timeline: "#ads-news-timeline",
         count: "#ads-news-count",
@@ -156,6 +160,8 @@
         topicInput: "#ads-news-topic",
         minRepSelect: "#ads-news-min-rep",
         sentSelect: "#ads-news-sent",
+        fromInput: "#ads-news-from",
+        toInput: "#ads-news-to",
       },
     };
     var rBtn = host.querySelector(state.sel.refreshBtn);
@@ -167,6 +173,8 @@
       var t = host.querySelector(state.sel.topicInput); if (t) state.topic = t.value.trim();
       var mr = host.querySelector(state.sel.minRepSelect); if (mr) state.minRep = Number(mr.value);
       var ss = host.querySelector(state.sel.sentSelect); if (ss) state.sentiment = ss.value;
+      var fi = host.querySelector(state.sel.fromInput); if (fi) state.from = fi.value;
+      var ti = host.querySelector(state.sel.toInput); if (ti) state.to = ti.value;
       loadTimeline(state);
     });
     await loadTimeline(state);
