@@ -183,11 +183,41 @@ export async function refreshEntityNews(env: Env, entityId: string, opts: { arch
   return result;
 }
 
+// Canonicalize a URL for near-dup detection: lowercase host, drop fragment,
+// drop tracker params (utm_*, fbclid, gclid, mc_*, ref, ref_src, igshid,
+// _hsenc, _hsmi, vero_*), strip default ports, and remove a single
+// trailing slash on the path. Keeps semantically meaningful query params.
+const TRACKER_PARAMS = /^(utm_|mc_|vero_|_hs|hsCtaTracking)/i;
+const TRACKER_EXACT = new Set(["fbclid", "gclid", "ref", "ref_src", "igshid", "yclid", "mkt_tok", "msclkid", "spm"]);
+function canonicalizeUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    u.hash = "";
+    u.hostname = u.hostname.toLowerCase().replace(/^www\./, "");
+    if ((u.protocol === "https:" && u.port === "443") || (u.protocol === "http:" && u.port === "80")) u.port = "";
+    const keep: Array<[string, string]> = [];
+    for (const [k, v] of u.searchParams.entries()) {
+      if (TRACKER_PARAMS.test(k) || TRACKER_EXACT.has(k.toLowerCase())) continue;
+      keep.push([k, v]);
+    }
+    keep.sort((a, b) => a[0].localeCompare(b[0]));
+    u.search = "";
+    for (const [k, v] of keep) u.searchParams.append(k, v);
+    if (u.pathname.length > 1 && u.pathname.endsWith("/")) u.pathname = u.pathname.slice(0, -1);
+    return u.toString();
+  } catch {
+    return raw;
+  }
+}
+
 async function persistStubIfNew(env: Env, cand: NewsCandidate): Promise<{ id: string; host: string } | null> {
   const host = normalizeHost(cand.url);
-  // Honors the "new URL dedupe" intent: existing URLs return null so the
-  // caller skips re-enrichment and does not bump persisted/enriched counts.
-  const existing = await env.DB.prepare(`SELECT id FROM news_items WHERE url = ? LIMIT 1`).bind(cand.url).first<{ id: string }>();
+  const canonical = canonicalizeUrl(cand.url);
+  // Dedupe on BOTH raw URL and canonical URL so tracker/query variants of
+  // the same article don't double-persist.
+  const existing = await env.DB.prepare(
+    `SELECT id FROM news_items WHERE url = ?1 OR url_canonical = ?2 LIMIT 1`,
+  ).bind(cand.url, canonical).first<{ id: string }>();
   if (existing?.id) return null;
   const rep = await getReputability(env, host);
   const id = crypto.randomUUID();
@@ -195,7 +225,7 @@ async function persistStubIfNew(env: Env, cand: NewsCandidate): Promise<{ id: st
     await env.DB.prepare(
       `INSERT INTO news_items(id, url, url_canonical, host, title, headline, byline, published_at, source_name, source_reputability, language, body_excerpt)
        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(id, cand.url, cand.url, host, cand.title, cand.headline, cand.byline, cand.published_at, cand.source_name ?? host, rep.score, cand.language, cand.snippet ?? null).run();
+    ).bind(id, cand.url, canonical, host, cand.title, cand.headline, cand.byline, cand.published_at, cand.source_name ?? host, rep.score, cand.language, cand.snippet ?? null).run();
     return { id, host };
   } catch {
     // Lost a race with a concurrent insert of the same URL — treat as a
