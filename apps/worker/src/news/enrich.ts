@@ -186,9 +186,14 @@ export async function summarizeArticle(env: Env, text: string): Promise<string |
 
 // Resolve a NER name to a u_entities row. Strategy:
 //   1. Exact (case-insensitive) display_name match.
-//   2. Substring match if display_name is a prefix of the NER name.
-//   3. Vectorize lookup by embedding the name (when VEC_LEADS/FIRMS exist).
+//   2. Prefix / substring match against display_name.
+//   3. Vectorize lookup by embedding the name across VEC_LEADS / VEC_FIRMS
+//      / VEC_COMPANIES; arbitrate the top hit with an AI yes/no/maybe call
+//      when similarity sits in the ambiguous band.
 // Returns null when no candidate clears MENTION_CONFIDENCE_MIN.
+const VEC_AUTO = 0.85;   // direct match — high confidence
+const VEC_ARBIT = 0.78;  // ambiguous — arbitrate with LLM
+
 export async function resolveEntity(env: Env, hit: NerHit): Promise<{ entity_id: string; confidence: number } | null> {
   const name = hit.name.trim();
   if (!name) return null;
@@ -210,6 +215,49 @@ export async function resolveEntity(env: Env, hit: NerHit): Promise<{ entity_id:
     if (a === b) return { entity_id: row.id, confidence: 0.95 };
     if (a.startsWith(b) || b.startsWith(a)) return { entity_id: row.id, confidence: 0.8 };
   }
+
+  // Vectorize + AI arbitration. Best-effort: any failure (no AI binding,
+  // no index, budget exhausted) falls through to null without breaking
+  // the enrichment pipeline.
+  try {
+    const { aiEmbed, aiArbitrate } = await import("../ai/extract");
+    const emb = await aiEmbed(env, name);
+    if (!emb) return null;
+    const indexes = [env.VEC_LEADS, env.VEC_FIRMS, env.VEC_COMPANIES].filter(Boolean) as NonNullable<typeof env.VEC_LEADS>[];
+    let best: { id: string; score: number } | null = null;
+    for (const idx of indexes) {
+      try {
+        const res = await idx.query(emb, { topK: 3, returnMetadata: true });
+        for (const m of res?.matches ?? []) {
+          const id = String((m as { id?: string }).id ?? "");
+          const score = Number((m as { score?: number }).score ?? 0);
+          if (id && (!best || score > best.score)) best = { id, score };
+        }
+      } catch { /* per-index failures non-fatal */ }
+    }
+    if (!best) return null;
+    // The vector id space may use legacy IDs; resolve through
+    // entity_legacy_map when the raw id isn't a u_entities row.
+    const direct = await env.DB.prepare(
+      `SELECT id, display_name FROM u_entities WHERE id = ? AND status='active' LIMIT 1`,
+    ).bind(best.id).first<{ id: string; display_name: string }>();
+    let candidate = direct;
+    if (!candidate) {
+      const mapped = await env.DB.prepare(
+        `SELECT u.id, u.display_name FROM entity_legacy_map m
+           JOIN u_entities u ON u.id = m.entity_id AND u.status='active'
+          WHERE m.legacy_id = ? LIMIT 1`,
+      ).bind(best.id).first<{ id: string; display_name: string }>();
+      candidate = mapped ?? null;
+    }
+    if (!candidate?.id) return null;
+    if (best.score >= VEC_AUTO) return { entity_id: candidate.id, confidence: Math.min(0.92, best.score) };
+    if (best.score >= VEC_ARBIT) {
+      const verdict = await aiArbitrate(env, name, candidate.display_name ?? "");
+      if (verdict.match === "yes") return { entity_id: candidate.id, confidence: Math.max(0.78, verdict.confidence) };
+      if (verdict.match === "maybe" && verdict.confidence >= 0.8) return { entity_id: candidate.id, confidence: 0.78 };
+    }
+  } catch { /* vector path disabled */ }
   return null;
 }
 
