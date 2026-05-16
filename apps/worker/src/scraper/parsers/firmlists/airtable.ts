@@ -40,15 +40,41 @@ export async function importFirms(url: string, env: Env): Promise<FirmlistImport
   if (parsed.variant === "universe") {
     return importUniverse(env, url, parsed);
   }
-  // No explicit tableId/viewId → try the view fast path first; if the
-  // share is actually a multi-table base, the view endpoint returns
-  // zero rows but the shared-base endpoint enumerates the table list.
-  if (!parsed.tableId && !parsed.viewId) {
-    const viewResult = await importView(env, url, parsed);
-    if (viewResult.totalSeen > 0) return viewResult;
-    return importBase(env, url, { ...parsed, variant: "base" });
+  return dispatchShare(env, url, parsed);
+}
+
+/**
+ * Deterministic dispatch for `airtable.com/{appId}/{shrId}[/...]` links.
+ *
+ * URL shape alone cannot reliably distinguish a single-table shared
+ * view from a multi-table shared base — many real shared bases pin at
+ * the bare `app/shr` form, and many shared views do too. So we probe
+ * the `readSharedBase` metadata endpoint first: if it reports ≥2
+ * tables (and no explicit tableId/viewId is pinned in the URL), the
+ * share is treated as a base and fanned out via `importBase`.
+ * Otherwise — including any case where the probe fails or returns a
+ * single table — we route through `importView`.
+ */
+async function dispatchShare(
+  env: Env,
+  url: string,
+  parsed: ParsedAirtableUrl,
+  opts?: { collection?: string | null; seedHints?: SeedHints | null },
+): Promise<FirmlistImportResult> {
+  const ctx: ImportContext | undefined = opts
+    ? { collection: opts.collection ?? null, seedHints: opts.seedHints ?? null }
+    : undefined;
+  if (parsed.tableId || parsed.viewId) {
+    return importView(env, url, parsed, ctx);
   }
-  return importView(env, url, parsed);
+  let tables: Array<{ id: string; name: string; defaultViewId: string | null }> = [];
+  try {
+    tables = await fetchSharedBaseTables(parsed);
+  } catch { tables = []; }
+  if (tables.length >= 2) {
+    return importBase(env, url, { ...parsed, variant: "base" }, ctx);
+  }
+  return importView(env, url, parsed, ctx);
 }
 
 // ============================================================================
@@ -134,7 +160,7 @@ interface AirtableTablePayload {
 interface ImportContext {
   collection: string | null;
   /** Pre-seeded source-level hints (role/country/region). */
-  seedHints: SeedHints;
+  seedHints: SeedHints | null;
 }
 
 async function importView(
@@ -284,9 +310,11 @@ async function importUniverse(
   const collection = `explore.${slug}`;
   const seedHints = lookupSeedHints(url);
 
-  const sub = baseParsed.variant === "view"
-    ? await importView(env, baseHref, baseParsed, { collection, seedHints })
-    : await importBase(env, baseHref, baseParsed, { collection, seedHints });
+  // Re-use the same deterministic probe used for plain share links so
+  // Universe → embedded sharedBase always lands in the right variant
+  // (parser heuristics never decide). Multi-table bases fan out; a
+  // single-table base/view routes through importView.
+  const sub = await dispatchShare(env, baseHref, baseParsed, { collection, seedHints });
 
   sub.sourceCollection = collection;
   if (errors.length) (sub.errors ??= []).push(...errors);
@@ -1030,7 +1058,10 @@ function isUsefulChildUrl(u: string): boolean {
     if (host === "dl.airtable.com" || host === "v5.airtableusercontent.com") return false;
     // Image / attachment URLs are skipped — only profile/personal links matter.
     if (/\.(png|jpe?g|gif|webp|svg|ico|pdf|csv|xlsx?)(\?|#|$)/i.test(u)) return false;
-    return classifyUrl(u) !== "url" || true;
+    // classifyUrl returns "firmlist" | "profile" | "url" — any of the
+    // three is a useful child URL once Airtable/asset hosts are filtered.
+    const kind = classifyUrl(u);
+    return kind === "firmlist" || kind === "profile" || kind === "url";
   } catch { return false; }
 }
 

@@ -953,6 +953,11 @@ async function processFirmlist(
       people_merged: peopleMerged,
       edges_created: edgesCreated,
       child_jobs: childJobIds.length,
+      // Task #2: surface per-table metadata for the dashboard import-
+      // history mapping UI (shared bases fan out N tables → N tabs).
+      table_tabs: (result.tableTabs ?? []).slice(0, 32),
+      source_collection: sourceCollection,
+      stubs_created: (result.stubEntities ?? []).length,
       errors: (result.errors ?? []).slice(0, 20),
     }),
     Date.now() - start,
