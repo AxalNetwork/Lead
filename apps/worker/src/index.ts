@@ -213,6 +213,7 @@ export default {
             err: new AppError({ code: "queue_malformed", kind: "validation", message: "malformed queue message", context: { msgId: msg.id } }),
           });
           msg.ack();
+          batchAcked++;
           continue;
         }
         await runJob(legacy, env);
