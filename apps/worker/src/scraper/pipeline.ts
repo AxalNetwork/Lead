@@ -57,8 +57,12 @@ async function isCancelled(env: Env, jobId: string): Promise<boolean> {
 }
 
 async function markRunning(env: Env, jobId: string): Promise<void> {
+  // Task #2: stamp `started_at` unconditionally on the queued->running
+  // transition so the budget clock measures actual running time, not
+  // enqueue time. The state-machine triggers (migration 193) still
+  // gate the status transition itself.
   await env.DB.prepare(
-    "UPDATE jobs SET status = 'running', started_at = COALESCE(started_at, ?) WHERE id = ? AND status = 'queued'",
+    "UPDATE jobs SET status = 'running', started_at = ? WHERE id = ? AND status = 'queued'",
   )
     .bind(new Date().toISOString(), jobId)
     .run();

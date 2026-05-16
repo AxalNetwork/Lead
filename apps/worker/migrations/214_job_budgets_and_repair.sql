@@ -22,6 +22,23 @@ WHERE budget_ms IS NULL;
 CREATE INDEX IF NOT EXISTS idx_jobs_running_started
   ON jobs(status, started_at) WHERE status = 'running';
 
+-- AFTER INSERT trigger: when a caller doesn't set `budget_ms`, default it
+-- by `kind`. This catches every INSERT INTO jobs callsite (replay,
+-- fanout, discover, uploads, imports, sources registry, etc.) so the
+-- sweeper's `budget_ms IS NOT NULL` filter never excludes a job.
+CREATE TRIGGER IF NOT EXISTS trg_jobs_budget_default
+AFTER INSERT ON jobs
+FOR EACH ROW
+WHEN NEW.budget_ms IS NULL
+BEGIN
+  UPDATE jobs SET budget_ms = CASE
+    WHEN NEW.kind = 'firmlist'        THEN 300000
+    WHEN NEW.kind = 'firm_team_crawl' THEN 120000
+    WHEN NEW.kind = 'profile_fanout'  THEN 60000
+    ELSE 90000
+  END WHERE id = NEW.id;
+END;
+
 -- 2. repair_runs: idempotent audit trail for /api/admin/repair-pipeline and
 --    the nightly cron. One row per invocation; counts how many rows the
 --    repair touched per phase so operators can confirm a no-op vs. a real

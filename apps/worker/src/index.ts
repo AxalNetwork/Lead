@@ -201,7 +201,8 @@ export default {
         await logError(env, { err: appErr, job_id: jobId, step: "queue.runJob", retry_count: attempts });
         const transient = appErr.retryable;
         const now = new Date().toISOString();
-        if (transient && attempts < 5) {
+        // Task #2: cap retries at 3 (was 5) before dead-lettering.
+        if (transient && attempts < 3) {
           console.warn("Queue retry (transient)", msg.id, appErr.code, appErr.message);
           if (jobId) {
             try {
@@ -212,8 +213,8 @@ export default {
           }
           msg.retry({ delaySeconds: Math.min(30 * Math.pow(2, attempts), 600) });
         } else {
-          // attempts >= 5 transitions the job to dead_letter; otherwise failed.
-          const finalState = attempts >= 5 ? "dead_letter" : "failed";
+          // Task #2: attempts >= 3 transitions the job to dead_letter; otherwise failed.
+          const finalState = attempts >= 3 ? "dead_letter" : "failed";
           console.error("Queue ack (permanent)", msg.id, finalState, appErr.code, appErr.message);
           if (jobId) {
             try {

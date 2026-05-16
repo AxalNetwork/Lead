@@ -56,8 +56,33 @@ export async function sweepStuckJobs(env: Env): Promise<number> {
 }
 
 admin.post("/clear-stuck-jobs", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as
+    | { older_than_hours?: number }
+    | null;
   const swept = await sweepStuckJobs(c.env);
-  return c.json({ ok: true, swept });
+
+  // Task #2: optional one-time backlog drain. When `older_than_hours`
+  // is supplied, also cancel any `queued` job whose created_at is
+  // older than that cutoff. The queued -> cancelled transition is
+  // allowed by the migration-193 state machine.
+  let queuedCancelled = 0;
+  const olderThan = body?.older_than_hours;
+  if (typeof olderThan === "number" && olderThan > 0) {
+    const cutoffSec = Math.floor(olderThan * 3600);
+    const now = new Date().toISOString();
+    const r = await c.env.DB.prepare(
+      `UPDATE jobs
+          SET status = 'cancelled',
+              cancelled_at = ?,
+              finished_at = COALESCE(finished_at, ?),
+              error = COALESCE(error, 'queued_too_long')
+        WHERE status = 'queued'
+          AND (strftime('%s', ?) - strftime('%s', created_at)) > ?`,
+    ).bind(now, now, now, cutoffSec).run();
+    queuedCancelled = Number(r.meta?.changes ?? 0);
+  }
+
+  return c.json({ ok: true, swept, queued_cancelled: queuedCancelled });
 });
 
 admin.post("/rebuild-summary", async (c) => {
