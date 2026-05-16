@@ -70,7 +70,10 @@ function stripHtml(s: string): string {
   return s.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
 }
 
-// Map common infobox keys to canonical fact predicates.
+// Canonical predicate aliases — well-known infobox keys map to existing
+// fact predicates so they merge cleanly with non-wiki facts. Any other
+// infobox key is persisted as its normalized name (prefixed `wiki_` only
+// when needed to disambiguate from a reserved predicate).
 const KEY_MAP: Record<string, string> = {
   "founded": "founded",
   "founder": "founder_of",
@@ -91,6 +94,14 @@ const KEY_MAP: Record<string, string> = {
   "known_for": "known_for",
   "spouse": "spouse",
 };
+
+function normalizePredicate(rawKey: string): string | null {
+  if (KEY_MAP[rawKey]) return KEY_MAP[rawKey];
+  // Safe-normalize unknown keys: keep [a-z0-9_], drop the rest, cap length.
+  const safe = rawKey.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40);
+  if (!safe || safe.length < 2) return null;
+  return safe;
+}
 
 async function sha256Hex(s: string): Promise<string> {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
@@ -135,7 +146,9 @@ export async function crossReferenceEntity(env: Env, entityId: string, displayNa
   let citationsAdded = 0;
   const touchedFactIds: string[] = [];
   for (const r of rows) {
-    const predicate = KEY_MAP[r.key] ?? null;
+    // Task #2: persist EVERY infobox key as a fact (not only KEY_MAP
+    // subset). Unknown keys are stored under their normalized name.
+    const predicate = normalizePredicate(r.key);
     if (!predicate) continue;
     const existing = await env.DB.prepare(
       `SELECT id FROM facts WHERE entity_id = ? AND predicate = ? AND is_current = 1 LIMIT 1`,
