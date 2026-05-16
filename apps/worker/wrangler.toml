@@ -41,6 +41,14 @@ ENRICHMENT_KV_TTL_DAYS = "14"
 NITTER_BASE = "https://nitter.net"
 SEC_EDGAR_UA = "AIDataSignal/1.0 contact@aidatasignal.com"
 
+# Task #2: per-aggregator page budgets. Each value caps how many index
+# pages the importer will walk before stopping. Operators can tune these
+# without a code change. Defaults applied in code when unset.
+AGG_VCSHEET_MAX_PAGES = "8"
+AGG_VCSTACK_MAX_PAGES = "6"
+AGG_LANDSCAPE_VC_MAX_PAGES = "10"
+AGG_CLIMATESCAPE_MAX_PAGES = "8"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "aidatasignal-leads"

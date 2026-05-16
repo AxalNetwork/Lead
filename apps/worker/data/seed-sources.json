@@ -157,6 +157,150 @@
       "record_type": "companies",
       "variant": "workbook",
       "hints": {}
+    },
+    {
+      "importer": "openvc",
+      "kind": "firmlist",
+      "url": "https://www.openvc.app/blog/vc-list",
+      "label": "OpenVC public investor list (signup-walled preview)",
+      "record_type": "companies",
+      "hints": { "role_hint": "vc_partner" }
+    },
+    {
+      "importer": "mercury",
+      "kind": "firmlist",
+      "url": "https://mercury.com/investor-database",
+      "label": "Mercury Investor Database",
+      "record_type": "companies",
+      "hints": { "role_hint": "vc_partner" }
+    },
+    {
+      "importer": "vcsheet",
+      "kind": "firmlist",
+      "url": "https://www.vcsheet.com/funds",
+      "label": "VCSheet — All Funds directory",
+      "record_type": "companies",
+      "hints": { "role_hint": "vc_partner" }
+    },
+    {
+      "importer": "vcstack",
+      "kind": "firmlist",
+      "url": "https://www.vcstack.io/investors",
+      "label": "VCStack investor directory",
+      "record_type": "companies",
+      "hints": { "role_hint": "vc_partner" }
+    },
+    {
+      "importer": "failory",
+      "kind": "firmlist",
+      "url": "https://www.failory.com/startups/investors",
+      "label": "Failory — Startup Investors list",
+      "record_type": "companies",
+      "hints": { "role_hint": "vc_partner" }
+    },
+    {
+      "importer": "landscape_vc",
+      "kind": "firmlist",
+      "url": "https://landscape.vc/funds",
+      "label": "landscape.vc fund directory",
+      "record_type": "companies",
+      "hints": { "role_hint": "vc_partner" }
+    },
+    {
+      "importer": "climatescape",
+      "kind": "firmlist",
+      "url": "https://climatescape.org/investors",
+      "label": "Climatescape — Climate-tech investors",
+      "record_type": "companies",
+      "hints": { "role_hint": "vc_partner", "sector": "climate" }
+    },
+    {
+      "importer": "mountside_ventures",
+      "kind": "firmlist",
+      "url": "https://www.mountsideventures.com/investor-database",
+      "label": "Mountside Ventures — Investor Database (signup-walled)",
+      "record_type": "companies",
+      "hints": { "role_hint": "vc_partner" }
+    },
+    {
+      "importer": "nyc_founder_guide",
+      "kind": "firmlist",
+      "url": "https://www.nycfounderguide.com/investors",
+      "label": "NYC Founder Guide — Investors",
+      "record_type": "companies",
+      "hints": { "role_hint": "vc_partner", "geo_metro": "new_york" }
+    },
+    {
+      "importer": "versatilevc",
+      "kind": "firmlist",
+      "url": "https://versatilevc.com/our-vc-list/",
+      "label": "Versatile VC — public VC list",
+      "record_type": "companies",
+      "hints": { "role_hint": "vc_partner" }
+    },
+    {
+      "importer": "founders_next_move",
+      "kind": "firmlist",
+      "url": "https://www.foundersnextmove.com/investors/accelerators",
+      "label": "Founders Next Move — Accelerators",
+      "record_type": "companies",
+      "hints": { "role_hint": "accelerator" }
+    },
+    {
+      "importer": "founders_next_move",
+      "kind": "firmlist",
+      "url": "https://www.foundersnextmove.com/investors/incubators",
+      "label": "Founders Next Move — Incubators",
+      "record_type": "companies",
+      "hints": { "role_hint": "incubator" }
+    },
+    {
+      "importer": "founders_next_move",
+      "kind": "firmlist",
+      "url": "https://www.foundersnextmove.com/investors/government-funds",
+      "label": "Founders Next Move — Government Funds",
+      "record_type": "companies",
+      "hints": { "role_hint": "gov_fund" }
+    },
+    {
+      "importer": "founders_next_move",
+      "kind": "firmlist",
+      "url": "https://www.foundersnextmove.com/investors/grants",
+      "label": "Founders Next Move — Grants",
+      "record_type": "companies",
+      "hints": { "role_hint": "grant_program" }
+    },
+    {
+      "importer": "founders_next_move",
+      "kind": "firmlist",
+      "url": "https://www.foundersnextmove.com/investors/impact-funds",
+      "label": "Founders Next Move — Impact Funds",
+      "record_type": "companies",
+      "hints": { "role_hint": "impact_fund" }
+    },
+    {
+      "importer": "founders_next_move",
+      "kind": "firmlist",
+      "url": "https://www.foundersnextmove.com/investors/corporate-vcs",
+      "label": "Founders Next Move — Corporate VCs",
+      "record_type": "companies",
+      "hints": { "role_hint": "corp_vc" }
+    },
+    {
+      "importer": "founders_next_move",
+      "kind": "firmlist",
+      "url": "https://www.foundersnextmove.com/investors/venture-studios",
+      "label": "Founders Next Move — Venture Studios",
+      "record_type": "companies",
+      "hints": { "role_hint": "venture_studio" }
+    },
+    {
+      "importer": "founders_next_move",
+      "kind": "firmlist",
+      "url": "https://www.foundersnextmove.com/investors/syndicates",
+      "label": "Founders Next Move — Syndicates",
+      "record_type": "companies",
+      "hints": { "role_hint": "syndicate" }
     }
   ]
 }

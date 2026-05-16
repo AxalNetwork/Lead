@@ -3,6 +3,14 @@ import { fetchPage } from "../../fetcher";
 import { decodeEntities, extractAnchors } from "../../html";
 import type { FirmCandidate, FirmlistImportResult } from "./types";
 import { rowToCandidate } from "./_helpers";
+import { importKey } from "./aggregators/_base";
+
+/** Task #2: every firm scraped from the NYC Founder Guide is force-
+ *  tagged with `geo:nyc_metro` so the dashboard's NYC filter finds
+ *  them even when the row itself doesn't carry a city. The tag taxonomy
+ *  uses single-colon prefixes consumed by `mapTagTaxonomy` in the
+ *  pipeline (`geo` is one of the accepted prefixes; `geo_metro` is not). */
+const NYC_TAG = "geo:nyc_metro";
 
 /**
  * NYC Founder Guide investor list (or any wiki/Notion-style listing where
@@ -43,7 +51,11 @@ export async function importFirms(url: string, env: Env): Promise<FirmlistImport
       LinkedIn: linkedin,
       Twitter: twitter,
     }, url);
-    if (cand) firms.push(cand.candidate);
+    if (cand) {
+      (cand.candidate as { import_key?: string }).import_key = importKey("nyc_fg", name);
+      (cand.candidate as { tags?: string[] }).tags = [NYC_TAG];
+      firms.push(cand.candidate);
+    }
   }
 
   // Bullet-list fallback: <li><a href="https://firm.com">Firm Name</a> – blurb</li>
@@ -58,7 +70,11 @@ export async function importFirms(url: string, env: Env): Promise<FirmlistImport
       if (!name || seen.has(name.toLowerCase())) continue;
       seen.add(name.toLowerCase());
       const cand = rowToCandidate({ name, website: ext.href }, url);
-      if (cand) firms.push(cand.candidate);
+      if (cand) {
+        (cand.candidate as { import_key?: string }).import_key = importKey("nyc_fg", name);
+        (cand.candidate as { tags?: string[] }).tags = [NYC_TAG];
+        firms.push(cand.candidate);
+      }
     }
   }
 

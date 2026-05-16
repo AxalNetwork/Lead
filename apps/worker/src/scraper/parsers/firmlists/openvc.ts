@@ -3,6 +3,7 @@ import { fetchPage } from "../../fetcher";
 import { decodeEntities } from "../../html";
 import type { FirmCandidate, FirmlistImportResult } from "./types";
 import { rowToCandidate } from "./_helpers";
+import { detectSignupWall } from "./aggregators/_base";
 
 /**
  * OpenVC importer (openvc.app investor list pages).
@@ -33,6 +34,11 @@ export async function importFirms(url: string, env: Env): Promise<FirmlistImport
       if (page === 1) return { firms: [], totalSeen: 0, errors };
       break;
     }
+    // OpenVC's `/blog/vc-list` URL surfaces a signup wall when scraped
+    // without a session — flag it but still try to harvest the public
+    // preview rows below.
+    const wall = detectSignupWall(fetched.html, pageUrl);
+    if (wall && page === 1) errors.push(wall);
     const data = extractNextData(fetched.html);
     if (!data) {
       if (page === 1) return { firms: [], totalSeen: 0, errors: [...errors, "next_data_missing"] };

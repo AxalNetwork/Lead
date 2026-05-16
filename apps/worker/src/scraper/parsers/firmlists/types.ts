@@ -45,6 +45,19 @@ export interface FirmCandidate {
   submission_url?: string | null;
   notes?: string | null;
   source_url?: string | null;
+  /**
+   * Task #2: tag slugs applied to the unified firm entity post-upsert.
+   * Each slug uses the `taxonomy:value` convention consumed by
+   * `tagAsFolkImport` in the pipeline:
+   *   role:vc_partner | role:accelerator | role:gov_fund | ...
+   *   sector:climate | sector:fintech | ...
+   *   geo:country:US | geo:geo_metro:new_york | geo:region:europe | ...
+   *   stage:seed | stage:series_a | ...
+   * Slugs that don't match a known taxonomy prefix are silently dropped.
+   * Requires the importer to also set `import_key` so the pipeline can
+   * resolve the upserted firm to its unified entity id.
+   */
+  tags?: string[] | null;
 }
 
 /**
@@ -181,4 +194,24 @@ export interface FirmlistImportResult {
   importNotes?: Array<{ tab: string; content: string }>;
 }
 
-export type FirmlistImporter = (url: string, env: Env) => Promise<FirmlistImportResult>;
+/**
+ * Task #2: hints surfaced by the source registry (seed-sources.json or
+ * the operator-curated `sources` table). Aggregator importers consume
+ * these to tag every emitted firm with the appropriate role / geo /
+ * sector slugs. Importers that ignore the third arg keep working
+ * unchanged because the parameter is optional.
+ *
+ * The seed-sources schema uses `role_hint`, `country`, `region`,
+ * `geo_metro`, `sector`. The pipeline (`processFirmlist`) maps the seed
+ * keys to this normalized shape before invoking the importer.
+ */
+export interface ImporterHints {
+  role?: string | null;
+  sector?: string | null;
+  geo?: string | null;
+  country_iso2?: string | null;
+  region?: string | null;
+  kind?: string | null;
+}
+
+export type FirmlistImporter = (url: string, env: Env, hints?: ImporterHints) => Promise<FirmlistImportResult>;

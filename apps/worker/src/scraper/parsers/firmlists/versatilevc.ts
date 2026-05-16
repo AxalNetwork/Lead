@@ -29,6 +29,16 @@ export async function importFirms(url: string, env: Env): Promise<FirmlistImport
     return { firms, totalSeen: r.totalSeen, errors: r.errors };
   }
 
+  // Task #2: surface any PDF / XLSX / Google-Sheet links on the page as
+  // child URL jobs so the downstream pipeline crawls them too.
+  const childUrls: string[] = [];
+  for (const a of anchors) {
+    if (/\.(pdf|xlsx?|ods)(\?|#|$)/i.test(a.href)) childUrls.push(a.href);
+    else if (/docs\.google\.com\/spreadsheets\//i.test(a.href)) childUrls.push(a.href);
+  }
+
   // Fallback: page-as-list scrape using the same heuristics as the NYC guide.
-  return importNyc(url, env);
+  const fallback = await importNyc(url, env);
+  if (childUrls.length) fallback.childUrls = [...new Set([...(fallback.childUrls ?? []), ...childUrls])];
+  return fallback;
 }

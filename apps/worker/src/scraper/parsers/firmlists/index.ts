@@ -11,6 +11,14 @@ import { importFirms as nycFounderGuide } from "./nyc_founder_guide";
 import { importFirms as versatileVc } from "./versatilevc";
 import { importFirms as genericCsvUrl } from "./generic_csv_url";
 import { importFirms as genericJsonld } from "./generic_jsonld";
+// Task #2: structured aggregator importers.
+import { importFirms as vcsheet } from "./aggregators/vcsheet";
+import { importFirms as vcstack } from "./aggregators/vcstack";
+import { importFirms as failory } from "./aggregators/failory";
+import { importFirms as landscapeVc } from "./aggregators/landscape_vc";
+import { importFirms as climatescape } from "./aggregators/climatescape";
+import { importFirms as mountsideVentures } from "./aggregators/mountside_ventures";
+import { importFirms as foundersNextMove } from "./aggregators/founders_next_move";
 
 export const FIRMLIST_IMPORTERS: Record<string, FirmlistImporter> = {
   airtable,
@@ -25,6 +33,14 @@ export const FIRMLIST_IMPORTERS: Record<string, FirmlistImporter> = {
   versatilevc: versatileVc,
   generic_csv_url: genericCsvUrl,
   generic_jsonld: genericJsonld,
+  // Task #2 aggregators.
+  vcsheet,
+  vcstack,
+  failory,
+  landscape_vc: landscapeVc,
+  climatescape,
+  mountside_ventures: mountsideVentures,
+  founders_next_move: foundersNextMove,
 };
 
 export type FirmlistImporterName = keyof typeof FIRMLIST_IMPORTERS;
@@ -54,9 +70,6 @@ export function selectImporter(url: string): { name: string; importer: FirmlistI
   if (host === "openvc.app" || host === "api.openvc.app") return { name: "openvc", importer: openvc };
   if (host.endsWith("signal.nfx.com") || host.endsWith("nfx.com")) return { name: "nfx_signal", importer: nfxSignal };
   if (host === "folk.app" || host.endsWith(".folk.app")) {
-    // Folk *share* URLs (`/shared/{slug}-{id}`) get the dedicated full-API
-    // importer; everything else on folk.app falls back to the legacy
-    // best-effort scraper.
     if (/^\/shared\//.test(path)) return { name: "folk", importer: folk };
     return { name: "folk_app", importer: folkApp };
   }
@@ -64,6 +77,24 @@ export function selectImporter(url: string): { name: string; importer: FirmlistI
     return { name: "nyc_founder_guide", importer: nycFounderGuide };
   }
   if (host.includes("versatilevc")) return { name: "versatilevc", importer: versatileVc };
+
+  // Task #2 — structured aggregator host routing.
+  if (host === "vcsheet.com" || host.endsWith(".vcsheet.com")) return { name: "vcsheet", importer: vcsheet };
+  if (host === "vcstack.io" || host === "vcstack.com" || host.endsWith(".vcstack.io") || host.endsWith(".vcstack.com")) {
+    return { name: "vcstack", importer: vcstack };
+  }
+  if (host === "failory.com" || host.endsWith(".failory.com")) return { name: "failory", importer: failory };
+  if (host === "landscape.vc" || host.endsWith(".landscape.vc")) return { name: "landscape_vc", importer: landscapeVc };
+  if (host === "climatescape.org" || host.endsWith(".climatescape.org") || host === "climatescape.earth") {
+    return { name: "climatescape", importer: climatescape };
+  }
+  if (host === "mountsideventures.com" || host.endsWith(".mountsideventures.com")) {
+    return { name: "mountside_ventures", importer: mountsideVentures };
+  }
+  if (host === "foundersnextmove.com" || host.endsWith(".foundersnextmove.com")) {
+    return { name: "founders_next_move", importer: foundersNextMove };
+  }
+
   if (/\.(csv|tsv)(\?|#|$)/.test(url)) return { name: "generic_csv_url", importer: genericCsvUrl };
   return { name: "generic_jsonld", importer: genericJsonld };
 }

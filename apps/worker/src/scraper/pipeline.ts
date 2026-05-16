@@ -641,9 +641,26 @@ async function processFirmlist(
     : null;
   const picked = explicit ?? selectImporter(target);
 
+  // Task #2: thread normalized hints from the source registry into the
+  // importer. Seed-sources.json uses keys like `role_hint`, `country`,
+  // `region`, `geo_metro`, `sector`; we map them to the `ImporterHints`
+  // shape so aggregator importers can stamp `role:` / `sector:` / `geo:`
+  // / `country:` / `region:` tags on every emitted firm.
+  const rawHints = (config.hints && typeof config.hints === "object") ? (config.hints as Record<string, unknown>) : {};
+  const importerHints: import("./parsers/firmlists/types").ImporterHints = {
+    role: typeof rawHints.role === "string" ? rawHints.role : (typeof rawHints.role_hint === "string" ? rawHints.role_hint : null),
+    sector: typeof rawHints.sector === "string" ? rawHints.sector : null,
+    geo: typeof rawHints.geo === "string" ? rawHints.geo : (typeof rawHints.geo_metro === "string" ? rawHints.geo_metro : null),
+    country_iso2: typeof rawHints.country_iso2 === "string"
+      ? rawHints.country_iso2
+      : (typeof rawHints.country === "string" && rawHints.country.length === 2 ? rawHints.country : null),
+    region: typeof rawHints.region === "string" ? rawHints.region : null,
+    kind: typeof rawHints.kind === "string" ? rawHints.kind : null,
+  };
+
   let result: import("./parsers/firmlists/types").FirmlistImportResult;
   try {
-    result = await picked.importer(target, env);
+    result = await picked.importer(target, env, importerHints);
   } catch (e) {
     result = { firms: [], totalSeen: 0, errors: [`importer_throw:${(e as Error).message}`] };
   }
@@ -727,6 +744,16 @@ async function processFirmlist(
         }
         const firmTags: string[] = [];
         if (sourceCollection) firmTags.push(`collection:explore.${sourceCollection.replace(/^explore\./, "")}`);
+        // Task #2: aggregator importers (vcsheet/climatescape/founders-
+        // next-move/etc.) attach per-firm tags (sector / geo / role) via
+        // `FirmCandidate.tags`. Forward them through the same tag
+        // pipeline so they end up on `entity_tags`.
+        const rawFirmTags = (f as unknown as { tags?: string[] | null }).tags;
+        if (Array.isArray(rawFirmTags)) {
+          for (const t of rawFirmTags) {
+            if (typeof t === "string" && t.trim()) firmTags.push(t.trim());
+          }
+        }
         await tagAsFolkImport(env, ent, picked.name, f.source_url ?? target, firmTags.length ? firmTags : null);
       }
     }
