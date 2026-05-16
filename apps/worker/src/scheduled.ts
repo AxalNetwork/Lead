@@ -5,8 +5,11 @@ import { runRelationshipDerivation } from "./scraper/relationships/derive";
 import { runInvestorStats } from "./services/investor_stats";
 import { recomputeAccountScore } from "./prospects/repo";
 import { ensureRoleTaxonomySeeded } from "./prospects/seedRoles";
+// Task #5: source registry — drives the 6h cron + nightly staleness sweep.
+import { enqueueSourceRun, sweepStaleEntities, type SourceRow } from "./sources/registry";
+import { loadSeedSources } from "./sources/seed_loader";
 
-interface SourceRow {
+interface LegacySourceRow {
   id: string;
   domain: string;
 }
@@ -93,6 +96,17 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         console.error("relationship derivation failed", (e as Error).message);
       }
 
+      // 5a. Task #5: staleness sweep — entities not seen on any source
+      // for >90 days are flagged `staleness='likely_dead'` for admin
+      // review. Bounded so a single nightly tick can't churn through
+      // the whole graph.
+      try {
+        const n = await sweepStaleEntities(env, 90, 2000);
+        console.log("staleness sweep done", n);
+      } catch (e) {
+        console.error("staleness sweep failed", (e as Error).message);
+      }
+
       // 5. Project match refresh
       try {
         const r = await env.DB.prepare(`SELECT id FROM projects WHERE deleted_at IS NULL AND status = 'active' ORDER BY last_modified DESC LIMIT 200`).all<{ id: string }>();
@@ -112,12 +126,48 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
     })());
     return;
   }
+  // Task #5: every 6h, the registry is the source of truth. We enqueue
+  // a firmlist job for every enabled row whose `next_run_after` has
+  // passed (or is null) — capped at 200/tick so a single cron tick
+  // doesn't melt the queue. On first deploy, populate the registry
+  // from seed-sources.json so it isn't empty.
+  const registryDue = await env.DB.prepare(
+    `SELECT * FROM source_registry
+       WHERE enabled = 1
+         AND last_run_status != 'running'
+         AND (next_run_after IS NULL OR datetime(next_run_after) <= datetime('now'))
+       ORDER BY COALESCE(next_run_after, added_at) ASC LIMIT 200`,
+  ).all<SourceRow>();
+  const registryRows = registryDue.results ?? [];
+
+  const enqueueRegistry = async () => {
+    if (registryRows.length === 0) {
+      // First-deploy bootstrap: registry is empty, populate from seeds.
+      const probe = await env.DB.prepare(`SELECT COUNT(*) AS n FROM source_registry`).first<{ n: number }>();
+      if (!probe || probe.n === 0) {
+        try {
+          const r = await loadSeedSources(env);
+          console.log("source_registry first-deploy bootstrap", JSON.stringify(r));
+        } catch (e) {
+          console.warn("source_registry bootstrap failed", (e as Error).message);
+        }
+      }
+      return;
+    }
+    for (const row of registryRows) {
+      try { await enqueueSourceRun(env, row, { trigger: "cron" }); }
+      catch (e) { console.warn("registry enqueue failed", row.url, (e as Error).message); }
+    }
+  };
+
+  // Legacy `sources` table — kept for backwards compatibility with
+  // per-domain re-scrapes that pre-date the registry (Task #5).
   const r = await env.DB.prepare(
     `SELECT id, domain FROM sources
        WHERE enabled = 1
          AND (last_scraped_at IS NULL OR datetime(last_scraped_at) < datetime('now','-24 hours'))
        LIMIT 200`,
-  ).all<SourceRow>();
+  ).all<LegacySourceRow>();
   const rows = r.results ?? [];
 
   const enqueueScrapes = async () => {
@@ -164,6 +214,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
     }
   };
 
+  ctx.waitUntil(enqueueRegistry());
   ctx.waitUntil(enqueueScrapes());
   ctx.waitUntil(reEnrichStale());
 }

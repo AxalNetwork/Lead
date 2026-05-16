@@ -21,6 +21,7 @@ import { compliance, complianceDncAlias, complianceAuditAlias, gdpr, leadsDncAct
 import { campaigns, campaignsWebhook, leadsCampaignActions } from "./routes/campaigns";
 import { firms } from "./routes/firms";
 import { imports } from "./routes/imports";
+import { sources } from "./routes/sources";
 import { savedFilters } from "./routes/saved_filters";
 import { analyticsFirms } from "./routes/analytics_firms";
 import { relationships } from "./routes/relationships";
@@ -99,6 +100,8 @@ api.route("/api/campaigns", campaigns);
 api.route("/api/firms", firms);
 api.route("/api/import", imports);
 api.route("/api/imports", imports);
+// Task #5: source registry (CRUD + run + run-all + preview + bootstrap).
+api.route("/api/sources", sources);
 api.route("/api/saved-filters", savedFilters);
 api.route("/api/analytics/firms", analyticsFirms);
 api.route("/api/relationships", relationships);

@@ -9,6 +9,7 @@ import { discoverPartnersForFirm, discoverByPersona } from "../discovery/discove
 import { saveCandidates } from "../discovery/store";
 import { selectImporter, FIRMLIST_IMPORTERS } from "./parsers/firmlists";
 import { upsertFirm } from "./firms_upsert";
+import { recordRunResult, stampEntitiesSeen } from "../sources/registry";
 import { getLegacyEntityId } from "../entities/roles";
 import { canonicalEmail, canonicalLinkedin } from "../entities/normalize";
 import { addTag } from "../entities/tags";
@@ -695,6 +696,15 @@ async function processFirmlist(
   //   airtable  → source='airtable_universe' when the importer surfaced a
   //               sourceCollection (Variant C), else 'airtable_share'
   // For all other firmlist importers the default scrape provenance applies.
+  // Task #5: when this job was kicked off by the source registry the
+  // caller passes `source_registry_id` + `source_run_id` via config.
+  // We collect every touched entity id and write back to the registry
+  // on completion so the dashboard reflects the run + entities carry
+  // `last_seen_source_at` for the staleness sweep.
+  const sourceRegistryId = typeof config.source_registry_id === "string" ? config.source_registry_id : null;
+  const sourceRunId = typeof config.source_run_id === "string" ? config.source_run_id : null;
+  const touchedEntityIds = new Set<string>();
+
   const folkImportCtx: { source: string; sourceKind: "import" } | null =
     picked.name === "folk"
       ? { source: "folk_share", sourceKind: "import" }
@@ -724,12 +734,22 @@ async function processFirmlist(
     if (upsertRes.action === "created") created += 1;
     else if (upsertRes.action === "updated") updated += 1;
     else unchanged += 1;
+    // Task #5: stamp `last_seen_source_at` for every firm a
+    // source-registry run touched, regardless of whether the importer
+    // emits import_keys (Folk/Airtable do; aggregators don't).
+    if (sourceRegistryId && (upsertRes.action === "created" || upsertRes.action === "updated")) {
+      try {
+        const e = await getLegacyEntityId(env, "firms", upsertRes.firmId);
+        if (e) touchedEntityIds.add(e);
+      } catch { /* non-fatal */ }
+    }
     const fKey = (f as unknown as { import_key?: string }).import_key;
     if (fKey) {
       firmKeyToLegacyId.set(fKey, upsertRes.firmId);
       const ent = await getLegacyEntityId(env, "firms", upsertRes.firmId);
       if (ent) {
         firmKeyToEntity.set(fKey, ent);
+        if (sourceRegistryId) touchedEntityIds.add(ent);
         // Task #1: route Folk-imported firms through the EntityLock DO.
         // The DO is keyed by the unified entity id (`firm:{entityId}`)
         // so concurrent imports of the same firm — even via two
@@ -1106,6 +1126,34 @@ async function processFirmlist(
     Date.now() - start,
     new Date().toISOString(),
   ).run();
+
+  // Task #5: write back to source_registry + stamp entities seen.
+  if (sourceRegistryId) {
+    const totalErrors = (result.errors ?? []).length;
+    const status: "succeeded" | "partial" | "failed" =
+      result.firms.length === 0 && (result.people?.length ?? 0) === 0 && totalErrors > 0
+        ? "failed"
+        : totalErrors > 0
+          ? "partial"
+          : "succeeded";
+    try {
+      await recordRunResult(env, sourceRegistryId, sourceRunId, {
+        status,
+        records_seen: result.totalSeen ?? (result.firms.length + (result.people?.length ?? 0)),
+        records_created: created + peopleCreated,
+        records_updated: updated,
+        records_unchanged: unchanged,
+        records_errors: totalErrors,
+        error_message: totalErrors ? (result.errors ?? []).slice(0, 3).join(" | ").slice(0, 500) : null,
+      });
+    } catch (e) {
+      console.warn("source_registry recordRunResult failed", sourceRegistryId, (e as Error).message);
+    }
+    if (touchedEntityIds.size > 0) {
+      try { await stampEntitiesSeen(env, touchedEntityIds); }
+      catch (e) { console.warn("stampEntitiesSeen failed", (e as Error).message); }
+    }
+  }
 
   return {
     // We treat each upserted firm + each fresh person as a "lead found".

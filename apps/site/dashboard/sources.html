@@ -1,0 +1,89 @@
+---
+layout: default
+title: Sources
+permalink: /dashboard/sources/
+---
+
+<h1 class="ads-page-title">Sources</h1>
+<p class="ads-page-sub">Source registry &mdash; the single list of recurring URLs we re-crawl. Each row tracks freshness, last-run stats, and the importer used.</p>
+
+<div class="ads-card" style="margin-bottom:12px;display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+  <div id="ads-src-stats" class="ads-muted" style="flex:1;min-width:200px;font-size:12px">Loading&hellip;</div>
+  <button class="ads-btn" id="ads-src-add">+ Add source</button>
+  <button class="ads-btn ads-btn--ghost" id="ads-src-run-all">Run all due now</button>
+  <button class="ads-btn ads-btn--ghost" id="ads-src-bootstrap" title="Populate registry from seed-sources.json">Bootstrap seeds</button>
+  <button class="ads-btn ads-btn--ghost" id="ads-src-refresh">Refresh</button>
+</div>
+
+<div class="ads-card" style="margin-bottom:12px">
+  <div class="ads-filter-grid ads-filter-grid--3">
+    <label class="ads-field"><span>Search</span><input id="ads-src-q" placeholder="url / label / host"></label>
+    <label class="ads-field"><span>Importer</span>
+      <select id="ads-src-importer">
+        <option value="">all</option>
+        <option>folk</option>
+        <option>airtable</option>
+        <option>notion</option>
+        <option>google_sheets</option>
+        <option>openvc</option>
+        <option>mountside</option>
+        <option>signal_nfx</option>
+        <option>generic_html</option>
+      </select>
+    </label>
+    <label class="ads-field"><span>Status</span>
+      <select id="ads-src-status">
+        <option value="">all</option>
+        <option value="enabled">enabled</option>
+        <option value="disabled">disabled</option>
+        <option value="due">due now</option>
+        <option value="failing">failing</option>
+        <option value="archived">archived</option>
+      </select>
+    </label>
+  </div>
+</div>
+
+<div class="ads-card">
+  <div id="ads-src-list"><div class="ads-loading">Loading&hellip;</div></div>
+</div>
+
+<div id="ads-src-drawer" class="ads-drawer" hidden style="position:fixed;top:0;right:0;bottom:0;width:min(640px,96vw);background:var(--ads-bg, #fff);border-left:1px solid #ddd;box-shadow:-4px 0 16px rgba(0,0,0,.08);z-index:150;overflow:auto;padding:20px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <h3 id="ads-src-drawer-title" style="margin:0">Source</h3>
+    <button class="ads-btn ads-btn--ghost" id="ads-src-drawer-close">Close</button>
+  </div>
+  <div id="ads-src-drawer-body"><div class="ads-loading">Loading&hellip;</div></div>
+</div>
+
+<div id="ads-src-add-modal" class="ads-modal" hidden style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:200;display:flex;align-items:center;justify-content:center">
+  <div class="ads-modal__panel" style="background:var(--ads-bg, #fff);border-radius:8px;width:min(680px,94vw);max-height:90vh;overflow:auto;padding:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h3 style="margin:0">Add source</h3>
+      <button class="ads-btn ads-btn--ghost" id="ads-src-add-close">Close</button>
+    </div>
+    <label class="ads-field"><span>URL</span><input id="ads-src-add-url" placeholder="https://&hellip;"></label>
+    <label class="ads-field" style="margin-top:8px"><span>Label (optional)</span><input id="ads-src-add-label" placeholder="e.g. OpenVC seed-stage US"></label>
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <label class="ads-field" style="flex:1;min-width:160px"><span>Importer</span>
+        <select id="ads-src-add-importer">
+          <option value="">auto-detect</option>
+          <option>folk</option><option>airtable</option><option>notion</option>
+          <option>google_sheets</option><option>openvc</option><option>mountside</option>
+          <option>signal_nfx</option><option>generic_html</option>
+        </select>
+      </label>
+      <label class="ads-field" style="flex:1;min-width:160px"><span>Cron (optional)</span><input id="ads-src-add-cron" placeholder="0 */6 * * *"></label>
+    </div>
+    <div id="ads-src-add-detect" class="ads-muted" style="font-size:12px;margin-top:8px"></div>
+    <div id="ads-src-add-preview" style="margin-top:12px"></div>
+    <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
+      <button class="ads-btn ads-btn--ghost" id="ads-src-add-detect-btn">Detect importer</button>
+      <button class="ads-btn ads-btn--ghost" id="ads-src-add-preview-btn">Preview 10 rows</button>
+      <button class="ads-btn" id="ads-src-add-save">Save source</button>
+    </div>
+    <div id="ads-src-add-err" class="ads-muted" style="font-size:12px;margin-top:8px;color:#b3261e"></div>
+  </div>
+</div>
+
+<script src="/assets/js/sources.js?v=1"></script>
