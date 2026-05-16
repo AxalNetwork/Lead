@@ -103,7 +103,15 @@ export async function insertPersona(env: Env, body: Partial<PersonaRow> & { name
   const now = new Date().toISOString();
   const cols = ["id","created_by","created_at","updated_at","last_modified", ...PERSONA_FIELDS];
   const binds: unknown[] = [id, by ?? null, now, now, now];
-  for (const f of PERSONA_FIELDS) binds.push((body as Record<string, unknown>)[f] ?? null);
+  // Defaults for NOT NULL columns when the caller omits them (e.g. the
+  // seed loader). Without this, the seed path threw
+  // `NOT NULL constraint failed: personas.status` and surfaced as a
+  // db_error on the Personas page.
+  const defaults: Record<string, unknown> = { status: "active", kind: "account" };
+  for (const f of PERSONA_FIELDS) {
+    const v = (body as Record<string, unknown>)[f];
+    binds.push(v ?? defaults[f] ?? null);
+  }
   await env.DB.prepare(`INSERT INTO personas (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`).bind(...binds).run();
   await env.DB.prepare(`INSERT INTO persona_history (id, persona_id, field, new_value, changed_by) VALUES (?, ?, 'created', ?, ?)`)
     .bind(crypto.randomUUID(), id, body.name, by ?? null).run();
