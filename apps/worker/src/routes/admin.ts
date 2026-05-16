@@ -294,11 +294,42 @@ admin.post("/repair-pipeline", async (c) => {
                 WHERE NOT EXISTS (SELECT 1 FROM entity_roles r WHERE r.entity_id = e.id AND r.role = 'company')`,
       },
       // Modern-only entities (no entity_legacy_map row) still need a
-      // role so they appear in /api/investors|companies|firms. Fall
-      // back to inferring role from `u_entities.kind` for any entity
-      // that ends the prior phases with zero roles.
+      // role so they appear in /api/investors|companies|firms. The
+      // u_entities.kind taxonomy is only person|org, so role here is
+      // inferred from heuristics rather than directly from kind:
+      //   - person + VC-flavored legacy persona_role / leads.role  -> investor
+      //   - person + any legacy mapping at all                     -> prospect
+      //   - person otherwise                                       -> prospect
+      //   - org    + legacy firms row                              -> firm (covered above)
+      //   - org    + legacy companies row                          -> company (covered above)
+      //   - org    + legacy investor-flavored persona              -> firm
+      //   - org    otherwise                                       -> company
+      // Confidence is 0.5 so future explicit signals (extractor,
+      // operator UI) can promote without conflict.
       {
-        label: "kind_fallback_person",
+        label: "kind_fallback_person_investor",
+        // Promote person -> investor when legacy lead row exposes a
+        // VC-flavored persona_role / role / current_role_title.
+        sql: `INSERT OR IGNORE INTO entity_roles (entity_id, role, is_primary, source, confidence)
+               SELECT e.id, 'investor', 1, 'repair_kind_fallback_persona', 0.5
+                 FROM u_entities e
+                 JOIN entity_legacy_map m
+                   ON m.entity_id = e.id AND m.legacy_table = 'leads'
+                 JOIN leads l ON l.id = m.legacy_id
+                WHERE e.kind = 'person'
+                  AND NOT EXISTS (SELECT 1 FROM entity_roles r WHERE r.entity_id = e.id)
+                  AND (
+                    l.persona_role IN ('vc_partner','vc_principal','vc_analyst','operating_partner')
+                 OR LOWER(COALESCE(l.role,'')) LIKE '%partner%'
+                 OR LOWER(COALESCE(l.role,'')) LIKE '%investor%'
+                 OR LOWER(COALESCE(l.role,'')) LIKE '%principal%'
+                 OR LOWER(COALESCE(l.current_role_title,'')) LIKE '%partner%'
+                 OR LOWER(COALESCE(l.current_role_title,'')) LIKE '%investor%'
+                  )`,
+      },
+      {
+        label: "kind_fallback_person_prospect",
+        // Remaining role-less persons -> prospect (low confidence).
         sql: `INSERT OR IGNORE INTO entity_roles (entity_id, role, is_primary, source, confidence)
                SELECT e.id, 'prospect', 0, 'repair_kind_fallback', 0.5
                  FROM u_entities e
@@ -306,19 +337,26 @@ admin.post("/repair-pipeline", async (c) => {
                   AND NOT EXISTS (SELECT 1 FROM entity_roles r WHERE r.entity_id = e.id)`,
       },
       {
-        label: "kind_fallback_firm",
+        label: "kind_fallback_org_firm",
+        // Org whose primary_domain matches a legacy firm row -> firm.
         sql: `INSERT OR IGNORE INTO entity_roles (entity_id, role, is_primary, source, confidence)
-               SELECT e.id, 'firm', 1, 'repair_kind_fallback', 0.5
+               SELECT e.id, 'firm', 1, 'repair_kind_fallback_persona', 0.5
                  FROM u_entities e
-                WHERE e.kind = 'firm'
-                  AND NOT EXISTS (SELECT 1 FROM entity_roles r WHERE r.entity_id = e.id)`,
+                WHERE e.kind = 'org'
+                  AND NOT EXISTS (SELECT 1 FROM entity_roles r WHERE r.entity_id = e.id)
+                  AND EXISTS (
+                    SELECT 1 FROM firms f
+                     WHERE LOWER(COALESCE(f.domain,'')) = LOWER(COALESCE(e.primary_domain,''))
+                       AND e.primary_domain IS NOT NULL
+                  )`,
       },
       {
-        label: "kind_fallback_company",
+        label: "kind_fallback_org_company",
+        // Remaining role-less orgs -> company.
         sql: `INSERT OR IGNORE INTO entity_roles (entity_id, role, is_primary, source, confidence)
                SELECT e.id, 'company', 1, 'repair_kind_fallback', 0.5
                  FROM u_entities e
-                WHERE e.kind = 'company'
+                WHERE e.kind = 'org'
                   AND NOT EXISTS (SELECT 1 FROM entity_roles r WHERE r.entity_id = e.id)`,
       },
     ];
