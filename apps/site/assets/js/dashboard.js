@@ -993,8 +993,12 @@
 
   async function loadIdentity() {
     var me = await api("/api/auth/me");
+    var email = me && me.email ? me.email : "";
     var el = document.getElementById("ads-user-email");
-    if (el) el.textContent = me && me.email ? me.email : "(not signed in)";
+    if (el) el.textContent = email || "(not signed in)";
+    if (window.ADS && window.ADS.ui && typeof window.ADS.ui.setUser === "function") {
+      window.ADS.ui.setUser(email);
+    }
   }
 
   async function loadDashboard() {
