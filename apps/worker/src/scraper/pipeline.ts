@@ -9,6 +9,8 @@ import { discoverPartnersForFirm, discoverByPersona } from "../discovery/discove
 import { saveCandidates } from "../discovery/store";
 import { selectImporter, FIRMLIST_IMPORTERS } from "./parsers/firmlists";
 import { upsertFirm } from "./firms_upsert";
+import { getLegacyEntityId } from "../entities/roles";
+import { canonicalEmail, canonicalLinkedin } from "../entities/normalize";
 import { buildSeedUrls, type FetchedPage } from "./firmcrawl/pathProbes";
 import { extractPeopleFromPage, nameKeyOf, type ExtractedPerson } from "./firmcrawl/personExtract";
 import { aiExtractPeople } from "../ai/extract";
@@ -627,7 +629,7 @@ async function processFirmlist(
     : null;
   const picked = explicit ?? selectImporter(target);
 
-  let result: { firms: import("./parsers/firmlists/types").FirmCandidate[]; totalSeen: number; errors?: string[] };
+  let result: import("./parsers/firmlists/types").FirmlistImportResult;
   try {
     result = await picked.importer(target, env);
   } catch (e) {
@@ -637,8 +639,19 @@ async function processFirmlist(
   let created = 0;
   let updated = 0;
   let unchanged = 0;
+  let peopleCreated = 0;
+  let peopleMerged = 0;
+  let edgesCreated = 0;
   const childJobIds: string[] = [];
   const importedFrom = `firmlist:${picked.name}`;
+
+  // Importer-supplied per-record key (`import_key`) → unified entity_id
+  // map. Used to resolve `EdgeCandidate.from_key` / `to_key` directly to
+  // unified entity ids — including the merged-row case where `insertLead`
+  // returned null because dedupe collapsed into an existing lead. Only
+  // populated for importers that emit `import_key` (e.g. Folk).
+  const firmKeyToEntity = new Map<string, string>();
+  const personKeyToEntity = new Map<string, string>();
 
   for (const f of result.firms) {
     if (await isCancelled(env, jobId)) break;
@@ -654,6 +667,11 @@ async function processFirmlist(
     if (upsertRes.action === "created") created += 1;
     else if (upsertRes.action === "updated") updated += 1;
     else unchanged += 1;
+    const fKey = (f as unknown as { import_key?: string }).import_key;
+    if (fKey) {
+      const ent = await getLegacyEntityId(env, "firms", upsertRes.firmId);
+      if (ent) firmKeyToEntity.set(fKey, ent);
+    }
 
     // Enqueue child team-crawl job using the persisted firm record's
     // canonical website (or synthesize https://{domain}). This guarantees
@@ -683,6 +701,74 @@ async function processFirmlist(
     }
   }
 
+  // ---- People (Folk + future importers that emit person records) ----
+  for (const p of result.people ?? []) {
+    if (await isCancelled(env, jobId)) break;
+    const parsedLead: ParsedLead = {
+      name: p.name,
+      email: p.email ?? undefined,
+      org: p.org ?? undefined,
+      title: p.title ?? undefined,
+      category: p.category ?? undefined,
+      source_domain: p.source_domain ?? safeHost(target),
+      source_url: p.source_url ?? target,
+      meta: {
+        socials: [
+          p.linkedin_url ? { platform: "linkedin", url: p.linkedin_url } : null,
+          p.twitter_url ? { platform: "twitter", url: p.twitter_url } : null,
+          p.github_url ? { platform: "github", url: p.github_url } : null,
+        ].filter(Boolean) as Array<{ platform: string; url: string }>,
+        tags: p.tags ?? [],
+        bio: p.bio ?? null,
+        country_iso2: p.country_iso2 ?? null,
+        region: p.region ?? null,
+        city: p.city ?? null,
+        personal_url: p.personal_url ?? null,
+      },
+    };
+    let leadId: string | null;
+    try {
+      leadId = await insertLead(env, parsedLead, importedFrom, jobId, "live");
+    } catch (e) {
+      result.errors = result.errors ?? [];
+      result.errors.push(`person_insert_fail:${p.name}:${(e as Error).message}`);
+      continue;
+    }
+    if (leadId) peopleCreated += 1;
+    else peopleMerged += 1;
+    const pKey = (p as unknown as { import_key?: string }).import_key;
+    if (pKey) {
+      // Resolve the person to its unified entity id. When `insertLead`
+      // created a new row we can go through `entity_legacy_map`; when
+      // dedupe merged the incoming evidence into an existing lead the
+      // returned leadId is null, so fall back to a direct canonical-key
+      // lookup against `u_entities` (mirrors `resolveOrCreate`).
+      let entityId: string | null = null;
+      if (leadId) entityId = await getLegacyEntityId(env, "leads", leadId);
+      if (!entityId) entityId = await resolvePersonEntityId(env, p.email ?? null, p.linkedin_url ?? null);
+      if (entityId) personKeyToEntity.set(pKey, entityId);
+    }
+  }
+
+  // ---- Edges: resolve import_keys to unified entity ids, then write rel_edges ----
+  for (const edge of result.edges ?? []) {
+    if (await isCancelled(env, jobId)) break;
+    try {
+      const srcEntity = personKeyToEntity.get(edge.from_key) ?? firmKeyToEntity.get(edge.from_key) ?? null;
+      const dstEntity = personKeyToEntity.get(edge.to_key) ?? firmKeyToEntity.get(edge.to_key) ?? null;
+      if (!srcEntity || !dstEntity) continue;
+      await env.DB.prepare(
+        `INSERT INTO rel_edges (id, src_entity_id, dst_entity_id, kind, source)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(src_entity_id, dst_entity_id, kind, IFNULL(valid_from,'')) DO NOTHING`,
+      ).bind(crypto.randomUUID(), srcEntity, dstEntity, edge.kind, importedFrom).run();
+      edgesCreated += 1;
+    } catch (e) {
+      result.errors = result.errors ?? [];
+      result.errors.push(`edge_fail:${edge.from_key}->${edge.to_key}:${(e as Error).message}`);
+    }
+  }
+
   // Persist a per-job summary using the same fetch_log audit pattern other
   // processors use (one row scoped to this jobId).
   await env.DB.prepare(
@@ -698,6 +784,9 @@ async function processFirmlist(
       created,
       updated,
       unchanged,
+      people_created: peopleCreated,
+      people_merged: peopleMerged,
+      edges_created: edgesCreated,
       child_jobs: childJobIds.length,
       errors: (result.errors ?? []).slice(0, 20),
     }),
@@ -706,8 +795,8 @@ async function processFirmlist(
   ).run();
 
   return {
-    // We treat each upserted firm as a "lead found" for the job-summary KPI.
-    leadsFound: created + updated,
+    // We treat each upserted firm + each fresh person as a "lead found".
+    leadsFound: created + updated + peopleCreated,
     pagesFetched: 1,
     pagesBlocked: 0,
     captchaHits: 0,
@@ -1245,6 +1334,33 @@ function pickTeamUrl(f: import("./parsers/firmlists/types").FirmCandidate): stri
   } catch {
     return null;
   }
+}
+
+async function resolvePersonEntityId(env: Env, email: string | null, linkedin: string | null): Promise<string | null> {
+  // Mirrors the dedupe order used in `resolveOrCreate` (dualwrite.ts):
+  // canonical email first, then canonical linkedin URL. Returns the
+  // unified entity id for a person that already exists, even when
+  // `insertLead` merged the new evidence into it (and therefore did not
+  // emit a fresh legacy id).
+  const ek = canonicalEmail(email);
+  if (ek) {
+    const row = await env.DB.prepare(
+      `SELECT id FROM u_entities
+        WHERE primary_email_key = ? AND status NOT IN ('merged','soft_deleted')
+        LIMIT 1`,
+    ).bind(ek).first<{ id: string }>();
+    if (row?.id) return row.id;
+  }
+  const lk = canonicalLinkedin(linkedin);
+  if (lk) {
+    const row = await env.DB.prepare(
+      `SELECT id FROM u_entities
+        WHERE primary_linkedin_key = ? AND status NOT IN ('merged','soft_deleted')
+        LIMIT 1`,
+    ).bind(lk).first<{ id: string }>();
+    if (row?.id) return row.id;
+  }
+  return null;
 }
 
 function safeHost(url: string): string {

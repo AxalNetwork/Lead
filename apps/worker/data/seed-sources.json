@@ -1,0 +1,48 @@
+{
+  "$schema": "./seed-sources.schema.json",
+  "version": 1,
+  "description": "Pre-seeded lead-intelligence source URLs grouped by importer. Loaded at deploy time by the source registry (Task #6). Each entry specifies the importer, the URL, and optional hints (role_hint, country, region) that downstream importers may use to tag extracted entities.",
+  "sources": [
+    {
+      "importer": "folk",
+      "kind": "firmlist",
+      "url": "https://app.folk.app/shared/Top-300-Angel-Investors-in-Middle-East-Q9XBlKjvAYG6XAh2Lk0Mt",
+      "label": "Top 300 Angel Investors in the Middle East",
+      "record_type": "people",
+      "hints": {
+        "role_hint": "angel",
+        "region": "middle_east"
+      }
+    },
+    {
+      "importer": "folk",
+      "kind": "firmlist",
+      "url": "https://app.folk.app/shared/All-companies-PaXsApRD43c8wWlBC85oA",
+      "label": "All companies",
+      "record_type": "companies",
+      "hints": {}
+    },
+    {
+      "importer": "folk",
+      "kind": "firmlist",
+      "url": "https://app.folk.app/shared/French-VC-s-8oUL6QHbWsRDC4mNvjwbb",
+      "label": "French VCs",
+      "record_type": "people",
+      "hints": {
+        "role_hint": "vc_partner",
+        "country": "FR"
+      }
+    },
+    {
+      "importer": "folk",
+      "kind": "firmlist",
+      "url": "https://app.folk.app/shared/US-VCs-Eer2zk2OqxiOmZH6BLwOu",
+      "label": "US VCs",
+      "record_type": "people",
+      "hints": {
+        "role_hint": "vc_partner",
+        "country": "US"
+      }
+    }
+  ]
+}
