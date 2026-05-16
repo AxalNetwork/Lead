@@ -66,11 +66,13 @@ export async function importFirms(url: string, env: Env, hints?: AggregatorHints
   const firms: FirmCandidate[] = [];
   const html = fetched.html;
 
-  // List items first (the site uses bullet lists with one firm per item).
-  const liRe = /<li\b[^>]*>([\s\S]*?)<\/li>/gi;
+  // Per spec: pages embed a Notion/Coda-style table. We extract rows
+  // from both `<tr>` (table layout) and `<li>` (bullet-list layout)
+  // so we cover both rendering modes.
+  const rowRe = /<(tr|li)\b[^>]*>([\s\S]*?)<\/\1>/gi;
   let m: RegExpExecArray | null;
-  while ((m = liRe.exec(html)) !== null) {
-    const block = m[1];
+  while ((m = rowRe.exec(html)) !== null) {
+    const block = m[2];
     const anchors = extractAnchors(block, url);
     const ext = anchors.find((a) =>
       /^https?:\/\//i.test(a.href)
