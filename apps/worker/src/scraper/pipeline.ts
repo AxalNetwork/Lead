@@ -1725,7 +1725,11 @@ function mapTagTaxonomy(prefix: string): Taxonomy | null {
     // `collection:explore.{slug}` so the dashboard can filter "all
     // underrepresented-founder investors", etc. We store them under
     // the generic `tag` taxonomy.
-    case "collection": return "tag";
+    case "collection":
+    // Task #3: JVCA stamps `lang:ja` on every Japanese firm so the
+    // dashboard can filter by language without a separate column.
+    // Stored under the generic `tag` taxonomy.
+    case "lang":       return "tag";
     default:           return null;
   }
 }

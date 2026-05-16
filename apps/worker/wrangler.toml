@@ -49,6 +49,11 @@ AGG_VCSTACK_MAX_PAGES = "6"
 AGG_LANDSCAPE_VC_MAX_PAGES = "10"
 AGG_CLIMATESCAPE_MAX_PAGES = "8"
 
+# Task #3: Wikipedia importer follows up to N firm articles per import
+# to extract Infobox AUM/founded/HQ fields. Bounded so a 500-firm list
+# doesn't trigger 500 fetches.
+AGG_WIKIPEDIA_INFOBOX_CAP = "60"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "aidatasignal-leads"

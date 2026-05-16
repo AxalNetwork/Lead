@@ -325,6 +325,46 @@
       "label": "Founders Next Move — Consulting",
       "record_type": "companies",
       "hints": { "role_hint": "consulting_program" }
+    },
+    {
+      "importer": "jvca",
+      "kind": "firmlist",
+      "url": "https://jvca.jp/members/vc-members",
+      "label": "JVCA — Japan Venture Capital Association members",
+      "record_type": "companies",
+      "hints": { "country": "JP", "role_hint": "vc_partner" }
+    },
+    {
+      "importer": "golden_egg_check",
+      "kind": "firmlist",
+      "url": "https://www.goldeneggcheck.com/en/venture-capital-investors",
+      "label": "Golden Egg Check — Dutch VC investors",
+      "record_type": "companies",
+      "hints": { "country": "NL", "role_hint": "vc_partner" }
+    },
+    {
+      "importer": "map_of_the_money",
+      "kind": "firmlist",
+      "url": "https://www.mapofthemoney.com/",
+      "label": "Map of the Money — global VC map",
+      "record_type": "companies",
+      "hints": {}
+    },
+    {
+      "importer": "wikipedia",
+      "kind": "firmlist",
+      "url": "https://en.wikipedia.org/wiki/List_of_venture_capital_firms",
+      "label": "Wikipedia — List of venture capital firms",
+      "record_type": "companies",
+      "hints": {}
+    },
+    {
+      "importer": "wikipedia",
+      "kind": "firmlist",
+      "url": "https://en.wikipedia.org/wiki/List_of_private_equity_firms",
+      "label": "Wikipedia — List of private equity firms",
+      "record_type": "companies",
+      "hints": { "role_hint": "pe" }
     }
   ]
 }

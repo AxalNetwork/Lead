@@ -19,6 +19,12 @@ import { importFirms as landscapeVc } from "./aggregators/landscape_vc";
 import { importFirms as climatescape } from "./aggregators/climatescape";
 import { importFirms as mountsideVentures } from "./aggregators/mountside_ventures";
 import { importFirms as foundersNextMove } from "./aggregators/founders_next_move";
+// Task #3: regional / long-tail / Wikipedia / generic fallback.
+import { importFirms as jvca } from "./aggregators/jvca";
+import { importFirms as mapOfTheMoney } from "./aggregators/map_of_the_money";
+import { importFirms as goldenEggCheck } from "./aggregators/golden_egg_check";
+import { importFirms as wikipedia } from "./aggregators/wikipedia";
+import { importFirms as genericHtml } from "./aggregators/generic_html";
 
 export const FIRMLIST_IMPORTERS: Record<string, FirmlistImporter> = {
   airtable,
@@ -41,6 +47,12 @@ export const FIRMLIST_IMPORTERS: Record<string, FirmlistImporter> = {
   climatescape,
   mountside_ventures: mountsideVentures,
   founders_next_move: foundersNextMove,
+  // Task #3.
+  jvca,
+  map_of_the_money: mapOfTheMoney,
+  golden_egg_check: goldenEggCheck,
+  wikipedia,
+  generic_html: genericHtml,
 };
 
 export type FirmlistImporterName = keyof typeof FIRMLIST_IMPORTERS;
@@ -95,8 +107,21 @@ export function selectImporter(url: string): { name: string; importer: FirmlistI
     return { name: "founders_next_move", importer: foundersNextMove };
   }
 
+  // Task #3 — regional / Wikipedia routing.
+  if (host === "jvca.jp" || host.endsWith(".jvca.jp")) return { name: "jvca", importer: jvca };
+  if (host === "mapofthemoney.com" || host.endsWith(".mapofthemoney.com")) {
+    return { name: "map_of_the_money", importer: mapOfTheMoney };
+  }
+  if (host === "goldeneggcheck.com" || host.endsWith(".goldeneggcheck.com")) {
+    return { name: "golden_egg_check", importer: goldenEggCheck };
+  }
+  if (host.endsWith("wikipedia.org")) return { name: "wikipedia", importer: wikipedia };
+
   if (/\.(csv|tsv)(\?|#|$)/.test(url)) return { name: "generic_csv_url", importer: genericCsvUrl };
-  return { name: "generic_jsonld", importer: genericJsonld };
+  // Task #3: any URL we can't route to a site-specific importer falls
+  // through to the AI-assisted generic HTML list importer rather than
+  // generic_jsonld (which only fires when the page has ItemList LD+JSON).
+  return { name: "generic_html", importer: genericHtml };
 }
 
 export type { FirmCandidate, FirmlistImportResult, FirmlistImporter } from "./types";

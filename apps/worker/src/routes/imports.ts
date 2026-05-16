@@ -68,33 +68,58 @@ interface NfxPasteBody {
 }
 
 /**
- * POST /api/import/nfx/paste
- *   { rows: [{name, url, ...}, ...], source_url?: "https://signal.nfx.com/..." }
+ * POST /api/import/nfx/paste  (alias: POST /api/import/nfx-paste)
+ *   { rows: [{name, url|profile_url, website|firm, ...}, ...],
+ *     source_url?: "https://signal.nfx.com/..." }
  *
  * Manual paste path for NFX Signal (login-gated, can't be scraped).
- * Each row is run through the same field mapper used by spreadsheet imports
- * and upserted directly (no async job).
+ * Per the Task #3 spec the alias path accepts `{name, profile_url, firm}[]`
+ * — `profile_url` maps to `signal_nfx_url`, `firm` maps to `website` or a
+ * `notes:firm=...` line when no URL is present. Each row is upserted with
+ * `source='manual_paste'` + `source_kind='manual'` so the dual-write path
+ * records the provenance correctly. No scraping is attempted behind the
+ * NFX login.
  */
-imports.post("/nfx/paste", async (c) => {
+async function nfxPasteHandler(c: import("hono").Context<{ Bindings: Env; Variables: { email: string } }>) {
   const body = (await c.req.json().catch(() => null)) as NfxPasteBody | null;
   if (!body || !Array.isArray(body.rows) || !body.rows.length) {
     return c.json({ error: "bad_request", message: "rows[] required" }, 400);
   }
   const sourceUrl = typeof body.source_url === "string" ? body.source_url : "https://signal.nfx.com/";
-  const importedFrom = "firmlist:nfx_signal";
+  const importedFrom = "manual_paste";
   let created = 0, updated = 0, unchanged = 0;
   const errors: string[] = [];
   for (const raw of body.rows) {
     if (!raw || typeof raw !== "object") continue;
-    // Accept either {name,url,...} (NFX-style) or {Name, Website, ...}.
     const row = raw as Record<string, unknown>;
-    if (typeof row.url === "string" && !row.website) row.website = row.url;
-    const cand = rowToCandidate(row, sourceUrl);
+    // Accept all of {url, profile_url, signal_nfx_url, website, firm}.
+    const profileUrl = typeof row.profile_url === "string"
+      ? row.profile_url
+      : typeof row.url === "string"
+        ? row.url
+        : typeof row.signal_nfx_url === "string"
+          ? row.signal_nfx_url
+          : null;
+    if (typeof row.firm === "string" && !row.website && /^https?:\/\//i.test(row.firm)) row.website = row.firm;
+    if (profileUrl && !row.signal_nfx_url) row.signal_nfx_url = profileUrl;
+    const cand = rowToCandidate(row, profileUrl ?? sourceUrl);
     if (!cand) { errors.push("missing_name"); continue; }
     const candidate: FirmCandidate = cand.candidate;
-    if (!candidate.signal_nfx_url && typeof row.url === "string") candidate.signal_nfx_url = row.url;
+    if (typeof row.firm === "string" && !/^https?:\/\//i.test(row.firm)) {
+      candidate.notes = candidate.notes ? `${candidate.notes}\nfirm: ${row.firm}` : `firm: ${row.firm}`;
+    }
+    if (!candidate.signal_nfx_url && profileUrl) candidate.signal_nfx_url = profileUrl;
+    // upsertFirm requires either a domain or a website. Manual-paste
+    // rows often have only a profile URL + firm name; synthesize a
+    // stable placeholder domain (nfx-paste.invalid/{slug}) so the
+    // upsert succeeds and dedupe still groups repeat pastes by name.
+    if (!candidate.website && !candidate.domain) {
+      const slug = (candidate.name || "row").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64) || "row";
+      candidate.website = profileUrl ?? `https://nfx-paste.invalid/${slug}`;
+      candidate.domain = "nfx-paste.invalid";
+    }
     try {
-      const r = await upsertFirm(c.env, candidate, importedFrom);
+      const r = await upsertFirm(c.env, candidate, importedFrom, { source: "manual_paste", sourceKind: "manual" });
       if (r.action === "created") created += 1;
       else if (r.action === "updated") updated += 1;
       else unchanged += 1;
@@ -103,7 +128,11 @@ imports.post("/nfx/paste", async (c) => {
     }
   }
   return c.json({ created, updated, unchanged, errors: errors.slice(0, 50) });
-});
+}
+
+imports.post("/nfx/paste", nfxPasteHandler);
+// Task #3: stable alias requested by the spec.
+imports.post("/nfx-paste", nfxPasteHandler);
 
 /**
  * GET /api/imports — firmlist parent-job history with per-importer breakdown.

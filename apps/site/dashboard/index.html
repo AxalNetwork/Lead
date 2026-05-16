@@ -101,6 +101,11 @@ permalink: /dashboard/
         <option value="versatilevc">VersatileVC</option>
         <option value="generic_csv_url">Generic CSV / TSV</option>
         <option value="generic_jsonld">Generic (JSON-LD ItemList)</option>
+        <option value="generic_html">Generic HTML list (AI-assisted)</option>
+        <option value="jvca">JVCA (Japan VC members)</option>
+        <option value="golden_egg_check">Golden Egg Check (NL)</option>
+        <option value="map_of_the_money">Map of the Money</option>
+        <option value="wikipedia">Wikipedia (List_of_*)</option>
       </select>
     </label>
     <div class="ads-form-actions">
@@ -109,8 +114,8 @@ permalink: /dashboard/
     </div>
     <details class="ads-field" style="margin-top:12px">
       <summary>Paste rows (NFX Signal manual entry)</summary>
-      <p class="ads-muted" style="font-size:12px;margin:8px 0">Signal.nfx.com is login-gated and cannot be auto-scraped. Paste rows as JSON: <code>[{"name":"Acme Capital","url":"https://signal.nfx.com/...","website":"https://acme.vc"}, ...]</code></p>
-      <textarea name="nfx_paste" rows="6" placeholder='[{"name":"Acme Capital","website":"https://acme.vc"}]'></textarea>
+      <p class="ads-muted" style="font-size:12px;margin:8px 0">Signal.nfx.com is login-gated and cannot be auto-scraped. Paste rows as JSON — each row needs <code>name</code> plus optional <code>profile_url</code> (NFX profile) and <code>firm</code> (firm name or website). Example: <code>[{"name":"Jane Doe","profile_url":"https://signal.nfx.com/investor/...","firm":"Acme Capital"}, ...]</code>. Rows are stored with <code>source=manual_paste</code> (no scraping behind the login).</p>
+      <textarea name="nfx_paste" rows="6" placeholder='[{"name":"Jane Doe","profile_url":"https://signal.nfx.com/...","firm":"Acme Capital"}]'></textarea>
       <div class="ads-form-actions" style="margin-top:8px">
         <button type="button" class="ads-btn ads-btn--ghost" id="ads-nfx-submit">Submit pasted rows</button>
         <span class="ads-form-msg" data-msg-nfx></span>
