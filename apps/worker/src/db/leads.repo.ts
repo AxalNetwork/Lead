@@ -4,6 +4,8 @@
 // stays consistent.
 
 import type { Lead, LeadPatch } from "./leads.types";
+import { syncLeadToEntity } from "../entities/dualwrite";
+import type { Env } from "../types";
 
 export interface UpdateContext {
   source: string;
@@ -48,8 +50,13 @@ export interface LeadsRepoCacheEnv {
 
 export class LeadsRepo {
   private cacheKv: KVNamespace | null;
+  // Task #4: optional full Env so updateLead/insert can dual-write into
+  // the unified entity graph. Constructed by callers that already have
+  // the worker Env; passing only D1 keeps legacy callers compatible.
+  private fullEnv: Env | null;
   constructor(private db: D1Database, cacheEnv?: LeadsRepoCacheEnv) {
     this.cacheKv = cacheEnv?.SCRAPE_CACHE ?? null;
+    this.fullEnv = (cacheEnv && "DB" in (cacheEnv as Record<string, unknown>)) ? (cacheEnv as unknown as Env) : null;
   }
 
   async getById(id: string): Promise<Lead | null> {
@@ -66,6 +73,11 @@ export class LeadsRepo {
       .prepare(`INSERT INTO leads (${cols.join(", ")}) VALUES (${placeholders})`)
       .bind(...values)
       .run();
+    // Task #4: dual-write into the unified entity graph (best-effort).
+    if (this.fullEnv) {
+      try { await syncLeadToEntity(this.fullEnv, lead as never, "leads_repo_insert"); }
+      catch (e) { console.warn("dualwrite syncLeadToEntity (insert) failed", lead.id, (e as Error).message); }
+    }
   }
 
   /**
@@ -142,6 +154,17 @@ export class LeadsRepo {
         } catch (e) {
           console.warn("profile cache bust failed", id, (e as Error).message);
         }
+      }
+    }
+    // Task #4: dual-write into the unified entity graph. We re-read the
+    // post-update row so the entity reflects the new state, not the
+    // pre-change snapshot.
+    if (this.fullEnv) {
+      try {
+        const after = await this.getById(id);
+        if (after) await syncLeadToEntity(this.fullEnv, after as never, "leads_repo_update");
+      } catch (e) {
+        console.warn("dualwrite syncLeadToEntity (update) failed", id, (e as Error).message);
       }
     }
     return changes.length;

@@ -5,6 +5,7 @@
 // JSON-decoding lives in the route layer.
 
 import type { Env } from "../types";
+import { syncAccountToEntity, syncBuyerToEntity } from "../entities/dualwrite";
 import { assertSignalKind, DEFAULT_WEIGHT, type SignalKind } from "./signalKinds";
 import { blendAccountScore, computeIntent, type IntentResult } from "./score";
 import { computeFit, DEFAULT_ICP, type FitResult, type RoleTaxonomyRow } from "./fit";
@@ -237,7 +238,11 @@ export async function insertAccount(env: Env, input: Partial<AccountRow> & { nam
     await env.DB.prepare(`INSERT INTO account_history (id, account_id, field, new_value, source, changed_by) VALUES (?, ?, 'created', ?, 'api', ?)`)
       .bind(crypto.randomUUID(), id, input.name, by).run();
   }
-  return (await getAccount(env, id))!;
+  const created = (await getAccount(env, id))!;
+  // Task #4: dual-write into the unified entity graph (best-effort).
+  try { await syncAccountToEntity(env, created as never, "accounts_insert"); }
+  catch (e) { console.warn("dualwrite syncAccountToEntity (insert) failed", id, (e as Error).message); }
+  return created;
 }
 
 export async function updateAccount(env: Env, id: string, patch: Partial<AccountRow>, by?: string, prevSnapshot?: AccountRow | null): Promise<AccountRow | null> {
@@ -268,7 +273,13 @@ export async function updateAccount(env: Env, id: string, patch: Partial<Account
     await env.DB.prepare(`INSERT INTO account_history (id, account_id, field, old_value, new_value, source, changed_by) VALUES (?, ?, ?, ?, ?, 'api', ?)`)
       .bind(crypto.randomUUID(), id, h.field, h.old != null ? String(h.old) : null, h.nw != null ? String(h.nw) : null, by ?? null).run();
   }
-  return await getAccount(env, id);
+  const after = await getAccount(env, id);
+  // Task #4: dual-write the post-update snapshot into the entity graph.
+  if (after) {
+    try { await syncAccountToEntity(env, after as never, "accounts_update"); }
+    catch (e) { console.warn("dualwrite syncAccountToEntity (update) failed", id, (e as Error).message); }
+  }
+  return after;
 }
 
 export async function deleteAccount(env: Env, id: string): Promise<boolean> {
@@ -313,7 +324,11 @@ export async function insertBuyer(env: Env, input: Partial<BuyerRow> & { account
           enriched.is_decision_maker ?? 0, input.is_champion ?? 0, input.influence_score ?? 0,
           input.last_seen_at ?? null, input.meta_json ?? null, now, now)
     .run();
-  return (await getBuyer(env, id))!;
+  const created = (await getBuyer(env, id))!;
+  // Task #4: dual-write into the unified entity graph (best-effort).
+  try { await syncBuyerToEntity(env, created as never, "buyers_insert"); }
+  catch (e) { console.warn("dualwrite syncBuyerToEntity (insert) failed", id, (e as Error).message); }
+  return created;
 }
 
 export async function updateBuyer(env: Env, id: string, patch: Partial<BuyerRow>): Promise<BuyerRow | null> {
@@ -354,7 +369,13 @@ export async function updateBuyer(env: Env, id: string, patch: Partial<BuyerRow>
   if (!sets.length) return cur;
   binds.push(new Date().toISOString(), id);
   await env.DB.prepare(`UPDATE buyers SET ${sets.join(", ")}, updated_at = ? WHERE id = ?`).bind(...binds).run();
-  return await getBuyer(env, id);
+  const after = await getBuyer(env, id);
+  // Task #4: dual-write the post-update snapshot into the entity graph.
+  if (after) {
+    try { await syncBuyerToEntity(env, after as never, "buyers_update"); }
+    catch (e) { console.warn("dualwrite syncBuyerToEntity (update) failed", id, (e as Error).message); }
+  }
+  return after;
 }
 
 // Task #52: shared title-classification helper used by insert/update and

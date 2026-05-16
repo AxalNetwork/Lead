@@ -1,6 +1,7 @@
 import type { Env } from "../types";
 import { extractDomain } from "./normalize";
 import type { FirmCandidate } from "./parsers/firmlists/types";
+import { syncFirmToEntity } from "../entities/dualwrite";
 
 /**
  * Firm upsert helper used by every firm-list importer.
@@ -84,8 +85,38 @@ export async function upsertFirm(
     if (!domain && !storedDomain) { existing = r; break; }
   }
 
-  if (existing) return mergeInto(env, existing, candidate, importedFrom);
-  return insertNew(env, candidate, domain, importedFrom);
+  const result = existing
+    ? await mergeInto(env, existing, candidate, importedFrom)
+    : await insertNew(env, candidate, domain, importedFrom);
+  // Task #4: dual-write into the unified entity graph (best-effort —
+  // never block the legacy firm-list importer on a unified-model error).
+  try {
+    await syncFirmToEntity(env, {
+      id: result.firmId,
+      name: candidate.name,
+      legal_name: candidate.legal_name ?? null,
+      website: result.website,
+      domain: result.domain,
+      hq_country_iso2: candidate.hq_country_iso2 ?? null,
+      hq_region: candidate.hq_region ?? null,
+      hq_city: candidate.hq_city ?? null,
+      check_size_min_usd: candidate.check_size_min_usd ?? null,
+      check_size_max_usd: candidate.check_size_max_usd ?? null,
+      check_size_typical_usd: candidate.check_size_typical_usd ?? null,
+      thesis: candidate.thesis ?? null,
+      linkedin_url: candidate.linkedin_url ?? null,
+      crunchbase_url: candidate.crunchbase_url ?? null,
+      twitter_handle: candidate.twitter_handle ?? null,
+      contact_email: candidate.contact_email ?? null,
+      sectors_json: candidate.sectors ? JSON.stringify(candidate.sectors) : null,
+      stages_json: candidate.stages ? JSON.stringify(candidate.stages) : null,
+      geo_focus_json: candidate.geo_focus ? JSON.stringify(candidate.geo_focus) : null,
+      kind: candidate.kind ?? null,
+    }, importedFrom);
+  } catch (e) {
+    console.warn("dualwrite syncFirmToEntity failed", result.firmId, (e as Error).message);
+  }
+  return result;
 }
 
 async function insertNew(

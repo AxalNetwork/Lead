@@ -26,7 +26,7 @@ export interface Env {
   UPLOADS: R2Bucket;
   AI_CACHE?: R2Bucket;
   BROWSER?: Fetcher;
-  LEAD_QUEUE: Queue<JobMessage>;
+  LEAD_QUEUE: Queue<QueueMessage>;
   ALLOWED_EMAIL: string;
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
@@ -118,6 +118,16 @@ export interface JobMessage {
   target: string;
   config?: Record<string, unknown>;
 }
+
+// Task #4: unified queue envelope. Existing crawl/import jobs land as the
+// legacy `JobMessage` shape; the queue handler dispatches on shape so new
+// message kinds (e.g. entity-summary rebuilds) can ride the same queue.
+export interface RebuildSummaryQueueMessage {
+  type: "rebuild_summary";
+  entityId: string;
+}
+
+export type QueueMessage = JobMessage | RebuildSummaryQueueMessage;
 
 export interface ParsedLead {
   source_domain: string;

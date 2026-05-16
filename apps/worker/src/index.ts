@@ -1,7 +1,9 @@
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { cors } from "hono/cors";
-import type { Env, JobMessage } from "./types";
+import type { Env, JobMessage, QueueMessage } from "./types";
+import { entitiesRoute } from "./routes/entities";
+import { isRebuildSummaryMessage, handleSummaryMessage } from "./entities/summaryQueue";
 import { health } from "./routes/health";
 import { auth } from "./routes/auth";
 import { analytics } from "./routes/analytics";
@@ -115,6 +117,8 @@ api.route("/api/crawlers", crawlersRoute);
 api.route("/api/personas", personasRoute);
 // Task #47: projects (multi-audience matching workspace).
 api.route("/api/projects", projectsRoute);
+// Task #4: unified entity graph (additive — legacy reads keep working).
+api.route("/api/entities", entitiesRoute);
 // /api/leads/:id/enrich, /api/leads/enrich/bulk, /:id/dnc, /:id/campaigns
 api.route("/api/leads", leadsEnrichActions);
 api.route("/api/leads", leadsDncActions);
@@ -150,12 +154,27 @@ export default {
     return new Response("Not found", { status: 404 });
   },
 
-  async queue(batch: MessageBatch<JobMessage>, env: Env): Promise<void> {
+  async queue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {
     for (const msg of batch.messages) {
-      const body = msg.body as JobMessage | undefined;
-      const jobId = body && typeof body === "object" && "jobId" in body ? String((body as { jobId: unknown }).jobId) : null;
+      const body = msg.body as QueueMessage | undefined;
+      // Task #4: dispatch the new summary-rebuild envelope before the legacy
+      // JobMessage validation kicks in.
+      if (isRebuildSummaryMessage(body)) {
+        try {
+          await handleSummaryMessage(env, body);
+          msg.ack();
+        } catch (e) {
+          const appErr = e instanceof AppError ? e : wrapUnknown(e, "queue_run_failed", { msgId: msg.id, op: "rebuild_summary" });
+          await logError(env, { err: appErr, step: "queue.rebuildSummary", retry_count: msg.attempts });
+          if (msg.attempts < 3) msg.retry({ delaySeconds: 30 * Math.pow(2, msg.attempts) });
+          else msg.ack();
+        }
+        continue;
+      }
+      const legacy = body as JobMessage | undefined;
+      const jobId = legacy && typeof legacy === "object" && "jobId" in legacy ? String((legacy as { jobId: unknown }).jobId) : null;
       try {
-        if (!body || typeof body !== "object" || !("jobId" in body) || !("kind" in body) || !("target" in body)) {
+        if (!legacy || typeof legacy !== "object" || !("jobId" in legacy) || !("kind" in legacy) || !("target" in legacy)) {
           console.warn("Skipping malformed queue message", msg.id);
           await logError(env, {
             err: new AppError({ code: "queue_malformed", kind: "validation", message: "malformed queue message", context: { msgId: msg.id } }),
@@ -163,7 +182,7 @@ export default {
           msg.ack();
           continue;
         }
-        await runJob(body, env);
+        await runJob(legacy, env);
         msg.ack();
       } catch (e) {
         const appErr = e instanceof AppError ? e : wrapUnknown(e, "queue_run_failed", { msgId: msg.id, jobId });
