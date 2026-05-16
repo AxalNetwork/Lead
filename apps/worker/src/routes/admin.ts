@@ -17,6 +17,7 @@
 
 import { Hono } from "hono";
 import type { Env } from "../types";
+import { backfillAll } from "../entities/backfill";
 import { enqueueSummaryRebuild } from "../entities/summaryQueue";
 
 export const admin = new Hono<{ Bindings: Env; Variables: { email: string } }>();
@@ -56,21 +57,40 @@ export async function sweepStuckJobs(env: Env): Promise<number> {
 }
 
 admin.post("/clear-stuck-jobs", async (c) => {
+  // Task #2: `older_than_hours` may arrive via query string or JSON body
+  // (incident response is often run from curl/dashboard with either).
+  // Default behavior: budget-based sweep of `running` rows only.
+  // With `older_than_hours`: also age-based sweep `running` rows to
+  // `timed_out` AND cancel queued rows older than the cutoff.
   const body = (await c.req.json().catch(() => null)) as
     | { older_than_hours?: number }
     | null;
+  const q = c.req.query("older_than_hours");
+  const olderThan =
+    (q ? Number(q) : undefined) ??
+    (typeof body?.older_than_hours === "number" ? body.older_than_hours : undefined);
+
   const swept = await sweepStuckJobs(c.env);
 
-  // Task #2: optional one-time backlog drain. When `older_than_hours`
-  // is supplied, also cancel any `queued` job whose created_at is
-  // older than that cutoff. The queued -> cancelled transition is
-  // allowed by the migration-193 state machine.
+  let runningTimedOut = 0;
   let queuedCancelled = 0;
-  const olderThan = body?.older_than_hours;
   if (typeof olderThan === "number" && olderThan > 0) {
     const cutoffSec = Math.floor(olderThan * 3600);
     const now = new Date().toISOString();
-    const r = await c.env.DB.prepare(
+    // Age-based running -> timed_out (independent of budget_ms).
+    const r1 = await c.env.DB.prepare(
+      `UPDATE jobs
+          SET status = 'timed_out',
+              finished_at = COALESCE(finished_at, ?),
+              error = COALESCE(error, 'age_exceeded')
+        WHERE status = 'running'
+          AND started_at IS NOT NULL
+          AND (strftime('%s', ?) - strftime('%s', started_at)) > ?`,
+    ).bind(now, now, cutoffSec).run();
+    runningTimedOut = Number(r1.meta?.changes ?? 0);
+    // Age-based queued -> cancelled (one-time backlog drain). Allowed
+    // by the migration-193 state machine.
+    const r2 = await c.env.DB.prepare(
       `UPDATE jobs
           SET status = 'cancelled',
               cancelled_at = ?,
@@ -79,10 +99,15 @@ admin.post("/clear-stuck-jobs", async (c) => {
         WHERE status = 'queued'
           AND (strftime('%s', ?) - strftime('%s', created_at)) > ?`,
     ).bind(now, now, now, cutoffSec).run();
-    queuedCancelled = Number(r.meta?.changes ?? 0);
+    queuedCancelled = Number(r2.meta?.changes ?? 0);
   }
 
-  return c.json({ ok: true, swept, queued_cancelled: queuedCancelled });
+  return c.json({
+    ok: true,
+    swept,
+    running_timed_out: runningTimedOut,
+    queued_cancelled: queuedCancelled,
+  });
 });
 
 admin.post("/rebuild-summary", async (c) => {
@@ -132,13 +157,27 @@ admin.post("/repair-pipeline", async (c) => {
   let stuckSwept = 0;
   let summariesEnq = 0;
   let rolesAdded = 0;
+  let entitiesBackfilled = 0;
   let errorMsg: string | null = null;
 
   try {
     // (1) sweep stuck running jobs.
     stuckSwept = await sweepStuckJobs(c.env);
 
-    // (2) Re-enqueue summary rebuilds for any entity whose latest fact /
+    // (2) Backfill legacy-only records (leads/firms/companies/accounts/
+    // buyers that have no `u_entities` row + `entity_legacy_map` entry
+    // yet). Without this, the role-insert phases below cannot attach
+    // roles for invisible legacy records. The existing
+    // `backfillAll` helper is idempotent (uses sync*ToEntity which
+    // upserts on the legacy key) and pages 200/table/batch.
+    try {
+      const progress = await backfillAll(c.env, { batches: 5 });
+      for (const p of progress) entitiesBackfilled += p.synced;
+    } catch (e) {
+      console.warn("repair-pipeline backfillAll failed", (e as Error).message);
+    }
+
+    // (3) Re-enqueue summary rebuilds for any entity whose latest fact /
     // membership / fund-investment activity is newer than its
     // entity_summary.updated_at. Bounded to 500/run so a single call is
     // predictable.
@@ -155,14 +194,13 @@ admin.post("/repair-pipeline", async (c) => {
       summariesEnq += 1;
     }
 
-    // (3) Repair missing entity_roles for every legacy table. Each
+    // (4) Repair missing entity_roles for every legacy table. Each
     // statement is INSERT-OR-IGNORE on the (entity_id, role) unique
     // key so re-running the repair is a no-op once converged.
     //   leads  with investor_kind set → 'investor' role on the entity
     //   leads  without investor_kind  → 'prospect' role  (fallback)
     //   firms                          → 'firm'     role on the entity
     //   companies                      → 'company'  role on the entity
-    //   company_founders               → 'founder'  role on the entity
     const phases: Array<{ label: string; sql: string }> = [
       {
         label: "investor",
@@ -227,6 +265,7 @@ admin.post("/repair-pipeline", async (c) => {
   return c.json({
     ok: !errorMsg,
     run_id: runId,
+    entities_backfilled: entitiesBackfilled,
     stuck_swept: stuckSwept,
     roles_added: rolesAdded,
     summaries_enqueued: summariesEnq,
