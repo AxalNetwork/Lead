@@ -220,6 +220,14 @@ factsCitationsRoute.post("/:id/resolve-dispute", async (c) => {
   const factId = c.req.param("id");
   const body = (await c.req.json().catch(() => ({}))) as { competing_fact_id?: string; decision?: "canonical" | "rejected" | "merged"; notes?: string };
   const decision = body.decision ?? "canonical";
+  // Constrain decisions to the supported set so operators can't silently
+  // record states the server doesn't act on.
+  if (!["canonical", "rejected", "merged"].includes(decision)) {
+    return c.json({ error: "invalid_decision", allowed: ["canonical", "rejected", "merged"] }, 400);
+  }
+  if ((decision === "rejected" || decision === "merged") && !body.competing_fact_id) {
+    return c.json({ error: "competing_fact_id_required", message: `decision=${decision} requires competing_fact_id` }, 400);
+  }
   const resId = crypto.randomUUID();
   const actor = c.get("email") ?? null;
 
@@ -265,6 +273,29 @@ factsCitationsRoute.post("/:id/resolve-dispute", async (c) => {
     stmts.push(c.env.DB.prepare(
       `UPDATE facts SET is_current = 1, supersedes_fact_id = NULL WHERE id = ?`,
     ).bind(factId));
+  } else if (decision === "rejected") {
+    // Operator rejects the competing fact in favor of the canonical: demote
+    // the competitor and ensure the canonical stays current.
+    stmts.push(c.env.DB.prepare(
+      `UPDATE facts SET is_current = 0, supersedes_fact_id = ? WHERE id = ?`,
+    ).bind(factId, body.competing_fact_id));
+    stmts.push(c.env.DB.prepare(
+      `UPDATE facts SET is_current = 1, supersedes_fact_id = NULL WHERE id = ?`,
+    ).bind(factId));
+  } else if (decision === "merged") {
+    // Treat as equivalent: demote the competitor, keep canonical, and copy
+    // the competitor's citations onto the canonical fact (idempotent).
+    stmts.push(c.env.DB.prepare(
+      `UPDATE facts SET is_current = 0, supersedes_fact_id = ? WHERE id = ?`,
+    ).bind(factId, body.competing_fact_id));
+    stmts.push(c.env.DB.prepare(
+      `INSERT OR IGNORE INTO fact_citations(id, fact_id, news_item_id, quote, contradicts)
+       SELECT lower(hex(randomblob(16))), ?, news_item_id, quote, contradicts
+         FROM fact_citations WHERE fact_id = ?`,
+    ).bind(factId, body.competing_fact_id));
+    stmts.push(c.env.DB.prepare(
+      `UPDATE facts SET is_current = 1, supersedes_fact_id = NULL WHERE id = ?`,
+    ).bind(factId));
   }
 
   stmts.push(c.env.DB.prepare(
@@ -285,6 +316,17 @@ factsCitationsRoute.post("/:id/resolve-dispute", async (c) => {
   } catch (e) {
     return c.json({ error: "resolve_failed", message: (e as Error).message }, 500);
   }
-  const score = await recomputeVerifiedScore(c.env, factId);
-  return c.json({ ok: true, resolution_id: resId, verified_score: score });
+  // Recompute verified scores for the canonical AND every fact in the
+  // same (entity_id, predicate) family so conflict badges stay synced.
+  const family = await c.env.DB.prepare(
+    `SELECT id FROM facts WHERE entity_id = ? AND predicate = ?`,
+  ).bind(canonical.entity_id, canonical.predicate).all<{ id: string }>();
+  const familyIds = new Set<string>([factId, ...((family.results ?? []).map((r) => r.id))]);
+  if (body.competing_fact_id) familyIds.add(body.competing_fact_id);
+  let score = 0;
+  for (const fid of familyIds) {
+    const s = await recomputeVerifiedScore(c.env, fid);
+    if (fid === factId) score = s;
+  }
+  return c.json({ ok: true, resolution_id: resId, verified_score: score, rescored: familyIds.size });
 });
