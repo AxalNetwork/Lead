@@ -80,6 +80,9 @@ async function loadPdfjs(): Promise<PdfMod | null> {
 }
 
 interface PageExtraction {
+  /** Embedded bitmap (JPEG or PNG) for the page; null when no decodable
+   *  image XObject was found. Despite the historical field name, this
+   *  may also be a PNG byte array. */
   jpeg: Uint8Array | null;
   /** pdfjs-extracted text on the page (if any), used for OCR-vs-vision
    *  disagreement scoring and tab-strip name detection. */
@@ -129,8 +132,14 @@ async function extractPages(bytes: ArrayBuffer): Promise<PageExtraction[]> {
         : bm.bitmap?.data instanceof Uint8Array ? bm.bitmap.data
         : null;
       if (!data || data.length < 1024) continue;
-      // JPEG magic FF D8.
-      if (data[0] !== 0xff || data[1] !== 0xd8) continue;
+      // Accept both JPEG (FF D8) and PNG (89 50 4E 47) bitmaps. macOS
+      // Quartz "Print to PDF" of Google Sheets / Excel embeds the
+      // rendered grid as a single large PNG XObject, not a JPEG, so
+      // restricting to JPEG here was the root cause of "no_table_found"
+      // on those exports. Workers AI vision models accept both formats.
+      const isJpeg = data[0] === 0xff && data[1] === 0xd8;
+      const isPng = data.length >= 4 && data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47;
+      if (!isJpeg && !isPng) continue;
       if (!largest || data.length > largest.length) largest = data;
     }
     out.push({ jpeg: largest, pdfText });
