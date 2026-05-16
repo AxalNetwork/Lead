@@ -346,7 +346,9 @@ async function tier2Proxy(env: Env, url: string, opts: FetchOptions): Promise<Fe
       bytes: 0,
       durationMs: Date.now() - start,
       tier: 2,
-      blockReason: `proxy_error:${(e as Error).message}`,
+      blockReason: (e as Error).name === "AbortError"
+        ? `fetch_timeout:proxy:${(e as Error).message}`
+        : `proxy_error:${(e as Error).message}`,
       fetched_from: "live",
     };
   } finally {
@@ -398,7 +400,9 @@ async function tier3ScrapingApi(env: Env, url: string, opts: FetchOptions): Prom
       bytes: 0,
       durationMs: Date.now() - start,
       tier: 3,
-      blockReason: `scraping_api_error:${(e as Error).message}`,
+      blockReason: (e as Error).name === "AbortError"
+        ? `fetch_timeout:scraping_api:${(e as Error).message}`
+        : `scraping_api_error:${(e as Error).message}`,
       fetched_from: "live",
     };
   } finally {

@@ -179,6 +179,10 @@ export default {
     }
     const batchAttempts = batch.messages.map((m) => ({ msg_id: m.id, attempts: m.attempts }));
     console.log("queue.batch_begin", JSON.stringify({ size: batchSize, swept: batchSwept, attempts: batchAttempts }));
+    // Task #2: wrap the message loop in try/finally so that
+    // queue.batch_end telemetry is emitted even if an unexpected
+    // uncaught error escapes the per-message try/catch above.
+    try {
     for (const msg of batch.messages) {
       const body = msg.body as QueueMessage | undefined;
       // Task #4: dispatch the new summary-rebuild envelope before the legacy
@@ -259,10 +263,12 @@ export default {
         }
       }
     }
-    console.log("queue.batch_end", JSON.stringify({
-      size: batchSize, swept: batchSwept, acked: batchAcked, retried: batchRetried,
-      failed: batchFailed, dead_lettered: batchDeadLettered, ms: Date.now() - batchStartedAt,
-    }));
+    } finally {
+      console.log("queue.batch_end", JSON.stringify({
+        size: batchSize, swept: batchSwept, acked: batchAcked, retried: batchRetried,
+        failed: batchFailed, dead_lettered: batchDeadLettered, ms: Date.now() - batchStartedAt,
+      }));
+    }
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
