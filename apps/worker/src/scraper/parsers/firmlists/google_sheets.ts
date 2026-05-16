@@ -105,7 +105,8 @@ export async function importFirms(url: string, env: Env): Promise<FirmlistImport
   }
   const prepped: PreppedTab[] = [];
   let tabsFetched = 0;
-  for (const tab of tabs) {
+  for (let tabIdx = 0; tabIdx < tabs.length; tabIdx++) {
+    const tab = tabs[tabIdx];
     const parsed = await fetchTabRows(sheetId, tab.gid);
     if (!parsed) {
       errors.push(`tab_fetch_fail:${tab.name}`);
@@ -118,7 +119,12 @@ export async function importFirms(url: string, env: Env): Promise<FirmlistImport
       tableTabs.push({ tableId: tab.gid, name: tab.name, intent: "empty", rowCount: 0 });
       continue;
     }
-    if (README_RE.test(tab.name) || looksLikeProseTab(headers, rows)) {
+    // Prose detection: heuristic only kicks in for the first tab or
+    // tabs whose name matches README/Instructions/etc. A narrow 1-2
+    // column data tab buried in the middle of the workbook should NOT
+    // be silently demoted to notes by the prose ratio alone.
+    const proseEligible = tabIdx === 0 || README_RE.test(tab.name);
+    if (README_RE.test(tab.name) || (proseEligible && looksLikeProseTab(headers, rows))) {
       tableTabs.push({ tableId: tab.gid, name: tab.name, intent: "notes", rowCount: rows.length });
       const content = collectProseContent(headers, rows);
       if (content) importNotes.push({ tab: tab.name, content });
@@ -223,6 +229,21 @@ export async function importFirms(url: string, env: Env): Promise<FirmlistImport
     tableTabs,
     errors: errors.length ? errors : undefined,
   };
+}
+
+/** Pick the right value out of a gviz cell for downstream coercion.
+ *  Per spec: prefer raw `v` for numeric / date fidelity, but when `f`
+ *  carries currency symbols (€, $, £, ¥, etc.) or unit suffixes (M/B/K)
+ *  that would let `parseMoney` recover the original currency code, use
+ *  `f` instead. This is the narrow exception the task spec calls out
+ *  for "use formatted f only as fallback for currency-string parsing". */
+const CURRENCY_F_RE = /[€$£¥₹₽₩฿]|\b(?:USD|EUR|GBP|JPY|CHF|CAD|AUD|CNY|INR)\b|\d\s*[MBK]\b/i;
+function metricCellValue(cell: { v: unknown; f: unknown } | null): unknown {
+  if (!cell) return undefined;
+  const f = cell.f;
+  const v = cell.v;
+  if (typeof f === "string" && CURRENCY_F_RE.test(f)) return f;
+  return v ?? f;
 }
 
 /** Aggregate prose-like cell content from a notes tab into one body. */
@@ -464,7 +485,7 @@ function extractFirms(
       // survive into rowToCandidate's parseUsdAmount; raw `v` for
       // numbers/dates which f-string would mangle (e.g. "€80,000,000.00"
       // is fine, but a date as "2024-01-01" or epoch number both round-trip).
-      const v = cell?.v ?? cell?.f;
+      const v = metricCellValue(cell);
       if (v != null && v !== "") obj[headers[i] || `col_${i}`] = v;
     }
     const built = rowToCandidate(obj, sourceUrl);
@@ -500,7 +521,7 @@ function extractPeople(
     const person: KeyedPersonCandidate = { name: "", source_url: sourceUrl };
     for (let i = 0; i < headers.length; i++) {
       const cell = r[i];
-      const v = cell?.v ?? cell?.f;
+      const v = metricCellValue(cell);
       if (v == null || v === "") continue;
       const m = map[headers[i]];
       if (!m) continue;
@@ -585,7 +606,7 @@ function extractFirmMetrics(
     const obj: Record<string, string> = {};
     for (let i = 0; i < headers.length; i++) {
       const cell = r[i];
-      const v = cell?.v ?? cell?.f;
+      const v = metricCellValue(cell);
       if (v != null && v !== "") obj[headers[i]] = String(v);
     }
     const rawName = obj[nameCol];
@@ -641,7 +662,7 @@ function extractFirmKpi(
     const obj: Record<string, string> = {};
     for (let i = 0; i < headers.length; i++) {
       const cell = r[i];
-      const v = cell?.v ?? cell?.f;
+      const v = metricCellValue(cell);
       if (v != null && v !== "") obj[headers[i]] = String(v);
     }
     const rawName = obj[nameCol];
@@ -709,7 +730,7 @@ function extractFirmGeo(
     const obj: Record<string, string> = {};
     for (let i = 0; i < headers.length; i++) {
       const cell = r[i];
-      const v = cell?.v ?? cell?.f;
+      const v = metricCellValue(cell);
       if (v != null && v !== "") obj[headers[i]] = String(v);
     }
     const rawName = obj[nameCol];
