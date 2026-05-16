@@ -146,6 +146,14 @@ export interface FirmlistImportResult {
    * detection (firms / leads / metrics).
    */
   tableTabs?: Array<{ tableId: string; name: string; intent: string; rowCount: number }>;
+  /**
+   * Task #2: name-only entity stubs derived from Airtable
+   * `multipleRecordLinks` columns whose foreign rows lack a URL/domain.
+   * The pipeline materializes each stub as a minimal `u_entities` row
+   * so edges with these `import_key`s can persist into `rel_edges`
+   * instead of being dropped at resolution time.
+   */
+  stubEntities?: Array<{ import_key: string; kind: "firm" | "person"; name: string }>;
 }
 
 export type FirmlistImporter = (url: string, env: Env) => Promise<FirmlistImportResult>;

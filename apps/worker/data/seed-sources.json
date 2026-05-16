@@ -1,7 +1,7 @@
 {
   "$schema": "./seed-sources.schema.json",
   "version": 2,
-  "description": "Pre-seeded lead-intelligence source URLs grouped by importer. Loaded at deploy time by the source registry (Task #6). Each entry specifies the importer, the URL, and optional hints (role_hint, country, region) that downstream importers may use to tag extracted entities.",
+  "description": "Pre-seeded lead-intelligence source URLs grouped by importer. Loaded at deploy time by the source registry (Task #6). Each entry specifies the importer, the URL, and optional hints (role_hint, country, region) that downstream importers may use to tag extracted entities. Entries marked `placeholder: true` are structural representatives — the URL shape is real but the share id may not resolve; the seed-source loader (Task #6) skips placeholders on automated daily crawls.",
   "sources": [
     {
       "importer": "folk",
@@ -85,6 +85,7 @@
       "label": "Female-Founder-Friendly Funds (shared view)",
       "record_type": "companies",
       "variant": "view",
+      "placeholder": true,
       "hints": {
         "role_hint": "vc_partner"
       }
@@ -96,6 +97,7 @@
       "label": "US Pre-Seed Funds (shared base)",
       "record_type": "companies",
       "variant": "base",
+      "placeholder": true,
       "hints": {
         "role_hint": "vc_partner",
         "country": "US"
@@ -108,6 +110,7 @@
       "label": "LatAm Venture Funds (shared base)",
       "record_type": "companies",
       "variant": "base",
+      "placeholder": true,
       "hints": {
         "role_hint": "vc_partner",
         "region": "latam"
@@ -120,6 +123,7 @@
       "label": "Underrepresented-Founder-Friendly Investors (Universe)",
       "record_type": "companies",
       "variant": "universe",
+      "placeholder": true,
       "hints": {}
     },
     {
@@ -129,6 +133,7 @@
       "label": "Climate-Tech Investors Directory (Universe)",
       "record_type": "companies",
       "variant": "universe",
+      "placeholder": true,
       "hints": {}
     }
   ]

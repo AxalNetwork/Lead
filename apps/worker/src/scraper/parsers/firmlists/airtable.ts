@@ -3,7 +3,7 @@ import { fetchPage } from "../../fetcher";
 import { decodeEntities } from "../../html";
 import { extractDomain, countryNameToIso2 } from "../../normalize";
 import { classifyTab } from "../../../imports/tab_intent";
-import { classifyUrl } from "../../../imports/url_extract";
+import { classifyUrl, extractUrlsFromRows } from "../../../imports/url_extract";
 import type {
   EdgeCandidate,
   FirmlistImportResult,
@@ -40,8 +40,13 @@ export async function importFirms(url: string, env: Env): Promise<FirmlistImport
   if (parsed.variant === "universe") {
     return importUniverse(env, url, parsed);
   }
-  if (parsed.variant === "base") {
-    return importBase(env, url, parsed);
+  // No explicit tableId/viewId → try the view fast path first; if the
+  // share is actually a multi-table base, the view endpoint returns
+  // zero rows but the shared-base endpoint enumerates the table list.
+  if (!parsed.tableId && !parsed.viewId) {
+    const viewResult = await importView(env, url, parsed);
+    if (viewResult.totalSeen > 0) return viewResult;
+    return importBase(env, url, { ...parsed, variant: "base" });
   }
   return importView(env, url, parsed);
 }
@@ -84,12 +89,15 @@ export function parseAirtableUrl(url: string): ParsedAirtableUrl | null {
   const tableId = segs.find((s) => /^tbl[A-Za-z0-9]{10,}$/.test(s)) ?? null;
   const viewId = segs.find((s) => /^viw[A-Za-z0-9]{10,}$/.test(s)) ?? null;
   if (!shareId) return null;
-  // A shared link is a "view" whenever the URL pins either a table OR a
-  // view id (Airtable allows `.../shr.../viw...` without an explicit
-  // `tbl` segment for the default-table view). Only when BOTH are
-  // absent does the link denote a multi-table base.
+  // URL-shape alone cannot reliably distinguish a single-table shared
+  // view from a multi-table shared base: many real views are pinned at
+  // the bare `app.../shr...` form. We default to "view" (cheap path —
+  // readSharedViewData succeeds on either shape and returns the first
+  // table) and let `importView` fall back to base enumeration if the
+  // view-scoped endpoint reports a multi-table base. `tableId`/`viewId`
+  // when present override the heuristic and force the view path.
   return {
-    variant: (tableId || viewId) ? "view" : "base",
+    variant: "view",
     appId, shareId, tableId, viewId, expId: null, slug: null,
   };
 }
@@ -220,7 +228,7 @@ async function importBase(
   }
 
   const merged: FirmlistImportResult = {
-    firms: [], people: [], edges: [], childUrls: [],
+    firms: [], people: [], edges: [], childUrls: [], stubEntities: [],
     totalSeen: 0, errors: [], tableTabs: [], sourceCollection: collection,
   };
 
@@ -234,6 +242,7 @@ async function importBase(
     if (sub.people) (merged.people ??= []).push(...sub.people);
     if (sub.edges) (merged.edges ??= []).push(...sub.edges);
     if (sub.childUrls) (merged.childUrls ??= []).push(...sub.childUrls);
+    if (sub.stubEntities) (merged.stubEntities ??= []).push(...sub.stubEntities);
     if (sub.errors) (merged.errors ??= []).push(...sub.errors.map((e) => `${t.id}:${e}`));
     const intent = classifyTab(t.name, []);
     (merged.tableTabs ??= []).push({
@@ -759,21 +768,24 @@ function assembleResult(
   const edges: EdgeCandidate[] = [];
   const childUrls = new Set<string>();
   const seenKeys = new Set<string>();
+  const stubEntities: Array<{ import_key: string; kind: "firm" | "person"; name: string }> = [];
+  // Aggregate every cell value once so we can re-run the Task-20 URL
+  // extractor over the full row set instead of regex-scanning per cell.
+  const rowsForUrlExtract: Array<Record<string, string>> = [];
 
   for (const row of table.rows) {
     const cellsRaw = row.cellValuesByColumnId ?? row.cellsByColumnId ?? {};
     // Build normalized cells: {canonicalKey → text, raw, links, urls}.
     const cells: Record<string, ExtractedCell & { col: AirtableColumn; canon: string | null }> = {};
+    const rowTextByHeader: Record<string, string> = {};
     for (const [cid, raw] of Object.entries(cellsRaw)) {
       const col = colById.get(cid) ?? { id: cid, name: cid, type: "text" };
       const x = extractCell(col, raw);
       const canon = canonicalFieldKey(col.name);
       cells[cid] = { ...x, col, canon };
-      // Free-text URLs into childUrls (skip pure airtable.com / file URLs).
-      if (x.urls) for (const u of x.urls) {
-        if (isUsefulChildUrl(u)) childUrls.add(u);
-      }
+      if (x.text) rowTextByHeader[col.name || cid] = x.text;
     }
+    rowsForUrlExtract.push(rowTextByHeader);
 
     const keyed: Record<string, string> = {};
     for (const c of Object.values(cells)) {
@@ -821,28 +833,36 @@ function assembleResult(
         "linked_to";
       for (const linkedId of c.links) {
         const toKey = `airtable:${c.col.foreignTableId ?? table.id}:${linkedId}`;
-        // Promote the linked record to a stub firm if we have a primary.
+        // Materialize the linked foreign record so the pipeline can
+        // persist the edge. Firm edges (works_at / partner_at /
+        // invested_in / linked_to) target a firm; everything else
+        // defaults to firm as well since Airtable relation columns
+        // almost always link rows in another firm-shaped table.
         const primary = foreignPrimary.get(linkedId);
-        if (primary && !seenKeys.has(toKey) && (edgeKind === "works_at" || edgeKind === "partner_at" || edgeKind === "invested_in")) {
-          const stub: KeyedFirmCandidate = {
-            name: primary,
-            website: null,
-            domain: null,
-            source_url: sourceUrl,
-            import_key: toKey,
-          };
-          // Only emit the stub firm if a downstream upserter can dedupe it
-          // (i.e. name + domain or website). Without a domain the pipeline's
-          // upsertFirm would reject. Skip in that case but still record the
-          // edge so other downstream consumers can resolve later.
-          // (Edge will be dropped by the pipeline because to_key resolves
-          // to nothing — acceptable: relation columns lacking URLs are
-          // unresolvable without enrichment.)
-          void stub;
+        if (!seenKeys.has(toKey)) {
+          seenKeys.add(toKey);
+          if (primary) {
+            const stubKind: "firm" | "person" = edgeKind === "works_at" ? "person" : "firm";
+            // Heuristic: a "works_at" edge points from the row (person)
+            // to the firm — so the linked record IS the firm. Override
+            // the default and keep stubKind="firm" for that case.
+            stubEntities.push({
+              import_key: toKey,
+              kind: edgeKind === "works_at" ? "firm" : stubKind,
+              name: primary,
+            });
+          }
         }
         edges.push({ from_key: importKey, to_key: toKey, kind: edgeKind });
       }
     }
+  }
+
+  // Task-20 URL extraction: scan every cell value once for inline URLs
+  // (Notes/Thesis free text, plus bare hostnames like "acme.vc"). The
+  // pipeline fans these out as child kind='url' scrape jobs.
+  for (const u of extractUrlsFromRows(rowsForUrlExtract)) {
+    if (isUsefulChildUrl(u)) childUrls.add(u);
   }
 
   return {
@@ -850,6 +870,7 @@ function assembleResult(
     people,
     edges,
     childUrls: [...childUrls],
+    stubEntities,
     totalSeen: table.rows.length,
     errors: errors.length ? errors : undefined,
     sourceCollection: collection,

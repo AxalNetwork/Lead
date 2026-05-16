@@ -826,6 +826,48 @@ async function processFirmlist(
     }
   }
 
+  // Task #2: materialize Airtable `multipleRecordLinks` stub entities.
+  // These represent foreign-table rows that only carry a primary name
+  // (no URL/email/linkedin), so `upsertFirm` / `insertLead` would
+  // reject them. We write a minimal `u_entities` row + history entry
+  // so the downstream edge resolver can persist the relation. Dedupe
+  // on canonical display_name within this batch — re-imports of the
+  // same Airtable base reuse the existing entity id.
+  for (const stub of result.stubEntities ?? []) {
+    if (await isCancelled(env, jobId)) break;
+    try {
+      const map = stub.kind === "firm" ? firmKeyToEntity : personKeyToEntity;
+      if (map.has(stub.import_key)) continue;
+      const kindCol = stub.kind === "firm" ? "org" : "person";
+      const trimmed = stub.name.trim();
+      if (!trimmed) continue;
+      // Look up an existing active u_entity by display_name + kind.
+      const existing = await env.DB.prepare(
+        `SELECT id FROM u_entities
+          WHERE kind = ? AND lower(display_name) = ?
+            AND status NOT IN ('merged','soft_deleted')
+          LIMIT 1`,
+      ).bind(kindCol, trimmed.toLowerCase()).first<{ id: string }>();
+      let entityId = existing?.id ?? null;
+      if (!entityId) {
+        entityId = crypto.randomUUID();
+        const now = new Date().toISOString();
+        await env.DB.prepare(
+          `INSERT INTO u_entities (id, kind, display_name, status, created_at, updated_at)
+           VALUES (?, ?, ?, 'active', ?, ?)`,
+        ).bind(entityId, kindCol, trimmed, now, now).run();
+        await env.DB.prepare(
+          `INSERT INTO entity_history (id, entity_id, action, source, changed_at)
+           VALUES (?, ?, 'create', ?, ?)`,
+        ).bind(crypto.randomUUID(), entityId, folkImportCtx?.source ?? importedFrom, now).run().catch(() => undefined);
+      }
+      map.set(stub.import_key, entityId);
+    } catch (e) {
+      result.errors = result.errors ?? [];
+      result.errors.push(`stub_entity_fail:${stub.name}:${(e as Error).message}`);
+    }
+  }
+
   // ---- Edges: resolve import_keys to unified entity ids, then write rel_edges ----
   for (const edge of result.edges ?? []) {
     if (await isCancelled(env, jobId)) break;
