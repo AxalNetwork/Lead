@@ -157,6 +157,33 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       } catch (e) {
         console.error("daily dd-scan-batch failed", (e as Error).message);
       }
+      // Task #2: nightly news refresh for the top-N highest-quality
+      // entities. Bounded so a single tick stays well under cron limits.
+      try {
+        const { ensureSeeded } = await import("./news/reputability");
+        await ensureSeeded(env);
+        const top = await env.DB.prepare(
+          `SELECT id FROM u_entities WHERE status='active' AND display_name IS NOT NULL
+            ORDER BY quality_score DESC, updated_at DESC LIMIT 50`,
+        ).all<{ id: string }>();
+        let dispatched = 0;
+        for (const r of top.results ?? []) {
+          try {
+            if (env.WF_REFRESH_NEWS) {
+              await env.WF_REFRESH_NEWS.create({ params: { entityId: r.id, triggered_by: "cron:nightly" } });
+            } else {
+              const { refreshEntityNews } = await import("./news/refresh");
+              await refreshEntityNews(env, r.id, { maxArticles: 25 });
+            }
+            dispatched++;
+          } catch (e) {
+            console.warn("nightly news refresh failed", r.id, (e as Error).message);
+          }
+        }
+        console.log("nightly news refresh dispatched", dispatched);
+      } catch (e) {
+        console.error("nightly news refresh batch failed", (e as Error).message);
+      }
     })());
     return;
   }

@@ -109,6 +109,20 @@ export interface Env {
   // CourtListener). UK Companies House reuses UK_CH_API_KEY above.
   // NEWSAPI_KEY is optional and used to augment adverse-media scans.
   NEWSAPI_KEY?: string;
+
+  // ---- Task #2: News ingestion ----
+  // newsapi.org key. When set, /news/refresh pulls up to 100 articles
+  // per entity per day. Free tier ⇒ 100/day total. Absent ⇒ skip provider.
+  NEWS_API_KEY?: string;
+  // api.congress.gov key. When set, the regulator crawler pulls federal
+  // bill mentions. Absent ⇒ skip provider.
+  CONGRESS_API_KEY?: string;
+  // Comma-separated language allowlist (ISO 639-1). Default: "en".
+  NEWS_LANG_ALLOWLIST?: string;
+  // Per-entity per-day cap for /news/refresh. Default: 100.
+  NEWS_REFRESH_PER_ENTITY_CAP?: string;
+  // Task #2: refresh-news workflow (durable per-entity news pull).
+  WF_REFRESH_NEWS?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
 }
 
 export type JobKind =

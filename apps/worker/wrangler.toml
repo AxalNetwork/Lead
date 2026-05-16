@@ -211,6 +211,13 @@ binding = "WF_DD_SCAN_BATCH"
 name = "dd-scan-batch"
 class_name = "DDScanBatchWorkflow"
 
+# Task #2: per-entity news refresh workflow. Triggered on POST
+# /api/news/refresh/:entityId/dispatch and inside the EnrichLeadWorkflow.
+[[workflows]]
+binding = "WF_REFRESH_NEWS"
+name = "refresh-news"
+class_name = "RefreshNewsWorkflow"
+
 [[queues.producers]]
 binding = "LEAD_QUEUE"
 queue = "aidatasignal-lead-jobs"

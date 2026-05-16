@@ -38,6 +38,23 @@ entitiesRoute.get("/", async (c) => {
   return c.json(res);
 });
 
+// Task #2: resolve a legacy table+ref to a u_entities.id (used by the
+// News tab + DD page when linking from firm/investor/company/account/
+// buyer detail pages). Mirrors the entity_xref shape produced by the
+// backfill modules.
+entitiesRoute.get("/resolve", async (c) => {
+  const table = (c.req.query("table") || "").toLowerCase();
+  const ref = c.req.query("ref") || "";
+  if (!table || !ref) return c.json({ error: "table_and_ref_required" }, 400);
+  const allowed = new Set(["firms", "investors", "companies", "accounts", "buyers", "leads", "people"]);
+  if (!allowed.has(table)) return c.json({ error: "unsupported_table" }, 400);
+  const row = await c.env.DB.prepare(
+    `SELECT entity_id FROM entity_legacy_map WHERE legacy_table = ?1 AND legacy_id = ?2 LIMIT 1`,
+  ).bind(table, String(ref)).first<{ entity_id: string }>();
+  if (!row || !row.entity_id) return c.json({ error: "not_found", table, ref }, 404);
+  return c.json({ entity_id: row.entity_id, table, ref });
+});
+
 entitiesRoute.get("/:id", async (c) => {
   const id = c.req.param("id");
   const includeNonCurrent = c.req.query("include_history") === "1";

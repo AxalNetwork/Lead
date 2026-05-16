@@ -35,8 +35,9 @@ import { crawlersRoute } from "./routes/crawlers";
 import { personasRoute } from "./routes/personas";
 import { projectsRoute } from "./routes/projects";
 import { ddRoute } from "./routes/dd";
+import { newsRoute, factsCitationsRoute } from "./routes/news";
 export { EntityLock } from "./do/EntityLock";
-export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow } from "./ai/workflows";
+export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow } from "./ai/workflows";
 import { piiAuditOnLeadGet } from "./middleware/pii_audit";
 import { accessGuard } from "./middleware/access";
 import { requestId } from "./middleware/request_id";
@@ -125,6 +126,9 @@ api.route("/api/projects", projectsRoute);
 // Task #4: unified entity graph (additive — legacy reads keep working).
 api.route("/api/entities", entitiesRoute);
 api.route("/api/dd", ddRoute);
+// Task #2: news ingestion + citations + fact verification.
+api.route("/api/news", newsRoute);
+api.route("/api/facts", factsCitationsRoute);
 // /api/leads/:id/enrich, /api/leads/enrich/bulk, /:id/dnc, /:id/campaigns
 api.route("/api/leads", leadsEnrichActions);
 api.route("/api/leads", leadsDncActions);

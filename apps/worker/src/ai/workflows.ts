@@ -201,6 +201,24 @@ export class DDScanBatchWorkflow {
   }
 }
 
+// Task #2: per-entity news refresh workflow. Heavy lifting (provider
+// fan-out, AI enrichment, citation extraction, verified-score recompute,
+// Wikipedia cross-reference) lives in `news/refresh.ts` so the same code
+// path is reachable from the route handler and from durable execution.
+export class RefreshNewsWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ entityId: string; triggered_by?: string }>, step: WorkflowStep): Promise<{ ok: true; entityId: string; persisted: number; mentions: number; citations: number }> {
+    const { entityId } = event.payload;
+    const { refreshEntityNews } = await import("../news/refresh");
+    const r = await step.do("refresh", { retries: { limit: 1, backoff: "exponential" } }, async () => {
+      return await refreshEntityNews(this.env, entityId);
+    });
+    return { ok: true, entityId, persisted: r.persisted, mentions: r.mentions, citations: r.citations };
+  }
+}
+
 export class IngestPageWorkflow {
   env: Env;
   ctx: ExecutionContext;

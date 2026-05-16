@@ -1,0 +1,77 @@
+---
+layout: default
+title: News & Citations
+permalink: /dashboard/news/
+---
+
+<h1 class="ads-page-title" id="ads-news-title">Entity News</h1>
+<p class="ads-page-sub" id="ads-news-sub">Pass <code>?entity=&lt;id&gt;</code> or <code>?table=firms&amp;ref=&lt;id&gt;</code> in the URL to scope this view.</p>
+
+<div class="ads-card" style="margin-bottom:18px;border-left:3px solid #2c6eb5;background:#f0f6ff">
+  <p style="margin:0;font-size:12px;color:#1a3a6b">
+    <strong>Source transparency.</strong> Every article shown below was pulled from public news / regulator
+    feeds (NewsAPI, GDELT, PRNewswire, BusinessWire, SEC/FCA/ESMA/FINRA/CFTC, gov.uk, Wikipedia).
+    Reputability badges are heuristic — a high score means we trust the publisher's editorial process,
+    not that the specific claim is verified. Citation pills on facts indicate how many independent
+    sources support a value; verified ≥ 0.7, contradicting ≥ 1 opens the dispute view.
+  </p>
+</div>
+
+<div class="ads-card" style="margin-bottom:18px">
+  <div class="ads-active__head">
+    <h3>Refresh</h3>
+    <span class="ads-muted" id="ads-news-meta"></span>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <button id="ads-news-refresh" class="ads-btn">Refresh now</button>
+    <button id="ads-news-dispatch" class="ads-btn">Queue refresh</button>
+    <label style="font-size:12px;color:var(--ads-muted);margin-left:12px">
+      Min reputability:
+      <select id="ads-news-min-rep" style="margin-left:6px">
+        <option value="0">All</option>
+        <option value="0.5">≥ 0.5 (mid)</option>
+        <option value="0.7" selected>≥ 0.7 (major)</option>
+        <option value="0.9">≥ 0.9 (primary)</option>
+      </select>
+    </label>
+    <label style="font-size:12px;color:var(--ads-muted)">
+      Sentiment:
+      <select id="ads-news-sent" style="margin-left:6px">
+        <option value="">Any</option>
+        <option value="pos">Positive</option>
+        <option value="neutral">Neutral</option>
+        <option value="neg">Negative</option>
+      </select>
+    </label>
+    <input id="ads-news-topic" type="text" placeholder="Topic filter…" style="margin-left:6px;padding:4px 8px;font-size:12px">
+    <button id="ads-news-apply" class="ads-btn" style="font-size:12px;padding:4px 10px">Apply</button>
+  </div>
+  <div class="ads-form-msg" id="ads-news-msg" style="margin-top:8px"></div>
+</div>
+
+<div class="ads-card" style="margin-bottom:18px">
+  <div class="ads-active__head">
+    <h3>Timeline</h3>
+    <span class="ads-muted" id="ads-news-count"></span>
+  </div>
+  <div id="ads-news-timeline"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<div class="ads-card">
+  <div class="ads-active__head">
+    <h3>Coverage analytics</h3>
+  </div>
+  <div id="ads-news-coverage"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<script src="/assets/js/news-tab.js"></script>
+<script>
+  // Bootstrapper for the standalone /dashboard/news/ page. The
+  // embeddable widget (news-tab.js) does the heavy lifting; this just
+  // wires the page chrome to it.
+  document.addEventListener("DOMContentLoaded", () => {
+    if (window.ADS && window.ADS.News && typeof window.ADS.News.mountStandalone === "function") {
+      window.ADS.News.mountStandalone();
+    }
+  });
+</script>
