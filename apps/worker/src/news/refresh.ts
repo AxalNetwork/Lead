@@ -183,8 +183,10 @@ export async function refreshEntityNews(env: Env, entityId: string, opts: { arch
 
 async function persistStubIfNew(env: Env, cand: NewsCandidate): Promise<{ id: string; host: string } | null> {
   const host = normalizeHost(cand.url);
+  // Honors the "new URL dedupe" intent: existing URLs return null so the
+  // caller skips re-enrichment and does not bump persisted/enriched counts.
   const existing = await env.DB.prepare(`SELECT id FROM news_items WHERE url = ? LIMIT 1`).bind(cand.url).first<{ id: string }>();
-  if (existing?.id) return { id: existing.id, host };
+  if (existing?.id) return null;
   const rep = await getReputability(env, host);
   const id = crypto.randomUUID();
   try {
@@ -194,8 +196,9 @@ async function persistStubIfNew(env: Env, cand: NewsCandidate): Promise<{ id: st
     ).bind(id, cand.url, cand.url, host, cand.title, cand.headline, cand.byline, cand.published_at, cand.source_name ?? host, rep.score, cand.language, cand.snippet ?? null).run();
     return { id, host };
   } catch {
-    const after = await env.DB.prepare(`SELECT id FROM news_items WHERE url = ? LIMIT 1`).bind(cand.url).first<{ id: string }>();
-    return after?.id ? { id: after.id, host } : null;
+    // Lost a race with a concurrent insert of the same URL — treat as a
+    // duplicate (skip) rather than re-enriching the just-inserted row.
+    return null;
   }
 }
 
