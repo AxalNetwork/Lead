@@ -190,7 +190,7 @@
     var verified = Number((data.fact || {}).verified_score || 0);
     var contradicting = (data.citations || []).filter(function (c) { return c.contradicts === 1; }).length;
     var icon = "";
-    if (contradicting > 0) icon = '<span title="contradicting" style="color:#a33;font-weight:700;margin-left:3px">⚑</span>';
+    if (contradicting > 0) icon = '<span class="ads-cite-conflict" data-cite-icon role="button" tabindex="0" aria-label="Open dispute view" title="Open dispute view" style="cursor:pointer;color:#a33;font-weight:700;margin-left:3px">⚑</span>';
     else if (verified >= 0.7) icon = '<span title="verified" style="color:#1a7a35;font-weight:700;margin-left:3px">✓</span>';
     else if (verified < 0.3) icon = '<span title="unverified" style="color:#a36a00;font-weight:700;margin-left:3px">⚠</span>';
     var pill = citCount > 0
@@ -221,6 +221,11 @@
               child.addEventListener("mouseenter", open);
               child.addEventListener("focus", open);
               child.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(e); } });
+            } else if (child.classList && child.classList.contains("ads-cite-conflict")) {
+              // Red ⚑ icon: clicking/keyboard opens the dispute view directly.
+              var openDispute = function (e) { if (e) { e.stopPropagation(); e.preventDefault(); } openDisputeView(data, {}); };
+              child.addEventListener("click", openDispute);
+              child.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") openDispute(e); });
             }
             node.appendChild(child);
           }

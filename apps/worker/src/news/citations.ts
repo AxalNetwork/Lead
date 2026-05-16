@@ -135,10 +135,16 @@ export async function persistCitationsForMention(
     stmts.push(citationStmt(env, factId, newsItemId, claim.quote, contradicts));
     try {
       await env.DB.batch(stmts);
-    } catch {
-      // Hash collision on facts insert (UNIQUE) means the fact already
-      // exists — re-resolve and just write the citation alone.
+    } catch (e) {
+      // Only the facts(hash) UNIQUE collision is recoverable — every other
+      // failure must surface so the caller can record it in result.errors
+      // rather than silently writing a citation against a possibly-missing
+      // fact row.
+      const msg = (e as Error).message || "";
+      const isHashCollision = /UNIQUE/i.test(msg) && /facts/i.test(msg);
+      if (!isHashCollision) throw e;
       const built = await buildFactInsert(env, entityId, claim, evidence_url);
+      if (!built.id) throw e;
       await env.DB.batch([citationStmt(env, built.id, newsItemId, claim.quote, contradicts)]);
       factId = built.id;
     }
