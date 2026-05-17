@@ -1,0 +1,15 @@
+---
+layout: default
+title: Person dossier
+permalink: /dashboard/profiles/
+---
+<a href="/dashboard/" class="ads-muted" style="font-size:12px">← Dashboard</a>
+<p class="ads-loading" id="ads-profiles-redirect">Redirecting…</p>
+<script>
+  // Task #6: /dashboard/profiles/ is an alias for /dashboard/people/.
+  // Keep ?id= and any other query params intact.
+  (function () {
+    var qs = location.search || "";
+    location.replace("/dashboard/people/" + qs);
+  })();
+</script>

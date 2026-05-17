@@ -46,6 +46,8 @@ import { alerts as alertsRoute } from "./routes/alerts";
 import { osint as osintRoute } from "./routes/osint";
 // Task #5: advanced individual profiler.
 import { profilers as profilersRoute } from "./routes/profilers";
+// Task #6: dossier comments (right-rail thread).
+import { profileComments as profileCommentsRoute } from "./routes/profile_comments";
 export { EntityLock } from "./do/EntityLock";
 export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, RefreshGovernmentWorkflow, DiscoverFromSeedWorkflow, CrawlFrontierWorkflow, MonitorEntityWorkflow, MonitorBatchWorkflow, DigestWorkflow, IndividualProfilerWorkflow } from "./ai/workflows";
 // Task #3 (this task): OSINT cross-platform identity workflows.
@@ -156,6 +158,8 @@ api.route("/api/alerts", alertsRoute);
 api.route("/api/osint", osintRoute);
 // Task #5: advanced individual profiler (POST run / GET status / GET dossier).
 api.route("/api/profilers", profilersRoute);
+// Task #6: dossier comments thread.
+api.route("/api/profile-comments", profileCommentsRoute);
 // /api/leads/:id/enrich, /api/leads/enrich/bulk, /:id/dnc, /:id/campaigns
 api.route("/api/leads", leadsEnrichActions);
 api.route("/api/leads", leadsDncActions);

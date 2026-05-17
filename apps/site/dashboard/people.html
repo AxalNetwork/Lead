@@ -1,0 +1,76 @@
+---
+layout: default
+title: Person dossier
+permalink: /dashboard/people/
+---
+<a href="/dashboard/" class="ads-muted" style="font-size:12px">← Dashboard</a>
+
+<div id="ads-person-empty" hidden>
+  <h1 class="ads-page-title">People</h1>
+  <p class="ads-page-sub">Open any person from a list to see their full dossier here. Pass <code>?id=&lt;entity_id&gt;</code> in the URL.</p>
+  <div class="ads-card ads-empty">No person selected.</div>
+</div>
+
+<header class="ads-person-header" id="ads-person-header" hidden>
+  <div class="ads-person-header__inner">
+    <div class="ads-person-header__avatar" id="ads-person-avatar" aria-hidden="true">·</div>
+    <div class="ads-person-header__id">
+      <h1 class="ads-person-header__name" id="ads-person-name">Loading…</h1>
+      <p class="ads-person-header__sub" id="ads-person-sub">&nbsp;</p>
+      <p class="ads-person-header__summary" id="ads-person-summary">&nbsp;</p>
+    </div>
+    <div class="ads-person-header__rings" id="ads-person-rings" aria-label="Trust rings"></div>
+    <div class="ads-person-header__actions">
+      <button class="ads-btn ads-btn--sm" type="button" id="ads-person-refresh">Refresh</button>
+      <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-person-copy">Copy link</button>
+      <a class="ads-btn ads-btn--ghost ads-btn--sm" id="ads-person-json" target="_blank" rel="noopener">Raw JSON</a>
+    </div>
+  </div>
+  <div class="ads-person-header__msg" id="ads-person-msg" hidden></div>
+</header>
+
+<div class="ads-person-layout" id="ads-person-layout" hidden>
+  <main class="ads-person-main">
+    <div class="ads-tabs ads-person-tabs" role="tablist">
+      <button type="button" class="ads-tab active" data-tab="overview" role="tab">Overview</button>
+      <button type="button" class="ads-tab" data-tab="career" role="tab">Career</button>
+      <button type="button" class="ads-tab" data-tab="background" role="tab">Background</button>
+      <button type="button" class="ads-tab" data-tab="interests" role="tab">Interests &amp; Lifestyle</button>
+      <button type="button" class="ads-tab" data-tab="network" role="tab">Network</button>
+      <button type="button" class="ads-tab" data-tab="voice" role="tab">Voice &amp; Content</button>
+      <button type="button" class="ads-tab" data-tab="outreach" role="tab">Outreach Playbook</button>
+    </div>
+
+    <section class="ads-tab-panel active" data-tab="overview"><div class="ads-card" id="ads-pane-overview"><div class="ads-loading">Loading…</div></div></section>
+    <section class="ads-tab-panel" data-tab="career" hidden><div class="ads-card" id="ads-pane-career"></div></section>
+    <section class="ads-tab-panel" data-tab="background" hidden><div class="ads-card" id="ads-pane-background"></div></section>
+    <section class="ads-tab-panel" data-tab="interests" hidden><div class="ads-card" id="ads-pane-interests"></div></section>
+    <section class="ads-tab-panel" data-tab="network" hidden><div class="ads-card" id="ads-pane-network"></div></section>
+    <section class="ads-tab-panel" data-tab="voice" hidden><div class="ads-card" id="ads-pane-voice"></div></section>
+    <section class="ads-tab-panel" data-tab="outreach" hidden><div class="ads-card" id="ads-pane-outreach"></div></section>
+  </main>
+
+  <aside class="ads-person-rail" id="ads-person-rail">
+    <div class="ads-card ads-person-rail__card">
+      <h3>Sources</h3>
+      <div id="ads-person-sources"><div class="ads-loading">…</div></div>
+    </div>
+    <div class="ads-card ads-person-rail__card">
+      <h3>Recent edits</h3>
+      <div id="ads-person-changelog"><div class="ads-loading">…</div></div>
+    </div>
+    <div class="ads-card ads-person-rail__card">
+      <h3>Comments</h3>
+      <form id="ads-person-comment-form" autocomplete="off" style="margin-bottom:10px">
+        <textarea name="body" rows="2" placeholder="Add an operator note…" maxlength="2000"
+          style="width:100%;background:var(--ads-bg);border:1px solid var(--ads-border);border-radius:8px;padding:8px 10px;color:var(--ads-text);font-size:13px;font-family:inherit;resize:vertical"></textarea>
+        <div style="display:flex;justify-content:flex-end;margin-top:6px">
+          <button class="ads-btn ads-btn--sm" type="submit">Post</button>
+        </div>
+      </form>
+      <div id="ads-person-comments"><div class="ads-loading">…</div></div>
+    </div>
+  </aside>
+</div>
+
+<script src="/assets/js/people.js?v={{ site.time | date: '%s' }}"></script>

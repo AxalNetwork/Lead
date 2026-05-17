@@ -197,6 +197,40 @@ profilers.get("/:entity_id/status", async (c) => {
   });
 });
 
+// Task #6: dossier right-rail feed — most recent fact mutations.
+profilers.get("/:entity_id/changelog", async (c) => {
+  const entityId = c.req.param("entity_id");
+  if (!entityId) return c.json({ error: "entity_id_required" }, 400);
+  const limit = Math.min(50, Math.max(1, Number(c.req.query("limit") ?? "10")));
+  const rows = await c.env.DB.prepare(
+    `SELECT id, predicate, value_text, value_number, source_kind, source,
+            evidence_url, confidence, observed_at
+       FROM facts
+      WHERE entity_id = ?
+      ORDER BY observed_at DESC
+      LIMIT ?`,
+  ).bind(entityId, limit).all().catch(() => null);
+  return c.json({ entity_id: entityId, items: rows?.results ?? [] });
+});
+
+// Task #6: distinct source/source_kind list backing the "Sources" rail.
+profilers.get("/:entity_id/sources", async (c) => {
+  const entityId = c.req.param("entity_id");
+  if (!entityId) return c.json({ error: "entity_id_required" }, 400);
+  const rows = await c.env.DB.prepare(
+    `SELECT source_kind,
+            COALESCE(source, '(unspecified)') AS source,
+            COUNT(*) AS n,
+            MAX(observed_at) AS last_seen
+       FROM facts
+      WHERE entity_id = ?
+      GROUP BY source_kind, source
+      ORDER BY n DESC, last_seen DESC
+      LIMIT 30`,
+  ).bind(entityId).all().catch(() => null);
+  return c.json({ entity_id: entityId, items: rows?.results ?? [] });
+});
+
 profilers.get("/:entity_id/dossier", async (c) => {
   const entityId = c.req.param("entity_id");
   const noCache = c.req.query("no_cache") === "true";
