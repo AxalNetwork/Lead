@@ -215,6 +215,22 @@ export async function runCrawlFrontier(env: Env, opts: FrontierOpts = {}): Promi
   const perRunFetched: Record<string, number> = {};
   const perRunEntities: Record<string, number> = {};
 
+  // Per-run config cache: when a frontier row carries a run_id, the
+  // recursive `runDiscoverFromSeed` must honor the depth/host caps the
+  // operator chose at seed time. Without this, a depth=1 seed would
+  // recurse to the global default (3) once it lands on the frontier.
+  const runCfgCache: Record<string, { depth_max: number; max_per_host: number }> = {};
+  async function getRunCfg(rid: string | null): Promise<{ depth_max: number; max_per_host: number } | null> {
+    if (!rid) return null;
+    if (runCfgCache[rid]) return runCfgCache[rid];
+    const row = await env.DB.prepare(
+      `SELECT depth_max, max_per_host FROM discovery_runs WHERE id = ?`,
+    ).bind(rid).first<{ depth_max: number; max_per_host: number }>();
+    if (!row) return null;
+    runCfgCache[rid] = row;
+    return row;
+  }
+
   for (const it of items) {
     if (!(await assertHostPolite(env, it.host))) {
       // Skip — leave on the frontier with a future re-attempt window.
@@ -244,12 +260,17 @@ export async function runCrawlFrontier(env: Env, opts: FrontierOpts = {}): Promi
       }
       entities += entityIds.length;
       if (attribRun && entityIds.length) perRunEntities[attribRun] = (perRunEntities[attribRun] ?? 0) + entityIds.length;
-      // 2. Recursion: discover further links from this page.
+      // 2. Recursion: discover further links from this page. When the
+      //    frontier row is run-scoped, load the persisted run config so
+      //    operator-chosen depth_max / max_per_host carry through every
+      //    recursion cycle (not just the initial seed pass).
+      const ridForCfg = opts.runId ?? it.run_id ?? null;
+      const cfg = await getRunCfg(ridForCfg);
       const r = await runDiscoverFromSeed(env, {
         url: it.url,
         depth: it.depth,
-        depthMax: opts.depthMax ?? 3,
-        maxPerHost: opts.maxPerHost ?? 200,
+        depthMax: opts.depthMax ?? cfg?.depth_max ?? 3,
+        maxPerHost: opts.maxPerHost ?? cfg?.max_per_host ?? 200,
         yieldThreshold: opts.yieldThreshold ?? 0.4,
         runId: opts.runId ?? it.run_id ?? undefined,
         parentUrlId: it.url_id,
