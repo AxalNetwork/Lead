@@ -11,7 +11,7 @@ import type { Env } from "../types";
 import { selectParser } from "../scraper/parsers";
 import { insertLead } from "../scraper/pipeline";
 
-export async function extractFromHtml(env: Env, url: string, html: string): Promise<string[]> {
+export async function extractFromHtml(env: Env, url: string, html: string, runId?: string | null): Promise<string[]> {
   const { name, parser } = selectParser(url);
   // Every registered parser exposes the same `(html, url) => ParsedLead[]`
   // sync entry, including the "profile" parser which internally routes
@@ -28,7 +28,12 @@ export async function extractFromHtml(env: Env, url: string, html: string): Prom
     console.log("extractAdapter_zero", JSON.stringify({ url, parser: name }));
   }
   const ids: string[] = [];
-  const jobId = `discovery:${crypto.randomUUID()}`;
+  // Tie the synthetic job id to the discovery run when we have one so
+  // operators can join discovery_runs ↔ inserted leads via job_id
+  // prefix. Falls back to `adhoc` (the case where /api/discovery/crawl
+  // pops a frontier row that has no run_id, e.g. a manually-promoted
+  // URL from before run tracking existed).
+  const jobId = `discovery:${runId ?? "adhoc"}:${crypto.randomUUID()}`;
   for (const lead of parsed) {
     try {
       const id = await insertLead(env, lead, name, jobId, "live");

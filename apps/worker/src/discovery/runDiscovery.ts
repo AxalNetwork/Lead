@@ -255,7 +255,7 @@ export async function runCrawlFrontier(env: Env, opts: FrontierOpts = {}): Promi
       let entityIds: string[] = [];
       try {
         const { extractFromHtml } = await import("./extractAdapter");
-        entityIds = await extractFromHtml(env, it.url, f.html);
+        entityIds = await extractFromHtml(env, it.url, f.html, opts.runId ?? it.run_id ?? null);
       } catch (e) {
         console.warn("discovery_extract_failed", (e as Error).message);
       }
