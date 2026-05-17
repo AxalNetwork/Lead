@@ -18,7 +18,22 @@ alerts.get("/rules", async (c) => {
             is_active, last_fired_at, fire_count, created_at, updated_at
        FROM alert_rules WHERE owner_email = ? ORDER BY created_at DESC`,
   ).bind(email).all();
-  return c.json({ items: r.results ?? [] });
+  // Redact webhook_secret from list responses — secret is shown ONCE
+  // in the POST /rules response and never re-surfaced in plaintext.
+  // Operators rotate by PATCHing channel_config.webhook_secret.
+  const items = (r.results ?? []).map((row: any) => {
+    if (row && typeof row.channel_config_json === "string") {
+      try {
+        const cfg = JSON.parse(row.channel_config_json);
+        if (cfg && typeof cfg === "object" && "webhook_secret" in cfg) {
+          cfg.webhook_secret = "***redacted***";
+          row.channel_config_json = JSON.stringify(cfg);
+        }
+      } catch { /* ignore malformed cfg */ }
+    }
+    return row;
+  });
+  return c.json({ items });
 });
 
 alerts.post("/rules", async (c) => {
@@ -117,7 +132,32 @@ alerts.patch("/rules/:id", async (c) => {
   if ("is_active" in body) { fields.push("is_active = ?"); binds.push(body.is_active ? 1 : 0); }
   if ("dedupe_window_seconds" in body) { fields.push("dedupe_window_seconds = ?"); binds.push(Number(body.dedupe_window_seconds) || 3600); }
   if ("trigger_config" in body) { fields.push("trigger_config_json = ?"); binds.push(body.trigger_config ? JSON.stringify(body.trigger_config) : null); }
-  if ("channel_config" in body) { fields.push("channel_config_json = ?"); binds.push(body.channel_config ? JSON.stringify(body.channel_config) : null); }
+  if ("channel_config" in body) {
+    // PATCH parity with POST: if the rule is (or becomes) a webhook rule,
+    // re-validate the URL is HTTPS and don't let a redacted placeholder
+    // overwrite the stored secret.
+    const cur = await c.env.DB.prepare(
+      `SELECT channel, channel_config_json FROM alert_rules WHERE id = ? AND owner_email = ?`,
+    ).bind(id, email).first<{ channel: string; channel_config_json: string | null }>();
+    const newCfg = (body.channel_config && typeof body.channel_config === "object")
+      ? { ...(body.channel_config as Record<string, unknown>) } : null;
+    if (cur?.channel === "webhook" && newCfg) {
+      const url = String(newCfg.webhook_url ?? "");
+      if (url && !/^https:\/\//.test(url)) {
+        return c.json({ error: "bad_webhook_url", message: "webhook_url must be https://" }, 400);
+      }
+      // Preserve existing secret when the client echoes back the redacted
+      // placeholder (or omits it entirely).
+      if (!newCfg.webhook_secret || newCfg.webhook_secret === "***redacted***") {
+        try {
+          const prev = cur.channel_config_json ? JSON.parse(cur.channel_config_json) : {};
+          if (prev && prev.webhook_secret) newCfg.webhook_secret = prev.webhook_secret;
+        } catch { /* ignore */ }
+      }
+    }
+    fields.push("channel_config_json = ?");
+    binds.push(newCfg ? JSON.stringify(newCfg) : null);
+  }
   if (!fields.length) return c.json({ error: "no_changes" }, 400);
   fields.push("updated_at = datetime('now')");
   const r = await c.env.DB.prepare(
