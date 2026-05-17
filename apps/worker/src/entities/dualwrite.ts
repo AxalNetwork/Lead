@@ -60,6 +60,8 @@ interface LeadLikeInput {
   tags_json?: string | null;
   thesis?: string | null;
   bio?: string | null;
+  source_domain?: string | null;
+  source_url?: string | null;
 }
 
 interface CompanyLikeInput {
@@ -288,8 +290,8 @@ export async function syncLeadToEntity(
       await inferAndAssignRoles(env, entityId, {
         kind: "person",
         sourceKind,
-        sourceUrl: l.personal_url ?? null,
-        sourceDomain: null,
+        sourceUrl: l.source_url ?? l.personal_url ?? null,
+        sourceDomain: l.source_domain ?? null,
         title: l.title ?? null,
         org: l.org ?? null,
         category: l.category ?? null,
