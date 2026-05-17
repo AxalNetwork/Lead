@@ -329,10 +329,22 @@ bulk.post("/assign-role", async (c) => {
     } else {
       if (before) continue; // already present — no-op, no audit row.
       // Audit before the role write so that a partial failure still
-      // leaves an undo-able audit row. addRole is idempotent.
+      // leaves an undo-able audit row. addRole is idempotent but
+      // swallows DB errors internally, so we verify the post-write
+      // state before counting `affected` — never report success for
+      // a row that didn't actually persist.
       await auditStmt(c.env, opId, "assign_role", entityId,
         { exists: false, role }, { exists: true, role, source: "bulk" }, email).run();
       await addRole(c.env, entityId, role, { source: "bulk" });
+      const after = await c.env.DB.prepare(
+        `SELECT 1 FROM entity_roles WHERE entity_id = ? AND role = ?`,
+      ).bind(entityId, role).first<{ 1: number }>();
+      if (!after) {
+        await c.env.DB.prepare(
+          `UPDATE bulk_operation_audit SET undo_conflict = 1 WHERE operation_id = ? AND entity_id = ? AND action = 'assign_role'`,
+        ).bind(opId, entityId).run();
+        continue;
+      }
       mutated += 1;
     }
   }
@@ -368,9 +380,20 @@ bulk.post("/add-tag", async (c) => {
     ).bind(entityId, taxonomy, slug).first<{ id: number }>();
     if (existed) continue;
     // Audit before mutation (addTag is idempotent on conflict).
+    // addTag swallows DB errors internally, so we re-read to verify
+    // the row actually persisted before counting `affected`.
     await writeAudit(c.env, opId, "add_tag", entityId,
       { exists: false, taxonomy, slug }, { exists: true, taxonomy, slug }, email);
     await addTag(c.env, { entity_id: entityId, taxonomy: taxonomy as Taxonomy, slug, source: "bulk" });
+    const after = await c.env.DB.prepare(
+      `SELECT 1 FROM entity_tags WHERE entity_id = ? AND taxonomy = ? AND slug = ?`,
+    ).bind(entityId, taxonomy, slug).first<{ 1: number }>();
+    if (!after) {
+      await c.env.DB.prepare(
+        `UPDATE bulk_operation_audit SET undo_conflict = 1 WHERE operation_id = ? AND entity_id = ? AND action = 'add_tag'`,
+      ).bind(opId, entityId).run();
+      continue;
+    }
     mutated += 1;
   }
   return c.json({ ok: true, operation_id: opId, affected: mutated, dropped, taxonomy, slug }, 200);

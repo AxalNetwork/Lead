@@ -80,7 +80,7 @@ api.use(
     },
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Cf-Access-Jwt-Assertion"],
+    allowHeaders: ["Content-Type", "Cf-Access-Jwt-Assertion", "Idempotency-Key"],
   }),
 );
 api.route("/health", health);
