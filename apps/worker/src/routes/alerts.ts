@@ -3,7 +3,6 @@
 import { Hono } from "hono";
 import type { Env } from "../types";
 import { ALL_TRIGGER_KINDS, type TriggerKind } from "../monitoring/types";
-import { monitorEntity } from "../monitoring/dispatch";
 
 export const alerts = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
@@ -190,28 +189,51 @@ alerts.get("/unread-count", async (c) => {
   return c.json({ unread: r?.n ?? 0 });
 });
 
-// Manual test/preview — runs the entity through monitorEntity once.
+// Synthetic preview — non-destructive. Builds a fake diff and runs the
+// rule's evaluator inline. Persists nothing, dispatches nothing.
 // Useful for the rule editor "preview" button.
 alerts.post("/test/:rule_id", async (c) => {
   const email = ownerEmail(c);
   const ruleId = c.req.param("rule_id");
   const rule = await c.env.DB.prepare(
-    `SELECT id, entity_id, watchlist_id FROM alert_rules WHERE id = ? AND owner_email = ?`,
-  ).bind(ruleId, email).first<{ id: string; entity_id: string | null; watchlist_id: string | null }>();
+    `SELECT id, entity_id, watchlist_id, trigger_kind, trigger_config_json
+       FROM alert_rules WHERE id = ? AND owner_email = ?`,
+  ).bind(ruleId, email).first<{ id: string; entity_id: string | null; watchlist_id: string | null;
+    trigger_kind: string; trigger_config_json: string | null }>();
   if (!rule) return c.json({ error: "not_found" }, 404);
   const entityId = rule.entity_id ?? (await c.env.DB
     .prepare(`SELECT entity_id FROM watchlist_members WHERE watchlist_id = ? LIMIT 1`)
     .bind(rule.watchlist_id ?? "").first<{ entity_id: string }>())?.entity_id;
   if (!entityId) return c.json({ error: "no_entity_to_test" }, 400);
-  // Force a fresh evaluation by deleting the latest snapshot for this entity.
-  await c.env.DB.prepare(
-    `DELETE FROM entity_snapshots WHERE id = (
-        SELECT id FROM entity_snapshots WHERE entity_id = ? ORDER BY snapshot_at DESC LIMIT 1
-     )`,
-  ).bind(entityId).run();
-  const r = await monitorEntity(c.env, entityId);
-  return c.json({ ok: true, entity_id: entityId, result: r });
+
+  const { buildCanonicalSummary } = await import("../monitoring/summary");
+  const { evaluate } = await import("../monitoring/triggers/index");
+  const current = await buildCanonicalSummary(c.env, entityId);
+  if (!current) return c.json({ error: "no_summary_for_entity" }, 400);
+
+  // Synthetic "before" — clone current, perturb one likely field so any
+  // diff-driven evaluator has something to bite on.
+  const synthetic = JSON.parse(JSON.stringify(current));
+  synthetic.title = (current.title ?? "") + " (prev)";
+  synthetic.fit_max_score = Math.max(0, (Number(current.fit_max_score) || 50) - 10);
+  const { diffSummaries } = await import("../monitoring/diff");
+  const diff = diffSummaries(synthetic, current);
+  const cfg = rule.trigger_config_json ? safeJsonParse(rule.trigger_config_json) : {};
+  const evt = await evaluate(rule.trigger_kind as never, {
+    env: c.env, entityId, ownerEmail: email,
+    oldSummary: synthetic, newSummary: current, diff, ruleConfig: (cfg as Record<string, unknown>) ?? {},
+  });
+  return c.json({
+    ok: true, dry_run: true, entity_id: entityId,
+    would_emit: !!evt,
+    event: evt ?? null,
+    note: "Preview only — no event row persisted, no channel dispatched.",
+  });
 });
+
+function safeJsonParse(s: string): unknown {
+  try { return JSON.parse(s); } catch { return null; }
+}
 
 alerts.get("/trigger-kinds", async (c) => c.json({ kinds: ALL_TRIGGER_KINDS }));
 

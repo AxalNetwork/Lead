@@ -145,3 +145,15 @@ CREATE TABLE IF NOT EXISTS digest_queue (
 );
 CREATE INDEX IF NOT EXISTS idx_digest_due ON digest_queue(scheduled_for, status);
 CREATE INDEX IF NOT EXISTS idx_digest_owner ON digest_queue(owner_email, scheduled_for);
+
+-- Per-owner preferences (timezone + digest send-hour). Resolved by the
+-- digest scheduler to compute next 9 a.m. *recipient-local*. Defaults to
+-- UTC + 9 a.m. when no row exists.
+CREATE TABLE IF NOT EXISTS user_prefs (
+  email          TEXT PRIMARY KEY,
+  timezone       TEXT NOT NULL DEFAULT 'UTC',     -- IANA tz, e.g. America/Toronto
+  digest_hour    INTEGER NOT NULL DEFAULT 9,      -- 0..23, local
+  digest_weekday INTEGER NOT NULL DEFAULT 1,      -- 1=Mon..7=Sun for weekly
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);

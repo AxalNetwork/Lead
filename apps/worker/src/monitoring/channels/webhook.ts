@@ -18,8 +18,8 @@ export async function deliverWebhook(_env: Env, p: WebhookPayload): Promise<{
   ok: boolean; status?: number; retryable: boolean; error?: string;
 }> {
   if (!/^https?:\/\//.test(p.url)) return { ok: false, retryable: false, error: "bad_url" };
-  const raw = JSON.stringify(p.body);
-  const sig = await hmacSha256Hex(p.secret, raw);
+  const raw = canonicalJson(p.body);
+  const sig = await signHmac(p.secret, raw);
   const ctl = new AbortController();
   const tm = setTimeout(() => ctl.abort(), 15_000);
   try {
@@ -28,7 +28,7 @@ export async function deliverWebhook(_env: Env, p: WebhookPayload): Promise<{
       headers: {
         "Content-Type": "application/json",
         "User-Agent": "AIDataSignal-Webhooks/1.0",
-        "X-AIDS-Signature": `sha256=${sig}`,
+        "X-AIDS-Signature": sig,
         "X-AIDS-Timestamp": new Date().toISOString(),
       },
       body: raw,
@@ -52,7 +52,18 @@ export async function deliverWebhook(_env: Env, p: WebhookPayload): Promise<{
   }
 }
 
-async function hmacSha256Hex(secret: string, body: string): Promise<string> {
+/**
+ * Byte-stable JSON serialization. Webhooks sign this exact byte sequence,
+ * so retries must produce the identical body. Currently this is just
+ * `JSON.stringify`, but the indirection lets us swap in a canonical
+ * serializer (sorted keys, fixed number format) without touching callers.
+ */
+export function canonicalJson(body: unknown): string {
+  return JSON.stringify(body);
+}
+
+/** Returns `sha256=<hex>` for direct use in the `X-AIDS-Signature` header. */
+export async function signHmac(secret: string, body: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
@@ -61,5 +72,6 @@ async function hmacSha256Hex(secret: string, body: string): Promise<string> {
     ["sign"],
   );
   const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
-  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const hex = [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `sha256=${hex}`;
 }

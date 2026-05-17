@@ -22,6 +22,10 @@ import { deliverInApp } from "./channels/inApp";
 import { deliverEmail } from "./channels/email";
 import { deliverSlack } from "./channels/slack";
 import { deliverWebhook } from "./channels/webhook";
+import { computeDigestScheduledFor, loadDigestPrefs } from "./schedule";
+
+// Spec: webhook retries continue for up to 6 hours from first attempt.
+const WEBHOOK_RETRY_HORIZON_MS = 6 * 60 * 60 * 1000;
 
 interface MonitorResult {
   entityId: string;
@@ -141,7 +145,8 @@ async function dispatchEvent(env: Env, rule: AlertRuleRow, evt: EvaluatedAlert, 
   // Digest routing: short-circuit channel delivery, enqueue the event.
   if (rule.digest_frequency !== "realtime" && rule.digest_frequency !== "off"
       && rule.channel !== "in_app" /* in-app is always realtime */) {
-    const scheduled = computeDigestScheduledFor(rule.digest_frequency);
+    const prefs = await loadDigestPrefs(env, rule.owner_email);
+    const scheduled = computeDigestScheduledFor(rule.digest_frequency, prefs);
     await env.DB.prepare(
       `INSERT INTO digest_queue (id, owner_email, watchlist_id, event_id, scheduled_for, status)
          VALUES (?, ?, ?, ?, ?, 'pending')`,
@@ -227,58 +232,41 @@ export async function deliverEvent(env: Env, eventId: string, rule: AlertRuleRow
       break;
   }
 
-  // Persist outcome + delivery log.
+  // Accumulate the delivery log so every attempt is preserved (audit trail).
+  const existing = await env.DB.prepare(
+    `SELECT delivery_attempts, delivery_log_json FROM alert_events WHERE id = ?`,
+  ).bind(eventId).first<{ delivery_attempts: number; delivery_log_json: string | null }>();
+  const prevLog = parseJson<Array<{ ts: string; channel: string; status: string; error?: string }>>(existing?.delivery_log_json ?? null) ?? [];
+  const fullLog = prevLog.concat(log);
+  const attempts = (existing?.delivery_attempts ?? 0) + 1;
+
   if (ok) {
     await env.DB.prepare(
       `UPDATE alert_events SET delivery_status='delivered', delivered_at=?,
-         delivery_attempts=delivery_attempts+1, delivery_log_json=? WHERE id = ?`,
-    ).bind(now(), JSON.stringify(log), eventId).run();
+         delivery_attempts=?, delivery_log_json=?, next_attempt_at=NULL WHERE id = ?`,
+    ).bind(now(), attempts, JSON.stringify(fullLog), eventId).run();
     return "delivered";
   }
-  // Failure path. Webhook with retryable error → schedule next attempt
-  // with exponential backoff (max 6h total per spec).
-  const existing = await env.DB.prepare(`SELECT delivery_attempts FROM alert_events WHERE id = ?`).bind(eventId).first<{ delivery_attempts: number }>();
-  const attempts = (existing?.delivery_attempts ?? 0) + 1;
-  if (rule.channel === "webhook" && retryable && attempts < 8) {
-    const backoffMs = Math.min(60 * 1000 * Math.pow(2, attempts), 60 * 60 * 1000); // cap 1h between attempts
-    const nextAttempt = new Date(Date.now() + backoffMs).toISOString();
+  // Failure path. Webhook with retryable (5xx/network) error → schedule
+  // next attempt with exponential backoff, but only while we're still
+  // inside the 6h retry horizon measured from the original event time.
+  const ageMs = Date.now() - new Date(dctx.occurredAt).getTime();
+  if (rule.channel === "webhook" && retryable && ageMs < WEBHOOK_RETRY_HORIZON_MS) {
+    const backoffMs = Math.min(60 * 1000 * Math.pow(2, attempts), 60 * 60 * 1000);
+    const cappedNext = Math.min(Date.now() + backoffMs,
+      new Date(dctx.occurredAt).getTime() + WEBHOOK_RETRY_HORIZON_MS);
+    const nextAttempt = new Date(cappedNext).toISOString();
     await env.DB.prepare(
       `UPDATE alert_events SET delivery_status='pending', delivery_attempts=?,
          next_attempt_at=?, delivery_log_json=? WHERE id = ?`,
-    ).bind(attempts, nextAttempt, JSON.stringify(log), eventId).run();
+    ).bind(attempts, nextAttempt, JSON.stringify(fullLog), eventId).run();
     return "pending";
   }
   await env.DB.prepare(
     `UPDATE alert_events SET delivery_status='failed', delivery_attempts=?,
-       delivery_log_json=? WHERE id = ?`,
-  ).bind(attempts, JSON.stringify(log), eventId).run();
+       delivery_log_json=?, next_attempt_at=NULL WHERE id = ?`,
+  ).bind(attempts, JSON.stringify(fullLog), eventId).run();
   return "failed";
-}
-
-function computeDigestScheduledFor(freq: string): string {
-  const now = new Date();
-  switch (freq) {
-    case "hourly": {
-      const next = new Date(now);
-      next.setMinutes(0, 0, 0); next.setHours(now.getHours() + 1);
-      return next.toISOString();
-    }
-    case "weekly": {
-      const next = new Date(now);
-      const day = next.getUTCDay();
-      const daysUntilMonday = (1 - day + 7) % 7 || 7;
-      next.setUTCDate(next.getUTCDate() + daysUntilMonday);
-      next.setUTCHours(9, 0, 0, 0);
-      return next.toISOString();
-    }
-    case "daily":
-    default: {
-      const next = new Date(now);
-      next.setUTCHours(9, 0, 0, 0);
-      if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
-      return next.toISOString();
-    }
-  }
 }
 
 function parseJson<T>(s: string | null): T | null {

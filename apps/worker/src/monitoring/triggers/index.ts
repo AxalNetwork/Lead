@@ -16,10 +16,12 @@ import { evalNewNewsItem } from "./new_news_item";
 import { evalNewInvestment } from "./new_investment";
 import { evalHandleAdded } from "./handle_added";
 import { evalExecutiveChange } from "./executive_change";
-
-// Stub — returns null. Kind is registered so rules can be created and
-// the queue/diff path stays uniform; semantics implemented in a follow-up.
-const stub: EvaluatorFn = async () => null;
+import { evalNewPortfolioAddition } from "./new_portfolio_addition";
+import { evalAdverseMedia } from "./adverse_media";
+import { evalFundingEvent } from "./funding_event";
+import { evalNewTweet, evalNewPodcast, evalNewPost } from "./social_post";
+import { evalPredictionAboveThreshold } from "./prediction_above_threshold";
+import { evalRelationshipChange } from "./relationship_change";
 
 export const EVALUATORS: Record<TriggerKind, EvaluatorFn> = {
   any_change: evalAnyChange,
@@ -34,15 +36,14 @@ export const EVALUATORS: Record<TriggerKind, EvaluatorFn> = {
   new_investment: evalNewInvestment,
   handle_added: evalHandleAdded,
   executive_change: evalExecutiveChange,
-  // Stubs — implemented as follow-ups. Rules can still be created/saved.
-  new_portfolio_addition: stub,
-  adverse_media: stub,
-  funding_event: stub,
-  new_tweet: stub,
-  new_podcast: stub,
-  new_post: stub,
-  prediction_above_threshold: stub,
-  relationship_change: stub,
+  new_portfolio_addition: evalNewPortfolioAddition,
+  adverse_media: evalAdverseMedia,
+  funding_event: evalFundingEvent,
+  new_tweet: evalNewTweet,
+  new_podcast: evalNewPodcast,
+  new_post: evalNewPost,
+  prediction_above_threshold: evalPredictionAboveThreshold,
+  relationship_change: evalRelationshipChange,
 };
 
 export async function evaluate(kind: TriggerKind, ctx: EvalContext): Promise<EvaluatedAlert | null> {
