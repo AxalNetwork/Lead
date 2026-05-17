@@ -129,13 +129,27 @@ itself, so the safe rollout sequence is:
 
 The backfill cannot auto-derive manual provenance because legacy
 `persona_matches` has no `source` column. **Migration 331 hard-fails
-with a division-by-zero error if `persona_matches` has any rows and
-`persona_match_manual_overrides` is empty** — operators must
-explicitly opt out by inserting at least one row (a no-op sentinel is
-fine if there genuinely are no manual pins) or pre-populate the
-override table with the manual pairs to preserve. Greenfield deploys
-(empty `persona_matches`) pass through cleanly with no operator
-action required.
+with a `CHECK constraint failed` error (raised by an inline
+`CREATE TEMP TABLE … CHECK(ok=1)` guard) if `persona_matches` has any
+rows and `persona_match_manual_overrides` is empty.** SQLite's `1/0`
+evaluates to NULL rather than raising, so the CHECK-constraint
+pattern is the portable D1/SQLite-aborting primitive. Operators must
+either pre-populate the override table with the manual pairs to
+preserve, OR explicitly opt out by inserting a no-op sentinel row if
+there genuinely are no manual pins. Greenfield deploys (empty
+`persona_matches`) pass through cleanly with no operator action.
+
+**Release checklist gate.** Before applying migration 331 to any
+environment that has historically run the legacy `persona_matches`
+matcher (Task #46 accounts/buyers), the deploy pipeline must:
+1. Query `SELECT COUNT(*) FROM persona_matches` on the target DB.
+2. If non-zero, require an explicit operator-signed manifest listing
+   the (persona_id, entity_id) pairs to preserve as manual.
+3. Apply those rows to `persona_match_manual_overrides` (created
+   beforehand if needed) before running the 331 migration.
+4. If the operator has zero manual pins to preserve, insert a single
+   sentinel row (e.g. `('__sentinel__','__sentinel__')`) to bypass
+   the guard while documenting the decision in the release notes.
 
 ### Inline-scoring feature flag
 
