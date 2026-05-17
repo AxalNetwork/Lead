@@ -187,16 +187,20 @@ api.onError((err, c) => {
   } else {
     console.warn("Worker error", appErr.code, appErr.message);
   }
-  // Task #2 bug-triage: in production, return a stable minimal envelope
-  // ({error:{code,message}}) and never serialize Error.stack. Dev
-  // (`DEBUG=1`) keeps the rich legacy envelope for debugging.
+  // Task #2 bug-triage: in production, return the stable minimal
+  // envelope `{ error: { code, message } }` and never serialize
+  // Error.stack. For internal/unknown failures, sanitize the message
+  // (replace raw thrown text with a constant) so we never leak SQL,
+  // provider, or platform error strings. Dev (`DEBUG=1`) keeps the
+  // rich legacy envelope for debugging.
   const isProd = c.env.ENVIRONMENT === "production" || !c.env.DEBUG;
   if (isProd) {
-    const body = {
-      error: { code: appErr.code, message: appErr.message },
-      request_id: requestIdVal,
-    };
-    return c.json(body, appErr.status as ContentfulStatusCode);
+    const isUnknown = appErr.kind === "internal" || appErr.status >= 500;
+    const safeMessage = isUnknown ? "Internal server error" : appErr.message;
+    return c.json(
+      { error: { code: appErr.code, message: safeMessage } },
+      appErr.status as ContentfulStatusCode,
+    );
   }
   return c.json(appErr.toJSON(requestIdVal), appErr.status as ContentfulStatusCode);
 });
