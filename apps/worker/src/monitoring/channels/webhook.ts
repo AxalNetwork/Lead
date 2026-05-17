@@ -17,7 +17,10 @@ interface WebhookPayload {
 export async function deliverWebhook(env: Env, p: WebhookPayload): Promise<{
   ok: boolean; status?: number; retryable: boolean; error?: string;
 }> {
-  if (!/^https?:\/\//.test(p.url)) return { ok: false, retryable: false, error: "bad_url" };
+  // HTTPS-only: webhook bodies carry alert payloads + HMAC signatures
+  // and must never traverse plaintext. Reject http:// up front (not
+  // retryable — operator must fix the URL).
+  if (!/^https:\/\//.test(p.url)) return { ok: false, retryable: false, error: "bad_url_https_required" };
   // Per-host rate limit (same RL_HOST binding the crawler uses). A noisy
   // webhook destination must not starve other tenants; if the limiter
   // rejects us we mark the attempt retryable so the dispatcher reschedules.

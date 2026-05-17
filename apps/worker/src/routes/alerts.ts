@@ -58,9 +58,15 @@ alerts.post("/rules", async (c) => {
     }, 400);
   }
   let channelCfg: Record<string, unknown> = (typeof body.channel_config === "object" && body.channel_config) ? body.channel_config as Record<string, unknown> : {};
-  // Webhook: auto-generate secret if absent.
-  if (channel === "webhook" && !channelCfg.webhook_secret) {
-    channelCfg.webhook_secret = generateSecret();
+  // Webhook: auto-generate secret if absent + enforce HTTPS at write-time
+  // so an operator can't save a rule that will permanently fail at
+  // dispatch (matches the channel-level HTTPS-only policy).
+  if (channel === "webhook") {
+    if (!channelCfg.webhook_secret) channelCfg.webhook_secret = generateSecret();
+    const url = String(channelCfg.webhook_url ?? "");
+    if (!/^https:\/\//.test(url)) {
+      return c.json({ error: "bad_webhook_url", message: "webhook_url must be https://" }, 400);
+    }
   }
   const id = crypto.randomUUID();
   await c.env.DB.prepare(
