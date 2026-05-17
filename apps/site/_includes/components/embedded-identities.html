@@ -3,7 +3,9 @@
     1. expose the entity id as `window.ADS_ENTITY_ID` (already done by
        lead.html / dd-entity.html via the URL `?id=` parameter).
     2. include /assets/js/osint.js once.
-  Renders into #ads-osint-identities.
+  Renders three lanes (verified / candidates / demoted), a coverage
+  progress strip "Found on N/60" with per-platform quick-probe buttons
+  for missing platforms, and per-handle quick-reject for linked rows.
 {%- endcomment -%}
 <div class="ads-card" id="ads-osint-identities" style="margin-bottom:18px">
   <div class="ads-loading">Loading identities…</div>

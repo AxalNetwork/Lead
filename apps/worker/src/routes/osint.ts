@@ -59,7 +59,13 @@ osint.get("/entity/:id", async (c) => {
   });
 });
 
-osint.get("/entity/:id/coverage", async (c) => {
+// Spec contract: /api/osint/coverage/:id is the canonical path.
+// /entity/:id/coverage retained as a back-compat alias (same handler body).
+const coverageImpl = async (c: {
+  req: { param(name: string): string };
+  env: Env;
+  json(data: unknown): Response;
+}): Promise<Response> => {
   const id = c.req.param("id");
   const r = await c.env.DB.prepare(
     `SELECT platform, MAX(is_active) AS is_active, MAX(link_confidence) AS conf
@@ -75,8 +81,11 @@ osint.get("/entity/:id/coverage", async (c) => {
     confidence: map.get(p.slug)?.conf ?? 0,
   }));
   const covered = matrix.filter((m) => m.active).length;
-  return c.json({ entity_id: id, total_platforms: PLATFORMS.length, covered, matrix });
-});
+  const missing = matrix.filter((m) => !m.active).map((m) => m.platform);
+  return c.json({ entity_id: id, total_platforms: PLATFORMS.length, covered, missing, matrix });
+};
+osint.get("/coverage/:id", (c) => coverageImpl(c));
+osint.get("/entity/:id/coverage", (c) => coverageImpl(c));
 
 osint.post("/entity/:id/resolve", async (c) => {
   const id = c.req.param("id");
@@ -123,9 +132,11 @@ osint.post("/entity/:id/probe", async (c) => {
 osint.get("/candidates", async (c) => {
   const status = c.req.query("status") ?? "pending";
   const entityId = c.req.query("entity_id");
+  const platform = c.req.query("platform");
   const limit = Math.min(Number(c.req.query("limit") ?? "100"), 500);
   const where = ["status = ?"]; const binds: unknown[] = [status];
   if (entityId) { where.push("entity_id = ?"); binds.push(entityId); }
+  if (platform) { where.push("platform = ?"); binds.push(platform); }
   const r = await c.env.DB.prepare(
     `SELECT id, entity_id, platform, handle, url, link_method, link_confidence,
             evidence_json, status, reviewer_email, reviewed_at, reviewer_notes, created_at
@@ -164,6 +175,22 @@ osint.post("/candidates/:id/accept", async (c) => {
   await c.env.DB.prepare(
     `UPDATE handle_candidates SET status = 'accepted', reviewer_email = ?, reviewed_at = datetime('now') WHERE id = ?`,
   ).bind(email, id).run();
+  return c.json({ ok: true });
+});
+
+// Quick-reject a linked handle from the Identities tab. Marks the row
+// inactive (is_active=0) with a demoted_reason so the audit trail survives.
+osint.post("/handles/:id/reject", async (c) => {
+  const id = c.req.param("id");
+  const email = c.get("email") ?? null;
+  const body = await c.req.json().catch(() => ({})) as { reason?: string };
+  const reason = body.reason ? `operator_rejected:${email ?? "unknown"}:${body.reason}` : `operator_rejected:${email ?? "unknown"}`;
+  const r = await c.env.DB.prepare(
+    `UPDATE identity_handles
+        SET is_active = 0, demoted_reason = ?, updated_at = datetime('now')
+        WHERE id = ?`,
+  ).bind(reason, id).run();
+  if (!r.meta || !r.meta.changes) return c.json({ error: "not_found" }, 404);
   return c.json({ ok: true });
 });
 

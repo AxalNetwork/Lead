@@ -1,5 +1,8 @@
 // Shared helpers for individual pivots.
 
+import type { Env } from "../../types";
+import { fetchPage } from "../../scraper/fetcher";
+
 export interface SimpleFetchResult {
   ok: boolean;
   status: number;
@@ -79,6 +82,33 @@ export async function parallelMap<T, R>(
 // Time gate — quick check before launching a sub-probe.
 export function pastDeadline(deadlineMs: number): boolean {
   return Date.now() > deadlineMs;
+}
+
+// Tiered, rate-limited fetch via the existing scraper pipeline. Used by
+// the username sweep where Task 5's tier-2 proxy + Task 22 per-host rate
+// limiter are required so we don't burn the home IP on anti-bot platforms.
+// Falls back to `simpleGet` if the scraper pipeline returns a non-OK block
+// reason that isn't a real 404 (e.g. circuit_open).
+export async function tieredGet(env: Env, url: string, opts: { timeoutMs?: number } = {}): Promise<SimpleFetchResult> {
+  try {
+    const r = await fetchPage(env, url, {
+      minIntervalMs: 1500,
+      timeoutMs: opts.timeoutMs ?? 3500,
+      liveOnly: true,
+    });
+    if (r.ok && r.html) {
+      const text = r.html.length > 262144 ? r.html.slice(0, 262144) : r.html;
+      return { ok: true, status: r.status ?? 200, text, contentType: "text/html" };
+    }
+    if (r.status && r.status >= 400 && r.status < 500) {
+      return { ok: false, status: r.status, text: r.html ?? "", contentType: "text/html" };
+    }
+    // Soft-block (circuit_open, robots, tos) — fall back so the OSINT
+    // probe still gets a chance, but we burn through tier 0 only.
+    return await simpleGet(url, opts);
+  } catch {
+    return await simpleGet(url, opts);
+  }
 }
 
 // Best-effort log without throwing.

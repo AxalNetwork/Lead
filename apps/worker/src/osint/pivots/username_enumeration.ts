@@ -8,7 +8,7 @@
 import type { Env } from "../../types";
 import type { KnownEntityFacts, PivotContext, PivotHit } from "../types";
 import { PLATFORMS } from "../platforms";
-import { simpleGet, pastDeadline, parallelMap, bodyLooksLikeMiss, generateHandleVariants } from "./_util";
+import { simpleGet, tieredGet, pastDeadline, parallelMap, bodyLooksLikeMiss, generateHandleVariants } from "./_util";
 import { isNegativeCached, recordMiss } from "../negativeCache";
 
 // Platforms we never sweep — heavy / anti-bot / require auth.
@@ -35,7 +35,12 @@ export async function runUsernameEnumeration(env: Env, facts: KnownEntityFacts, 
     if (ctx.useNegativeCache && await isNegativeCached(env, facts.entityId, platform.slug, handle)) return;
 
     const url = platform.probeUrlOf ? platform.probeUrlOf(handle) : platform.urlOf(handle);
-    const res = await simpleGet(url, { timeoutMs: 3500, accept: platform.probeUrlOf ? "application/json" : "text/html" });
+    // JSON probes (HEAD-equivalent endpoints) stay on simpleGet (low cost,
+    // no anti-bot). HTML profile fetches escalate through the scraper's
+    // tiered pipeline so per-host rate limits + Tier 2 proxy apply.
+    const res = platform.probeUrlOf
+      ? await simpleGet(url, { timeoutMs: 3500, accept: "application/json" })
+      : await tieredGet(env, url, { timeoutMs: 3500 });
 
     if (res.status === 404 || (res.status >= 400 && res.status < 500 && res.status !== 429)) {
       if (ctx.useNegativeCache) await recordMiss(env, facts.entityId, platform.slug, handle, `http_${res.status}`);

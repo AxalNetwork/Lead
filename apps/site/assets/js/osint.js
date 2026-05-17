@@ -75,19 +75,35 @@
       };
       root.appendChild(el("div", { style: "display:flex;gap:8px;align-items:center;margin-bottom:10px" }, [runBtn, msg]));
 
-      // Handles table
+      // Coverage progress strip: "Found on N/60"
+      const pct = cov.total_platforms ? Math.round((cov.covered / cov.total_platforms) * 100) : 0;
+      const strip = el("div", { style: "margin:4px 0 12px 0" }, [
+        el("div", { style: "display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px" }, [
+          el("strong", null, [`Found on ${cov.covered}/${cov.total_platforms} platforms`]),
+          el("span", { class: "ads-muted" }, [`${pct}% coverage`]),
+        ]),
+        el("div", { style: "height:8px;background:#eee;border-radius:4px;overflow:hidden" }, [
+          el("div", { style: `height:100%;width:${pct}%;background:#43a047` }),
+        ]),
+      ]);
+      root.appendChild(strip);
+
+      // Handles table — with quick-reject (mark inactive) per active row.
       const tbl = el("table", { class: "ads-table", style: "width:100%" }, [
         el("thead", null, [el("tr", null, [
           el("th", null, ["Platform"]), el("th", null, ["Handle"]),
           el("th", null, ["Method"]), el("th", null, ["Confidence"]),
           el("th", null, ["Verified"]), el("th", null, ["Link"]),
+          el("th", null, ["Action"]),
         ])]),
       ]);
       const tb = el("tbody");
       if (!info.handles.length) {
-        tb.appendChild(el("tr", null, [el("td", { colspan: "6", class: "ads-muted" }, ["No identities resolved yet."])]));
+        tb.appendChild(el("tr", null, [el("td", { colspan: "7", class: "ads-muted" }, ["No identities resolved yet."])]));
       }
       for (const h of info.handles) {
+        const rejectBtn = h.is_active ? el("button", { class: "ads-btn", style: "padding:2px 8px;font-size:11px" }, ["Reject"]) : null;
+        const actionCell = el("td", null, rejectBtn ? [rejectBtn] : ["—"]);
         const row = el("tr", { style: h.is_active ? "" : "opacity:.55" }, [
           el("td", null, [h.platform]),
           el("td", null, [h.handle]),
@@ -95,7 +111,22 @@
           el("td", null, [fmtConf(h.link_confidence)]),
           el("td", { class: "ads-muted" }, [ago(h.last_verified_at) + (h.demoted_reason ? ` · demoted: ${h.demoted_reason}` : "")]),
           el("td", null, [h.url ? el("a", { href: h.url, target: "_blank", rel: "noopener" }, ["open"]) : "—"]),
+          actionCell,
         ]);
+        if (rejectBtn) {
+          rejectBtn.onclick = async () => {
+            const reason = prompt(`Reject ${h.platform}:${h.handle}? (optional reason)`);
+            if (reason === null) return;
+            rejectBtn.disabled = true; rejectBtn.textContent = "…";
+            try {
+              await jpost(`/api/osint/handles/${encodeURIComponent(h.id)}/reject`, { reason: reason || null });
+              row.style.opacity = ".4"; actionCell.textContent = "rejected";
+            } catch (e) {
+              alert("Reject failed: " + e.message);
+              rejectBtn.disabled = false; rejectBtn.textContent = "Reject";
+            }
+          };
+        }
         tb.appendChild(row);
       }
       tbl.appendChild(tb);
@@ -113,12 +144,32 @@
 
       // Coverage matrix
       const covWrap = el("div", { style: "margin-top:18px" }, [el("h4", null, ["Platform coverage"])]);
-      const grid = el("div", { style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px" });
+      const grid = el("div", { style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px" });
       for (const m of cov.matrix) {
-        grid.appendChild(el("div", {
+        const cell = el("div", {
           title: `${m.label} · ${m.category}`,
-          style: `border:1px solid #e5e5e5;padding:6px 8px;border-radius:6px;font-size:12px;background:${m.active ? "#e8f5e9" : "#fafafa"};color:${m.active ? "#1b5e20" : "#999"}`,
-        }, [`${m.label}${m.active ? " ✓ " + fmtConf(m.confidence) : ""}`]));
+          style: `border:1px solid #e5e5e5;padding:6px 8px;border-radius:6px;font-size:12px;background:${m.active ? "#e8f5e9" : "#fafafa"};color:${m.active ? "#1b5e20" : "#666"};display:flex;justify-content:space-between;align-items:center;gap:6px`,
+        }, [el("span", null, [`${m.label}${m.active ? " ✓ " + fmtConf(m.confidence) : ""}`])]);
+        if (!m.active) {
+          // Per-platform Probe action for missing cells — prompts for a
+          // handle and POSTs /entity/:id/probe?platform=<slug>.
+          const pb = el("button", { class: "ads-btn", style: "padding:1px 6px;font-size:10px" }, ["Probe"]);
+          pb.onclick = async () => {
+            const handle = prompt(`Probe ${m.label} for handle:`);
+            if (!handle) return;
+            pb.disabled = true; pb.textContent = "…";
+            try {
+              const r = await jpost(`/api/osint/entity/${encodeURIComponent(entityId)}/probe`, { platform: m.platform, handle: handle.trim() });
+              pb.textContent = r.exists ? "✓ queued" : "✗ miss";
+              if (r.exists) setTimeout(() => renderIdentities(rootId, entityId), 1500);
+            } catch (e) {
+              alert("Probe failed: " + e.message);
+              pb.disabled = false; pb.textContent = "Probe";
+            }
+          };
+          cell.appendChild(pb);
+        }
+        grid.appendChild(cell);
       }
       covWrap.appendChild(grid);
       root.appendChild(covWrap);
