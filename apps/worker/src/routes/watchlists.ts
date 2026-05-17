@@ -220,11 +220,17 @@ watchlists.get("/watch/:entityId", async (c) => {
   const email = ownerEmail(c);
   const entityId = c.req.param("entityId");
   const r = await c.env.DB.prepare(
-    `SELECT m.watchlist_id, w.name FROM watchlist_members m
+    `SELECT m.watchlist_id, w.name, w.is_default FROM watchlist_members m
        JOIN watchlists w ON w.id = m.watchlist_id
       WHERE w.owner_email = ? AND m.entity_id = ?`,
-  ).bind(email, entityId).all<{ watchlist_id: string; name: string }>();
-  return c.json({ watching: (r.results ?? []).length > 0, lists: r.results ?? [] });
+  ).bind(email, entityId).all<{ watchlist_id: string; name: string; is_default: number }>();
+  const lists = r.results ?? [];
+  // `watching` reflects DEFAULT-watchlist membership only — keeps the
+  // star/toggle semantics consistent with POST/DELETE which both target
+  // the default watchlist. `lists` still exposes every list membership
+  // for callers that want the full picture.
+  const watching = lists.some((l) => l.is_default === 1);
+  return c.json({ watching, lists });
 });
 
 // Force a smart-list re-eval now.

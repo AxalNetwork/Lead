@@ -369,19 +369,30 @@ export class MonitorBatchWorkflow {
       return await reevaluateAllSmartWatchlists(this.env, { limit: 25 });
     });
 
-    // 2. Pick due entities and evaluate inline (per-entity work is small
-    //    — no need to fan out to the per-entity workflow for v1).
+    // 2. Pick due entities. Prefer fan-out to MonitorEntityWorkflow for
+    //    per-entity durability/retry isolation; fall back to inline
+    //    evaluation when the binding isn't available (local dev / tests).
     const { pickDueEntities, monitorEntity, retryPendingDeliveries } = await import("../monitoring/dispatch");
     const ids = await step.do("pick", { retries: { limit: 1 } }, async () =>
       await pickDueEntities(this.env, { limit, staleMinutes }),
     );
     let emitted = 0, delivered = 0;
-    for (let i = 0; i < ids.length; i++) {
-      try {
-        const r = await monitorEntity(this.env, ids[i]);
-        emitted += r.emitted; delivered += r.delivered;
-      } catch (e) {
-        console.warn("monitorEntity failed", ids[i], (e as Error).message);
+    if (this.env.WF_MONITOR_ENTITY) {
+      for (let i = 0; i < ids.length; i++) {
+        try {
+          await this.env.WF_MONITOR_ENTITY.create({ params: { entityId: ids[i] } });
+        } catch (e) {
+          console.warn("WF_MONITOR_ENTITY create failed", ids[i], (e as Error).message);
+        }
+      }
+    } else {
+      for (let i = 0; i < ids.length; i++) {
+        try {
+          const r = await monitorEntity(this.env, ids[i]);
+          emitted += r.emitted; delivered += r.delivered;
+        } catch (e) {
+          console.warn("monitorEntity failed", ids[i], (e as Error).message);
+        }
       }
     }
 
