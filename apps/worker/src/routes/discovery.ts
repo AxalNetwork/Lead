@@ -32,8 +32,19 @@ discoveryRoute.post("/seed", async (c) => {
     url?: string; depth?: number; max_per_host?: number; methods?: string[]; dispatch?: boolean; yield_threshold?: number;
   };
   if (!body.url) return c.json({ error: "url_required" }, 400);
+  // Strict scheme gate: only http/https URLs make sense as discovery
+  // seeds. `canonicalizeUrl` happily accepts `mailto:` / `tel:` etc.
+  // and returns scheme="other", which would otherwise create noisy
+  // runs that the methods could never crawl.
+  const rawScheme = (body.url.match(/^([a-z][a-z0-9+.\-]*):/i)?.[1] ?? "").toLowerCase();
+  if (rawScheme && rawScheme !== "http" && rawScheme !== "https") {
+    return c.json({ error: "unsupported_scheme", scheme: rawScheme }, 400);
+  }
   const can = canonicalizeUrl(body.url);
   if (!can) return c.json({ error: "invalid_url" }, 400);
+  if (can.scheme && can.scheme !== "http" && can.scheme !== "https") {
+    return c.json({ error: "unsupported_scheme", scheme: can.scheme }, 400);
+  }
   // Reject when the caller asked for methods that are all unimplemented —
   // otherwise the run would silently produce zero links and look broken.
   // Returns the dropped names so operators see exactly what we ignored.
