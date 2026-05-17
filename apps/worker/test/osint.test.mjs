@@ -225,6 +225,82 @@ test("integration: global uniqueness — same (platform, handle) on a second ent
   assert.equal(ev.conflicting_entity_id, "entity_A");
 });
 
+test("end-to-end: resolveEntity workflow against stubbed Keybase + DB + KV auto-links a high-confidence handle", async () => {
+  const { resolveEntity } = await import(`${ROOT}/osint/resolve.js`);
+  const { resetOsintBudgetForTests } = await import(`${ROOT}/osint/pivots/_util.js`);
+  resetOsintBudgetForTests();
+  // Stub DB. Tracks identity_handles inserts so we can assert the auto-link.
+  const handles = [];
+  const candidates = [];
+  const factsRow = {
+    id: "ent-e2e", display_name: "Alice Example",
+    primary_url: "https://alice.example.com",
+    primary_email_key: "alice@example.com",
+    primary_linkedin_key: null, primary_twitter_handle: null, primary_github_handle: null,
+  };
+  const env = {
+    SCRAPE_CACHE: { async get() { return null; }, async put() {}, async delete() {} },
+    DB: {
+      prepare(sql) {
+        let binds = [];
+        return {
+          bind(...a) { binds = a; return this; },
+          async first() {
+            if (/FROM u_entities WHERE id/.test(sql)) return factsRow;
+            if (/SELECT entity_id FROM identity_handles/.test(sql)) return null;
+            if (/blocklist|squatter/i.test(sql)) return null;
+            return null;
+          },
+          async all() {
+            if (/FROM identity_handles WHERE entity_id/.test(sql)) {
+              return { results: [{ platform: "keybase", handle: "alice", url: "https://keybase.io/alice", is_active: 1 }] };
+            }
+            if (/FROM email_hashes/.test(sql)) return { results: [] };
+            if (/FROM wallet_addresses/.test(sql)) return { results: [] };
+            if (/FROM personal_sites/.test(sql)) return { results: [{ url: "https://alice.example.com" }] };
+            return { results: [] };
+          },
+          async run() {
+            if (/^\s*INSERT INTO identity_handles/i.test(sql)) {
+              handles.push({ entity_id: binds[1], platform: binds[2], handle: binds[3], conf: binds[6] });
+            } else if (/^\s*INSERT INTO handle_candidates/i.test(sql)) {
+              candidates.push({ entity_id: binds[1], platform: binds[2], handle: binds[3], conf: binds[6] });
+            }
+            return { meta: { changes: 1 } };
+          },
+        };
+      },
+    },
+  };
+  // Stub fetch — emit a Keybase sigchain proof that strongly binds the
+  // entity's email to a keybase handle (the canonical high-confidence
+  // pivot per spec). Everything else returns 404 (and is cached).
+  const origFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (url) => {
+    calls++;
+    const u = String(url);
+    if (u.includes("keybase.io") && u.includes("user/lookup")) {
+      const body = JSON.stringify({
+        status: { code: 0 },
+        them: [{ basics: { username: "alice" }, proofs_summary: { all: [{ proof_type: "twitter", nametag: "alice_tw", state: 1 }] } }],
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response("not found", { status: 404, headers: { "content-type": "text/plain" } });
+  };
+  try {
+    const summary = await resolveEntity(env, "ent-e2e", { totalBudgetMs: 5_000 });
+    assert.ok(summary, "summary returned");
+    assert.ok(calls > 0, "at least one external fetch issued by pivot framework");
+    const linked = handles.find((h) => h.platform === "keybase" && h.handle === "alice");
+    assert.ok(linked, "keybase/alice auto-linked into identity_handles");
+    assert.ok(linked.conf >= 0.85, `auto-link confidence must clear 0.85 threshold, got ${linked.conf}`);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
 test("acceptance (d): 90-day reverify with HTTP 404 demotes the handle", async () => {
   const { reverifyDueHandles } = await import(`${ROOT}/osint/reverify.js`);
   // Stub D1 + simpleGet via the env. simpleGet is imported inside

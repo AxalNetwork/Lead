@@ -8,10 +8,10 @@
 
 import type { Env } from "../../types";
 import type { KnownEntityFacts, PivotContext, PivotHit } from "../types";
-import { simpleGet, pastDeadline, parallelMap } from "./_util";
+import { simpleGetCached, pastDeadline, parallelMap } from "./_util";
 import { parseProfileUrl } from "../platforms";
 
-export async function runWellKnownPaths(_env: Env, facts: KnownEntityFacts, ctx: PivotContext): Promise<PivotHit[]> {
+export async function runWellKnownPaths(env: Env, facts: KnownEntityFacts, ctx: PivotContext): Promise<PivotHit[]> {
   if (!facts.personalSites.length) return [];
   if (pastDeadline(ctx.deadlineMs)) return [];
 
@@ -26,7 +26,7 @@ export async function runWellKnownPaths(_env: Env, facts: KnownEntityFacts, ctx:
     // 1) WebFinger acct: discovery for primary email
     for (const email of facts.emails.slice(0, 2)) {
       if (pastDeadline(ctx.deadlineMs)) return;
-      const wf = await simpleGet(`${origin}/.well-known/webfinger?resource=acct:${encodeURIComponent(email)}`, { timeoutMs: 3000, accept: "application/jrd+json" });
+      const wf = await simpleGetCached(env, `${origin}/.well-known/webfinger?resource=acct:${encodeURIComponent(email)}`, { timeoutMs: 3000, accept: "application/jrd+json" });
       if (wf.ok && wf.text) {
         try {
           const data = JSON.parse(wf.text) as { links?: Array<{ rel?: string; href?: string; type?: string }> };
@@ -50,7 +50,7 @@ export async function runWellKnownPaths(_env: Env, facts: KnownEntityFacts, ctx:
 
     // 2) /.well-known/keybase.txt — domain → keybase username binding
     if (!pastDeadline(ctx.deadlineMs)) {
-      const kb = await simpleGet(`${origin}/.well-known/keybase.txt`, { timeoutMs: 3000, accept: "text/plain" });
+      const kb = await simpleGetCached(env, `${origin}/.well-known/keybase.txt`, { timeoutMs: 3000, accept: "text/plain" });
       if (kb.ok && kb.text) {
         const m = kb.text.match(/keybase\.io\/([a-z0-9_]+)/i);
         if (m) hits.push({
@@ -65,7 +65,7 @@ export async function runWellKnownPaths(_env: Env, facts: KnownEntityFacts, ctx:
     // 3) /.well-known/openid-configuration — issuer often points to a
     // canonical identity provider that includes the operator's handle
     if (!pastDeadline(ctx.deadlineMs)) {
-      const oid = await simpleGet(`${origin}/.well-known/openid-configuration`, { timeoutMs: 3000, accept: "application/json" });
+      const oid = await simpleGetCached(env, `${origin}/.well-known/openid-configuration`, { timeoutMs: 3000, accept: "application/json" });
       if (oid.ok && oid.text) {
         try {
           const j = JSON.parse(oid.text) as { issuer?: string };
@@ -84,7 +84,7 @@ export async function runWellKnownPaths(_env: Env, facts: KnownEntityFacts, ctx:
     // 4) /.well-known/security.txt — Contact: links sometimes leak the
     // operator's email or social profile (mailto: / https://...)
     if (!pastDeadline(ctx.deadlineMs)) {
-      const sec = await simpleGet(`${origin}/.well-known/security.txt`, { timeoutMs: 2500, accept: "text/plain" });
+      const sec = await simpleGetCached(env, `${origin}/.well-known/security.txt`, { timeoutMs: 2500, accept: "text/plain" });
       if (sec.ok && sec.text) {
         const re = /^Contact:\s*(.+)$/gim;
         let m: RegExpExecArray | null;
@@ -104,7 +104,7 @@ export async function runWellKnownPaths(_env: Env, facts: KnownEntityFacts, ctx:
 
     // 5) /humans.txt — TEAM section sometimes exposes Twitter:/GitHub: lines
     if (!pastDeadline(ctx.deadlineMs)) {
-      const hum = await simpleGet(`${origin}/humans.txt`, { timeoutMs: 2500, accept: "text/plain" });
+      const hum = await simpleGetCached(env, `${origin}/humans.txt`, { timeoutMs: 2500, accept: "text/plain" });
       if (hum.ok && hum.text) {
         const re = /^(?:Twitter|GitHub|LinkedIn|Mastodon|Site):\s*(.+)$/gim;
         let m: RegExpExecArray | null;
@@ -123,7 +123,7 @@ export async function runWellKnownPaths(_env: Env, facts: KnownEntityFacts, ctx:
 
     // 6) /about.json (Jekyll/static convention) — links: { twitter, github }
     if (!pastDeadline(ctx.deadlineMs)) {
-      const ab = await simpleGet(`${origin}/about.json`, { timeoutMs: 2500, accept: "application/json" });
+      const ab = await simpleGetCached(env, `${origin}/about.json`, { timeoutMs: 2500, accept: "application/json" });
       if (ab.ok && ab.text) {
         try {
           const j = JSON.parse(ab.text) as { links?: Record<string, string>; profiles?: Record<string, string> };
@@ -143,7 +143,7 @@ export async function runWellKnownPaths(_env: Env, facts: KnownEntityFacts, ctx:
 
     // 7) Homepage rel=me / rel=author scan
     if (pastDeadline(ctx.deadlineMs)) return;
-    const home = await simpleGet(origin, { timeoutMs: 4000 });
+    const home = await simpleGetCached(env, origin, { timeoutMs: 4000 });
     if (home.ok && home.text) {
       const relMeRe = /<(?:a|link)\b[^>]*\brel=["']?(?:me|author)["']?[^>]*\bhref=["']([^"']+)["']/gi;
       const hrefRe2 = /<(?:a|link)\b[^>]*\bhref=["']([^"']+)["'][^>]*\brel=["']?(?:me|author)["']?/gi;

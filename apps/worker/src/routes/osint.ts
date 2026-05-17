@@ -90,6 +90,16 @@ osint.get("/entity/:id/coverage", (c) => coverageImpl(c));
 osint.post("/entity/:id/resolve", async (c) => {
   const id = c.req.param("id");
   const body = await c.req.json().catch(() => ({})) as { manualReviewOnly?: boolean; sync?: boolean };
+  // Per-entity rate limit: one resolve per 60s per entity. KV-backed so
+  // it survives across isolates. Operators routinely click "Resolve"
+  // multiple times in a row — without this gate each click would burn
+  // the full 45-60s pivot budget against external APIs.
+  try {
+    const rlKey = `osint:resolve:rl:${id}`;
+    const seen = await c.env.SCRAPE_CACHE?.get(rlKey);
+    if (seen) return c.json({ error: "rate_limited", retry_after_seconds: 60 }, 429);
+    await c.env.SCRAPE_CACHE?.put(rlKey, "1", { expirationTtl: 60 });
+  } catch { /* KV may be absent in tests */ }
   // Dispatch the workflow if available; otherwise run inline (capped).
   if (c.env.WF_OSINT_RESOLVE_ENTITY && !body.sync) {
     try {
@@ -105,11 +115,18 @@ osint.post("/entity/:id/resolve", async (c) => {
 
 osint.post("/entity/:id/probe", async (c) => {
   const id = c.req.param("id");
+  // Spec contract: platform comes from ?platform= query; handle may come
+  // from query or JSON body. Body-only is still accepted as a back-compat
+  // convenience for the dashboard's existing JS.
   const body = await c.req.json().catch(() => null) as { platform?: string; handle?: string } | null;
-  if (!body?.platform || !body?.handle) return c.json({ error: "bad_request", message: "platform + handle required" }, 400);
-  const def = getPlatform(body.platform);
+  const qPlatform = c.req.query("platform");
+  const qHandle = c.req.query("handle");
+  const platform = qPlatform ?? body?.platform;
+  const handle = qHandle ?? body?.handle;
+  if (!platform || !handle) return c.json({ error: "bad_request", message: "platform + handle required" }, 400);
+  const def = getPlatform(platform);
   if (!def) return c.json({ error: "unknown_platform" }, 400);
-  const url = def.probeUrlOf ? def.probeUrlOf(body.handle) : def.urlOf(body.handle);
+  const url = def.probeUrlOf ? def.probeUrlOf(handle) : def.urlOf(handle);
   const res = await simpleGet(url, { timeoutMs: 6000, accept: def.probeUrlOf ? "application/json" : "text/html" });
   const miss = res.status === 404 || (res.ok && bodyLooksLikeMiss(res.text, def.notFoundHints));
   const exists = res.ok && !miss;
@@ -122,11 +139,11 @@ osint.post("/entity/:id/probe", async (c) => {
          link_confidence = max(handle_candidates.link_confidence, excluded.link_confidence),
          updated_at = datetime('now')`,
     ).bind(
-      crypto.randomUUID(), id, def.slug, body.handle.toLowerCase(),
-      def.urlOf(body.handle), JSON.stringify({ kind: "manual_probe", status: res.status, by: c.get("email") ?? null }),
+      crypto.randomUUID(), id, def.slug, handle.toLowerCase(),
+      def.urlOf(handle), JSON.stringify({ kind: "manual_probe", status: res.status, by: c.get("email") ?? null }),
     ).run();
   }
-  return c.json({ ok: true, platform: def.slug, handle: body.handle, exists, http_status: res.status, profile_url: def.urlOf(body.handle) });
+  return c.json({ ok: true, platform: def.slug, handle, exists, http_status: res.status, profile_url: def.urlOf(handle) });
 });
 
 osint.get("/candidates", async (c) => {

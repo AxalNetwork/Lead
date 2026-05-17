@@ -7,7 +7,7 @@
 import type { Env } from "../../types";
 import type { KnownEntityFacts, PivotContext, PivotHit } from "../types";
 import { md5Hex } from "../hashing";
-import { simpleGet, pastDeadline, parallelMap } from "./_util";
+import { simpleGetCached, pastDeadline, parallelMap } from "./_util";
 import { parseProfileUrl } from "../platforms";
 
 interface GravatarEntry {
@@ -20,7 +20,7 @@ interface GravatarEntry {
   urls?: Array<{ value: string; title?: string }>;
 }
 
-export async function runGravatarLookup(_env: Env, facts: KnownEntityFacts, ctx: PivotContext): Promise<PivotHit[]> {
+export async function runGravatarLookup(env: Env, facts: KnownEntityFacts, ctx: PivotContext): Promise<PivotHit[]> {
   if (!facts.emails.length) return [];
   if (pastDeadline(ctx.deadlineMs)) return [];
 
@@ -28,7 +28,7 @@ export async function runGravatarLookup(_env: Env, facts: KnownEntityFacts, ctx:
   await parallelMap(facts.emails.slice(0, 5), 3, async (email) => {
     if (pastDeadline(ctx.deadlineMs)) return;
     const md5 = md5Hex(email.trim().toLowerCase());
-    const res = await simpleGet(`https://gravatar.com/${md5}.json`, { timeoutMs: 4000, accept: "application/json" });
+    const res = await simpleGetCached(env, `https://gravatar.com/${md5}.json`, { timeoutMs: 4000, accept: "application/json" });
     if (!res.ok) return;
     try {
       const data = JSON.parse(res.text) as { entry?: GravatarEntry[] };

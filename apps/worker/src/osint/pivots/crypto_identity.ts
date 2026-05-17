@@ -6,9 +6,9 @@
 
 import type { Env } from "../../types";
 import type { KnownEntityFacts, PivotContext, PivotHit } from "../types";
-import { simpleGet, pastDeadline, parallelMap } from "./_util";
+import { simpleGetCached, pastDeadline, parallelMap } from "./_util";
 
-export async function runCryptoIdentity(_env: Env, facts: KnownEntityFacts, ctx: PivotContext): Promise<PivotHit[]> {
+export async function runCryptoIdentity(env: Env, facts: KnownEntityFacts, ctx: PivotContext): Promise<PivotHit[]> {
   if (pastDeadline(ctx.deadlineMs)) return [];
   const out: PivotHit[] = [];
 
@@ -22,7 +22,7 @@ export async function runCryptoIdentity(_env: Env, facts: KnownEntityFacts, ctx:
 
   await parallelMap([...ensInputs].slice(0, 5), 3, async (probe) => {
     if (pastDeadline(ctx.deadlineMs)) return;
-    const r = await simpleGet(`https://api.ensideas.com/ens/resolve/${encodeURIComponent(probe)}`, { timeoutMs: 4000, accept: "application/json" });
+    const r = await simpleGetCached(env, `https://api.ensideas.com/ens/resolve/${encodeURIComponent(probe)}`, { timeoutMs: 4000, accept: "application/json" });
     if (!r.ok) return;
     try {
       const data = JSON.parse(r.text) as { name?: string; address?: string; avatar?: string };
@@ -62,7 +62,7 @@ export async function runCryptoIdentity(_env: Env, facts: KnownEntityFacts, ctx:
   }
   await parallelMap([...farcasterSeeds].slice(0, 4), 2, async (name) => {
     if (pastDeadline(ctx.deadlineMs)) return;
-    const r = await simpleGet(`https://api.warpcast.com/v2/user-by-username?username=${encodeURIComponent(name)}`, { timeoutMs: 4000, accept: "application/json" });
+    const r = await simpleGetCached(env, `https://api.warpcast.com/v2/user-by-username?username=${encodeURIComponent(name)}`, { timeoutMs: 4000, accept: "application/json" });
     if (!r.ok) return;
     try {
       const data = JSON.parse(r.text) as { result?: { user?: { username: string; fid: number; profile?: { bio?: { text?: string } } } } };

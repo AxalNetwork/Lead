@@ -7,12 +7,12 @@
 
 import type { Env } from "../../types";
 import type { KnownEntityFacts, PivotContext, PivotHit } from "../types";
-import { simpleGet, pastDeadline, parallelMap } from "./_util";
+import { simpleGetCached, pastDeadline, parallelMap } from "./_util";
 import { getPlatform, parseProfileUrl } from "../platforms";
 
 const URL_RE = /\bhttps?:\/\/[^\s"'<>)]+/gi;
 
-export async function runBioUrlChain(_env: Env, facts: KnownEntityFacts, ctx: PivotContext): Promise<PivotHit[]> {
+export async function runBioUrlChain(env: Env, facts: KnownEntityFacts, ctx: PivotContext): Promise<PivotHit[]> {
   if (pastDeadline(ctx.deadlineMs)) return [];
   const hits: PivotHit[] = [];
   const known = facts.knownHandles.slice(0, 5);
@@ -23,7 +23,7 @@ export async function runBioUrlChain(_env: Env, facts: KnownEntityFacts, ctx: Pi
     const def = getPlatform(kh.platform);
     if (!def) return;
     const url = kh.url ?? def.urlOf(kh.handle);
-    const res = await simpleGet(url, { timeoutMs: 5000 });
+    const res = await simpleGetCached(env, url, { timeoutMs: 5000 });
     if (!res.ok || !res.text) return;
 
     // Extract JSON-LD sameAs blocks first (high signal)

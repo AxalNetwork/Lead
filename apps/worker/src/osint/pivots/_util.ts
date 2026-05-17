@@ -16,14 +16,20 @@ export interface SimpleFetchResult {
 //
 // Honors a hard timeout via AbortController; bubbles network errors as
 // { ok: false }. Caller is responsible for negative-cache writes.
-// Per-host rate gate + per-process budget meter shared across ALL pivots.
+// Per-host rate gate + ROLLING-WINDOW request meter shared across ALL pivots.
 // Satisfies the Task 22 rate-limit + Task 2 budget constraints without
 // requiring every pivot to thread through a context object: any call to
 // simpleGet implicitly participates in the shared limiter.
+//
+// The budget is a 60s sliding window (not a monotonic counter) so warm
+// isolates never reach permanent budget_exceeded — old timestamps age
+// out naturally and steady-state request rate is capped at
+// BUDGET_REQUESTS_CAP per 60s.
 const HOST_LAST_HIT = new Map<string, number>();
 const HOST_MIN_GAP_MS = 800;
-let BUDGET_REQUESTS = 0;
-const BUDGET_REQUESTS_CAP = 600; // hard cap per worker instance per run
+const BUDGET_WINDOW_MS = 60_000;
+const BUDGET_REQUESTS_CAP = 600;
+const BUDGET_TS: number[] = [];
 
 async function gateHost(url: string): Promise<void> {
   let host = "";
@@ -34,16 +40,23 @@ async function gateHost(url: string): Promise<void> {
   HOST_LAST_HIT.set(host, Date.now());
 }
 
-export function resetOsintBudgetForTests(): void { BUDGET_REQUESTS = 0; HOST_LAST_HIT.clear(); }
+function budgetAdmit(): boolean {
+  const now = Date.now();
+  while (BUDGET_TS.length && now - BUDGET_TS[0] > BUDGET_WINDOW_MS) BUDGET_TS.shift();
+  if (BUDGET_TS.length >= BUDGET_REQUESTS_CAP) return false;
+  BUDGET_TS.push(now);
+  return true;
+}
+
+export function resetOsintBudgetForTests(): void { BUDGET_TS.length = 0; HOST_LAST_HIT.clear(); }
 
 export async function simpleGet(
   url: string,
   opts: { timeoutMs?: number; accept?: string; ua?: string } = {},
 ): Promise<SimpleFetchResult> {
-  if (BUDGET_REQUESTS >= BUDGET_REQUESTS_CAP) {
+  if (!budgetAdmit()) {
     return { ok: false, status: 0, text: "budget_exceeded", contentType: "" };
   }
-  BUDGET_REQUESTS++;
   await gateHost(url);
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 4000);
@@ -134,6 +147,44 @@ export async function tieredGet(env: Env, url: string, opts: { timeoutMs?: numbe
   } catch {
     return await simpleGet(url, opts);
   }
+}
+
+// URL-keyed negative cache wrapper. Mandatory negative-cache policy:
+// every pivot that probes an external resource should route through
+// this helper. A previous 404/410/miss for the same URL short-circuits
+// without spending budget or making the network call. Successful or
+// transient (5xx, timeout) responses are NOT cached; only definite
+// misses are recorded.
+const URL_MISS_KV_PREFIX = "osint:miss:url";
+function urlMissKey(url: string): string {
+  // Trim querystring noise but preserve path so /user/X.json and
+  // /user/Y.json don't collide.
+  try {
+    const u = new URL(url);
+    return `${URL_MISS_KV_PREFIX}:${u.host}${u.pathname}${u.search}`;
+  } catch { return `${URL_MISS_KV_PREFIX}:${url}`; }
+}
+
+export async function simpleGetCached(
+  env: Env,
+  url: string,
+  opts: { timeoutMs?: number; accept?: string; ua?: string; ttlSeconds?: number; missHints?: string[] } = {},
+): Promise<SimpleFetchResult> {
+  const key = urlMissKey(url);
+  try {
+    const cached = await env.SCRAPE_CACHE?.get(key);
+    if (cached) return { ok: false, status: 404, text: "negative_cache", contentType: "" };
+  } catch { /* ignore */ }
+  const res = await simpleGet(url, opts);
+  const isDefiniteMiss =
+    res.status === 404 || res.status === 410 ||
+    (res.ok && !!opts.missHints && bodyLooksLikeMiss(res.text, opts.missHints));
+  if (isDefiniteMiss) {
+    try {
+      await env.SCRAPE_CACHE?.put(key, "1", { expirationTtl: opts.ttlSeconds ?? 30 * 24 * 3600 });
+    } catch { /* ignore */ }
+  }
+  return res;
 }
 
 // Best-effort log without throwing.

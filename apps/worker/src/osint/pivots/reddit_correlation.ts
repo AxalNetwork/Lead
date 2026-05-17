@@ -6,13 +6,13 @@
 
 import type { Env } from "../../types";
 import type { KnownEntityFacts, PivotContext, PivotHit } from "../types";
-import { simpleGet, pastDeadline, parallelMap, generateHandleVariants } from "./_util";
+import { simpleGetCached, pastDeadline, parallelMap, generateHandleVariants } from "./_util";
 
 interface RedditAbout {
   data?: { name?: string; created_utc?: number; total_karma?: number; subreddit?: { public_description?: string } | null };
 }
 
-export async function runRedditCorrelation(_env: Env, facts: KnownEntityFacts, ctx: PivotContext): Promise<PivotHit[]> {
+export async function runRedditCorrelation(env: Env, facts: KnownEntityFacts, ctx: PivotContext): Promise<PivotHit[]> {
   if (pastDeadline(ctx.deadlineMs)) return [];
   const seeds = new Set<string>();
   for (const kh of facts.knownHandles) {
@@ -25,8 +25,8 @@ export async function runRedditCorrelation(_env: Env, facts: KnownEntityFacts, c
   const hits: PivotHit[] = [];
   await parallelMap([...seeds].slice(0, 6), 2, async (h) => {
     if (pastDeadline(ctx.deadlineMs)) return;
-    const r = await simpleGet(`https://www.reddit.com/user/${encodeURIComponent(h)}/about.json`, { timeoutMs: 4000, accept: "application/json" });
-    if (!r.ok || !r.text) return;
+    const r = await simpleGetCached(env, `https://www.reddit.com/user/${encodeURIComponent(h)}/about.json`, { timeoutMs: 4000, accept: "application/json" });
+    if (!r.ok || !r.text || r.text === "negative_cache") return;
     let body: RedditAbout;
     try { body = JSON.parse(r.text); } catch { return; }
     const u = body.data;

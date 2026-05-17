@@ -6,12 +6,12 @@
 
 import type { Env } from "../../types";
 import type { KnownEntityFacts, PivotContext, PivotHit } from "../types";
-import { simpleGet, pastDeadline, parallelMap, generateHandleVariants } from "./_util";
+import { simpleGetCached, pastDeadline, parallelMap, generateHandleVariants } from "./_util";
 import { parseProfileUrl } from "../platforms";
 
 interface HNUser { id: string; about?: string | null; karma?: number; created?: number }
 
-export async function runHackerNewsCorrelation(_env: Env, facts: KnownEntityFacts, ctx: PivotContext): Promise<PivotHit[]> {
+export async function runHackerNewsCorrelation(env: Env, facts: KnownEntityFacts, ctx: PivotContext): Promise<PivotHit[]> {
   if (pastDeadline(ctx.deadlineMs)) return [];
   // Build seed handles: known HN handles + variants from email/name/github/twitter.
   const seeds = new Set<string>();
@@ -25,8 +25,8 @@ export async function runHackerNewsCorrelation(_env: Env, facts: KnownEntityFact
   const hits: PivotHit[] = [];
   await parallelMap([...seeds].slice(0, 8), 3, async (h) => {
     if (pastDeadline(ctx.deadlineMs)) return;
-    const r = await simpleGet(`https://hacker-news.firebaseio.com/v0/user/${encodeURIComponent(h)}.json`, { timeoutMs: 4000, accept: "application/json" });
-    if (!r.ok || !r.text || r.text === "null") return;
+    const r = await simpleGetCached(env, `https://hacker-news.firebaseio.com/v0/user/${encodeURIComponent(h)}.json`, { timeoutMs: 4000, accept: "application/json" });
+    if (!r.ok || !r.text || r.text === "null" || r.text === "negative_cache") return;
     let u: HNUser;
     try { u = JSON.parse(r.text); } catch { return; }
     if (!u || !u.id) return;
