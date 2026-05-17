@@ -21,17 +21,20 @@ export interface RawLink {
 
 const UA = "AIDataSignal/1.0 (+https://aidatasignal.com)";
 
-async function fetchText(_env: Env, url: string, timeoutMs = 15_000): Promise<string | null> {
+async function fetchText(env: Env, url: string, _timeoutMs = 15_000): Promise<string | null> {
+  // Route through the shared `fetchPage` so discovery-method network calls
+  // inherit the policy stack (robots/ToS gates, host rate-limit, circuit
+  // breaker, multi-tier fallback). Previously this used raw `fetch` which
+  // bypassed all of that and risked compliance drift between discovery
+  // and the main scrape pipeline.
   try {
-    const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), timeoutMs);
-    try {
-      const r = await fetch(url, { headers: { "user-agent": UA, accept: "*/*" }, signal: ac.signal });
-      if (!r.ok) return null;
-      return await r.text();
-    } finally { clearTimeout(t); }
+    const r = await fetchPage(env, url).catch(() => null);
+    if (!r || !r.ok || !r.html) return null;
+    return r.html;
   } catch { return null; }
 }
+// Keep UA exported-ish so future direct fetches (if any) reuse it.
+void UA;
 
 // ----------------------------------------------------------------------------
 // 1. outbound — every <a href> from a fetched HTML page.
