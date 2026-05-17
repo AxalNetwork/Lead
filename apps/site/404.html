@@ -7,3 +7,20 @@ permalink: /404.html
 ---
 
 <div class="pt-120"></div>
+
+<script>
+// Task #6: SPA-style path routing on GitHub Pages.
+// Maps /dashboard/people/<id>  and  /dashboard/profiles/<id>
+// onto the static /dashboard/people/ page using ?id=<id>, so
+// operators can share canonical /people/:entity_id links per the
+// dossier spec without us needing per-entity HTML files at build time.
+(function () {
+  try {
+    var m = location.pathname.match(/^\/dashboard\/(people|profiles)\/([A-Za-z0-9._-]+)\/?$/);
+    if (m && m[2] && m[2] !== "index.html") {
+      var dest = "/dashboard/people/?id=" + encodeURIComponent(m[2]) + location.search.replace(/^\?/, location.search ? "&" : "") + location.hash;
+      location.replace(dest);
+    }
+  } catch (e) { /* fall through to the visible 404 */ }
+})();
+</script>

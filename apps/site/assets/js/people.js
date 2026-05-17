@@ -1,16 +1,16 @@
-// Task #6: dossier UI for /dashboard/people/?id=<entity_id>.
+// Task #6: dossier UI for /dashboard/people/?id=<entity_id>
+// (also reached via /dashboard/people/<id> and /dashboard/profiles/<id>
+// thanks to the 404.html SPA redirect).
 //
 // Consumes:
 //   GET    /api/profilers/:id/dossier
 //   POST   /api/profilers/:id/run
+//   POST   /api/profilers/:id/audit
 //   GET    /api/profilers/:id/changelog
 //   GET    /api/profilers/:id/sources
 //   GET    /api/profile-comments/:id
 //   POST   /api/profile-comments/:id
 //   DELETE /api/profile-comments/:id/:comment_id
-//
-// No build step — vanilla JS + the same .ads-* tokens already used by
-// every other dashboard page.
 
 (function () {
   // ---- helpers --------------------------------------------------------
@@ -21,7 +21,6 @@
   }
   function qsId() {
     var p = new URLSearchParams(location.search);
-    // Also support path-based aliases like /people/<id> via a redirect.
     var fromPath = (location.pathname.match(/\/(?:people|profiles)\/([^/?#]+)\/?$/) || [])[1];
     return p.get("id") || fromPath || "";
   }
@@ -59,10 +58,6 @@
   }
 
   // ---- predicate label resolver --------------------------------------
-  // Tiny client-side mirror of the server registry, so predicate keys
-  // (e.g. "person.preference.coffee_order") never leak raw to operators.
-  // Anything not in the map falls back to a humanized version of the
-  // last segment.
   var PRED_LABELS = {
     "person.identity.full_name": "Full name",
     "person.identity.preferred_name": "Preferred name",
@@ -88,30 +83,53 @@
   }
 
   // ---- Fact wrapper ---------------------------------------------------
-  // Renders a value with confidence dots and a tooltip showing the
-  // evidence URL. `fact` can be either:
-  //   - {value, source, evidence_url, confidence}                (loose)
-  //   - a raw dossier row (uses .source / .source_url / .confidence)
-  function dots(c) {
-    var n = Math.max(0, Math.min(5, Math.round(((c == null ? 1 : c) || 0) * 5)));
-    var out = "";
-    for (var i = 0; i < 5; i++) {
-      out += '<span class="ads-fact__dot' + (i < n ? " on" : "") + '"></span>';
-    }
-    return '<span class="ads-fact__dots" aria-label="confidence ' + n + ' of 5">' + out + "</span>";
+  // Spec: facts without a source_url MUST NOT render, EXCEPT operator-
+  // asserted identity fields, which render with an explicit
+  // "operator-asserted" badge. Confidence is rendered as a single
+  // color-graded chip (red < 0.4, amber < 0.7, green ≥ 0.7) rather
+  // than a row of monochrome dots.
+  function isOperatorAsserted(opts) {
+    var k = String(opts.source_kind || opts.source || "").toLowerCase();
+    return k === "operator_asserted" || k === "operator" || k === "manual";
   }
+  function confLevel(c) {
+    var v = (c == null ? 1 : Number(c)) || 0;
+    if (v < 0.4) return "low";
+    if (v < 0.7) return "mid";
+    return "hi";
+  }
+  function confChip(c) {
+    var lvl = confLevel(c);
+    var pct = Math.round(Math.max(0, Math.min(1, (c == null ? 1 : Number(c)) || 0)) * 100);
+    var lbl = { low: "low confidence", mid: "medium confidence", hi: "high confidence" }[lvl];
+    return '<span class="ads-conf ads-conf--' + lvl + '" title="' + lbl + '" aria-label="' + lbl + ' (' + pct + '%)">' + pct + '%</span>';
+  }
+  // Returns "" when the fact has no source URL AND isn't operator-asserted.
+  // Returns inline HTML otherwise.
   function fact(value, opts) {
     opts = opts || {};
+    if (value == null || value === "") return "";
     var url = opts.evidence_url || opts.source_url || "";
+    var op = isOperatorAsserted(opts);
+    if (!url && !op) return ""; // contract: hide unsourced facts
     var src = opts.source || opts.source_kind || "";
     var title = src ? src + (url ? "\n" + url : "") : (url || "");
-    var inner = '<span class="ads-fact__value">' + esc(value == null ? "—" : value) + "</span>";
+    var inner = '<span class="ads-fact__value">' + esc(value) + "</span>";
     if (url) {
       inner = '<a class="ads-fact__link" href="' + esc(url) + '" target="_blank" rel="noopener" title="' + esc(title) + '">' + inner + "</a>";
     } else if (title) {
       inner = '<span title="' + esc(title) + '">' + inner + "</span>";
     }
-    return '<span class="ads-fact">' + inner + " " + dots(opts.confidence) + "</span>";
+    var opBadge = op ? ' <span class="ads-badge ads-badge--op" title="Asserted by operator, not a public source">operator-asserted</span>' : "";
+    return '<span class="ads-fact">' + inner + " " + confChip(opts.confidence) + opBadge + "</span>";
+  }
+  // Like fact() but used in tables/lists where the cell should always
+  // render *something*. When the underlying fact is unsourced and
+  // non-operator, we render an em-dash rather than the raw value so
+  // operators never see uncited claims.
+  function factOrDash(value, opts) {
+    var f = fact(value, opts);
+    return f || '<span class="ads-muted">—</span>';
   }
 
   // ---- 25-word summary derivation ------------------------------------
@@ -158,12 +176,10 @@
       '</div>';
   }
   function renderRings(d) {
-    var TOTAL = 13; // count of tables tracked by populated_tables
+    var TOTAL = 13;
     var completeness = (d.populated_tables || []).length / TOTAL;
     var skipped = (d.privacy_skipped_enrichers || []).length;
-    // Authenticity = 1 - (skipped / 30); clamps to [0.3, 1].
     var authenticity = Math.max(0.3, Math.min(1, 1 - skipped / 30));
-    // Confidence uses latest_synthesis presence + citation count as a proxy.
     var confBase = d.latest_synthesis ? 0.6 : 0.2;
     var cites = d.latest_synthesis ? (d.latest_synthesis.citations_count || 0) : 0;
     var confidence = Math.min(1, confBase + Math.min(0.4, cites / 25));
@@ -173,25 +189,49 @@
       ring("Authenticity", authenticity, "var(--ads-warn)");
   }
 
+  // ---- timezone live clock -------------------------------------------
+  var tzTimer = null;
+  function startTimezoneClock(tz) {
+    var el = document.getElementById("ads-person-tz");
+    if (!el) return;
+    if (tzTimer) { clearInterval(tzTimer); tzTimer = null; }
+    if (!tz) { el.hidden = true; return; }
+    function tick() {
+      try {
+        var now = new Date();
+        var t = now.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", timeZone: tz });
+        el.textContent = "🕒 " + t + " local (" + tz + ")";
+        el.hidden = false;
+      } catch (e) {
+        el.textContent = "🕒 " + tz;
+        el.hidden = false;
+      }
+    }
+    tick();
+    tzTimer = setInterval(tick, 30000);
+  }
+
   // ---- pane renderers -------------------------------------------------
   function paneOverview(d) {
     var id = d.identity || {};
     var rows = [];
     function row(label, val, opts) {
-      if (val == null || val === "") return;
-      rows.push('<tr><th>' + esc(label) + '</th><td>' + fact(val, opts || {}) + '</td></tr>');
+      var html = fact(val, opts || {});
+      if (!html) return; // hide unsourced rows entirely
+      rows.push('<tr><th>' + esc(label) + '</th><td>' + html + '</td></tr>');
     }
-    row("Full name", id.full_name, { source: id.source, evidence_url: id.source_url, confidence: id.confidence });
-    row("Preferred name", id.preferred_name);
-    row("Pronouns", id.pronouns);
-    row("Birth year", id.birth_year);
-    row("Nationality", id.nationality);
-    row("Timezone", id.timezone);
-    row("City", id.location_city);
-    row("Country", id.location_country);
+    row("Full name", id.full_name, { source_kind: id.source_kind || id.source || "operator_asserted", evidence_url: id.source_url, confidence: id.confidence });
+    row("Preferred name", id.preferred_name, { source_kind: id.preferred_name_source_kind, source_url: id.preferred_name_source_url, confidence: id.preferred_name_confidence });
+    row("Pronouns", id.pronouns, { source_kind: id.pronouns_source_kind, source_url: id.pronouns_source_url, confidence: id.pronouns_confidence });
+    row("Birth year", id.birth_year, { source_kind: id.birth_year_source_kind, source_url: id.birth_year_source_url, confidence: id.birth_year_confidence });
+    row("Nationality", id.nationality, { source_kind: id.nationality_source_kind, source_url: id.nationality_source_url, confidence: id.nationality_confidence });
+    row("Timezone", id.timezone, { source_kind: id.timezone_source_kind || "operator_asserted", source_url: id.timezone_source_url, confidence: id.timezone_confidence });
+    row("City", id.location_city, { source_kind: id.location_source_kind, source_url: id.location_source_url, confidence: id.location_confidence });
+    row("Country", id.location_country, { source_kind: id.location_source_kind, source_url: id.location_source_url, confidence: id.location_confidence });
     var langs = id.languages_json ? safeJson(id.languages_json) : null;
     if (Array.isArray(langs) && langs.length) {
-      row("Languages", langs.map(function (l) { return typeof l === "string" ? l : (l.name || l.code); }).join(", "));
+      row("Languages", langs.map(function (l) { return typeof l === "string" ? l : (l.name || l.code); }).join(", "),
+          { source_kind: "operator_asserted", confidence: 0.8 });
     }
     var html = "";
     if (id.headshot_url) {
@@ -199,9 +239,7 @@
     }
     html += rows.length
       ? '<table class="ads-table ads-table--kv">' + rows.join("") + '</table>'
-      : emptyCard("No identity fields collected yet.");
-
-    // Skipped enrichers badge strip.
+      : emptyCard("No sourced identity fields yet.");
     var skipped = d.privacy_skipped_enrichers || [];
     if (skipped.length) {
       html += '<div style="margin-top:18px"><h3 style="margin-bottom:8px">Skipped for privacy</h3><div class="ads-tag-row">' +
@@ -209,7 +247,6 @@
           return '<span class="ads-pill idle" title="' + esc(s.reason) + '">' + esc(s.enricher_name) + '</span>';
         }).join(" ") + '</div></div>';
     }
-    // Populated-tables badge strip.
     var pop = d.populated_tables || [];
     if (pop.length) {
       html += '<div style="margin-top:18px"><h3 style="margin-bottom:8px">Populated tables (' + pop.length + ')</h3><div class="ads-tag-row">' +
@@ -236,7 +273,7 @@
                 "<td>" + esc(r.organization_name || r.organization || "—") + "</td>" +
                 "<td>" + esc(r.started_at || "") + "</td>" +
                 "<td>" + esc(r.is_current ? "current" : (r.ended_at || "")) + "</td>" +
-                "<td>" + fact(r.source || "—", { evidence_url: r.source_url, confidence: r.confidence }) + "</td></tr>";
+                "<td>" + factOrDash(r.source || "source", { evidence_url: r.source_url, source_kind: r.source_kind, confidence: r.confidence }) + "</td></tr>";
       });
       html += "</tbody></table></div>";
     }
@@ -379,6 +416,11 @@
     document.getElementById("ads-pane-voice").innerHTML = html;
   }
 
+  function renderListSection(label, items, mapper) {
+    if (!items || !items.length) return "";
+    return '<div style="margin-bottom:14px"><h3 style="margin-bottom:6px">' + esc(label) + '</h3>' +
+      '<ul style="margin:0;padding-left:18px">' + items.map(mapper).join("") + '</ul></div>';
+  }
   function paneOutreach(d) {
     var synth = d.latest_synthesis;
     var tdb = synth && synth.to_do_business_with_them;
@@ -403,21 +445,85 @@
       sections.forEach(function (pair) {
         var label = pair[0], val = pair[1];
         if (val == null || (typeof val === "string" && !val.trim())) return;
-        html += '<div style="margin-bottom:14px"><h3 style="margin-bottom:6px">' + esc(label) + '</h3>';
-        if (Array.isArray(val)) {
-          html += '<ul style="margin:0;padding-left:18px">' + val.map(function (v) {
-            return "<li>" + esc(typeof v === "string" ? v : JSON.stringify(v)) + "</li>";
-          }).join("") + '</ul>';
-        } else if (typeof val === "string") {
-          html += '<p style="margin:0;white-space:pre-wrap">' + esc(val) + '</p>';
-        } else {
-          html += '<pre class="ads-detail__pre">' + esc(JSON.stringify(val, null, 2)) + '</pre>';
+        if (typeof val === "string") {
+          html += '<div style="margin-bottom:14px"><h3 style="margin-bottom:6px">' + esc(label) + '</h3>' +
+            '<p style="margin:0;white-space:pre-wrap">' + esc(val) + '</p></div>';
+        } else if (Array.isArray(val)) {
+          html += renderListSection(label, val, function (v) {
+            // Spec: never leak raw JSON to operators. Objects render as
+            // a single string field, never the whole blob.
+            if (typeof v === "string") return "<li>" + esc(v) + "</li>";
+            var pick = (v && (v.text || v.title || v.label || v.value || v.summary)) || "";
+            return pick ? "<li>" + esc(pick) + "</li>" : "";
+          });
         }
-        html += '</div>';
+        // Object-valued sections that aren't strings/arrays are skipped
+        // entirely — operators get nothing rather than raw JSON.
       });
     }
     if (!html) html += emptyCard("Nothing to render.");
     document.getElementById("ads-pane-outreach").innerHTML = html;
+  }
+
+  // Intelligence tab: sensitive subsection is collapsed by default and
+  // POSTs an audit log entry the first time it's expanded. Surfaces
+  // pHash duplicate signals, privacy reasons, and per-enricher coverage.
+  function paneIntelligence(d, entityId) {
+    var html = "";
+    html += '<h3>Coverage</h3>';
+    var pop = d.populated_tables || [];
+    var TOTAL = 13;
+    html += '<p class="ads-muted" style="margin:0 0 8px">' + esc(pop.length) + ' of ' + TOTAL + ' tables populated.</p>';
+    html += '<div class="ads-tag-row">' + pop.map(function (t) { return '<span class="ads-pill ok">' + esc(t) + '</span>'; }).join(" ") + '</div>';
+
+    var skipped = d.privacy_skipped_enrichers || [];
+    html += '<h3 style="margin-top:18px">Privacy decisions (' + skipped.length + ')</h3>';
+    if (!skipped.length) html += emptyCard("Nothing was skipped for privacy on the last run.");
+    else {
+      html += '<ul style="margin:0;padding-left:18px">' + skipped.map(function (s) {
+        return "<li><b>" + esc(s.enricher_name) + "</b> — " + esc(s.reason || "no reason given") + "</li>";
+      }).join("") + "</ul>";
+    }
+
+    // pHash / duplicate signal block (only shows when a candidate is reported).
+    var phash = d.phash_duplicate || (d.identity && d.identity.phash_duplicate);
+    if (phash) {
+      html += '<h3 style="margin-top:18px">Possible duplicate</h3>' +
+        '<p style="margin:0">Avatar pHash matches entity <code>' + esc(phash.entity_id || "?") + '</code>' +
+        (phash.distance != null ? ' (Hamming ' + esc(phash.distance) + ')' : '') + '. ' +
+        '<a href="/dashboard/people/?id=' + esc(phash.entity_id) + '">Open the other dossier</a>.</p>';
+    }
+
+    // Collapsed sensitive subsection — audit-logged on first open.
+    html += '<details class="ads-sensitive" id="ads-sensitive"><summary>Sensitive sources &amp; raw signals</summary>' +
+      '<div class="ads-sensitive__body">' +
+        '<p class="ads-muted" style="margin:0 0 8px;font-size:12px">Opening this section is recorded in <code>pii_audit_log</code>.</p>' +
+        '<div id="ads-sensitive-content"><div class="ads-skeleton ads-skeleton--sm"></div></div>' +
+      '</div></details>';
+
+    document.getElementById("ads-pane-intelligence").innerHTML = html;
+
+    var details = document.getElementById("ads-sensitive");
+    var loaded = false;
+    if (details) {
+      details.addEventListener("toggle", async function () {
+        if (!details.open || loaded) return;
+        loaded = true;
+        await api("/api/profilers/" + encodeURIComponent(entityId) + "/audit",
+          { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "dossier_sensitive_open" }) });
+        var inner = document.getElementById("ads-sensitive-content");
+        var hits = (d.osint_resolved || []).concat(d.identity_handles || []);
+        if (!hits.length) {
+          inner.innerHTML = emptyCard("No OSINT pivots resolved yet.");
+          return;
+        }
+        inner.innerHTML = '<ul style="margin:0;padding-left:18px">' + hits.slice(0, 50).map(function (h) {
+          return "<li><b>" + esc(h.platform || h.kind || "signal") + "</b>: " +
+            esc(h.handle || h.value || "—") +
+            (h.confidence != null ? " " + confChip(h.confidence) : "") + "</li>";
+        }).join("") + "</ul>";
+      });
+    }
   }
 
   // ---- right rail -----------------------------------------------------
@@ -440,7 +546,7 @@
       var v = f.value_text != null ? f.value_text : (f.value_number != null ? f.value_number : "");
       return "<li><b>" + esc(predicateLabel(f.predicate)) + "</b> " +
         '<span class="ads-muted" style="font-size:11px">' + esc(relTime(f.observed_at)) + "</span><br>" +
-        '<span style="font-size:12px">' + fact(v, { source: f.source, evidence_url: f.evidence_url, confidence: f.confidence }) + "</span></li>";
+        '<span style="font-size:12px">' + factOrDash(v, { source: f.source, source_kind: f.source_kind, evidence_url: f.evidence_url, confidence: f.confidence }) + "</span></li>";
     }).join("") + "</ul>";
   }
   async function loadComments(id) {
@@ -468,7 +574,12 @@
     });
   }
 
-  // ---- tabs -----------------------------------------------------------
+  // ---- tabs (lazy-loaded) --------------------------------------------
+  // Each pane is rendered exactly once, on first activation, behind a
+  // skeleton. The Overview pane renders immediately so the page paints
+  // useful content above the fold without waiting on tab interaction.
+  var paneRenderers = null;
+  var paneRendered = {};
   function activate(name) {
     document.querySelectorAll(".ads-person-tabs .ads-tab").forEach(function (t) {
       t.classList.toggle("active", t.getAttribute("data-tab") === name);
@@ -478,23 +589,60 @@
       p.classList.toggle("active", on);
       p.hidden = !on;
     });
+    if (paneRenderers && paneRenderers[name] && !paneRendered[name]) {
+      try { paneRenderers[name](); paneRendered[name] = true; }
+      catch (e) { console.warn("pane " + name + " render failed", e); }
+    }
     try { history.replaceState(null, "", "#" + name); } catch (e) { /* noop */ }
   }
 
-  // ---- top-level load -------------------------------------------------
-  async function loadDossier(id) {
-    var d = await api("/api/profilers/" + encodeURIComponent(id) + "/dossier");
-    if (!d || d.error) {
-      document.getElementById("ads-person-name").textContent = "Not found";
-      document.getElementById("ads-person-sub").textContent = id;
-      document.getElementById("ads-pane-overview").innerHTML = emptyCard((d && d.error) || "Could not load dossier.");
-      return;
+  // ---- header quick actions ------------------------------------------
+  function pickPrimaryRole(d) {
+    var c = (d.career_history || []).slice();
+    c.sort(function (a, b) {
+      var ac = a.is_current ? 1 : 0, bc = b.is_current ? 1 : 0;
+      if (ac !== bc) return bc - ac;
+      return (b.started_at || "").localeCompare(a.started_at || "");
+    });
+    return c[0] || null;
+  }
+  function findLinkedIn(d) {
+    var handles = d.identity_handles || [];
+    for (var i = 0; i < handles.length; i++) {
+      var h = handles[i];
+      if (String(h.platform || "").toLowerCase() === "linkedin") {
+        return h.url || ("https://www.linkedin.com/in/" + h.handle);
+      }
     }
+    return null;
+  }
+  function renderHeader(d) {
     var id_ = d.identity || {};
     var display = id_.full_name || id_.preferred_name || ("Entity " + (d.entity_id || "").slice(0, 8));
     document.getElementById("ads-person-name").textContent = display;
-    var subBits = [id_.headline, id_.location_city, id_.location_country].filter(Boolean);
-    document.getElementById("ads-person-sub").textContent = subBits.join(" · ") || "—";
+
+    var pron = document.getElementById("ads-person-pronouns");
+    if (id_.pronouns) { pron.textContent = "(" + id_.pronouns + ")"; pron.hidden = false; }
+
+    var phash = d.phash_duplicate || id_.phash_duplicate;
+    if (phash) document.getElementById("ads-person-phash").hidden = false;
+
+    var role = pickPrimaryRole(d);
+    var roleEl = document.getElementById("ads-person-role");
+    if (role) {
+      var org = role.organization_name || role.organization || "";
+      var label = (role.title || "") + (role.title && org ? " at " : "") + org;
+      if (role.organization_entity_id) {
+        roleEl.innerHTML = esc(role.title || "") + (role.title && org ? " at " : "") +
+          '<a href="/dashboard/company-detail/?id=' + esc(role.organization_entity_id) + '">' + esc(org) + '</a>';
+      } else {
+        roleEl.textContent = label;
+      }
+    } else {
+      var subBits = [id_.headline, id_.location_city, id_.location_country].filter(Boolean);
+      roleEl.textContent = subBits.join(" · ") || "—";
+    }
+
     document.getElementById("ads-person-summary").textContent = deriveSummary(d);
     var avatar = document.getElementById("ads-person-avatar");
     if (id_.headshot_url) {
@@ -504,13 +652,64 @@
       avatar.textContent = (display || "?").trim().charAt(0).toUpperCase();
     }
     renderRings(d);
-    paneOverview(d);
-    paneCareer(d);
-    paneBackground(d);
-    paneInterests(d);
-    paneNetwork(d);
-    paneVoice(d);
-    paneOutreach(d);
+    startTimezoneClock(id_.timezone);
+
+    // Quick actions.
+    var primaryEmail = id_.primary_email || id_.email;
+    if (primaryEmail) {
+      var eb = document.getElementById("ads-qa-email");
+      eb.href = "mailto:" + primaryEmail;
+      eb.hidden = false;
+      var cb = document.getElementById("ads-qa-calendar");
+      cb.href = "https://calendar.google.com/calendar/u/0/r/eventedit?add=" + encodeURIComponent(primaryEmail) +
+        "&text=" + encodeURIComponent("Meeting with " + display);
+      cb.hidden = false;
+    }
+    var li = findLinkedIn(d);
+    if (li) {
+      var lb = document.getElementById("ads-qa-linkedin");
+      lb.href = li;
+      lb.hidden = false;
+    }
+    var handles = d.identity_handles || [];
+    if (handles.length) {
+      var hb = document.getElementById("ads-qa-copy-handle");
+      hb.hidden = false;
+      hb.addEventListener("click", function () {
+        try {
+          var first = handles[0];
+          navigator.clipboard.writeText(String(first.handle || first.url || ""));
+          setMsg("Handle copied.", "ok");
+        } catch (e) { setMsg("Copy failed.", "err"); }
+      });
+    }
+  }
+
+  // ---- top-level load -------------------------------------------------
+  async function loadDossier(id) {
+    var d = await api("/api/profilers/" + encodeURIComponent(id) + "/dossier");
+    if (!d || d.error) {
+      document.getElementById("ads-person-name").textContent = "Not found";
+      document.getElementById("ads-person-role").textContent = id;
+      document.getElementById("ads-pane-overview").innerHTML = emptyCard((d && d.error) || "Could not load dossier.");
+      return;
+    }
+    renderHeader(d);
+
+    // Bind lazy pane renderers — only Overview runs now.
+    paneRenderers = {
+      overview:     function () { paneOverview(d); },
+      career:       function () { paneCareer(d); },
+      background:   function () { paneBackground(d); },
+      interests:    function () { paneInterests(d); },
+      network:      function () { paneNetwork(d); },
+      voice:        function () { paneVoice(d); },
+      outreach:     function () { paneOutreach(d); },
+      intelligence: function () { paneIntelligence(d, id); },
+    };
+    paneRendered = {};
+    var active = document.querySelector(".ads-tabs .ads-tab.active");
+    activate(active ? active.getAttribute("data-tab") : "overview");
   }
 
   async function triggerRefresh(id) {
@@ -533,8 +732,6 @@
     }
     document.getElementById("ads-person-header").hidden = false;
     document.getElementById("ads-person-layout").hidden = false;
-
-    document.getElementById("ads-person-json").href = "https://api.aidatasignal.com/api/profilers/" + encodeURIComponent(id) + "/dossier";
 
     document.querySelectorAll(".ads-person-tabs .ads-tab").forEach(function (t) {
       t.addEventListener("click", function () { activate(t.getAttribute("data-tab")); });
@@ -559,6 +756,10 @@
       if (r && r.ok) { ta.value = ""; loadComments(id); }
       else { setMsg((r && r.error) || "Could not post comment.", "err"); }
     });
+
+    // Fire a one-shot "dossier opened" audit entry.
+    api("/api/profilers/" + encodeURIComponent(id) + "/audit",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "dossier_view" }) });
 
     loadDossier(id);
     loadSources(id);

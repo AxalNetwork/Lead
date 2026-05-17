@@ -3,13 +3,14 @@ layout: default
 title: Person dossier
 permalink: /dashboard/profiles/
 ---
-<a href="/dashboard/" class="ads-muted" style="font-size:12px">← Dashboard</a>
-<p class="ads-loading" id="ads-profiles-redirect">Redirecting…</p>
 <script>
-  // Task #6: /dashboard/profiles/ is an alias for /dashboard/people/.
-  // Keep ?id= and any other query params intact.
-  (function () {
-    var qs = location.search || "";
-    location.replace("/dashboard/people/" + qs);
-  })();
+// Canonical surface is /dashboard/people/. This alias preserves the
+// /profiles/ URL family per the dossier spec; SPA path routing for
+// /dashboard/profiles/<id> happens in 404.html.
+(function () {
+  var q = location.search || "";
+  var h = location.hash || "";
+  location.replace("/dashboard/people/" + q + h);
+})();
 </script>
+<p>Redirecting to <a href="/dashboard/people/">/dashboard/people/</a>…</p>

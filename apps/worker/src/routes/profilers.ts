@@ -197,6 +197,28 @@ profilers.get("/:entity_id/status", async (c) => {
   });
 });
 
+// Task #6: lightweight audit hook for "view sensitive section" events
+// from the Intelligence tab. Best-effort write into pii_audit_log so
+// every operator open of a privacy-toggled subsection is grep-able.
+// Action is constrained to a small allowlist so this can't be abused
+// as a generic audit-log writer.
+profilers.post("/:entity_id/audit", async (c) => {
+  const entityId = c.req.param("entity_id");
+  if (!entityId) return c.json({ error: "entity_id_required" }, 400);
+  const body = (await c.req.json().catch(() => null)) as { action?: string } | null;
+  const action = String(body?.action ?? "").slice(0, 64);
+  const ALLOWED = new Set(["dossier_sensitive_open", "dossier_view"]);
+  if (!ALLOWED.has(action)) return c.json({ error: "bad_action" }, 400);
+  const actor = c.var.email || "unknown";
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO pii_audit_log (id, entity_id, actor_email, action, observed_at, request_id, notes)
+         VALUES (?, ?, ?, ?, datetime('now'), ?, NULL)`,
+    ).bind(crypto.randomUUID(), entityId, actor, action, c.req.header("cf-ray") ?? "").run();
+  } catch { /* table may not exist in some envs — non-fatal */ }
+  return c.json({ ok: true });
+});
+
 // Task #6: dossier right-rail feed — most recent fact mutations.
 profilers.get("/:entity_id/changelog", async (c) => {
   const entityId = c.req.param("entity_id");
