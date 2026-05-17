@@ -260,12 +260,20 @@
     try { return JSON.parse(s); } catch (e) { return null; }
   }
 
+  // Spec: a row is a "fact" — hide rows lacking source_url unless
+  // operator-asserted. Filter once, then render.
+  function sourcedRows(rows) {
+    return (rows || []).filter(function (r) {
+      return r.source_url || isOperatorAsserted({ source_kind: r.source_kind, source: r.source });
+    });
+  }
   function paneCareer(d) {
-    var c = d.career_history || [];
-    var b = d.board_seats || [];
+    var c = sourcedRows(d.career_history);
+    var dropped = (d.career_history || []).length - c.length;
+    var b = sourcedRows(d.board_seats);
     var html = "";
-    html += '<h3>Career history (' + c.length + ')</h3>';
-    if (!c.length) html += emptyCard("No career entries.");
+    html += '<h3>Career history (' + c.length + (dropped ? ' shown; ' + dropped + ' unsourced hidden' : '') + ')</h3>';
+    if (!c.length) html += emptyCard("No sourced career entries.");
     else {
       html += '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Title</th><th>Organization</th><th>From</th><th>To</th><th>Source</th></tr></thead><tbody>';
       c.forEach(function (r) {
@@ -293,11 +301,12 @@
   }
 
   function paneBackground(d) {
-    var e = d.education_history || [];
-    var f = d.family_ties_public || [];
+    var e = sourcedRows(d.education_history);
+    var eDropped = (d.education_history || []).length - e.length;
+    var f = sourcedRows(d.family_ties_public);
     var html = "";
-    html += '<h3>Education (' + e.length + ')</h3>';
-    if (!e.length) html += emptyCard("No education entries.");
+    html += '<h3>Education (' + e.length + (eDropped ? ' shown; ' + eDropped + ' unsourced hidden' : '') + ')</h3>';
+    if (!e.length) html += emptyCard("No sourced education entries.");
     else {
       html += '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Institution</th><th>Degree</th><th>Field</th><th>Years</th></tr></thead><tbody>';
       e.forEach(function (r) {
@@ -549,6 +558,17 @@
         '<span style="font-size:12px">' + factOrDash(v, { source: f.source, source_kind: f.source_kind, evidence_url: f.evidence_url, confidence: f.confidence }) + "</span></li>";
     }).join("") + "</ul>";
   }
+  function renderFreshness(d) {
+    var el = document.getElementById("ads-person-freshness");
+    if (!el) return;
+    var synth = d.latest_synthesis;
+    var bits = [];
+    if (synth && synth.computed_at) bits.push("Last enriched " + relTime(synth.computed_at));
+    if (d.last_run_finished_at) bits.push("Last run " + relTime(d.last_run_finished_at));
+    if (synth && synth.llm_model) bits.push("model " + synth.llm_model);
+    if (!bits.length) bits.push("Never enriched.");
+    el.textContent = bits.join(" · ");
+  }
   async function loadComments(id) {
     var r = await api("/api/profile-comments/" + encodeURIComponent(id));
     var el = document.getElementById("ads-person-comments");
@@ -671,6 +691,29 @@
       lb.href = li;
       lb.hidden = false;
     }
+    // Save / Watchlist / Share / Deep profile / Message — light stubs
+    // that POST to existing endpoints where available and surface
+    // intent otherwise, so operators get feedback today and future
+    // tasks can swap in real handlers without UI rework.
+    document.getElementById("ads-qa-save").addEventListener("click", function () {
+      setMsg("Save-to-list coming soon — copy this URL to share for now.", "info");
+    });
+    document.getElementById("ads-qa-watchlist").addEventListener("click", function () {
+      setMsg("Watchlist coming soon. Open Personas to define a saved cohort.", "info");
+    });
+    document.getElementById("ads-qa-share").addEventListener("click", function () {
+      try { navigator.clipboard.writeText(location.href); setMsg("Share link copied.", "ok"); }
+      catch (e) { setMsg("Copy failed.", "err"); }
+    });
+    document.getElementById("ads-qa-deep").addEventListener("click", function () {
+      setMsg("Use Refresh to enqueue the standard profile run. Deep profile (operator force_refresh) is API-only today.", "info");
+    });
+    var msgBtn = document.getElementById("ads-qa-message");
+    if (primaryEmail) {
+      msgBtn.href = "mailto:" + primaryEmail + "?subject=" + encodeURIComponent("Quick note");
+      msgBtn.hidden = false;
+    }
+
     var handles = d.identity_handles || [];
     if (handles.length) {
       var hb = document.getElementById("ads-qa-copy-handle");
@@ -695,6 +738,7 @@
       return;
     }
     renderHeader(d);
+    renderFreshness(d);
 
     // Bind lazy pane renderers — only Overview runs now.
     paneRenderers = {
@@ -765,5 +809,42 @@
     loadSources(id);
     loadChangelog(id);
     loadComments(id);
+
+    // Mobile: when the layout collapses (≤768px) all panes become
+    // visible at once and a sticky tab bar auto-highlights the active
+    // section as the operator scrolls. Above that breakpoint this is
+    // a no-op (panes remain hidden as on desktop).
+    function setupMobileAutoHighlight() {
+      if (!window.matchMedia || !window.matchMedia("(max-width: 768px)").matches) return;
+      document.querySelectorAll(".ads-tab-panel").forEach(function (p) {
+        p.hidden = false; p.classList.add("active");
+      });
+      if (paneRenderers) {
+        Object.keys(paneRenderers).forEach(function (k) {
+          if (!paneRendered[k]) { try { paneRenderers[k](); paneRendered[k] = true; } catch (e) {} }
+        });
+      }
+      if (typeof IntersectionObserver !== "function") return;
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (!e.isIntersecting) return;
+          var name = e.target.getAttribute("data-tab");
+          document.querySelectorAll(".ads-person-tabs .ads-tab").forEach(function (t) {
+            t.classList.toggle("active", t.getAttribute("data-tab") === name);
+          });
+        });
+      }, { rootMargin: "-40% 0px -50% 0px", threshold: 0 });
+      document.querySelectorAll(".ads-section-anchor").forEach(function (h) { io.observe(h); });
+      // Tabs scroll to anchors instead of swapping panes.
+      document.querySelectorAll(".ads-person-tabs .ads-tab").forEach(function (t) {
+        t.addEventListener("click", function (ev) {
+          var n = t.getAttribute("data-tab");
+          var anchor = document.querySelector('.ads-section-anchor[data-tab="' + n + '"]');
+          if (anchor) { ev.preventDefault(); anchor.scrollIntoView({ behavior: "smooth", block: "start" }); }
+        }, true);
+      });
+    }
+    // Defer until dossier has rendered so renderers are bound.
+    setTimeout(setupMobileAutoHighlight, 600);
   });
 })();

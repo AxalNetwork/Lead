@@ -31,8 +31,13 @@ permalink: /dashboard/people/
       <button class="ads-btn ads-btn--sm" type="button" id="ads-person-refresh">Refresh</button>
       <div class="ads-person-header__qa" id="ads-person-quick">
         <a class="ads-btn ads-btn--ghost ads-btn--sm" id="ads-qa-email" hidden>Email</a>
+        <a class="ads-btn ads-btn--ghost ads-btn--sm" id="ads-qa-message" hidden>Message</a>
         <a class="ads-btn ads-btn--ghost ads-btn--sm" id="ads-qa-calendar" target="_blank" rel="noopener" hidden>Calendar</a>
         <a class="ads-btn ads-btn--ghost ads-btn--sm" id="ads-qa-linkedin" target="_blank" rel="noopener" hidden>LinkedIn</a>
+        <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-qa-save">Save to list</button>
+        <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-qa-watchlist">Watchlist</button>
+        <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-qa-deep">Run deep profile</button>
+        <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-qa-share">Share</button>
         <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-person-copy">Copy link</button>
         <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-qa-copy-handle" hidden>Copy handle</button>
       </div>
@@ -50,21 +55,25 @@ permalink: /dashboard/people/
       <button type="button" class="ads-tab" data-tab="interests" role="tab">Interests &amp; Lifestyle</button>
       <button type="button" class="ads-tab" data-tab="network" role="tab">Network</button>
       <button type="button" class="ads-tab" data-tab="voice" role="tab">Voice &amp; Content</button>
-      <button type="button" class="ads-tab" data-tab="outreach" role="tab">Outreach Playbook</button>
       <button type="button" class="ads-tab" data-tab="intelligence" role="tab">Intelligence</button>
+      <button type="button" class="ads-tab" data-tab="outreach" role="tab">Outreach Playbook</button>
     </div>
 
-    <section class="ads-tab-panel active" data-tab="overview"><div class="ads-card" id="ads-pane-overview"><div class="ads-skeleton"></div></div></section>
-    <section class="ads-tab-panel" data-tab="career" hidden><div class="ads-card" id="ads-pane-career"><div class="ads-skeleton"></div></div></section>
-    <section class="ads-tab-panel" data-tab="background" hidden><div class="ads-card" id="ads-pane-background"><div class="ads-skeleton"></div></div></section>
-    <section class="ads-tab-panel" data-tab="interests" hidden><div class="ads-card" id="ads-pane-interests"><div class="ads-skeleton"></div></div></section>
-    <section class="ads-tab-panel" data-tab="network" hidden><div class="ads-card" id="ads-pane-network"><div class="ads-skeleton"></div></div></section>
-    <section class="ads-tab-panel" data-tab="voice" hidden><div class="ads-card" id="ads-pane-voice"><div class="ads-skeleton"></div></div></section>
-    <section class="ads-tab-panel" data-tab="outreach" hidden><div class="ads-card" id="ads-pane-outreach"><div class="ads-skeleton"></div></div></section>
-    <section class="ads-tab-panel" data-tab="intelligence" hidden><div class="ads-card" id="ads-pane-intelligence"><div class="ads-skeleton"></div></div></section>
+    <section class="ads-tab-panel active" data-tab="overview"><h2 class="ads-section-anchor" data-tab="overview">Overview</h2><div class="ads-card" id="ads-pane-overview"><div class="ads-skeleton"></div></div></section>
+    <section class="ads-tab-panel" data-tab="career" hidden><h2 class="ads-section-anchor" data-tab="career">Career</h2><div class="ads-card" id="ads-pane-career"><div class="ads-skeleton"></div></div></section>
+    <section class="ads-tab-panel" data-tab="background" hidden><h2 class="ads-section-anchor" data-tab="background">Background</h2><div class="ads-card" id="ads-pane-background"><div class="ads-skeleton"></div></div></section>
+    <section class="ads-tab-panel" data-tab="interests" hidden><h2 class="ads-section-anchor" data-tab="interests">Interests &amp; Lifestyle</h2><div class="ads-card" id="ads-pane-interests"><div class="ads-skeleton"></div></div></section>
+    <section class="ads-tab-panel" data-tab="network" hidden><h2 class="ads-section-anchor" data-tab="network">Network</h2><div class="ads-card" id="ads-pane-network"><div class="ads-skeleton"></div></div></section>
+    <section class="ads-tab-panel" data-tab="voice" hidden><h2 class="ads-section-anchor" data-tab="voice">Voice &amp; Content</h2><div class="ads-card" id="ads-pane-voice"><div class="ads-skeleton"></div></div></section>
+    <section class="ads-tab-panel" data-tab="intelligence" hidden><h2 class="ads-section-anchor" data-tab="intelligence">Intelligence</h2><div class="ads-card" id="ads-pane-intelligence"><div class="ads-skeleton"></div></div></section>
+    <section class="ads-tab-panel" data-tab="outreach" hidden><h2 class="ads-section-anchor" data-tab="outreach">Outreach Playbook</h2><div class="ads-card" id="ads-pane-outreach"><div class="ads-skeleton"></div></div></section>
   </main>
 
   <aside class="ads-person-rail" id="ads-person-rail">
+    <div class="ads-card ads-person-rail__card">
+      <h3>Freshness</h3>
+      <div id="ads-person-freshness" class="ads-muted" style="font-size:12px">Loading…</div>
+    </div>
     <div class="ads-card ads-person-rail__card">
       <h3>Sources</h3>
       <div id="ads-person-sources"><div class="ads-skeleton ads-skeleton--sm"></div></div>
