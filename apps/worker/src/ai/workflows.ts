@@ -394,7 +394,7 @@ export class AIProfileFillerWorkflow {
 
     // Phase E — write to DB.
     const written = await step.do("write_db", { retries: { limit: 1 } }, async () => {
-      return await pf.writeProfileToDb(env, entityId, profile, homepage.url);
+      return await pf.writeProfileToDb(env, entityId, profile, homepage.url, pages);
     });
 
     // Phase F — search corroboration (best-effort).

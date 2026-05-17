@@ -241,6 +241,7 @@ async function r2HtmlPut(env: Env, key: string, text: string): Promise<void> {
 
 export async function fetchSitePages(env: Env, siteBaseUrl: string): Promise<FetchedPage[]> {
   const out: FetchedPage[] = [];
+  let homepageHtml: string | null = null;
   for (const path of SUBPATHS) {
     const url = new URL(path, siteBaseUrl).toString();
     const cacheKey = `profile_filler/${await sha256Hex(url)}.html`;
@@ -253,9 +254,42 @@ export async function fetchSitePages(env: Env, siteBaseUrl: string): Promise<Fet
       html = r.html;
       await r2HtmlPut(env, cacheKey, html);
     }
+    if (path === "/") homepageHtml = html;
     const text = stripHtml(html).slice(0, PAGE_TEXT_CAP);
     if (text.length < 200) continue;
     out.push({ url, status, text });
+  }
+  // Step G: if the homepage links out to Wikipedia or Crunchbase, fetch
+  // those pages too — they often carry founding year, founders, and
+  // recent rounds in cleaner prose than the company site. Feeds into
+  // the same structured-extraction call as the rest of the pages.
+  if (homepageHtml) {
+    const extra = new Set<string>();
+    const linkRe = /href=["']([^"']+)["']/gi;
+    let m: RegExpExecArray | null;
+    while ((m = linkRe.exec(homepageHtml)) !== null) {
+      const href = m[1];
+      if (/wikipedia\.org\/wiki\//i.test(href) || /crunchbase\.com\/(organization|person)\//i.test(href)) {
+        try {
+          const abs = new URL(href, siteBaseUrl).toString();
+          extra.add(abs);
+        } catch { /* ignore */ }
+      }
+      if (extra.size >= 4) break;
+    }
+    for (const url of extra) {
+      const cacheKey = `profile_filler/${await sha256Hex(url)}.html`;
+      let html = await r2HtmlGet(env, cacheKey);
+      if (!html) {
+        const r = await fetchPage(env, url, { timeoutMs: 15_000, minIntervalMs: 4_000 });
+        if (!r.ok || !r.html || r.status >= 400) continue;
+        html = r.html;
+        await r2HtmlPut(env, cacheKey, html);
+      }
+      const text = stripHtml(html).slice(0, PAGE_TEXT_CAP);
+      if (text.length < 200) continue;
+      out.push({ url, status: 200, text });
+    }
   }
   return out;
 }
@@ -431,7 +465,16 @@ export async function writeProfileToDb(
   entityId: string,
   profile: ExtractedProfile,
   evidenceUrl: string,
+  pages?: FetchedPage[],
 ): Promise<{ facts_written: number; team_added: number; portfolio_added: number }> {
+  // Per-fact evidence attribution: team facts cite the /team (or
+  // /people) page if we fetched it, portfolio facts cite /portfolio
+  // (or /companies/investments), and the homepage URL is the default
+  // for general firm-level facts. Falls back to evidenceUrl when a
+  // section page wasn't fetched.
+  const findPage = (re: RegExp): string => pages?.find((p) => re.test(p.url))?.url ?? evidenceUrl;
+  const teamEvidenceUrl = findPage(/\/(team|people)\/?$/i);
+  const portfolioEvidenceUrl = findPage(/\/(portfolio|companies|investments)\/?$/i);
   const source = PROFILE_FILLER_VERSION;
   const patches: Array<{ predicate: string; value_text?: string | null; value_number?: number | null; value_json?: unknown }> = [];
   if (profile.thesis) patches.push({ predicate: "thesis", value_text: profile.thesis });
@@ -475,7 +518,7 @@ export async function writeProfileToDb(
     if (tm.title) {
       await insertFact(env, {
         entity_id: personId, predicate: "title", value_text: tm.title,
-        source_kind: "ai", source, evidence_url: evidenceUrl, confidence: 0.7,
+        source_kind: "ai", source, evidence_url: teamEvidenceUrl, confidence: 0.7,
       });
     }
     team_added += 1;
@@ -488,6 +531,14 @@ export async function writeProfileToDb(
     const orgId = await findOrCreatePortfolioEntity(env, pc.name, pc.website ?? null, source);
     if (!orgId) continue;
     await ensureRelEdge(env, entityId, orgId, "invested_in", source);
+    // Per-fact evidence: cite the /portfolio (or /companies) page
+    // where the company was listed, not the homepage.
+    await insertFact(env, {
+      entity_id: entityId, predicate: "portfolio_company",
+      value_text: pc.name,
+      value_entity_id: orgId,
+      source_kind: "ai", source, evidence_url: portfolioEvidenceUrl, confidence: 0.7,
+    });
     portfolio_added += 1;
   }
 
@@ -652,7 +703,7 @@ export async function fillProfile(env: Env, entityId: string, opts: FillOptions 
   }
 
   // Step E: write to DB.
-  const written = await writeProfileToDb(env, entityId, profile, homepage.url);
+  const written = await writeProfileToDb(env, entityId, profile, homepage.url, pages);
 
   // Step F: search corroboration (best-effort, only if we have a name).
   let corroborated = 0;
