@@ -109,7 +109,10 @@ CREATE TABLE IF NOT EXISTS persona_match_manual_overrides (
 -- an error) so it can't be used as an abort primitive; a CHECK on a
 -- temp table is the portable D1/SQLite-aborting pattern. Greenfield
 -- deploys (legacy empty) insert ok=1 and pass through cleanly.
-CREATE TEMP TABLE _migration_331_guard (
+-- D1 does not allow CREATE TEMP TABLE (returns SQLITE_AUTH). Use a
+-- regular table dropped at the end of this guard block instead.
+DROP TABLE IF EXISTS _migration_331_guard;
+CREATE TABLE _migration_331_guard (
   ok INTEGER NOT NULL CHECK (ok = 1)  -- CHECK fires: manual_overrides_missing
 );
 INSERT INTO _migration_331_guard (ok)
