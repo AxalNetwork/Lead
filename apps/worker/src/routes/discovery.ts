@@ -118,8 +118,21 @@ discoveryRoute.get("/graph/:urlId", async (c) => {
 
 discoveryRoute.post("/urls/:id/promote", async (c) => {
   const id = c.req.param("id");
+  // Manual promote = "I as an operator vouch for this URL". We mark the
+  // row promoted AND enqueue it onto the frontier so the next crawl
+  // batch actually fetches it. Yield is forced to 1.0 in priority so it
+  // jumps ahead of heuristic candidates.
+  const row = await c.env.DB.prepare(`SELECT id, host, depth FROM discovered_urls WHERE id = ?`).bind(id).first<{ id: string; host: string; depth: number }>();
+  if (!row) return c.json({ error: "not_found" }, 404);
   await c.env.DB.prepare(`UPDATE discovered_urls SET status = 'promoted' WHERE id = ?`).bind(id).run();
-  return c.json({ ok: true });
+  await c.env.DB.prepare(
+    `INSERT INTO crawl_frontier (url_id, priority, scheduled_at)
+       VALUES (?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(url_id) DO UPDATE SET priority = MAX(crawl_frontier.priority, excluded.priority),
+                                       next_attempt_at = NULL,
+                                       last_error = NULL`,
+  ).bind(id, 1.0).run();
+  return c.json({ ok: true, enqueued: true });
 });
 
 discoveryRoute.post("/urls/:id/reject", async (c) => {

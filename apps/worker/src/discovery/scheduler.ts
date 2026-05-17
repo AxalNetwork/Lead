@@ -3,9 +3,11 @@
 // `computePriority` is pure — given a YieldVerdict + depth + host stats
 // it returns a single float used by `popFrontier` to order the queue.
 //
-// `assertHostPolite` is the per-host gate: returns false when we have
-// fetched this host more than max-per-host times in this run, or when
-// the global rate limiter says we should wait.
+// `assertHostPolite` is the per-host *rate* gate. It enforces a minimum
+// spacing between fetches to the same host (KV lock, FRONTIER_TTL_SEC).
+// It does NOT enforce a run-wide host ceiling — that is the
+// orchestrator's responsibility via `hostFetchCountInRun` (see
+// `runDiscoverFromSeed`).
 
 import type { Env } from "../types";
 

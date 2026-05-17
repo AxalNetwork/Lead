@@ -21,7 +21,10 @@ permalink: /dashboard/discovery/
     <button id="ads-disc-go" class="ads-btn" type="button">Seed</button>
     <button id="ads-disc-crawl" class="ads-btn" type="button" style="background:#1a3a6b">Crawl frontier</button>
   </div>
-  <div id="ads-disc-methods" style="margin-top:10px;font-size:11px;color:#666"></div>
+  <div style="margin-top:10px">
+    <div style="font-size:11px;color:#666;margin-bottom:4px">Methods (toggle to limit discovery; default = all):</div>
+    <div id="ads-disc-methods" style="display:flex;gap:6px;flex-wrap:wrap;font-size:11px"></div>
+  </div>
 </div>
 
 <div class="ads-card" style="margin-bottom:14px">
@@ -76,17 +79,27 @@ permalink: /dashboard/discovery/
     var color = v > 0.6 ? "#2c8a3e" : v > 0.35 ? "#2c6eb5" : "#999";
     return '<div style="display:inline-flex;align-items:center;gap:4px"><div style="width:40px;height:5px;background:#eee;border-radius:3px"><div style="width:' + pct + '%;height:100%;background:' + color + ';border-radius:3px"></div></div><span style="font-size:10px">' + pct + '%</span></div>';
   }
+  // The 8 implemented method names — others are reserved placeholders.
+  var IMPLEMENTED = { outbound:1, sitemap:1, rss_atom:1, opengraph_meta:1, jsonld_sameas:1, archive_wayback:1, sister_pages:1, citations:1 };
   async function loadMethods() {
     try {
       var r = await fetch(API + "/api/discovery/methods", { credentials: "include" });
       var data = await r.json();
       var host = document.getElementById("ads-disc-methods");
       var select = document.getElementById("ads-disc-method");
-      host.innerHTML = "Methods: " + (data.methods || []).map(function (m) { return '<code style="background:#eef;padding:1px 5px;margin-right:3px;border-radius:3px">' + esc(m) + '</code>'; }).join("");
+      host.innerHTML = (data.methods || []).map(function (m) {
+        var live = IMPLEMENTED[m];
+        return '<label style="background:' + (live ? "#eef" : "#f5f5f5") + ';padding:2px 6px;border-radius:3px;cursor:' + (live ? "pointer" : "not-allowed") + ';opacity:' + (live ? 1 : 0.5) + '">' +
+          '<input type="checkbox" class="ads-disc-mcheck" value="' + esc(m) + '"' + (live ? " checked" : " disabled") + ' style="vertical-align:middle;margin-right:4px"><code style="font-size:11px">' + esc(m) + '</code>' +
+          (live ? '' : ' <span style="font-size:9px;color:#999">(soon)</span>') + '</label>';
+      }).join("");
       (data.methods || []).forEach(function (m) {
         var opt = document.createElement("option"); opt.value = m; opt.textContent = m; select.appendChild(opt);
       });
     } catch (e) { /* ignore */ }
+  }
+  function selectedMethods() {
+    return Array.from(document.querySelectorAll(".ads-disc-mcheck:checked")).map(function (el) { return el.value; });
   }
   async function loadStats() {
     try {
@@ -160,7 +173,10 @@ permalink: /dashboard/discovery/
     var max_per_host = Number(document.getElementById("ads-disc-host").value) || 200;
     this.disabled = true; this.textContent = "Running…";
     try {
-      var r = await fetch(API + "/api/discovery/seed", { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: url, depth: depth, max_per_host: max_per_host }) });
+      var methods = selectedMethods();
+      var payload = { url: url, depth: depth, max_per_host: max_per_host };
+      if (methods.length && methods.length < Object.keys(IMPLEMENTED).length) payload.methods = methods;
+      var r = await fetch(API + "/api/discovery/seed", { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
       var data = await r.json();
       if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
       loadStats(); loadUrls();

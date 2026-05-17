@@ -177,3 +177,22 @@ export async function markFrontierError(env: Env, urlId: string, error: string):
 export async function getDiscoveredUrl(env: Env, id: string): Promise<DiscoveredUrlRow | null> {
   return await env.DB.prepare(`SELECT * FROM discovered_urls WHERE id = ?`).bind(id).first<DiscoveredUrlRow>();
 }
+
+/** Run-wide host counter. Atomic upsert + read in one round trip. */
+export async function bumpRunHostCount(env: Env, runId: string, host: string, delta = 1): Promise<number> {
+  await env.DB.prepare(
+    `INSERT INTO discovery_run_hosts (run_id, host, n) VALUES (?, ?, ?)
+       ON CONFLICT(run_id, host) DO UPDATE SET n = discovery_run_hosts.n + excluded.n`,
+  ).bind(runId, host, delta).run();
+  const r = await env.DB.prepare(
+    `SELECT n FROM discovery_run_hosts WHERE run_id = ? AND host = ?`,
+  ).bind(runId, host).first<{ n: number }>();
+  return r?.n ?? 0;
+}
+
+export async function getRunHostCount(env: Env, runId: string, host: string): Promise<number> {
+  const r = await env.DB.prepare(
+    `SELECT n FROM discovery_run_hosts WHERE run_id = ? AND host = ?`,
+  ).bind(runId, host).first<{ n: number }>();
+  return r?.n ?? 0;
+}

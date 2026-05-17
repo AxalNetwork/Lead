@@ -20,7 +20,7 @@ import {
 import { predictYield } from "./predictYield";
 import {
   upsertDiscoveredUrl, insertLinkEdge, enqueueFrontier, popFrontier,
-  markCrawled, markFrontierError,
+  markCrawled, markFrontierError, bumpRunHostCount, getRunHostCount,
 } from "./store.discovery";
 import { computePriority, assertHostPolite } from "./scheduler";
 
@@ -103,8 +103,15 @@ export async function runDiscoverFromSeed(env: Env, opts: SeedOpts): Promise<See
   };
   const settled = await Promise.allSettled(enabled.map(async (name) => ({ name, links: await methodFns[name]() })));
 
-  // Per-host counter for diversity bias.
-  const hostCount: Record<string, number> = {};
+  // Run-wide host counter. Read the persisted base once per host then
+  // amortize increments locally; flush back to the DB at the end so the
+  // ceiling holds across recursive `runDiscoverFromSeed` calls AND
+  // across `runCrawlFrontier` invocations sharing the same runId.
+  const hostBase: Record<string, number> = {};
+  const hostDelta: Record<string, number> = {};
+  const ensureHostBase = async (host: string) => {
+    if (hostBase[host] == null) hostBase[host] = await getRunHostCount(env, runId, host);
+  };
   const method_counts: Record<string, number> = {};
   let discovered = 0, queued = 0, rejected = 0;
 
@@ -115,9 +122,10 @@ export async function runDiscoverFromSeed(env: Env, opts: SeedOpts): Promise<See
     for (const raw of links) {
       const c = canonicalizeUrl(raw.url);
       if (!c) continue;
-      // Per-host cap.
-      hostCount[c.host] = (hostCount[c.host] ?? 0) + 1;
-      if (hostCount[c.host] > maxPerHost) { rejected++; continue; }
+      // Run-wide per-host cap (persistent across recursion + workflow batches).
+      await ensureHostBase(c.host);
+      hostDelta[c.host] = (hostDelta[c.host] ?? 0) + 1;
+      if (hostBase[c.host] + hostDelta[c.host] > maxPerHost) { rejected++; continue; }
       // Don't re-insert the seed itself.
       if (c.canonical === seedCanon.canonical) continue;
 
@@ -141,7 +149,7 @@ export async function runDiscoverFromSeed(env: Env, opts: SeedOpts): Promise<See
           yield_score: verdict.yield_score,
           depth: depth + 1,
           host: c.host,
-          host_fetch_count_in_run: hostCount[c.host],
+          host_fetch_count_in_run: hostBase[c.host] + hostDelta[c.host],
           max_per_host: maxPerHost,
         });
         await enqueueFrontier(env, row.id, prio);
@@ -150,6 +158,13 @@ export async function runDiscoverFromSeed(env: Env, opts: SeedOpts): Promise<See
         rejected++;
       }
     }
+  }
+
+  // Flush per-host deltas in a single batch so the next recursive call
+  // (or the frontier-crawl follow-up) sees the up-to-date totals.
+  const deltaEntries = Object.entries(hostDelta).filter(([, n]) => n > 0);
+  if (deltaEntries.length) {
+    await Promise.all(deltaEntries.map(([host, n]) => bumpRunHostCount(env, runId, host, n)));
   }
 
   // Update the run row aggregates.

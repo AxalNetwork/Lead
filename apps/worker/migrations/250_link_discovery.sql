@@ -76,3 +76,14 @@ CREATE TABLE IF NOT EXISTS discovery_runs (
   error           TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_dr_started ON discovery_runs(started_at DESC);
+
+-- Persistent run-wide host counters so `max_per_host` is enforced across
+-- the recursive discovery + frontier-crawl fan-out, not just within a
+-- single Worker invocation. PK keyed on (run_id, host) so the upsert is
+-- a single round-trip.
+CREATE TABLE IF NOT EXISTS discovery_run_hosts (
+  run_id TEXT NOT NULL REFERENCES discovery_runs(id) ON DELETE CASCADE,
+  host   TEXT NOT NULL,
+  n      INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (run_id, host)
+);
