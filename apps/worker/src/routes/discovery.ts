@@ -10,6 +10,19 @@ import type { Env } from "../types";
 import { runDiscoverFromSeed, runCrawlFrontier, ALL_METHOD_NAMES } from "../discovery/runDiscovery";
 import { canonicalizeUrl } from "../discovery/canonical";
 
+// Methods that actually return links today (the other 10 are reserved
+// names exposed for forward-compatibility). Validating against this set
+// prevents callers from silently running zero-method discovery jobs.
+const IMPLEMENTED_METHODS = new Set([
+  "outbound", "sitemap", "rss_atom", "opengraph_meta", "jsonld_sameas",
+  "archive_wayback", "sister_pages", "citations",
+]);
+
+async function runExists(env: Env, runId: string): Promise<boolean> {
+  const r = await env.DB.prepare(`SELECT 1 AS x FROM discovery_runs WHERE id = ?`).bind(runId).first<{ x: number }>();
+  return !!r;
+}
+
 export const discoveryRoute = new Hono<{ Bindings: Env }>();
 
 discoveryRoute.get("/methods", (c) => c.json({ methods: ALL_METHOD_NAMES }));
@@ -21,6 +34,15 @@ discoveryRoute.post("/seed", async (c) => {
   if (!body.url) return c.json({ error: "url_required" }, 400);
   const can = canonicalizeUrl(body.url);
   if (!can) return c.json({ error: "invalid_url" }, 400);
+  // Reject when the caller asked for methods that are all unimplemented —
+  // otherwise the run would silently produce zero links and look broken.
+  if (body.methods && body.methods.length > 0) {
+    const live = body.methods.filter((m) => IMPLEMENTED_METHODS.has(m));
+    if (live.length === 0) {
+      return c.json({ error: "no_implemented_methods", implemented: [...IMPLEMENTED_METHODS] }, 400);
+    }
+    body.methods = live;
+  }
 
   if (body.dispatch && c.env.WF_DISCOVER_FROM_SEED) {
     const wf = await c.env.WF_DISCOVER_FROM_SEED.create({ params: { url: can.url, depthMax: body.depth ?? 3, maxPerHost: body.max_per_host ?? 200, methods: body.methods, yieldThreshold: body.yield_threshold } });
@@ -39,6 +61,9 @@ discoveryRoute.post("/seed", async (c) => {
 
 discoveryRoute.post("/crawl", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { run_id?: string; limit?: number };
+  if (body.run_id && !(await runExists(c.env, body.run_id))) {
+    return c.json({ error: "unknown_run_id" }, 400);
+  }
   if (body.run_id && c.env.WF_CRAWL_FRONTIER) {
     const wf = await c.env.WF_CRAWL_FRONTIER.create({ params: { runId: body.run_id, limit: body.limit ?? 25 } });
     return c.json({ ok: true, dispatched: true, workflow_id: wf.id });
@@ -53,6 +78,7 @@ discoveryRoute.get("/urls", async (c) => {
   const method = c.req.query("method");
   const minYield = Number(c.req.query("min_yield") ?? "0") || 0;
   const limit = Math.min(Number(c.req.query("limit") ?? "100") || 100, 500);
+  const offset = Math.max(Number(c.req.query("offset") ?? "0") || 0, 0);
   const wheres: string[] = ["expected_yield_score >= ?"];
   const binds: unknown[] = [minYield];
   if (status) { wheres.push("status = ?"); binds.push(status); }
@@ -60,10 +86,12 @@ discoveryRoute.get("/urls", async (c) => {
   if (method) { wheres.push("discovery_method = ?"); binds.push(method); }
   const sql = `SELECT id, url, host, discovery_method, depth, status, expected_yield_score, likely_kind, link_text, first_seen, last_crawled_at, rejected_reason
                  FROM discovered_urls WHERE ${wheres.join(" AND ")}
-                 ORDER BY expected_yield_score DESC, last_seen DESC LIMIT ?`;
-  binds.push(limit);
+                 ORDER BY expected_yield_score DESC, last_seen DESC
+                 LIMIT ? OFFSET ?`;
+  binds.push(limit, offset);
   const r = await c.env.DB.prepare(sql).bind(...binds).all();
-  return c.json({ items: r.results ?? [] });
+  const items = r.results ?? [];
+  return c.json({ items, next_offset: items.length === limit ? offset + limit : null });
 });
 
 discoveryRoute.get("/stats", async (c) => {
@@ -128,6 +156,9 @@ discoveryRoute.post("/urls/:id/promote", async (c) => {
   // accept one explicitly via body. Keeps run-level metrics accurate
   // when an operator promotes a URL surfaced by a specific run.
   const body = (await c.req.json().catch(() => ({}))) as { run_id?: string };
+  if (body.run_id && !(await runExists(c.env, body.run_id))) {
+    return c.json({ error: "unknown_run_id" }, 400);
+  }
   const prior = await c.env.DB.prepare(`SELECT run_id FROM crawl_frontier WHERE url_id = ?`).bind(id).first<{ run_id: string | null }>();
   const runId = body.run_id ?? prior?.run_id ?? null;
   await c.env.DB.prepare(`UPDATE discovered_urls SET status = 'promoted' WHERE id = ?`).bind(id).run();
