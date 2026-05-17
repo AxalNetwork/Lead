@@ -25,9 +25,18 @@ export interface Env {
   RAW_HTML: R2Bucket;
   UPLOADS: R2Bucket;
   AI_CACHE?: R2Bucket;
+  // Task #2 bug-triage: reserved bindings for upcoming tasks. Declared
+  // here + in wrangler.toml so a reference in Task #57 / #43 code can't
+  // typecheck against `undefined`.
+  IMPORTS?: R2Bucket;
+  TRANSCRIPTS?: R2Bucket;
   BROWSER?: Fetcher;
   LEAD_QUEUE: Queue<QueueMessage>;
   ALLOWED_EMAIL: string;
+  // Task #2 bug-triage: explicit prod/debug flags so the error envelope
+  // can strip Error.stack in production.
+  ENVIRONMENT?: string;
+  DEBUG?: string;
   ACCESS_TEAM_DOMAIN: string;
   ACCESS_AUD: string;
   ACCESS_APP_AUD: string;
@@ -40,6 +49,9 @@ export interface Env {
   VEC_ACCOUNTS?: VectorizeIndex;
   VEC_PERSONAS?: VectorizeIndex;
   VEC_PROJECTS?: VectorizeIndex;
+  // Task #2 bug-triage: unified entity-graph vector index used by
+  // Tasks #7 / #8 / #9 persona ↔ entity matching.
+  VECTORIZE_ENTITIES?: VectorizeIndex;
   ENTITY_LOCK?: DurableObjectNamespace;
   ANALYTICS?: AnalyticsEngineDataset;
   RL_HOST?: RateLimiter;

@@ -95,6 +95,17 @@ bucket_name = "aidatasignal-uploads"
 binding = "AI_CACHE"
 bucket_name = "aidatasignal-ai-cache"
 
+# Task #2 bug-triage: reserved bindings for upcoming tasks. Declared
+# now (Task #57 imports raw spreadsheet/PDF files; Task #43 stores call
+# transcripts) so a reference can't typecheck against `undefined`.
+[[r2_buckets]]
+binding = "IMPORTS"
+bucket_name = "aidatasignal-imports"
+
+[[r2_buckets]]
+binding = "TRANSCRIPTS"
+bucket_name = "aidatasignal-transcripts"
+
 # Task #25: Workers AI binding (extraction, embeddings, arbitration, OCR).
 [ai]
 binding = "AI"
@@ -131,6 +142,12 @@ index_name = "axal-personas-768"  # dim=768 metric=cosine
 [[vectorize]]
 binding = "VEC_PROJECTS"
 index_name = "axal-projects-768"  # dim=768 metric=cosine
+
+# Task #2 bug-triage: unified entity-graph vector index referenced by
+# Tasks #7 / #8 / #9 persona ↔ entity matching.
+[[vectorize]]
+binding = "VECTORIZE_ENTITIES"
+index_name = "axal-entities-768"  # dim=768 metric=cosine
 
 # Task #25: Durable Object for serialized merge locks (per-entity).
 [[durable_objects.bindings]]

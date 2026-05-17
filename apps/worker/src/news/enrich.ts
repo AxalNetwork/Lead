@@ -227,7 +227,7 @@ export async function resolveEntity(env: Env, hit: NerHit): Promise<{ entity_id:
     let best: { id: string; score: number } | null = null;
     for (const idx of indexes) {
       try {
-        const res = await idx.query(emb, { topK: 3, returnMetadata: true });
+        const res = await idx.query(emb, { topK: 3, returnMetadata: "all" });
         for (const m of res?.matches ?? []) {
           const id = String((m as { id?: string }).id ?? "");
           const score = Number((m as { score?: number }).score ?? 0);

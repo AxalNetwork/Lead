@@ -187,6 +187,17 @@ api.onError((err, c) => {
   } else {
     console.warn("Worker error", appErr.code, appErr.message);
   }
+  // Task #2 bug-triage: in production, return a stable minimal envelope
+  // ({error:{code,message}}) and never serialize Error.stack. Dev
+  // (`DEBUG=1`) keeps the rich legacy envelope for debugging.
+  const isProd = c.env.ENVIRONMENT === "production" || !c.env.DEBUG;
+  if (isProd) {
+    const body = {
+      error: { code: appErr.code, message: appErr.message },
+      request_id: requestIdVal,
+    };
+    return c.json(body, appErr.status as ContentfulStatusCode);
+  }
   return c.json(appErr.toJSON(requestIdVal), appErr.status as ContentfulStatusCode);
 });
 
