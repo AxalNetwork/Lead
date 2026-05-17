@@ -201,6 +201,11 @@ export async function runCrawlFrontier(env: Env, opts: FrontierOpts = {}): Promi
   const limit = opts.limit ?? 25;
   const items = await popFrontier(env, limit, opts.runId ?? null);
   let fetched = 0, recursed = 0, entities = 0, errors = 0;
+  // Per-run accumulators so progress is attributed correctly even when
+  // the caller doesn't pin opts.runId (e.g. a cron crawl that drains
+  // a mixed-run frontier).
+  const perRunFetched: Record<string, number> = {};
+  const perRunEntities: Record<string, number> = {};
 
   for (const it of items) {
     if (!(await assertHostPolite(env, it.host))) {
@@ -216,6 +221,8 @@ export async function runCrawlFrontier(env: Env, opts: FrontierOpts = {}): Promi
         continue;
       }
       fetched++;
+      const attribRun = opts.runId ?? it.run_id ?? null;
+      if (attribRun) perRunFetched[attribRun] = (perRunFetched[attribRun] ?? 0) + 1;
       // 1. Extraction: feed the fetched page through the existing
       //    extractor so discovered profile pages actually produce
       //    entities. We collect the inserted lead IDs and pass them
@@ -228,6 +235,7 @@ export async function runCrawlFrontier(env: Env, opts: FrontierOpts = {}): Promi
         console.warn("discovery_extract_failed", (e as Error).message);
       }
       entities += entityIds.length;
+      if (attribRun && entityIds.length) perRunEntities[attribRun] = (perRunEntities[attribRun] ?? 0) + entityIds.length;
       // 2. Recursion: discover further links from this page.
       const r = await runDiscoverFromSeed(env, {
         url: it.url,
@@ -247,16 +255,17 @@ export async function runCrawlFrontier(env: Env, opts: FrontierOpts = {}): Promi
     }
   }
 
-  // 3. Live run progress. Update the run row aggregates so the
-  //    dashboard reflects what actually happened.
-  const effectiveRunId = opts.runId;
-  if (effectiveRunId) {
+  // 3. Live run progress. Update each run's counters by attributed
+  //    (claimed-row) run_id so stats stay accurate whether the caller
+  //    pinned opts.runId or popped a mixed-run batch.
+  const touchedRuns = new Set<string>([...Object.keys(perRunFetched), ...Object.keys(perRunEntities)]);
+  for (const rid of touchedRuns) {
     await env.DB.prepare(
       `UPDATE discovery_runs
           SET crawled = crawled + ?,
               entities_found = entities_found + ?
         WHERE id = ?`,
-    ).bind(fetched, entities, effectiveRunId).run();
+    ).bind(perRunFetched[rid] ?? 0, perRunEntities[rid] ?? 0, rid).run();
   }
 
   return { scanned: items.length, fetched, recursed, entities, errors };
