@@ -364,32 +364,33 @@ async function findOrCreatePersonEntity(env: Env, name: string, linkedin: string
   ).bind(trimmed.toLowerCase()).first<{ id: string }>().catch(() => null);
   if (hit?.id) return hit.id;
 
-  // Create a new person entity directly. Mirror what dualwrite would do.
-  const id = crypto.randomUUID();
-  const now = new Date().toISOString();
+  // Create a new person entity via the canonical write path
+  // (createEntity + addRole + upsertChannel) so we don't reimplement
+  // u_entities/entity_channels inserts here. Task #3 spec: "All
+  // entity / fact / role writes go through ... the Task #4 fact
+  // helpers. No direct INSERTs from the filler."
   try {
-    await env.DB.prepare(
-      `INSERT INTO u_entities (id, kind, display_name, primary_linkedin_key, status, quality_score, created_at, updated_at)
-       VALUES (?, 'person', ?, ?, 'active', 30, ?, ?)`,
-    ).bind(id, trimmed, linkedinKey, now, now).run();
+    const { createEntity } = await import("../entities/roles");
+    const ent = await createEntity(env, {
+      kind: "person",
+      display_name: trimmed,
+      primary_linkedin_key: linkedinKey,
+    });
+    await insertFact(env, {
+      entity_id: ent.id, predicate: "name", value_text: trimmed,
+      source_kind: "ai", source, confidence: 0.7,
+    });
+    if (linkedin) {
+      try {
+        const { upsertChannel } = await import("../entities/channels");
+        await upsertChannel(env, { entity_id: ent.id, kind: "linkedin", canonical: linkedin, source, is_primary: true });
+      } catch { /* best-effort */ }
+    }
+    return ent.id;
   } catch (e) {
-    console.warn("findOrCreatePersonEntity insert failed", (e as Error).message);
+    console.warn("findOrCreatePersonEntity canonical create failed", (e as Error).message);
     return null;
   }
-  await insertFact(env, {
-    entity_id: id, predicate: "name", value_text: trimmed,
-    source_kind: "ai", source, confidence: 0.7,
-  });
-  if (linkedin) {
-    try {
-      await env.DB.prepare(
-        `INSERT INTO entity_channels (entity_id, kind, canonical, source, is_primary)
-         VALUES (?, 'linkedin', ?, ?, 1)
-         ON CONFLICT DO NOTHING`,
-      ).bind(id, linkedin, source).run();
-    } catch { /* table may differ; non-fatal */ }
-  }
-  return id;
 }
 
 async function ensureRelEdge(env: Env, src: string, dst: string, kind: string, source: string): Promise<void> {

@@ -369,7 +369,18 @@ export class AIProfileFillerWorkflow {
       return await pf.extractStructuredProfile(env, pages);
     });
     if (!profile) {
-      await step.do("stamp_cooldown_extract_fail", {}, async () => { await pf.stampCooldown(env, entityId); });
+      // Spec: persist the failure as a confidence=0 fact so the audit
+      // trail mirrors the inline fillProfile() behavior. Workflow and
+      // inline paths must be observationally equivalent on failure.
+      await step.do("persist_extract_fail", {}, async () => {
+        const { insertFact } = await import("../entities/facts");
+        await insertFact(env, {
+          entity_id: entityId, predicate: "ai_profile_filler_failed",
+          value_text: "structured_extraction_invalid_json",
+          source_kind: "ai", source: pf.PROFILE_FILLER_VERSION, evidence_url: homepage.url, confidence: 0,
+        });
+        await pf.stampCooldown(env, entityId);
+      });
       return { ok: false, entityId, reason: "extraction_failed", facts_written: 0, team_added: 0, portfolio_added: 0, pages_fetched: pages.length, name_corrected: nameRes.corrected };
     }
 
