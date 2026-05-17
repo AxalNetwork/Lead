@@ -78,8 +78,14 @@ export async function monitorEntity(env: Env, entityId: string): Promise<Monitor
   }
 
   const diff = fingerprintChanged ? diffSummaries(last?.summary ?? null, newSummary) : [];
-  // Baseline (no prior snapshot) → store but emit nothing (spec).
-  if (!last) return result;
+  // Baseline (no prior snapshot) → store but emit nothing (spec). We MUST
+  // stamp the watermark here so the next tick's source-driven evaluators
+  // see a non-null `sinceWatermark` and don't backfill historical rows
+  // (relationships, predictions, posts, news, investments) as new events.
+  if (!last) {
+    await stampWatermark(env, entityId, tickStartedAt, newHash);
+    return result;
+  }
 
   // Load matching active rules: directly attached OR via a watchlist
   // the entity belongs to. Dedupe by rule id.
