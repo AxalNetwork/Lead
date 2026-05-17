@@ -104,6 +104,37 @@ function capFor(method: string): number {
   return 0.78;
 }
 
+export const AUTO_LINK_THRESHOLD = 0.85;
+
+// Strong link methods are cryptographically / DNS / well-known verifiable.
+// Only these are eligible to auto-attach from a single signal. All other
+// methods require corroboration (>=2 distinct methods) before auto-link.
+const STRONG_METHODS: ReadonlySet<string> = new Set([
+  "keybase", "well_known", "crypto_ens", "crypto_lens", "crypto_farcaster", "manual",
+]);
+
+// Methods that bypass the common-name gate (keybase proofs at 0.98 must
+// auto-attach per requirement — they're cryptographic, not name-derived).
+const COMMON_NAME_EXEMPT_METHODS: ReadonlySet<string> = new Set([
+  "keybase", "well_known", "crypto_ens", "crypto_lens", "crypto_farcaster", "manual",
+]);
+
+export function isAutoLinkEligible(args: {
+  linkMethod: string;
+  finalConfidence: number;
+  corroborations: number;
+  isCommonName: boolean;
+}): { eligible: true } | { eligible: false; reason: string } {
+  if (args.finalConfidence < AUTO_LINK_THRESHOLD) return { eligible: false, reason: "below_threshold" };
+  if (args.linkMethod === "username" && args.corroborations === 1) return { eligible: false, reason: "username_alone" };
+  const strong = STRONG_METHODS.has(args.linkMethod);
+  if (!strong && args.corroborations < 2) return { eligible: false, reason: "weak_method_needs_corroboration" };
+  if (args.isCommonName && !COMMON_NAME_EXEMPT_METHODS.has(args.linkMethod) && args.corroborations < 3) {
+    return { eligible: false, reason: "common_name_needs_corroboration" };
+  }
+  return { eligible: true };
+}
+
 export function scoreHits(hits: PivotHit[]): Array<PivotHit & { final_confidence: number; corroborations: number }> {
   // Group by (platform, handle) — corroborations come from distinct methods.
   const groups = new Map<string, PivotHit[]>();

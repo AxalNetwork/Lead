@@ -6,9 +6,9 @@ import type { Env } from "../types";
 import type { ResolveSummary } from "./types";
 import { loadKnownFacts } from "./facts";
 import { runAllPivots, type OrchestratorOptions } from "./pivots/index";
-import { scoreHits, isBlocklisted, isCommonNameOnly, isCrossLinkedToDifferentEntity } from "./guardrails";
+import { scoreHits, isBlocklisted, isCommonNameOnly, isCrossLinkedToDifferentEntity, isAutoLinkEligible } from "./guardrails";
 
-const AUTO_LINK_THRESHOLD = 0.85;
+export { isAutoLinkEligible } from "./guardrails";
 
 export interface ResolveOptions extends OrchestratorOptions {
   // Force-route a candidate to the review queue regardless of confidence.
@@ -52,22 +52,20 @@ export async function resolveEntity(env: Env, entityId: string, opts: ResolveOpt
         continue;
       }
 
-      // username-alone is never enough.
-      const isUsernameAlone = h.link_method === "username" && h.corroborations === 1;
-      // common-name requires >= 3 distinct methods.
-      const commonNeedsMore = isCommon && h.corroborations < 3;
+      const decision = opts.manualReviewOnly
+        ? { eligible: false as const, reason: "manual_review_only" }
+        : isAutoLinkEligible({
+            linkMethod: h.link_method,
+            finalConfidence: h.final_confidence,
+            corroborations: h.corroborations,
+            isCommonName: isCommon,
+          });
 
-      const eligibleForAuto =
-        h.final_confidence >= AUTO_LINK_THRESHOLD &&
-        !isUsernameAlone &&
-        !commonNeedsMore &&
-        !opts.manualReviewOnly;
-
-      if (eligibleForAuto) {
+      if (decision.eligible) {
         await upsertActiveHandle(env, entityId, h);
         autoLinked++;
       } else {
-        await insertCandidate(env, entityId, h, commonNeedsMore ? "common_name_needs_corroboration" : (isUsernameAlone ? "username_alone" : "below_threshold"));
+        await insertCandidate(env, entityId, h, decision.reason);
         candidatesAdded++;
       }
     }
@@ -92,10 +90,21 @@ async function acquireEntityLock(env: Env, entityId: string): Promise<() => Prom
   try {
     const id = env.ENTITY_LOCK.idFromName(entityId);
     const stub = env.ENTITY_LOCK.get(id);
-    const res = await stub.fetch("https://lock/acquire", { method: "POST", body: JSON.stringify({ ttlMs: 90_000 }) });
+    const token = crypto.randomUUID();
+    const res = await stub.fetch("https://lock/acquire", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, ttlMs: 60_000 }),
+    });
     if (!res.ok) return async () => undefined;
     return async () => {
-      try { await stub.fetch("https://lock/release", { method: "POST" }); } catch { /* ignore */ }
+      try {
+        await stub.fetch("https://lock/release", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token }),
+        });
+      } catch { /* ignore */ }
     };
   } catch { return async () => undefined; }
 }

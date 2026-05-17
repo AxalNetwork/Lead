@@ -69,6 +69,35 @@ test("scoring: single username hit stays low (never auto-links by itself)", asyn
   assert.ok(s[0].final_confidence < 0.85);
 });
 
+test("auto-link policy: keybase proof auto-attaches at 0.98 and never queues (even for common name)", async () => {
+  const { isAutoLinkEligible } = await import(`${ROOT}/osint/guardrails.js`);
+  const d = isAutoLinkEligible({ linkMethod: "keybase", finalConfidence: 0.98, corroborations: 1, isCommonName: true });
+  assert.equal(d.eligible, true);
+});
+
+test("auto-link policy: weak method (bio_url) alone must NOT auto-link without corroboration", async () => {
+  const { isAutoLinkEligible } = await import(`${ROOT}/osint/guardrails.js`);
+  const d = isAutoLinkEligible({ linkMethod: "bio_url", finalConfidence: 0.90, corroborations: 1, isCommonName: false });
+  assert.equal(d.eligible, false);
+  assert.equal(d.reason, "weak_method_needs_corroboration");
+});
+
+test("auto-link policy: common handle on common name requires >=3 distinct methods", async () => {
+  const { isAutoLinkEligible } = await import(`${ROOT}/osint/guardrails.js`);
+  const two = isAutoLinkEligible({ linkMethod: "bio_url", finalConfidence: 0.92, corroborations: 2, isCommonName: true });
+  assert.equal(two.eligible, false);
+  assert.equal(two.reason, "common_name_needs_corroboration");
+  const three = isAutoLinkEligible({ linkMethod: "bio_url", finalConfidence: 0.92, corroborations: 3, isCommonName: true });
+  assert.equal(three.eligible, true);
+});
+
+test("auto-link policy: username-alone never enough even at high score", async () => {
+  const { isAutoLinkEligible } = await import(`${ROOT}/osint/guardrails.js`);
+  const d = isAutoLinkEligible({ linkMethod: "username", finalConfidence: 0.99, corroborations: 1, isCommonName: false });
+  assert.equal(d.eligible, false);
+  assert.equal(d.reason, "username_alone");
+});
+
 test("stylometric: feature vector + cosine similarity", async () => {
   const { featureVector, cosine } = await import(`${ROOT}/osint/pivots/writing_style.js`);
   const a = featureVector("The quick brown fox jumps over the lazy dog. The dog did not move at all today.");

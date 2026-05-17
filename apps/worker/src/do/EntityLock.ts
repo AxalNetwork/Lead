@@ -40,32 +40,43 @@ export class EntityLock {
     const url = new URL(req.url);
     const op = url.pathname.replace(/^\/+/, "");
     if (req.method !== "POST") return new Response("method_not_allowed", { status: 405 });
-    // Task #3 (OSINT): acquire/release ops for the resolver. These do NOT
-    // take a MergeRequest body — they implement a simple per-instance mutex
-    // backed by `blockConcurrencyWhile`. `acquire` parks until `release`
-    // resolves the held promise (or until a 60s TTL elapses). Because a
-    // single DO instance handles one id, other `acquire` calls queue
-    // automatically thanks to the DO runtime serializing fetch handlers.
+    // Task #3 (OSINT): token-based mutex for the resolver. acquire chains
+    // a fresh promise onto an in-memory queue and awaits the previous tail;
+    // release fires the stored resolver for the caller's token. Because the
+    // DO runtime keeps a single isolate per id, the in-memory queue is
+    // sufficient — we MUST NOT use `blockConcurrencyWhile` here because it
+    // would block delivery of the matching `/release` request.
     if (op === "acquire" || op === "release") {
       // eslint-disable-next-line @typescript-eslint/no-this-alias
-      const self = this as EntityLock & { __osintReleaser?: () => void };
+      const self = this as EntityLock & {
+        __osintChain?: Promise<void>;
+        __osintPending?: Map<string, { resolve: () => void; timer: ReturnType<typeof setTimeout> }>;
+      };
+      self.__osintChain ??= Promise.resolve();
+      self.__osintPending ??= new Map();
+      let payload: { token?: string; ttlMs?: number } = {};
+      try { payload = (await req.json()) as typeof payload; } catch { /* ignore */ }
+      const token = payload.token;
+      if (!token) return new Response("missing_token", { status: 400 });
       if (op === "release") {
-        if (self.__osintReleaser) { self.__osintReleaser(); self.__osintReleaser = undefined; }
+        const slot = self.__osintPending.get(token);
+        if (slot) { clearTimeout(slot.timer); self.__osintPending.delete(token); slot.resolve(); }
         return new Response("ok");
       }
-      let ttlMs = 60_000;
-      try {
-        const j = await req.json() as { ttlMs?: number };
-        if (typeof j?.ttlMs === "number") ttlMs = j.ttlMs;
-      } catch { /* ignore */ }
-      return this.state.blockConcurrencyWhile<Response>(async () => {
-        await new Promise<void>((resolve) => {
-          const t = setTimeout(() => { self.__osintReleaser = undefined; resolve(); },
-            Math.min(Math.max(1000, ttlMs), 120_000));
-          self.__osintReleaser = () => { clearTimeout(t); resolve(); };
-        });
-        return new Response("acquired");
+      const ttlMs = Math.min(Math.max(1000, payload.ttlMs ?? 60_000), 120_000);
+      const prev = self.__osintChain;
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          self.__osintPending!.delete(token);
+          resolve();
+        }, ttlMs);
+        release = () => { clearTimeout(timer); resolve(); };
+        self.__osintPending!.set(token, { resolve: release, timer });
       });
+      self.__osintChain = prev.then(() => held);
+      await prev;
+      return new Response("acquired");
     }
     let body: MergeRequest;
     try { body = (await req.json()) as MergeRequest; } catch { return new Response("bad_json", { status: 400 }); }
