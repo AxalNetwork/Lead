@@ -27,6 +27,13 @@
     "src/monitoring/types.ts",
     "src/monitoring/triggers/index.ts",
     "src/monitoring/triggers/*.ts",
-    "src/monitoring/channels/webhook.ts"
+    "src/monitoring/channels/webhook.ts",
+    "src/monitoring/dispatch.ts",
+    "src/monitoring/dedupe.ts",
+    "src/monitoring/digest.ts",
+    "src/monitoring/smart.ts",
+    "src/monitoring/channels/in_app.ts",
+    "src/monitoring/channels/email.ts",
+    "src/monitoring/channels/slack.ts"
   ]
 }
