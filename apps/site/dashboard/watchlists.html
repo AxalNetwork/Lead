@@ -1,0 +1,229 @@
+---
+layout: default
+title: Watchlists
+permalink: /dashboard/watchlists.html
+---
+
+<h1 class="ads-page-title">Watchlists</h1>
+<p class="ads-page-sub">Pin entities into manual or smart lists. Attach rules to get alerted when anything changes.</p>
+
+<div class="ads-card" style="padding:16px">
+  <details>
+    <summary><strong>+ Create watchlist</strong></summary>
+    <form id="ads-wl-create" style="margin-top:12px;display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));">
+      <label class="ads-field"><span>Name</span><input type="text" name="name" required></label>
+      <label class="ads-field"><span>Entity kind</span>
+        <select name="entity_kind"><option value="">any</option><option value="person">person</option><option value="org">org</option></select>
+      </label>
+      <label class="ads-field"><span>Type</span>
+        <select name="is_smart"><option value="0">Manual</option><option value="1">Smart (filter)</option></select>
+      </label>
+      <label class="ads-field" style="grid-column:1 / -1">
+        <span>Smart filter (JSON, optional)</span>
+        <textarea name="filter_json" rows="3" placeholder='{"min_fit": 70, "sectors": ["ai","saas"]}'></textarea>
+      </label>
+      <div><button type="submit" class="ads-btn">Create</button></div>
+    </form>
+  </details>
+</div>
+
+<div class="ads-card" style="margin-top:16px">
+  <table class="ads-table">
+    <thead><tr>
+      <th>Name</th><th>Type</th><th>Kind</th><th>Members</th><th>Last changed</th><th>Last evaluated</th><th>Actions</th>
+    </tr></thead>
+    <tbody id="ads-wl-body"><tr><td colspan="7" style="text-align:center;padding:24px">Loading…</td></tr></tbody>
+  </table>
+</div>
+
+<dialog id="ads-wl-detail" style="max-width:720px;width:90%;padding:0;border:1px solid #2a2e36;border-radius:8px;background:#1a1d24;color:#e3e6eb;">
+  <div style="padding:16px;border-bottom:1px solid #2a2e36;display:flex;justify-content:space-between;align-items:center;">
+    <h3 id="ads-wl-detail-title" style="margin:0">Watchlist</h3>
+    <button type="button" class="ads-btn ads-btn--ghost" id="ads-wl-detail-close">×</button>
+  </div>
+  <div style="padding:16px;max-height:60vh;overflow:auto;">
+    <h4>Members <span id="ads-wl-detail-mcount" class="ads-pill"></span></h4>
+    <ul id="ads-wl-detail-members" style="margin:0;padding-left:18px;"></ul>
+    <h4 style="margin-top:16px">Rules</h4>
+    <ul id="ads-wl-detail-rules" style="margin:0;padding-left:18px;"></ul>
+    <h4 style="margin-top:16px">+ Add a rule</h4>
+    <form id="ads-wl-rule-create" style="display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));">
+      <input type="hidden" name="watchlist_id">
+      <label class="ads-field"><span>Name</span><input type="text" name="name" placeholder="e.g. New funding"></label>
+      <label class="ads-field"><span>Trigger</span>
+        <select name="trigger_kind" id="ads-wl-rule-kind"></select>
+      </label>
+      <label class="ads-field"><span>Channel</span>
+        <select name="channel">
+          <option value="in_app">In-app</option>
+          <option value="email">Email</option>
+          <option value="slack">Slack</option>
+          <option value="webhook">Webhook</option>
+        </select>
+      </label>
+      <label class="ads-field"><span>Digest</span>
+        <select name="digest_frequency">
+          <option value="realtime">Realtime</option>
+          <option value="hourly">Hourly</option>
+          <option value="daily" selected>Daily 9am</option>
+          <option value="weekly">Weekly</option>
+        </select>
+      </label>
+      <label class="ads-field" style="grid-column:1 / -1">
+        <span>Channel config JSON (optional)</span>
+        <textarea name="channel_config" rows="2" placeholder='{"slack_url":"https://hooks.slack.com/services/..."}'></textarea>
+      </label>
+      <div style="grid-column:1 / -1"><button type="submit" class="ads-btn">Add rule</button></div>
+    </form>
+    <div id="ads-wl-rule-result" style="margin-top:8px;color:#aab3bf;font-size:13px;"></div>
+  </div>
+</dialog>
+
+<script>
+(function () {
+  var API = (window.ADS && window.ADS.API) || "";
+  function api(p) { return (API || "") + p; }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]; }); }
+  var body = document.getElementById("ads-wl-body");
+  var createForm = document.getElementById("ads-wl-create");
+  var detail = document.getElementById("ads-wl-detail");
+  var ruleForm = document.getElementById("ads-wl-rule-create");
+  var ruleKind = document.getElementById("ads-wl-rule-kind");
+  var ruleResult = document.getElementById("ads-wl-rule-result");
+
+  function load() {
+    body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:24px">Loading…</td></tr>';
+    fetch(api("/api/watchlists"), { credentials: "include" })
+      .then(function (r) { return r.ok ? r.json() : { items: [] }; })
+      .then(function (j) { render(j.items || []); });
+  }
+
+  function render(items) {
+    if (!items.length) {
+      body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:24px">No watchlists yet — create one above, or click the ☆ on any entity page.</td></tr>';
+      return;
+    }
+    body.innerHTML = items.map(function (w) {
+      var kind = w.is_smart ? '<span class="ads-pill">smart · live</span>' : '<span class="ads-pill">manual</span>';
+      return '<tr>'
+        + '<td><a href="#" data-open="' + esc(w.id) + '">' + esc(w.name) + '</a></td>'
+        + '<td>' + kind + '</td>'
+        + '<td>' + esc(w.entity_kind || 'any') + '</td>'
+        + '<td>' + esc(w.member_count) + '</td>'
+        + '<td>' + esc(w.last_changed_at || '—') + '</td>'
+        + '<td>' + esc(w.last_evaluated_at || '—') + '</td>'
+        + '<td>'
+          + (w.is_smart ? '<button type="button" class="ads-link" data-reeval="' + esc(w.id) + '">Re-evaluate</button> · ' : '')
+          + '<button type="button" class="ads-link" data-delete="' + esc(w.id) + '">Delete</button>'
+        + '</td></tr>';
+    }).join("");
+  }
+
+  fetch(api("/api/alerts/trigger-kinds"), { credentials: "include" })
+    .then(function (r) { return r.ok ? r.json() : { kinds: [] }; })
+    .then(function (j) {
+      (j.kinds || []).forEach(function (k) {
+        var o = document.createElement("option"); o.value = k; o.textContent = k;
+        ruleKind.appendChild(o);
+      });
+    });
+
+  createForm.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var fd = new FormData(createForm);
+    var body = {
+      name: fd.get("name"),
+      entity_kind: fd.get("entity_kind") || null,
+      is_smart: fd.get("is_smart") === "1",
+    };
+    var fj = (fd.get("filter_json") || "").toString().trim();
+    if (fj) { try { body.filter_json = JSON.parse(fj); } catch (e) { alert("filter_json must be valid JSON"); return; } }
+    fetch(api("/api/watchlists"), {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }).then(function (r) { return r.json(); }).then(function () { createForm.reset(); load(); });
+  });
+
+  body.addEventListener("click", function (e) {
+    var t = e.target;
+    if (t.dataset && t.dataset.open) {
+      e.preventDefault();
+      openDetail(t.dataset.open);
+    } else if (t.dataset && t.dataset.delete) {
+      if (!confirm("Delete this watchlist?")) return;
+      fetch(api("/api/watchlists/" + encodeURIComponent(t.dataset.delete)),
+        { method: "DELETE", credentials: "include" }).then(load);
+    } else if (t.dataset && t.dataset.reeval) {
+      fetch(api("/api/watchlists/" + encodeURIComponent(t.dataset.reeval) + "/reevaluate"),
+        { method: "POST", credentials: "include" }).then(load);
+    }
+  });
+
+  function openDetail(id) {
+    fetch(api("/api/watchlists/" + encodeURIComponent(id)), { credentials: "include" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (w) {
+        if (!w) return;
+        document.getElementById("ads-wl-detail-title").textContent = w.name;
+        document.getElementById("ads-wl-detail-mcount").textContent = w.member_count || 0;
+        var ml = document.getElementById("ads-wl-detail-members");
+        ml.innerHTML = (w.members || []).map(function (m) {
+          return '<li><a href="/dashboard/profile.html?entity=' + encodeURIComponent(m.entity_id) + '">'
+            + esc(m.display_name || m.entity_id) + '</a> <span style="color:#6b7280">' + esc(m.entity_kind || '') + '</span></li>';
+        }).join("") || '<li style="color:#6b7280">No members yet.</li>';
+        var rl = document.getElementById("ads-wl-detail-rules");
+        rl.innerHTML = (w.rules || []).map(function (r) {
+          return '<li>' + esc(r.name) + ' · ' + esc(r.trigger_kind) + ' · ' + esc(r.channel)
+            + ' · fires: ' + esc(r.fire_count || 0)
+            + ' <button type="button" class="ads-link" data-rule-delete="' + esc(r.id) + '">delete</button></li>';
+        }).join("") || '<li style="color:#6b7280">No rules attached.</li>';
+        ruleForm.elements.watchlist_id.value = id;
+        ruleResult.textContent = "";
+        if (typeof detail.showModal === "function") detail.showModal(); else detail.setAttribute("open", "");
+      });
+  }
+
+  document.getElementById("ads-wl-detail-close").addEventListener("click", function () {
+    if (typeof detail.close === "function") detail.close(); else detail.removeAttribute("open");
+  });
+
+  ruleForm.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var fd = new FormData(ruleForm);
+    var body = {
+      watchlist_id: fd.get("watchlist_id"),
+      name: fd.get("name") || (fd.get("trigger_kind") + " rule"),
+      trigger_kind: fd.get("trigger_kind"),
+      channel: fd.get("channel"),
+      digest_frequency: fd.get("digest_frequency"),
+    };
+    var cc = (fd.get("channel_config") || "").toString().trim();
+    if (cc) { try { body.channel_config = JSON.parse(cc); } catch (e) { alert("channel_config must be valid JSON"); return; } }
+    fetch(api("/api/alerts/rules"), {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      if (j.webhook_secret) {
+        ruleResult.innerHTML = 'Saved. <strong>Webhook secret (shown once):</strong> <code>' + esc(j.webhook_secret) + '</code>';
+      } else {
+        ruleResult.textContent = "Saved.";
+      }
+      openDetail(body.watchlist_id);
+    });
+  });
+
+  document.addEventListener("click", function (e) {
+    var t = e.target;
+    if (t.dataset && t.dataset.ruleDelete) {
+      if (!confirm("Delete this rule?")) return;
+      fetch(api("/api/alerts/rules/" + encodeURIComponent(t.dataset.ruleDelete)),
+        { method: "DELETE", credentials: "include" }).then(function () {
+          openDetail(ruleForm.elements.watchlist_id.value);
+        });
+    }
+  });
+
+  load();
+})();
+</script>

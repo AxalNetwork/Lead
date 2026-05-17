@@ -43,6 +43,34 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       } catch (e) {
         console.warn("hourly sweepStuckJobs failed", (e as Error).message);
       }
+      // Task #2 (monitoring): hourly monitor-batch + digest run. Free-plan
+      // cron slot cap (5) means the `*/15` cadence from the spec was
+      // collapsed onto the hourly slot; the batch is bounded so an hour
+      // of accumulated entity churn fits inside a single tick.
+      try {
+        if (env.WF_MONITOR_BATCH) {
+          await env.WF_MONITOR_BATCH.create({ params: { limit: 500, staleMinutes: 15 } });
+        } else {
+          const { reevaluateAllSmartWatchlists } = await import("./monitoring/smart");
+          const { pickDueEntities, monitorEntity, retryPendingDeliveries } = await import("./monitoring/dispatch");
+          await reevaluateAllSmartWatchlists(env, { limit: 25 }).catch(() => undefined);
+          const ids = await pickDueEntities(env, { limit: 200, staleMinutes: 15 });
+          for (const id of ids) await monitorEntity(env, id).catch(() => undefined);
+          await retryPendingDeliveries(env, 50).catch(() => undefined);
+        }
+      } catch (e) {
+        console.error("hourly monitor-batch failed", (e as Error).message);
+      }
+      try {
+        if (env.WF_DIGEST) {
+          await env.WF_DIGEST.create({ params: { limit: 500 } });
+        } else {
+          const { runDigest } = await import("./monitoring/digest");
+          await runDigest(env, { limit: 500 }).catch(() => undefined);
+        }
+      } catch (e) {
+        console.error("hourly digest failed", (e as Error).message);
+      }
       try {
         if (env.WF_CRAWL_SIGNALS) {
           await env.WF_CRAWL_SIGNALS.create({ params: {} });

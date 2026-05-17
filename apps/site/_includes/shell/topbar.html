@@ -17,9 +17,23 @@
     <span id="ads-theme-icon" aria-hidden="true">◐</span>
   </button>
 
-  <button type="button" id="ads-notify-btn" class="ads-topbar__btn" aria-label="Notifications" title="Notifications (coming soon)">
-    <span aria-hidden="true">🔔</span>
-  </button>
+  <div class="ads-notify" style="position:relative;display:inline-block;">
+    <button type="button" id="ads-notify-btn" class="ads-topbar__btn" aria-label="Notifications"
+            aria-haspopup="true" aria-expanded="false">
+      <span aria-hidden="true">🔔</span>
+      <span id="ads-notify-badge" class="ads-notify-badge" hidden></span>
+    </button>
+    <div id="ads-notify-dropdown" class="ads-notify-dropdown" role="dialog" aria-label="Recent alerts" hidden>
+      <div class="ads-notify-dropdown__head">
+        <strong>Alerts</strong>
+        <button type="button" id="ads-notify-readall" class="ads-link">Mark all read</button>
+      </div>
+      <ul id="ads-notify-list" class="ads-notify-list" aria-busy="true"></ul>
+      <div class="ads-notify-dropdown__foot">
+        <a href="/dashboard/alerts.html" class="ads-link">View all alerts →</a>
+      </div>
+    </div>
+  </div>
 
   <a href="https://axalnetwork.cloudflareaccess.com/cdn-cgi/access/logout"
      class="ads-avatar" id="ads-user-avatar"

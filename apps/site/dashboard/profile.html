@@ -4,7 +4,20 @@ title: Profile
 permalink: /dashboard/profile/
 ---
 
-<h1 class="ads-page-title" id="ads-profile-title">Profile</h1>
+<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+  <h1 class="ads-page-title" id="ads-profile-title" style="margin:0">Profile</h1>
+  <button type="button" id="ads-profile-watch" data-ads-watch="" hidden></button>
+</div>
+<script>
+(function () {
+  var p = new URLSearchParams(location.search);
+  var e = p.get("entity");
+  if (!e) return;
+  var b = document.getElementById("ads-profile-watch");
+  b.setAttribute("data-ads-watch", e);
+  b.hidden = false;
+})();
+</script>
 <p class="ads-page-sub">Pass <code>?entity=&lt;id&gt;</code> or <code>?table=firms&amp;ref=&lt;id&gt;</code> in the URL to scope this view.</p>
 
 <div class="ads-card" style="margin-bottom:18px;border-left:3px solid #2c6eb5;background:#f0f6ff">

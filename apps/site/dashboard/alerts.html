@@ -1,0 +1,163 @@
+---
+layout: default
+title: Alerts
+permalink: /dashboard/alerts.html
+---
+
+<h1 class="ads-page-title">Alerts</h1>
+<p class="ads-page-sub">Every change captured by your watchlists and rules.</p>
+
+<div class="ads-card">
+  <form class="ads-filters" id="ads-alerts-filters" autocomplete="off">
+    <label class="ads-field ads-field--inline">
+      <span>Status</span>
+      <select name="status">
+        <option value="">all</option>
+        <option value="pending">pending</option>
+        <option value="delivered">delivered</option>
+        <option value="failed">failed</option>
+        <option value="suppressed_duplicate">suppressed</option>
+        <option value="digested">digested</option>
+      </select>
+    </label>
+    <label class="ads-field ads-field--inline">
+      <span>Trigger</span>
+      <select name="kind" id="ads-alerts-kind"><option value="">all</option></select>
+    </label>
+    <label class="ads-field ads-field--inline">
+      <span>Entity</span>
+      <input type="text" name="entity_id" placeholder="entity id">
+    </label>
+    <label class="ads-field ads-field--inline">
+      <span>From</span>
+      <input type="date" name="from">
+    </label>
+    <label class="ads-field ads-field--inline">
+      <span>To</span>
+      <input type="date" name="to">
+    </label>
+    <button type="submit" class="ads-btn">Apply</button>
+    <button type="button" id="ads-alerts-csv" class="ads-btn ads-btn--ghost">Export CSV</button>
+  </form>
+</div>
+
+<div class="ads-card" style="margin-top:16px">
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;">
+    <div><strong id="ads-alerts-count">0</strong> events</div>
+    <button type="button" id="ads-alerts-ack" class="ads-btn ads-btn--ghost" disabled>Acknowledge selected</button>
+  </div>
+  <table class="ads-table">
+    <thead>
+      <tr>
+        <th><input type="checkbox" id="ads-alerts-all"></th>
+        <th>When</th>
+        <th>Trigger</th>
+        <th>Title</th>
+        <th>Entity</th>
+        <th>Channel</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="ads-alerts-body"><tr><td colspan="8" style="text-align:center;padding:24px">Loading…</td></tr></tbody>
+  </table>
+</div>
+
+<script>
+(function () {
+  var API = (window.ADS && window.ADS.API) || "";
+  var form = document.getElementById("ads-alerts-filters");
+  var body = document.getElementById("ads-alerts-body");
+  var countEl = document.getElementById("ads-alerts-count");
+  var ackBtn = document.getElementById("ads-alerts-ack");
+  var csvBtn = document.getElementById("ads-alerts-csv");
+  var allCb = document.getElementById("ads-alerts-all");
+  var kindSel = document.getElementById("ads-alerts-kind");
+
+  function api(p) { return (API || "") + p; }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]; }); }
+  function qs() {
+    var p = new URLSearchParams();
+    Array.prototype.forEach.call(form.elements, function (el) {
+      if (el.name && el.value) p.set(el.name, el.value);
+    });
+    return p.toString();
+  }
+
+  fetch(api("/api/alerts/trigger-kinds"), { credentials: "include" })
+    .then(function (r) { return r.ok ? r.json() : { kinds: [] }; })
+    .then(function (j) {
+      (j.kinds || []).forEach(function (k) {
+        var o = document.createElement("option"); o.value = k; o.textContent = k;
+        kindSel.appendChild(o);
+      });
+    });
+
+  function load() {
+    body.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:24px">Loading…</td></tr>';
+    fetch(api("/api/alerts/events?" + qs()), { credentials: "include" })
+      .then(function (r) { return r.ok ? r.json() : { items: [] }; })
+      .then(function (j) { render(j.items || []); });
+  }
+
+  function render(items) {
+    countEl.textContent = items.length;
+    if (!items.length) {
+      body.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:24px">No alerts match.</td></tr>';
+      return;
+    }
+    body.innerHTML = items.map(function (it) {
+      var entHref = it.entity_id ? '/dashboard/profile.html?entity=' + encodeURIComponent(it.entity_id) : '#';
+      var ack = it.acked_at ? '<span class="ads-pill ads-pill--ok">acked</span>'
+        : '<button type="button" class="ads-link" data-ack="' + esc(it.id) + '">Ack</button>';
+      return '<tr>'
+        + '<td><input type="checkbox" data-id="' + esc(it.id) + '"></td>'
+        + '<td>' + esc(it.occurred_at) + '</td>'
+        + '<td>' + esc(it.trigger_kind) + '</td>'
+        + '<td>' + esc(it.title) + '</td>'
+        + '<td><a href="' + entHref + '">' + esc(it.entity_id || '') + '</a></td>'
+        + '<td>' + esc(it.channel) + '</td>'
+        + '<td>' + esc(it.delivery_status) + '</td>'
+        + '<td>' + ack + '</td>'
+        + '</tr>';
+    }).join("");
+  }
+
+  form.addEventListener("submit", function (e) { e.preventDefault(); load(); });
+  csvBtn.addEventListener("click", function () {
+    var q = qs();
+    window.location.href = api("/api/alerts/events?format=csv" + (q ? "&" + q : ""));
+  });
+  allCb.addEventListener("change", function () {
+    var v = allCb.checked;
+    body.querySelectorAll('input[type="checkbox"][data-id]').forEach(function (cb) { cb.checked = v; });
+    ackBtn.disabled = !v;
+  });
+  body.addEventListener("change", function () {
+    var any = !!body.querySelector('input[type="checkbox"][data-id]:checked');
+    ackBtn.disabled = !any;
+  });
+  body.addEventListener("click", function (e) {
+    var t = e.target;
+    if (t.dataset && t.dataset.ack) {
+      e.preventDefault();
+      fetch(api("/api/alerts/events/" + encodeURIComponent(t.dataset.ack) + "/ack"),
+        { method: "POST", credentials: "include" }).then(load);
+    }
+  });
+  ackBtn.addEventListener("click", function () {
+    var ids = Array.prototype.map.call(
+      body.querySelectorAll('input[type="checkbox"][data-id]:checked'),
+      function (cb) { return cb.dataset.id; });
+    if (!ids.length) return;
+    fetch(api("/api/alerts/events/ack-bulk"), {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: ids }),
+    }).then(load);
+  });
+
+  load();
+})();
+</script>

@@ -150,6 +150,10 @@ export interface Env {
   PROPUBLICA_API_KEY?: string;
   // Toggle the Canadian Open Parliament adapter ("true" to enable).
   OPENPARLIAMENT_ENABLED?: string;
+  // Task #2 (monitoring): per-entity monitor + batch sweep + digest.
+  WF_MONITOR_ENTITY?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+  WF_MONITOR_BATCH?:  { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+  WF_DIGEST?:         { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
 }
 
 export type JobKind =

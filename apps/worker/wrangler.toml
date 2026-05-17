@@ -267,6 +267,27 @@ binding = "WF_CRAWL_FRONTIER"
 name = "crawl-frontier"
 class_name = "CrawlFrontierWorkflow"
 
+# Task #2 (monitoring): per-entity diff + trigger + channel dispatch.
+[[workflows]]
+binding = "WF_MONITOR_ENTITY"
+name = "monitor-entity"
+class_name = "MonitorEntityWorkflow"
+
+# Task #2 (monitoring): batch sweep — picks due entities, runs per-entity
+# inline (work is small), re-evaluates smart watchlists, retries pending
+# webhook deliveries.
+[[workflows]]
+binding = "WF_MONITOR_BATCH"
+name = "monitor-batch"
+class_name = "MonitorBatchWorkflow"
+
+# Task #2 (monitoring): hourly digest rollup. Drains `digest_queue` rows
+# whose scheduled_for has come due and sends one email per (owner, watchlist).
+[[workflows]]
+binding = "WF_DIGEST"
+name = "monitor-digest"
+class_name = "DigestWorkflow"
+
 [[queues.producers]]
 binding = "LEAD_QUEUE"
 queue = "aidatasignal-lead-jobs"

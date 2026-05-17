@@ -330,3 +330,82 @@ export class IngestPageWorkflow {
     return { ok: true, jobId };
   }
 }
+
+// Task #2 (this task): monitoring workflows.
+//
+// MonitorEntityWorkflow — runs the diff + trigger evaluation + channel
+// dispatch for one entity. Idempotent: re-running on the same fingerprint
+// is a no-op (fingerprint-first short-circuit inside monitorEntity).
+export class MonitorEntityWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ entityId: string }>, step: WorkflowStep): Promise<{ ok: true; entityId: string; changed: boolean; emitted: number; delivered: number }> {
+    const { entityId } = event.payload;
+    const { monitorEntity } = await import("../monitoring/dispatch");
+    const r = await step.do("monitor", { retries: { limit: 1, backoff: "exponential" } }, async () => {
+      return await monitorEntity(this.env, entityId);
+    });
+    return { ok: true, entityId, changed: r.changed, emitted: r.emitted, delivered: r.delivered };
+  }
+}
+
+// MonitorBatchWorkflow — walks the pool of entities that are due for
+// re-evaluation (members of an active watchlist OR directly attached to
+// an active rule) and runs the per-entity workflow on each. Also sweeps
+// pending webhook retries and re-evaluates smart watchlists. Bounded by
+// `limit` so a single tick can't melt the queue.
+export class MonitorBatchWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ limit?: number; staleMinutes?: number }>, step: WorkflowStep): Promise<{ ok: true; scanned: number; emitted: number; delivered: number; retried: number; smart: number }> {
+    const limit = event.payload?.limit ?? 200;
+    const staleMinutes = event.payload?.staleMinutes ?? 15;
+
+    // 1. Re-evaluate smart watchlists (membership rebalance).
+    const smart = await step.do("smart_reeval", { retries: { limit: 1 } }, async () => {
+      const { reevaluateAllSmartWatchlists } = await import("../monitoring/smart");
+      return await reevaluateAllSmartWatchlists(this.env, { limit: 25 });
+    });
+
+    // 2. Pick due entities and evaluate inline (per-entity work is small
+    //    — no need to fan out to the per-entity workflow for v1).
+    const { pickDueEntities, monitorEntity, retryPendingDeliveries } = await import("../monitoring/dispatch");
+    const ids = await step.do("pick", { retries: { limit: 1 } }, async () =>
+      await pickDueEntities(this.env, { limit, staleMinutes }),
+    );
+    let emitted = 0, delivered = 0;
+    for (let i = 0; i < ids.length; i++) {
+      try {
+        const r = await monitorEntity(this.env, ids[i]);
+        emitted += r.emitted; delivered += r.delivered;
+      } catch (e) {
+        console.warn("monitorEntity failed", ids[i], (e as Error).message);
+      }
+    }
+
+    // 3. Sweep pending webhook retries that have come due.
+    const retried = await step.do("retry", { retries: { limit: 1 } }, async () =>
+      await retryPendingDeliveries(this.env, 50),
+    );
+    return { ok: true, scanned: ids.length, emitted, delivered, retried: retried.retried, smart: smart.watchlists };
+  }
+}
+
+// DigestWorkflow — runs hourly. Picks rows from `digest_queue` whose
+// `scheduled_for` has come due, groups by (owner_email, watchlist_id),
+// renders one email per group, marks the queue rows sent.
+export class DigestWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ limit?: number }>, step: WorkflowStep): Promise<{ ok: true; groups: number; events: number; sent: number; failed: number }> {
+    const limit = event.payload?.limit ?? 500;
+    const r = await step.do("digest", { retries: { limit: 1, backoff: "exponential" } }, async () => {
+      const { runDigest } = await import("../monitoring/digest");
+      return await runDigest(this.env, { limit });
+    });
+    return { ok: true, ...r };
+  }
+}

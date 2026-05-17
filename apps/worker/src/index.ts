@@ -39,8 +39,11 @@ import { ddRoute } from "./routes/dd";
 import { newsRoute, factsCitationsRoute } from "./routes/news";
 import { profileRoute } from "./routes/profile";
 import { agent as agentRoute } from "./routes/agent";
+// Task #2 (monitoring): watchlists + alert rules/events.
+import { watchlists as watchlistsRoute } from "./routes/watchlists";
+import { alerts as alertsRoute } from "./routes/alerts";
 export { EntityLock } from "./do/EntityLock";
-export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, RefreshGovernmentWorkflow, DiscoverFromSeedWorkflow, CrawlFrontierWorkflow } from "./ai/workflows";
+export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, RefreshGovernmentWorkflow, DiscoverFromSeedWorkflow, CrawlFrontierWorkflow, MonitorEntityWorkflow, MonitorBatchWorkflow, DigestWorkflow } from "./ai/workflows";
 // Task #3 (this task): research-agent nightly saved-research refresh.
 export { RefreshSavedResearchWorkflow } from "./agent/workflow";
 import { piiAuditOnLeadGet } from "./middleware/pii_audit";
@@ -140,6 +143,9 @@ api.route("/api/profile", profileRoute);
 // Task #3 (this task): conversational research agent — SSE ask + sessions +
 // saved-research + budget + tool manifest.
 api.route("/api/agent", agentRoute);
+// Task #2 (monitoring): watchlists, alert rules + events.
+api.route("/api/watchlists", watchlistsRoute);
+api.route("/api/alerts", alertsRoute);
 // /api/leads/:id/enrich, /api/leads/enrich/bulk, /:id/dnc, /:id/campaigns
 api.route("/api/leads", leadsEnrichActions);
 api.route("/api/leads", leadsDncActions);
