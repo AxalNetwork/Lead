@@ -36,17 +36,22 @@ discoveryRoute.post("/seed", async (c) => {
   if (!can) return c.json({ error: "invalid_url" }, 400);
   // Reject when the caller asked for methods that are all unimplemented —
   // otherwise the run would silently produce zero links and look broken.
+  // Returns the dropped names so operators see exactly what we ignored.
+  let ignored_methods: string[] = [];
+  let effective_methods: string[] | undefined;
   if (body.methods && body.methods.length > 0) {
     const live = body.methods.filter((m) => IMPLEMENTED_METHODS.has(m));
+    ignored_methods = body.methods.filter((m) => !IMPLEMENTED_METHODS.has(m));
     if (live.length === 0) {
-      return c.json({ error: "no_implemented_methods", implemented: [...IMPLEMENTED_METHODS] }, 400);
+      return c.json({ error: "no_implemented_methods", implemented: [...IMPLEMENTED_METHODS], ignored_methods }, 400);
     }
     body.methods = live;
+    effective_methods = live;
   }
 
   if (body.dispatch && c.env.WF_DISCOVER_FROM_SEED) {
     const wf = await c.env.WF_DISCOVER_FROM_SEED.create({ params: { url: can.url, depthMax: body.depth ?? 3, maxPerHost: body.max_per_host ?? 200, methods: body.methods, yieldThreshold: body.yield_threshold } });
-    return c.json({ ok: true, dispatched: true, workflow_id: wf.id });
+    return c.json({ ok: true, dispatched: true, workflow_id: wf.id, ignored_methods, effective_methods });
   }
 
   const r = await runDiscoverFromSeed(c.env, {
@@ -56,7 +61,7 @@ discoveryRoute.post("/seed", async (c) => {
     methods: body.methods,
     yieldThreshold: body.yield_threshold,
   });
-  return c.json({ ok: true, ...r });
+  return c.json({ ok: true, ...r, ignored_methods, effective_methods });
 });
 
 discoveryRoute.post("/crawl", async (c) => {
