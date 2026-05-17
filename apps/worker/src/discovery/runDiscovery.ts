@@ -162,7 +162,7 @@ export async function runDiscoverFromSeed(env: Env, opts: SeedOpts): Promise<See
           host_fetch_count_in_run: hostBase[c.host] + hostDelta[c.host],
           max_per_host: maxPerHost,
         });
-        await enqueueFrontier(env, row.id, prio);
+        await enqueueFrontier(env, row.id, prio, runId);
         queued++;
       } else if (row.rejected) {
         rejected++;
@@ -197,10 +197,10 @@ export interface FrontierOpts {
   yieldThreshold?: number;
 }
 
-export async function runCrawlFrontier(env: Env, opts: FrontierOpts = {}): Promise<{ scanned: number; fetched: number; recursed: number; errors: number }> {
+export async function runCrawlFrontier(env: Env, opts: FrontierOpts = {}): Promise<{ scanned: number; fetched: number; recursed: number; entities: number; errors: number }> {
   const limit = opts.limit ?? 25;
-  const items = await popFrontier(env, limit);
-  let fetched = 0, recursed = 0, errors = 0;
+  const items = await popFrontier(env, limit, opts.runId ?? null);
+  let fetched = 0, recursed = 0, entities = 0, errors = 0;
 
   for (const it of items) {
     if (!(await assertHostPolite(env, it.host))) {
@@ -216,25 +216,50 @@ export async function runCrawlFrontier(env: Env, opts: FrontierOpts = {}): Promi
         continue;
       }
       fetched++;
-      // Recurse: discover from this page. Bumps depth.
+      // 1. Extraction: feed the fetched page through the existing
+      //    extractor so discovered profile pages actually produce
+      //    entities. We collect the inserted lead IDs and pass them
+      //    into `markCrawled` so the URL row records its harvest.
+      let entityIds: string[] = [];
+      try {
+        const { extractFromHtml } = await import("./extractAdapter");
+        entityIds = await extractFromHtml(env, it.url, f.html);
+      } catch (e) {
+        console.warn("discovery_extract_failed", (e as Error).message);
+      }
+      entities += entityIds.length;
+      // 2. Recursion: discover further links from this page.
       const r = await runDiscoverFromSeed(env, {
         url: it.url,
         depth: it.depth,
         depthMax: opts.depthMax ?? 3,
         maxPerHost: opts.maxPerHost ?? 200,
         yieldThreshold: opts.yieldThreshold ?? 0.4,
-        runId: opts.runId,
+        runId: opts.runId ?? it.run_id ?? undefined,
         parentUrlId: it.url_id,
         html: f.html,
       });
       recursed += r.discovered;
-      await markCrawled(env, it.url_id, []);
+      await markCrawled(env, it.url_id, entityIds);
     } catch (e) {
       errors++;
       await markFrontierError(env, it.url_id, (e as Error).message.slice(0, 200));
     }
   }
-  return { scanned: items.length, fetched, recursed, errors };
+
+  // 3. Live run progress. Update the run row aggregates so the
+  //    dashboard reflects what actually happened.
+  const effectiveRunId = opts.runId;
+  if (effectiveRunId) {
+    await env.DB.prepare(
+      `UPDATE discovery_runs
+          SET crawled = crawled + ?,
+              entities_found = entities_found + ?
+        WHERE id = ?`,
+    ).bind(fetched, entities, effectiveRunId).run();
+  }
+
+  return { scanned: items.length, fetched, recursed, entities, errors };
 }
 
 export { ALL_METHOD_NAMES };

@@ -182,7 +182,7 @@ function leadToIncoming(lead: ParsedLead, parserName: string): IncomingLead {
  * Returns the id of the row that should be counted as "leads_found", or null
  * if the incoming evidence merged into an existing row instead.
  */
-async function insertLead(
+export async function insertLead(
   env: Env,
   parsed: ParsedLead,
   parserName: string,

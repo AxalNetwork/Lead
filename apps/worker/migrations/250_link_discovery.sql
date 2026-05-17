@@ -53,10 +53,12 @@ CREATE TABLE IF NOT EXISTS crawl_frontier (
   scheduled_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   attempts        INTEGER NOT NULL DEFAULT 0,
   next_attempt_at TEXT,
-  last_error      TEXT
+  last_error      TEXT,
+  run_id          TEXT REFERENCES discovery_runs(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cf_priority ON crawl_frontier(priority DESC, scheduled_at ASC);
 CREATE INDEX IF NOT EXISTS idx_cf_next     ON crawl_frontier(next_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_cf_run      ON crawl_frontier(run_id);
 
 -- Per-seed run summary so the dashboard can show progress without a slow scan.
 CREATE TABLE IF NOT EXISTS discovery_runs (

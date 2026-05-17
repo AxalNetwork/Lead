@@ -120,27 +120,34 @@ export async function insertLinkEdge(env: Env, srcId: string, dstId: string, lin
   }
 }
 
-export async function enqueueFrontier(env: Env, urlId: string, priority: number): Promise<void> {
+export async function enqueueFrontier(env: Env, urlId: string, priority: number, runId?: string | null): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO crawl_frontier (url_id, priority, scheduled_at)
-     VALUES (?, ?, CURRENT_TIMESTAMP)
-     ON CONFLICT(url_id) DO UPDATE SET priority = MAX(crawl_frontier.priority, excluded.priority)`,
-  ).bind(urlId, priority).run();
+    `INSERT INTO crawl_frontier (url_id, priority, scheduled_at, run_id)
+     VALUES (?, ?, CURRENT_TIMESTAMP, ?)
+     ON CONFLICT(url_id) DO UPDATE SET priority = MAX(crawl_frontier.priority, excluded.priority),
+                                       run_id   = COALESCE(crawl_frontier.run_id, excluded.run_id)`,
+  ).bind(urlId, priority, runId ?? null).run();
   await env.DB.prepare(`UPDATE discovered_urls SET status = 'queued' WHERE id = ? AND status = 'new'`).bind(urlId).run();
 }
 
-export async function popFrontier(env: Env, limit: number): Promise<Array<{ url_id: string; url: string; host: string; priority: number; depth: number; attempts: number }>> {
+export async function popFrontier(env: Env, limit: number, runId?: string | null): Promise<Array<{ url_id: string; url: string; host: string; priority: number; depth: number; attempts: number; run_id: string | null }>> {
   // Diversity bias: dedupe by host so a single noisy host doesn't take
   // the whole batch. Cheap implementation — take the top-3 per host
-  // then re-order globally.
-  const r = await env.DB.prepare(
-    `SELECT cf.url_id, du.url, du.host, cf.priority, du.depth, cf.attempts
+  // then re-order globally. When `runId` is provided we scope the queue
+  // to that run so dashboard "Crawl frontier" follows the seed's run
+  // context end-to-end.
+  const runFilter = runId ? "AND cf.run_id = ?" : "";
+  const stmt = env.DB.prepare(
+    `SELECT cf.url_id, du.url, du.host, cf.priority, du.depth, cf.attempts, cf.run_id
        FROM crawl_frontier cf
        JOIN discovered_urls du ON du.id = cf.url_id
       WHERE (cf.next_attempt_at IS NULL OR datetime(cf.next_attempt_at) <= datetime('now'))
+        ${runFilter}
       ORDER BY cf.priority DESC, cf.scheduled_at ASC
       LIMIT ?`,
-  ).bind(Math.max(1, Math.min(limit * 4, 200))).all<{ url_id: string; url: string; host: string; priority: number; depth: number; attempts: number }>();
+  );
+  const bound = runId ? stmt.bind(runId, Math.max(1, Math.min(limit * 4, 200))) : stmt.bind(Math.max(1, Math.min(limit * 4, 200)));
+  const r = await bound.all<{ url_id: string; url: string; host: string; priority: number; depth: number; attempts: number; run_id: string | null }>();
   const rows = r.results ?? [];
   const perHost: Record<string, number> = {};
   const picked: typeof rows = [];
@@ -156,7 +163,7 @@ export async function popFrontier(env: Env, limit: number): Promise<Array<{ url_
   // real transaction (D1 lacks SELECT … FOR UPDATE). Rows we successfully
   // claim are returned; rows already claimed by someone else (the UPDATE
   // matched 0 rows because next_attempt_at moved) are filtered out.
-  const claimed: typeof picked = [];
+  const claimed: typeof rows = [];
   for (const row of picked) {
     const upd = await env.DB.prepare(
       `UPDATE crawl_frontier
