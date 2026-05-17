@@ -51,6 +51,8 @@ import { profilers as profilersRoute } from "./routes/profilers";
 import { profileComments as profileCommentsRoute } from "./routes/profile_comments";
 export { EntityLock } from "./do/EntityLock";
 export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, PersonaEntityMatchWorkflow, PersonaMatchRefreshWorkflow, PersonaMatchEntityWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, RefreshGovernmentWorkflow, DiscoverFromSeedWorkflow, CrawlFrontierWorkflow, MonitorEntityWorkflow, MonitorBatchWorkflow, DigestWorkflow, IndividualProfilerWorkflow } from "./ai/workflows";
+// Task #3: CSV import durable workflow.
+export { CsvImportWorkflow } from "./imports/csv_import_workflow";
 // Task #3 (this task): OSINT cross-platform identity workflows.
 export { OSINTResolveEntityWorkflow, OSINTBatchWorkflow, OSINTReverifyWorkflow } from "./osint/workflows";
 // Task #3 (this task): research-agent nightly saved-research refresh.
@@ -246,6 +248,33 @@ export default {
       const body = msg.body as QueueMessage | undefined;
       // Task #4: dispatch the new summary-rebuild envelope before the legacy
       // JobMessage validation kicks in.
+      // Task #3 spec envelope: {type:'csv_import', import_id} — external
+      // producers can enqueue without constructing a JobMessage. We
+      // synthesize a jobs row + JobMessage and dispatch through runJob so
+      // the audit trail stays consistent.
+      if (body && typeof body === "object" && (body as { type?: string }).type === "csv_import" && typeof (body as { import_id?: unknown }).import_id === "string") {
+        const stepStart = Date.now();
+        const importId = (body as { import_id: string }).import_id;
+        const jobId = crypto.randomUUID();
+        const now = new Date().toISOString();
+        try {
+          await env.DB.prepare(
+            `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
+             VALUES (?, ?, ?, 'queued', 'csv_import', ?, ?, ?, ?)`,
+          ).bind(jobId, `csv_import:envelope:${importId}`, "csv_import", importId, JSON.stringify({ importId }), now, now).run();
+          await runJob({ jobId, kind: "csv_import" as never, target: importId, config: { importId } }, env);
+          msg.ack();
+          batchAcked++;
+          console.log("queue.step_end", JSON.stringify({ step: "csv_import_envelope", msg_id: msg.id, ms: Date.now() - stepStart, ok: true }));
+        } catch (e) {
+          const appErr = e instanceof AppError ? e : wrapUnknown(e, "queue_run_failed", { msgId: msg.id, op: "csv_import_envelope" });
+          await logError(env, { err: appErr, step: "queue.csvImportEnvelope", retry_count: msg.attempts });
+          console.log("queue.step_end", JSON.stringify({ step: "csv_import_envelope", msg_id: msg.id, ms: Date.now() - stepStart, ok: false, error_code: appErr.code }));
+          if (msg.attempts < 3) { msg.retry({ delaySeconds: 30 * Math.pow(2, msg.attempts) }); batchRetried++; }
+          else { msg.ack(); batchAcked++; batchFailed++; }
+        }
+        continue;
+      }
       if (isRebuildSummaryMessage(body)) {
         const stepStart = Date.now();
         try {

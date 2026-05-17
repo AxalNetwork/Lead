@@ -280,6 +280,15 @@ binding = "WF_PROFILER_INDIVIDUAL"
 name = "profiler-individual"
 class_name = "IndividualProfilerWorkflow"
 
+# Task #3: durable per-import CSV pipeline. Triggered from
+# processCsvImport when an upload exceeds the 5,000-row inline cap so
+# the 30 s CPU budget never trips. Each step.do is one 5,000-row chunk;
+# the workflow resumes from `csv_imports.processed_rows` on retry.
+[[workflows]]
+binding = "WF_CSV_IMPORT"
+name = "csv-import"
+class_name = "CsvImportWorkflow"
+
 # Task #2: link discovery — seed fan-out + frontier crawler.
 [[workflows]]
 binding = "WF_DISCOVER_FROM_SEED"

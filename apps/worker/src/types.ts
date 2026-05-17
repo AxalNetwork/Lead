@@ -176,6 +176,8 @@ export interface Env {
   WF_OSINT_REVERIFY?:       { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   // Task #5: per-entity individual profiler workflow (30+ enrichers).
   WF_PROFILER_INDIVIDUAL?:  { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+  // Task #3: durable per-import CSV pipeline for >5,000 row files.
+  WF_CSV_IMPORT?:           { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
 }
 
 export type JobKind =
@@ -209,7 +211,18 @@ export interface RebuildSummaryQueueMessage {
   entityId: string;
 }
 
-export type QueueMessage = JobMessage | RebuildSummaryQueueMessage;
+// Task #3 spec envelope: external producers may enqueue
+// {type:'csv_import', import_id} directly without constructing the
+// legacy JobMessage. The queue dispatcher in index.ts recognizes this
+// shape and routes to processCsvImport with a synthetic JobMessage
+// so the audit trail (jobs row, markCompleted/markFailed) stays
+// consistent with the rest of the pipeline.
+export interface CsvImportEnvelopeMessage {
+  type: "csv_import";
+  import_id: string;
+}
+
+export type QueueMessage = JobMessage | RebuildSummaryQueueMessage | CsvImportEnvelopeMessage;
 
 export interface ParsedLead {
   source_domain: string;

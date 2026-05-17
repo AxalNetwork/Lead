@@ -180,6 +180,17 @@ export async function processCsvImport(env: Env, importId: string): Promise<void
         break;
       }
     }
+    // EOF-trigger detect for short files (<5 data rows): handleRecord
+    // only triggers detection when pendingRows hits the 5-sample
+    // threshold. Without this, files with 1–4 rows would never call
+    // detectSchema and would silently complete with zero entities.
+    if (!detected && headers && pendingRows.length > 0 && !needsManualMapping) {
+      detected = await detectSchema(env, headers, pendingRows.slice(0, 5));
+      if (!detected) needsManualMapping = true;
+      else await env.DB.prepare(
+        "UPDATE csv_imports SET detected_columns_json = ?, updated_at = ? WHERE id = ?",
+      ).bind(JSON.stringify(detected), new Date().toISOString(), importId).run();
+    }
     try { await reader.cancel(); } catch { /* swallow */ }
 
     if (needsManualMapping) {
@@ -202,19 +213,23 @@ export async function processCsvImport(env: Env, importId: string): Promise<void
         "UPDATE csv_imports SET status = 'completed', completed_at = ?, last_imported_at = ?, updated_at = ? WHERE id = ?",
       ).bind(now, now, now, importId).run();
     } else {
-      // >5,000 rows: leave status='processing' and re-enqueue to resume.
-      // The queue consumer picks up the row at the new processed_rows
-      // cursor on the next invocation. (CsvImportWorkflow chain — full
-      // Cloudflare Workflows integration with checkpoint-and-resume — is
-      // tracked as drift; this resume-via-requeue path achieves the same
-      // CPU-budget escape without adding a new workflow binding.)
-      const jobId = crypto.randomUUID();
-      const now = new Date().toISOString();
-      await env.DB.prepare(
-        `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
-         VALUES (?, ?, ?, 'queued', 'csv_import', ?, ?, ?, ?)`,
-      ).bind(jobId, `csv_import:resume:${importId}`, "csv_import", importId, JSON.stringify({ importId, resume: true }), now, now).run();
-      await env.LEAD_QUEUE.send({ jobId, kind: "csv_import" as never, target: importId, config: { importId, resume: true } });
+      // >5,000 rows: hand off to CsvImportWorkflow (durable
+      // checkpoint+resume on processed_rows). If the workflow binding
+      // isn't configured (dev/test) we fall back to a queue re-enqueue
+      // so the import still completes — same checkpoint pointer, just
+      // not durable. Both paths resume from csv_imports.processed_rows
+      // and reuse the cached detected_columns_json so the AI call runs
+      // exactly once per import.
+      if (env.WF_CSV_IMPORT?.create) {
+        try {
+          await env.WF_CSV_IMPORT.create({ params: { importId } });
+        } catch (e) {
+          console.warn("csv_import workflow create failed; falling back to queue", (e as Error).message);
+          await requeueResume(env, importId);
+        }
+      } else {
+        await requeueResume(env, importId);
+      }
     }
   } catch (e) {
     await env.DB.prepare(
@@ -226,6 +241,16 @@ export async function processCsvImport(env: Env, importId: string): Promise<void
     ).run();
     throw e;
   }
+}
+
+async function requeueResume(env: Env, importId: string): Promise<void> {
+  const jobId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
+     VALUES (?, ?, ?, 'queued', 'csv_import', ?, ?, ?, ?)`,
+  ).bind(jobId, `csv_import:resume:${importId}`, "csv_import", importId, JSON.stringify({ importId, resume: true }), now, now).run();
+  await env.LEAD_QUEUE.send({ jobId, kind: "csv_import" as never, target: importId, config: { importId, resume: true } });
 }
 
 async function setStatus(env: Env, importId: string, status: string): Promise<void> {
