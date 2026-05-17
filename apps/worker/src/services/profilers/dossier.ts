@@ -38,6 +38,13 @@ export interface DossierBundle {
     citations_count: number; llm_model: string | null;
   } | null;
   populated_tables: string[];
+  /**
+   * Enrichers that the most-recent run did NOT execute because the
+   * privacy gate fired. The UI renders these as "skipped for privacy"
+   * badges so users can SEE that we deliberately did not collect a
+   * particular signal class, rather than silently omitting it.
+   */
+  privacy_skipped_enrichers: Array<{ enricher_name: string; category: string; reason: string }>;
   cached_at: string;
   cache_key: string;
 }
@@ -101,7 +108,8 @@ export async function readDossier(
     rows(env, `SELECT * FROM lifestyle_signals WHERE entity_id = ? ORDER BY observed_at DESC`, entityId),
     rows(env, `SELECT * FROM travel_patterns WHERE entity_id = ? ORDER BY observed_at DESC`, entityId),
     rows(env, `SELECT * FROM conference_attendance WHERE entity_id = ? ORDER BY year DESC`, entityId),
-    rows(env, `SELECT * FROM goals WHERE entity_id = ? ORDER BY observed_at DESC`, entityId),
+    // Task #4 schema names the goals table `person_goals` (matches addGoal helper).
+    rows(env, `SELECT * FROM person_goals WHERE entity_id = ? ORDER BY observed_at DESC`, entityId),
     rows(env, `SELECT * FROM conversation_hooks WHERE entity_id = ? ORDER BY observed_at DESC`, entityId),
     rows(env, `SELECT * FROM appreciation_signals WHERE entity_id = ? ORDER BY observed_at DESC`, entityId),
   ]);
@@ -136,6 +144,24 @@ export async function readDossier(
     };
   }
 
+  // Privacy-skip metadata for the latest run — surfaces "skipped for
+  // privacy" badges in the UI rather than silently omitting the data.
+  let privacy_skipped_enrichers: DossierBundle["privacy_skipped_enrichers"] = [];
+  const latestRun = await rows<{ id: string }>(env,
+    `SELECT id FROM profiler_runs WHERE entity_id = ? ORDER BY started_at DESC LIMIT 1`, entityId);
+  if (latestRun[0]) {
+    const skipped = await rows<{ enricher_name: string; category: string; skipped_reason: string | null }>(env,
+      `SELECT enricher_name, category, skipped_reason
+         FROM profiler_enricher_logs
+        WHERE run_id = ? AND status = 'skipped' AND skipped_reason = 'privacy_gate'
+        ORDER BY enricher_name ASC`,
+      latestRun[0].id);
+    privacy_skipped_enrichers = skipped.map((s) => ({
+      enricher_name: s.enricher_name, category: s.category,
+      reason: s.skipped_reason ?? "privacy_gate",
+    }));
+  }
+
   const bundle: DossierBundle = {
     entity_id: entityId,
     identity: identityRows[0] ?? null,
@@ -153,6 +179,7 @@ export async function readDossier(
     appreciation_signals: appreciation,
     latest_synthesis: synthesis,
     populated_tables: populated,
+    privacy_skipped_enrichers,
     cached_at: new Date().toISOString(),
     cache_key: key,
   };

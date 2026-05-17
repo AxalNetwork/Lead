@@ -418,14 +418,17 @@ export class IndividualProfilerWorkflow {
     step: WorkflowStep,
   ): Promise<{ ok: true; summary: unknown }> {
     const { entityId, runId, triggeredBy, forceRefresh, viewerEntityId } = event.payload;
-    const summary = await step.do(
-      "profile",
-      { retries: { limit: 1, backoff: "constant" } },
-      async () => {
-        const { runProfiler } = await import("../services/profilers/orchestrator");
-        return runProfiler(this.env, entityId, { runId, triggeredBy, forceRefresh, viewerEntityId });
-      },
-    );
+    const { runProfiler } = await import("../services/profilers/orchestrator");
+    // Each enricher (and the synthesis pass) runs inside its own
+    // step.do, so a Workflow instance restart resumes from the last
+    // completed enricher rather than redoing the whole batch. The
+    // step name is `enricher:<name>` / `synthesize` — set by the
+    // orchestrator.
+    const summary = await runProfiler(this.env, entityId, {
+      runId, triggeredBy, forceRefresh, viewerEntityId,
+      stepRunner: <T>(name: string, fn: () => Promise<T>) =>
+        step.do(name, { retries: { limit: 1, backoff: "constant" } }, fn),
+    });
     return { ok: true, summary };
   }
 }

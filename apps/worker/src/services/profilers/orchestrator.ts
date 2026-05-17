@@ -30,6 +30,15 @@ export interface RunOpts {
   /** When set, skip enrichers whose `name` is NOT in this list. Used by
    *  tests + per-enricher re-runs. */
   onlyEnrichers?: string[];
+  /**
+   * Optional per-enricher step wrapper. The Cloudflare Workflow class
+   * (ai/workflows.ts IndividualProfilerWorkflow) passes
+   * `(name, fn) => step.do(name, ..., fn)` so every enricher becomes a
+   * durable workflow step that can be retried / resumed across instance
+   * restarts. When omitted (route's waitUntil fallback, tests) the
+   * runner is the identity function so behavior is unchanged.
+   */
+  stepRunner?: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
 }
 
 export interface RunSummary {
@@ -79,12 +88,21 @@ export async function runProfiler(env: Env, entityId: string, opts: RunOpts): Pr
   // 1. Privacy gate.
   const privacy = await computePrivacy(env, entityId);
 
-  // 2. Write run header.
+  // 2. Write run header. The route may have already INSERTed a 'queued'
+  //    header so the workflow_run_id update from dispatch lands on a
+  //    real row (eliminates the dispatch-vs-orchestrator race). We
+  //    UPSERT here: insert if absent, otherwise transition queued →
+  //    running and fill in the privacy fields the route can't know yet.
   await env.DB.prepare(
     `INSERT INTO profiler_runs
        (id, entity_id, workflow_run_id, status, triggered_by, force_refresh,
         respects_privacy, privacy_reasons_json, enricher_count, started_at)
-       VALUES (?, ?, NULL, 'running', ?, ?, ?, ?, 0, ?)`,
+       VALUES (?, ?, NULL, 'running', ?, ?, ?, ?, 0, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       status = 'running',
+       respects_privacy = excluded.respects_privacy,
+       privacy_reasons_json = excluded.privacy_reasons_json,
+       started_at = excluded.started_at`,
   ).bind(
     opts.runId, entityId, opts.triggeredBy, opts.forceRefresh ? 1 : 0,
     privacy.respects_privacy ? 1 : 0, JSON.stringify(privacy.reasons), startedAt,
@@ -109,8 +127,13 @@ export async function runProfiler(env: Env, entityId: string, opts: RunOpts): Pr
   };
 
   // 4. Run enrichers in parallel — each wrapped so one failure can't
-  //    poison the batch and each has its own wall-clock cap.
-  const results = await Promise.allSettled(candidates.map((e) => runOneEnricher(env, e, entityId, ctx)));
+  //    poison the batch and each has its own wall-clock cap. When
+  //    invoked from the Cloudflare Workflow each enricher is also
+  //    wrapped in step.do for durable per-enricher resumption.
+  const runStep = opts.stepRunner ?? (async (_n, fn) => fn());
+  const results = await Promise.allSettled(candidates.map((e) =>
+    runStep(`enricher:${e.name}`, () => runOneEnricher(env, e, entityId, ctx)),
+  ));
 
   // Also persist hard-skip logs for privacy-gated enrichers we excluded
   // so the status endpoint reports them as `skipped`.
@@ -153,10 +176,11 @@ export async function runProfiler(env: Env, entityId: string, opts: RunOpts): Pr
   //    data they may still have public bios → conversation starters).
   //    Note: viewer is intentionally NOT passed — viewer-specific
   //    warm-intro paths are computed at /dossier read time so persisted
-  //    state stays stable per-entity.
+  //    state stays stable per-entity. Also wrapped in step.do when
+  //    available so synthesis re-runs cleanly on instance restart.
   let synthesisId: string | null = null;
   try {
-    const s = await synthesize(env, entityId, { runId: opts.runId });
+    const s = await runStep("synthesize", () => synthesize(env, entityId, { runId: opts.runId }));
     synthesisId = s.synthesisId;
   } catch (e) {
     failed_count += 1;

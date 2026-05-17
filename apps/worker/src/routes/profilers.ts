@@ -57,6 +57,19 @@ profilers.post("/:entity_id/run", async (c) => {
   const runId = crypto.randomUUID();
   await setLastRun(c.env, entityId, { runId, startedAt: new Date().toISOString() });
 
+  // Insert the run header BEFORE dispatch so the workflow_run_id update
+  // below always lands on a real row (eliminates the dispatch-vs-
+  // orchestrator race). The orchestrator UPSERTs this row, transitioning
+  // status: queued → running and filling in the privacy fields.
+  const queuedAt = new Date().toISOString();
+  await c.env.DB.prepare(
+    `INSERT INTO profiler_runs
+       (id, entity_id, status, triggered_by, force_refresh, started_at)
+       VALUES (?, ?, 'queued', ?, ?, ?)
+     ON CONFLICT(id) DO NOTHING`,
+  ).bind(runId, entityId, triggeredBy, forceRefresh ? 1 : 0, queuedAt).run()
+    .catch((e) => console.warn("profilers: queued-header insert failed", (e as Error).message));
+
   // Try the Workflow binding first; fall back to inline ctx.waitUntil if
   // the binding isn't configured (dev / test). Either way the route
   // returns <200 ms because the actual work is deferred.
