@@ -163,7 +163,7 @@
           (data.ideology && data.ideology.confidence != null ? 'Overall confidence ' + Math.round(data.ideology.confidence * 100) + '%' : 'No confidence — null axes indicate no public evidence') +
         '</span></div>' +
         '<div style="margin-top:8px">' + idHtml + '</div>' +
-        '<div style="margin-top:8px;font-size:11px;color:var(--ads-muted)">Null = no evidence (we never default to centrist). Pinned values were set by an operator.</div>' +
+        '<div style="margin-top:8px;font-size:11px;color:var(--ads-muted)">Inferred from public statements and donations. May not reflect current views. Null = no evidence (we never default to centrist). Pinned values were set by an operator.</div>' +
       '</div>' +
 
       '<div class="ads-card" style="margin-top:14px">' +

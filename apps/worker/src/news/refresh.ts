@@ -22,6 +22,7 @@ import { fanOutAllProviders, type NewsCandidate } from "./providers";
 import { archiveUrl } from "./archive";
 import { fetchAndSanitize, archiveRawHtml, enrichArticle, type NewsItemRow } from "./enrich";
 import { extractClaims, persistCitationsForMention, recomputeVerifiedScore } from "./citations";
+import { mineEndorsementsForArticle } from "../profile/endorsements";
 import { crossReferenceEntity } from "./wikipediaXref";
 
 export interface RefreshResult {
@@ -166,6 +167,19 @@ export async function refreshEntityNews(env: Env, entityId: string, opts: { arch
         }
         const unique = [...new Set(allTouched)];
         for (const fid of unique) await recomputeVerifiedScore(env, fid);
+
+        // Task #1: endorsement mining. Best-effort, subject-only — failures
+        // are swallowed (already logged) so they never break ingestion.
+        try {
+          await mineEndorsementsForArticle(env, {
+            newsItemId: persisted.id,
+            subjectEntityId: ent.id,
+            subjectName: ent.display_name,
+            articleText: fetched.body,
+          });
+        } catch (e) {
+          console.warn("mineEndorsements call failed", (e as Error).message);
+        }
       } catch (e) {
         errors.push(`enrich_failed:${cand.url}:${(e as Error).message}`);
       }
