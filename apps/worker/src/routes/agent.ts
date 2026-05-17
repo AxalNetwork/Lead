@@ -275,7 +275,10 @@ agent.post("/ask", async (c) => {
     // Discrete persistence rows for the route-emitted opener events.
     // The loop's per-event persistence handles tool_call/tool_result/etc.
     // session + budget + done land here so a faithful replay of the
-    // emitted SSE stream is possible from agent_messages.
+    // emitted SSE stream is possible from agent_messages. Persisted
+    // synchronously after writeSSE so a replay from the DB is in the
+    // same order as the live stream.
+    // (persistEvent is defined just below; defer the inserts until then.)
 
     // Fire-and-forget persistence helper — never blocks the stream and
     // never throws. We deliberately keep these inserts narrow (no body
@@ -298,9 +301,14 @@ agent.post("/ask", async (c) => {
           body.tool_result_json ? JSON.stringify(body.tool_result_json) : null,
         ).run();
       } catch (e) {
-        console.warn("agent event persist failed", (e as Error).message);
+        console.warn("persistEvent failed", (e as Error).message);
       }
     };
+    // Persist the two opener events the route emits BEFORE the loop runs.
+    // Mirrors the strict "every emitted SSE event lands as a discrete row"
+    // contract so a session_id replay reconstructs the full event stream.
+    await persistEvent("system", { content: "session", tool_result_json: { session_id: sessionId } });
+    await persistEvent("system", { content: "budget", tool_result_json: budget });
 
     try {
       await runAgentLoop(c.env, question, {

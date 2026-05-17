@@ -31,7 +31,11 @@ export class CitationRegistry {
   register(kind: CitationKind, ref_id: string, payload: Omit<CitationPayload, "kind" | "ref_id">): string {
     const marker = `${kind}:${ref_id}`;
     if (!this.map.has(marker)) {
-      this.map.set(marker, { kind, ref_id, ...payload });
+      // Spread payload FIRST so the canonical {kind, ref_id} can't be
+      // overwritten by stale fields on the incoming payload (e.g. webSearch
+      // passes ref_id: "" at construction time before the W:n index is
+      // known). Marker stability + payload consistency stay aligned.
+      this.map.set(marker, { ...payload, kind, ref_id });
     }
     return marker;
   }
