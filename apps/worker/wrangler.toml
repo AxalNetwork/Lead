@@ -256,6 +256,13 @@ binding = "WF_REFRESH_SAVED_RESEARCH"
 name = "refresh-saved-research"
 class_name = "RefreshSavedResearchWorkflow"
 
+# Task #5: per-entity individual profiler. Triggered from POST
+# /api/profilers/:entity_id/run. Fans out 30+ enrichers in parallel.
+[[workflows]]
+binding = "WF_PROFILER_INDIVIDUAL"
+name = "profiler-individual"
+class_name = "IndividualProfilerWorkflow"
+
 # Task #2: link discovery — seed fan-out + frontier crawler.
 [[workflows]]
 binding = "WF_DISCOVER_FROM_SEED"

@@ -54,6 +54,20 @@
     "src/entities/facts.ts",
     "src/entities/normalize.ts",
     "src/entities/summaryQueue.ts",
-    "src/entities/model.ts"
+    "src/entities/model.ts",
+    "src/services/profilers/types.ts",
+    "src/services/profilers/privacy.ts",
+    "src/services/profilers/rateLimit.ts",
+    "src/services/profilers/applyWrites.ts",
+    "src/services/profilers/dossier.ts",
+    "src/services/profilers/synthesize.ts",
+    "src/services/profilers/registry.ts",
+    "src/services/profilers/orchestrator.ts",
+    "src/services/profilers/enrichers/career.ts",
+    "src/services/profilers/enrichers/interests.ts",
+    "src/services/profilers/enrichers/lifestyle.ts",
+    "src/services/profilers/enrichers/media.ts",
+    "src/services/profilers/enrichers/salesContext.ts",
+    "src/services/profilers/enrichers/relational.ts"
   ]
 }

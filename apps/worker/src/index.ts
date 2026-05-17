@@ -44,8 +44,10 @@ import { watchlists as watchlistsRoute } from "./routes/watchlists";
 import { alerts as alertsRoute } from "./routes/alerts";
 // Task #3 (this task): cross-platform identity / OSINT pivots.
 import { osint as osintRoute } from "./routes/osint";
+// Task #5: advanced individual profiler.
+import { profilers as profilersRoute } from "./routes/profilers";
 export { EntityLock } from "./do/EntityLock";
-export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, RefreshGovernmentWorkflow, DiscoverFromSeedWorkflow, CrawlFrontierWorkflow, MonitorEntityWorkflow, MonitorBatchWorkflow, DigestWorkflow } from "./ai/workflows";
+export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, RefreshGovernmentWorkflow, DiscoverFromSeedWorkflow, CrawlFrontierWorkflow, MonitorEntityWorkflow, MonitorBatchWorkflow, DigestWorkflow, IndividualProfilerWorkflow } from "./ai/workflows";
 // Task #3 (this task): OSINT cross-platform identity workflows.
 export { OSINTResolveEntityWorkflow, OSINTBatchWorkflow, OSINTReverifyWorkflow } from "./osint/workflows";
 // Task #3 (this task): research-agent nightly saved-research refresh.
@@ -152,6 +154,8 @@ api.route("/api/watchlists", watchlistsRoute);
 api.route("/api/alerts", alertsRoute);
 // Task #3 (this task): OSINT layer — identities, candidates queue, coverage.
 api.route("/api/osint", osintRoute);
+// Task #5: advanced individual profiler (POST run / GET status / GET dossier).
+api.route("/api/profilers", profilersRoute);
 // /api/leads/:id/enrich, /api/leads/enrich/bulk, /:id/dnc, /:id/campaigns
 api.route("/api/leads", leadsEnrichActions);
 api.route("/api/leads", leadsDncActions);

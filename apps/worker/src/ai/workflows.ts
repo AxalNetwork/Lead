@@ -404,6 +404,32 @@ export class MonitorBatchWorkflow {
   }
 }
 
+// Task #5: per-entity individual profiler workflow. The orchestrator
+// itself (services/profilers/orchestrator.ts) does the parallel fan-out,
+// per-enricher step.do isolation, write dispatch, and synthesis — this
+// Workflow class is a thin durable wrapper so dispatched runs survive
+// instance restarts and surface a run_id in the CF dashboard.
+export class IndividualProfilerWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(
+    event: WorkflowEvent<{ entityId: string; runId: string; triggeredBy: string; forceRefresh?: boolean; viewerEntityId?: string | null }>,
+    step: WorkflowStep,
+  ): Promise<{ ok: true; summary: unknown }> {
+    const { entityId, runId, triggeredBy, forceRefresh, viewerEntityId } = event.payload;
+    const summary = await step.do(
+      "profile",
+      { retries: { limit: 1, backoff: "constant" } },
+      async () => {
+        const { runProfiler } = await import("../services/profilers/orchestrator");
+        return runProfiler(this.env, entityId, { runId, triggeredBy, forceRefresh, viewerEntityId });
+      },
+    );
+    return { ok: true, summary };
+  }
+}
+
 // DigestWorkflow — runs hourly. Picks rows from `digest_queue` whose
 // `scheduled_for` has come due, groups by (owner_email, watchlist_id),
 // renders one email per group, marks the queue rows sent.

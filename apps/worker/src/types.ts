@@ -158,6 +158,8 @@ export interface Env {
   WF_OSINT_RESOLVE_ENTITY?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   WF_OSINT_BATCH?:          { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   WF_OSINT_REVERIFY?:       { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+  // Task #5: per-entity individual profiler workflow (30+ enrichers).
+  WF_PROFILER_INDIVIDUAL?:  { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
 }
 
 export type JobKind =
