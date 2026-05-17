@@ -170,8 +170,8 @@ export async function runDiscoverFromSeed(env: Env, opts: SeedOpts): Promise<See
           host_fetch_count_in_run: hostBase[c.host] + hostDelta[c.host],
           max_per_host: maxPerHost,
         });
-        await enqueueFrontier(env, row.id, prio, runId);
-        queued++;
+        const { inserted } = await enqueueFrontier(env, row.id, prio, runId);
+        if (inserted) queued++;
       } else if (row.rejected) {
         rejected++;
       }

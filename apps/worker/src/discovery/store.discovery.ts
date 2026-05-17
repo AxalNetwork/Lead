@@ -120,14 +120,26 @@ export async function insertLinkEdge(env: Env, srcId: string, dstId: string, lin
   }
 }
 
-export async function enqueueFrontier(env: Env, urlId: string, priority: number, runId?: string | null): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO crawl_frontier (url_id, priority, scheduled_at, run_id)
-     VALUES (?, ?, CURRENT_TIMESTAMP, ?)
-     ON CONFLICT(url_id) DO UPDATE SET priority = MAX(crawl_frontier.priority, excluded.priority),
-                                       run_id   = COALESCE(crawl_frontier.run_id, excluded.run_id)`,
+export async function enqueueFrontier(env: Env, urlId: string, priority: number, runId?: string | null): Promise<{ inserted: boolean }> {
+  // Two-step so we can distinguish "this URL is new on the frontier"
+  // from "we just bumped an existing row's priority". The first INSERT
+  // OR IGNORE reports meta.changes=1 only on a real insert; on conflict
+  // we then upgrade the priority/run_id without affecting that signal.
+  const ins = await env.DB.prepare(
+    `INSERT OR IGNORE INTO crawl_frontier (url_id, priority, scheduled_at, run_id)
+     VALUES (?, ?, CURRENT_TIMESTAMP, ?)`,
   ).bind(urlId, priority, runId ?? null).run();
+  const inserted = !!((ins as { meta?: { changes?: number } }).meta?.changes);
+  if (!inserted) {
+    await env.DB.prepare(
+      `UPDATE crawl_frontier
+          SET priority = MAX(priority, ?),
+              run_id   = COALESCE(run_id, ?)
+        WHERE url_id = ?`,
+    ).bind(priority, runId ?? null, urlId).run();
+  }
   await env.DB.prepare(`UPDATE discovered_urls SET status = 'queued' WHERE id = ? AND status = 'new'`).bind(urlId).run();
+  return { inserted };
 }
 
 export async function popFrontier(env: Env, limit: number, runId?: string | null): Promise<Array<{ url_id: string; url: string; host: string; priority: number; depth: number; attempts: number; run_id: string | null }>> {
