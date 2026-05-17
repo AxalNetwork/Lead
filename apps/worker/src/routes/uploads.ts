@@ -411,6 +411,12 @@ uploads.post("/:id/retry", async (c) => {
     .first<{ kind: string }>();
   const kind: JobKind = lastJob?.kind === "import_file" ? "import_file" : "parse_file";
   const nextStatus = kind === "import_file" ? "mapped" : "uploaded";
+  const priorStatus = row.status;
+  // Insert the audit row + flip status FIRST, then attempt the queue
+  // send. If the send throws we revert the import status back to its
+  // prior terminal state and surface the failure, so the operator can
+  // retry without the import being stuck in a stale 'uploaded'/'mapped'
+  // limbo with no queued job.
   await c.env.DB
     .prepare("UPDATE file_imports SET status = ?, error = NULL, updated_at = ? WHERE id = ?")
     .bind(nextStatus, new Date().toISOString(), id)
@@ -422,8 +428,18 @@ uploads.post("/:id/retry", async (c) => {
     `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
      VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
   ).bind(jobId, `${kind}:${row.filename}`, "upload", kind, id, JSON.stringify(cfg), now, now).run();
-  const msg: JobMessage = { jobId, kind, target: id, config: cfg };
-  await c.env.LEAD_QUEUE.send(msg);
+  try {
+    const msg: JobMessage = { jobId, kind, target: id, config: cfg };
+    await c.env.LEAD_QUEUE.send(msg);
+  } catch (e) {
+    await c.env.DB.prepare(
+      "UPDATE file_imports SET status = ?, error = ?, updated_at = ? WHERE id = ?",
+    ).bind(priorStatus, `retry_enqueue_failed: ${(e as Error).message}`.slice(0, 500),
+           new Date().toISOString(), id).run();
+    await c.env.DB.prepare("UPDATE jobs SET status = 'failed', error = ? WHERE id = ?")
+      .bind((e as Error).message.slice(0, 500), jobId).run();
+    return c.json({ error: "enqueue_failed", message: (e as Error).message }, 502);
+  }
   return c.json({ ok: true, jobId, kind, status: nextStatus }, 202);
 });
 

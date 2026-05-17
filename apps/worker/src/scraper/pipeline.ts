@@ -1956,6 +1956,22 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
     } catch { /* swallow — sweeper is a backstop */ }
     return true;
   };
+  // ----- Task #3 (spec compliance): queue-kind aliases ---------------------
+  // The spec uses the names `csv_import` / `enrich_lead` / `crawl_url` for
+  // queue messages. The real consumers in this codebase are
+  // `parse_file`+`import_file` / `profile_list`(enrich_kind=investor) / `url`.
+  // We normalize incoming aliases to the canonical kinds before dispatch so
+  // external producers writing to the spec contract Just Work.
+  const aliasedKind = msg.kind as unknown as string;
+  if (aliasedKind === "csv_import") {
+    // csv_import is treated as the parse-stage entry point; the importer
+    // later enqueues import_file once the operator confirms the column map.
+    msg = { ...msg, kind: "parse_file" };
+  } else if (aliasedKind === "enrich_lead") {
+    msg = { ...msg, kind: "profile_list", config: { ...(msg.config ?? {}), enrich_kind: "investor", lead_id: msg.target } };
+  } else if (aliasedKind === "crawl_url") {
+    msg = { ...msg, kind: "url" };
+  }
   // ----- Task #22: file-import lifecycle ------------------------------------
   // parse_file / import_file jobs don't produce leads/pages metrics. Their
   // detailed lifecycle lives on file_imports. We just mark the jobs row

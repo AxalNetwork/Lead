@@ -127,6 +127,11 @@ api.route("/api/saved-filters", savedFilters);
 api.route("/api/analytics/firms", analyticsFirms);
 api.route("/api/relationships", relationships);
 api.route("/api/uploads", uploads);
+// Task #3 (spec compliance): CSV-scoped alias. The dashboard's modern
+// callers can address `/api/uploads/csv*` while the legacy `/api/uploads*`
+// surface continues to serve every operator client. Both mounts share the
+// same Hono router — there is no behavioral fork.
+api.route("/api/uploads/csv", uploads);
 api.route("/api/investors", investors);
 api.route("/api/companies", companies);
 api.route("/api/search", search);
