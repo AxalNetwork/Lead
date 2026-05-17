@@ -19,6 +19,7 @@
 
 import type { Env } from "../types";
 import { upsertFirm } from "../scraper/firms_upsert";
+import { extractDomain } from "../scraper/normalize";
 import type { FirmCandidate } from "../scraper/parsers/firmlists/types";
 
 const INLINE_ROW_CAP = 5000;
@@ -53,54 +54,56 @@ export async function processCsvImport(env: Env, importId: string): Promise<void
     if (!env.IMPORTS) throw new Error("imports_bucket_not_bound");
     const obj = await env.IMPORTS.get(row.r2_key);
     if (!obj) throw new Error("r2_object_missing");
-    const text = await obj.text();
-    const { headers, rows } = parseCsv(text);
-    const totalRows = rows.length;
-
-    // Schema auto-detection: cached on the row to avoid re-calling the
-    // model on resume. Falls back to heuristic header matching if AI is
-    // unavailable or returns invalid JSON twice.
-    let detected: DetectedColumns | null = row.detected_columns_json
-      ? safeJson<DetectedColumns>(row.detected_columns_json)
-      : null;
-    if (!detected) {
-      detected = await detectSchema(env, headers, rows.slice(0, 5));
-      if (!detected) {
-        await env.DB.prepare(
-          "UPDATE csv_imports SET status = 'needs_manual_mapping', total_rows = ?, detected_columns_json = '{}', updated_at = ? WHERE id = ?",
-        ).bind(totalRows, new Date().toISOString(), importId).run();
-        return;
-      }
-      await env.DB.prepare(
-        "UPDATE csv_imports SET detected_columns_json = ?, total_rows = ?, updated_at = ? WHERE id = ?",
-      ).bind(JSON.stringify(detected), totalRows, new Date().toISOString(), importId).run();
-    } else if (!row.processed_rows) {
-      await env.DB.prepare("UPDATE csv_imports SET total_rows = ?, updated_at = ? WHERE id = ?")
-        .bind(totalRows, new Date().toISOString(), importId).run();
-    }
+    // Stream-parse the R2 body row-by-row. Memory bound: one chunk
+    // (~64 KB typical R2 block) + the current batch (≤50 rows) at a
+    // time — never the full file. The async generator yields one
+    // header array followed by one row array per CSV record.
+    const stream = obj.body as ReadableStream<Uint8Array>;
+    const reader = stream.getReader();
+    let headers: string[] | null = null;
+    const decoder = new TextDecoder();
+    let leftover = "";
+    let inQuotes = false;
+    const pendingRows: string[][] = [];
 
     // Resume from checkpoint.
-    let cursor = row.processed_rows | 0;
-    const inlineEnd = Math.min(totalRows, cursor + INLINE_ROW_CAP);
+    const startCursor = row.processed_rows | 0;
+    let totalSeen = 0;     // every row index parsed from the file so far
+    let cursor = startCursor;
+    const inlineEnd = startCursor + INLINE_ROW_CAP;
     let created = 0, updated = 0;
     const errors: Array<{ row_index: number; error: string }> = safeJson<Array<{ row_index: number; error: string }>>(row.error_log_json ?? "") ?? [];
     let droppedErrors = 0;
+    let detected: DetectedColumns | null = row.detected_columns_json
+      ? safeJson<DetectedColumns>(row.detected_columns_json)
+      : null;
+    let needsManualMapping = false;
+    let hitCap = false;
+    let reachedEof = false;
 
-    while (cursor < inlineEnd) {
-      const batchEnd = Math.min(inlineEnd, cursor + BATCH_SIZE);
-      for (let i = cursor; i < batchEnd; i++) {
+    const flushBatch = async (): Promise<void> => {
+      if (!pendingRows.length || !detected) { pendingRows.length = 0; return; }
+      for (const cells of pendingRows) {
+        const idx = totalSeen - pendingRows.length + pendingRows.indexOf(cells); // best-effort index
         try {
-          const candidate = rowToFirmCandidate(headers, rows[i], detected);
+          const candidate = rowToFirmCandidate(headers!, cells, detected);
           if (!candidate) continue; // skipped (no usable name+domain)
+          // Task #3 dedupe contract: lower(trim(name))+canonical(website)
+          // +canonical(crunchbase_url). Pre-query firms on the natural key
+          // and re-bind candidate.domain to the matched row so the
+          // downstream upsertFirm (which matches on lower(name)+domain)
+          // finds the existing row instead of inserting.
+          await applyNaturalKeyDedupe(env, candidate);
           const res = await upsertFirm(env, candidate, `csv_import:${importId}`, { source: "csv_import", sourceKind: "import" });
           if (res.action === "created") created++;
           else if (res.action === "updated") updated++;
         } catch (e) {
-          if (errors.length < ERROR_LOG_CAP) errors.push({ row_index: i, error: (e as Error).message.slice(0, 240) });
+          if (errors.length < ERROR_LOG_CAP) errors.push({ row_index: idx, error: (e as Error).message.slice(0, 240) });
           else droppedErrors++;
         }
       }
-      cursor = batchEnd;
+      cursor += pendingRows.length;
+      pendingRows.length = 0;
       const payload = droppedErrors > 0 ? { errors, dropped: droppedErrors } : { errors };
       await env.DB.prepare(
         `UPDATE csv_imports
@@ -112,9 +115,87 @@ export async function processCsvImport(env: Env, importId: string): Promise<void
          WHERE id = ?`,
       ).bind(cursor, created, updated, JSON.stringify(payload), new Date().toISOString(), importId).run();
       created = 0; updated = 0;
-    }
+    };
 
-    const isComplete = cursor >= totalRows;
+    const handleRecord = async (record: string[]): Promise<boolean> => {
+      // Returns true to keep reading, false when the inline cap is hit.
+      if (!headers) { headers = record.map((h) => h.trim()); return true; }
+      // Skip past the resume checkpoint without re-doing work.
+      if (totalSeen < startCursor) { totalSeen++; return true; }
+      if (cursor + pendingRows.length >= inlineEnd) { hitCap = true; return false; }
+
+      // Lazy schema detection: triggers on the FIRST data row of a fresh
+      // import, after we've buffered up to 5 sample rows. On resume, the
+      // cached detected map is reused without re-calling the model.
+      pendingRows.push(record);
+      totalSeen++;
+      if (!detected && pendingRows.length >= Math.min(5, INLINE_ROW_CAP)) {
+        detected = await detectSchema(env, headers, pendingRows.slice(0, 5));
+        if (!detected) {
+          // Strict spec contract: after two failed AI attempts, mark
+          // status='needs_manual_mapping' with detected_columns_json='{}'
+          // and ABORT — no heuristic coercion, no silent success.
+          needsManualMapping = true;
+          return false;
+        }
+        await env.DB.prepare(
+          "UPDATE csv_imports SET detected_columns_json = ?, updated_at = ? WHERE id = ?",
+        ).bind(JSON.stringify(detected), new Date().toISOString(), importId).run();
+      }
+      if (pendingRows.length >= BATCH_SIZE && detected) await flushBatch();
+      return true;
+    };
+
+    let keepReading = true;
+    while (keepReading) {
+      const { done, value } = await reader.read();
+      const chunk = done ? "" : decoder.decode(value, { stream: true });
+      leftover += chunk;
+      // Split leftover into complete records, leaving an unterminated
+      // tail in `leftover`. Track quote state across chunk boundaries.
+      let lastBoundary = 0;
+      for (let i = 0; i < leftover.length; i++) {
+        const ch = leftover[i];
+        if (ch === '"') {
+          if (inQuotes && leftover[i + 1] === '"') { i++; continue; }
+          inQuotes = !inQuotes;
+        } else if (ch === "\n" && !inQuotes) {
+          let line = leftover.slice(lastBoundary, i);
+          if (line.endsWith("\r")) line = line.slice(0, -1);
+          lastBoundary = i + 1;
+          if (line.length === 0 && !headers) continue; // skip leading blanks
+          const record = parseCsvLine(line);
+          if (!await handleRecord(record)) { keepReading = false; break; }
+        }
+      }
+      leftover = leftover.slice(lastBoundary);
+      if (done) {
+        // Flush any trailing record without a terminating newline.
+        if (leftover.length && !inQuotes) {
+          const record = parseCsvLine(leftover);
+          await handleRecord(record);
+          leftover = "";
+        }
+        reachedEof = true;
+        break;
+      }
+    }
+    try { await reader.cancel(); } catch { /* swallow */ }
+
+    if (needsManualMapping) {
+      await env.DB.prepare(
+        "UPDATE csv_imports SET status = 'needs_manual_mapping', detected_columns_json = '{}', updated_at = ? WHERE id = ?",
+      ).bind(new Date().toISOString(), importId).run();
+      return;
+    }
+    if (detected && pendingRows.length) await flushBatch();
+
+    const isComplete = reachedEof && !hitCap;
+    // total_rows is the count we've actually seen so far (file fully
+    // consumed when isComplete, or the partial checkpoint when chained).
+    await env.DB.prepare("UPDATE csv_imports SET total_rows = ?, updated_at = ? WHERE id = ?")
+      .bind(Math.max(totalSeen, cursor), new Date().toISOString(), importId).run();
+
     if (isComplete) {
       const now = new Date().toISOString();
       await env.DB.prepare(
@@ -157,6 +238,30 @@ async function setStatus(env: Env, importId: string, status: string): Promise<vo
 // shapes we accept (text/csv from operators) don't need streaming yet
 // because INLINE_ROW_CAP already bounds memory. A 5,000-row chunk of
 // typical 200-byte rows is ~1 MB.
+// Parse a single CSV line (no embedded LFs — caller has already split on
+// unquoted newlines via the streaming loop). Handles quoted fields and
+// doubled-quote escapes.
+export function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += ch;
+    } else {
+      if (ch === '"') inQuotes = true;
+      else if (ch === ",") { out.push(field); field = ""; }
+      else field += ch;
+    }
+  }
+  out.push(field);
+  return out;
+}
+
 export function parseCsv(text: string): { headers: string[]; rows: string[][] } {
   const out: string[][] = [];
   let cur: string[] = [];
@@ -210,9 +315,12 @@ const PRIMARY_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 const FALLBACK_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
 
 async function detectSchema(env: Env, headers: string[], sample: string[][]): Promise<DetectedColumns | null> {
-  // Heuristic mapping is always available; AI augmentation is best-effort.
-  const heuristic = heuristicDetect(headers);
-  if (!env.AI) return heuristic;
+  // Per spec: AI is the source of truth. The heuristic mapper is only
+  // used when no AI binding is configured (dev/test environments) —
+  // never as a silent fallback after model failure. If both AI attempts
+  // fail in a real environment, the handler must mark the import
+  // status='needs_manual_mapping' with detected_columns_json='{}'.
+  if (!env.AI) return heuristicDetect(headers);
   const prompt = buildDetectPrompt(headers, sample);
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -230,10 +338,7 @@ async function detectSchema(env: Env, headers: string[], sample: string[][]): Pr
       console.warn("detectSchema attempt failed", attempt, (e as Error).message);
     }
   }
-  // Both AI attempts failed → fall back to heuristic so the import can
-  // still proceed (heuristic recognizes the common columns from VC/PE
-  // operator-curated lists: Name, Website, Crunchbase, etc.).
-  return heuristic;
+  return null;
 }
 
 function buildDetectPrompt(headers: string[], sample: string[][]): string {
@@ -324,6 +429,46 @@ function rowToFirmCandidate(headers: string[], cells: string[], detected: Detect
     team_size: Number.isFinite(team) ? team : null,
     source_url: null,
   };
+}
+
+// Pre-upsert dedupe per Task #3 contract: natural key is
+// lower(trim(name)) + canonical(website) + canonical(crunchbase_url).
+// upsertFirm already dedupes on (lower(name), domain); we extend the
+// match to canonicalized website/crunchbase_url so a row with a
+// matching crunchbase URL but a stale/missing website still merges.
+// On hit, we re-bind candidate.domain to the matched row so upsertFirm
+// finds the existing firm and merges instead of inserting.
+async function applyNaturalKeyDedupe(env: Env, c: FirmCandidate): Promise<void> {
+  const lname = c.name.trim().toLowerCase();
+  const website = canonicalUrl(c.website);
+  const cbUrl = canonicalUrl(c.crunchbase_url);
+  const domain = c.domain?.toLowerCase().trim() || (website ? extractDomain(website) : null);
+  if (cbUrl) {
+    const hit = await env.DB.prepare(
+      "SELECT id, domain, website FROM firms WHERE lower(name) = ? AND lower(crunchbase_url) = ? LIMIT 1",
+    ).bind(lname, cbUrl).first<{ id: number; domain: string | null; website: string | null }>();
+    if (hit) {
+      c.domain = hit.domain || (hit.website ? extractDomain(hit.website) || null : null) || domain;
+      return;
+    }
+  }
+  if (website) {
+    const hit = await env.DB.prepare(
+      "SELECT id, domain, website FROM firms WHERE lower(name) = ? AND (lower(website) = ? OR lower(domain) = ?) LIMIT 1",
+    ).bind(lname, website, domain ?? "").first<{ id: number; domain: string | null; website: string | null }>();
+    if (hit) {
+      c.domain = hit.domain || (hit.website ? extractDomain(hit.website) || null : null) || domain;
+      return;
+    }
+  }
+  if (domain) c.domain = domain;
+}
+
+function canonicalUrl(u: string | null | undefined): string | null {
+  if (!u) return null;
+  const t = u.trim().toLowerCase();
+  if (!t) return null;
+  return t.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/+$/, "");
 }
 
 function splitList(s: string): string[] | null {
