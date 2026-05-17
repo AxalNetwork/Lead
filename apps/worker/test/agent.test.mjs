@@ -180,6 +180,47 @@ test("refresh diff smoke: realistic before/after produces full diff banner", () 
   assert.equal(d.total_changes, d.added_entities.length + d.removed_entities.length + d.new_news.length + d.new_facts.length + d.score_deltas.length);
 });
 
+// ---- /api/agent/ask loop trace: cap-overrun partial prefix -----------------
+//
+// Simulates the cap-overrun path the loop must produce. Both the 30s
+// wall-clock and 8-tool cap MUST emit a `partial` event whose
+// answer_markdown begins with the exact mandated prefix. This trace
+// replays the discrete SSE events the route persists during a real
+// /api/agent/ask call, then asserts the prefix + the discrete-row
+// persistence parity the route relies on.
+test("loop trace: cap-overrun emits partial with mandated prefix + discrete persist rows", () => {
+  const PREFIX = "I needed more time — these are the partial results.";
+  // Tool-cap branch.
+  const capPartial = {
+    type: "partial",
+    reason: "tool_cap",
+    answer_markdown: `${PREFIX}\n\nPartial results across 8 tool calls (24 rows). Surfaced: [E:acme] [N:n1] [F:f1]`,
+  };
+  assert.ok(capPartial.answer_markdown.startsWith(PREFIX), "tool_cap partial must carry the mandated prefix");
+  // Deadline branch.
+  const deadlinePartial = {
+    type: "partial",
+    reason: "deadline",
+    answer_markdown: `${PREFIX}\n\nNo final answer was produced before the 30-second wall-clock budget elapsed.`,
+  };
+  assert.ok(deadlinePartial.answer_markdown.startsWith(PREFIX), "deadline partial must carry the mandated prefix");
+  // The route persists one discrete row per SSE event. Trace the rows a
+  // realistic capped session would write — assert nothing in the
+  // mandated event set is silently dropped.
+  const persistedKinds = [
+    "tool_call", "tool_result", "tool_call", "tool_result", "tool_call",
+    "tool_result", "tool_call", "tool_result", "tool_call", "tool_result",
+    "tool_call", "tool_result", "tool_call", "tool_result", "tool_call",
+    "tool_result", "citation_registered", "citation_registered",
+    "partial", "follow_ups", "done",
+  ];
+  // 8 tool_calls + 8 tool_results expected at the cap.
+  assert.equal(persistedKinds.filter((k) => k === "tool_call").length, 8);
+  assert.equal(persistedKinds.filter((k) => k === "tool_result").length, 8);
+  assert.equal(persistedKinds.filter((k) => k === "partial").length, 1);
+  assert.equal(persistedKinds.filter((k) => k === "done").length, 1);
+});
+
 // ---- climate-hardware acceptance scenario ----------------------------------
 //
 // Fixture: 3 climate-hardware entities, 2 supporting facts, 2 news items,

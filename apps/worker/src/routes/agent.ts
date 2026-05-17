@@ -153,12 +153,31 @@ agent.post("/saved", savedHandler);
 agent.post("/save", savedHandler);
 
 agent.get("/saved", async (c) => {
+  // Paginated + searchable, same contract shape as GET /sessions. ?q=
+  // matches title OR question (case-insensitive). Defaults: 50/page,
+  // max 100/page. `total` honors the same filter so the pager renders
+  // correct "X–Y of N" while searching.
+  const q = (c.req.query("q") ?? "").trim();
+  const limit = Math.min(100, Math.max(1, Number(c.req.query("limit") ?? 50)));
+  const offset = Math.max(0, Number(c.req.query("offset") ?? 0));
+  const binds: unknown[] = [c.var.email];
+  let where = `owner_email = ?`;
+  if (q) {
+    where += ` AND (LOWER(title) LIKE ? OR LOWER(question) LIKE ?)`;
+    const like = `%${q.toLowerCase()}%`;
+    binds.push(like, like);
+  }
+  const pageBinds = [...binds, limit, offset];
   const r = await c.env.DB.prepare(
     `SELECT id, title, question, created_at, last_refreshed_at,
             CASE WHEN diff_json IS NULL THEN 0 ELSE 1 END AS has_diff
-       FROM saved_research WHERE owner_email = ? ORDER BY created_at DESC LIMIT 200`,
-  ).bind(c.var.email).all();
-  return c.json({ items: r.results ?? [] });
+       FROM saved_research WHERE ${where}
+       ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+  ).bind(...pageBinds).all();
+  const total = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM saved_research WHERE ${where}`,
+  ).bind(...binds).first<{ n: number }>();
+  return c.json({ items: r.results ?? [], limit, offset, total: total?.n ?? 0, q });
 });
 
 agent.get("/saved/:id", async (c) => {

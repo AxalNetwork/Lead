@@ -21,7 +21,9 @@ permalink: /dashboard/research/
     </div>
     <div class="ads-research__rail-section">
       <div class="ads-research__rail-head"><strong>Saved research</strong></div>
+      <input type="search" id="ads-research-saved-search" placeholder="Search saved…" class="ads-research__search">
       <ul class="ads-research__list" id="ads-research-saved"></ul>
+      <div class="ads-research__pager" id="ads-research-saved-pager"></div>
     </div>
     <div class="ads-research__rail-section ads-research__budget" id="ads-research-budget">
       <div class="ads-muted" style="font-size:11px">Daily token budget</div>
@@ -223,13 +225,23 @@ permalink: /dashboard/research/
     } catch (e) { console.warn("loadSessions", e); }
   };
 
-  // ---------- saved list ---------------------------------------------------
+  // ---------- saved list (searchable + paginated) -------------------------
+  const savedPage = { offset: 0, limit: 25, q: "" };
   const loadSaved = async () => {
     try {
-      const { items } = await apiFetch("/saved");
+      const qs = new URLSearchParams({ limit: String(savedPage.limit), offset: String(savedPage.offset) });
+      if (savedPage.q) qs.set("q", savedPage.q);
+      const r = await apiFetch(`/saved?${qs.toString()}`);
+      const items = r.items || [];
       const ul = $("ads-research-saved");
-      ul.innerHTML = items.map((s) => `<li data-id="${s.id}">${escapeHtml(s.title || s.question)}${s.has_diff ? '<span class="diff-badge">changes</span>' : ''}<span class="meta">${s.last_refreshed_at ? 'refreshed ' + new Date(s.last_refreshed_at + 'Z').toLocaleDateString() : 'saved ' + new Date(s.created_at + 'Z').toLocaleDateString()}</span></li>`).join("") || `<li class="ads-muted">No saved research yet — click "Save" on any answer.</li>`;
+      ul.innerHTML = items.map((s) => `<li data-id="${s.id}">${escapeHtml(s.title || s.question)}${s.has_diff ? '<span class="diff-badge">changes</span>' : ''}<span class="meta">${s.last_refreshed_at ? 'refreshed ' + new Date(s.last_refreshed_at + 'Z').toLocaleDateString() : 'saved ' + new Date(s.created_at + 'Z').toLocaleDateString()}</span></li>`).join("") || `<li class="ads-muted">${savedPage.q ? 'No matches.' : 'No saved research yet — click "Save" on any answer.'}</li>`;
       ul.querySelectorAll("li[data-id]").forEach((li) => li.addEventListener("click", () => openSaved(li.dataset.id)));
+      const total = r.total ?? items.length;
+      const end = Math.min(total, savedPage.offset + savedPage.limit);
+      const pg = $("ads-research-saved-pager");
+      pg.innerHTML = `<button type="button" id="ads-research-saved-prev" ${savedPage.offset === 0 ? 'disabled' : ''}>‹ prev</button><span>${total ? (savedPage.offset + 1) : 0}–${end} of ${total}</span><button type="button" id="ads-research-saved-next" ${end >= total ? 'disabled' : ''}>next ›</button>`;
+      $("ads-research-saved-prev")?.addEventListener("click", () => { savedPage.offset = Math.max(0, savedPage.offset - savedPage.limit); loadSaved(); });
+      $("ads-research-saved-next")?.addEventListener("click", () => { savedPage.offset = savedPage.offset + savedPage.limit; loadSaved(); });
     } catch (e) { console.warn("loadSaved", e); }
   };
 
@@ -407,9 +419,25 @@ permalink: /dashboard/research/
       return;
     }
     if (action === "watch") {
-      apiFetch(`/entities/${encodeURIComponent(id)}/watchlist`, { method: "POST" })
-        .then(() => { btn.textContent = "✓ On watchlist"; btn.disabled = true; })
-        .catch((err) => alert("Watchlist failed: " + err.message));
+      // The watchlist endpoint lives outside the /api/agent namespace, so
+      // we use an absolute fetch (apiFetch hard-prefixes /api/agent and
+      // would route this to the wrong path). Best-effort: if the server
+      // returns 404 (no per-entity watchlist toggle wired yet) we fall
+      // back to prefilling the compose box so the user can still queue
+      // a follow-up action without a runtime error.
+      fetch(`${API}/api/entities/${encodeURIComponent(id)}/watchlist`, {
+        method: "POST", credentials: "include",
+        headers: { "content-type": "application/json" },
+      }).then((r) => {
+        if (r.ok) { btn.textContent = "✓ On watchlist"; btn.disabled = true; return; }
+        const inp = $("ads-research-input");
+        inp.value = `Add ${name} to my watchlist and tell me what triggered the alert.`;
+        inp.focus();
+      }).catch(() => {
+        const inp = $("ads-research-input");
+        inp.value = `Add ${name} to my watchlist and tell me what triggered the alert.`;
+        inp.focus();
+      });
       return;
     }
     const inp = $("ads-research-input");
@@ -575,6 +603,11 @@ permalink: /dashboard/research/
   $("ads-research-session-search")?.addEventListener("input", (e) => {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => { sessionPage.q = e.target.value.trim(); sessionPage.offset = 0; loadSessions(); }, 200);
+  });
+  let savedSearchTimer = null;
+  $("ads-research-saved-search")?.addEventListener("input", (e) => {
+    clearTimeout(savedSearchTimer);
+    savedSearchTimer = setTimeout(() => { savedPage.q = e.target.value.trim(); savedPage.offset = 0; loadSaved(); }, 200);
   });
   $("ads-research-new").addEventListener("click", () => {
     state.sessionId = null;
