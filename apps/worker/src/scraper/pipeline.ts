@@ -22,6 +22,8 @@ import { aiExtractPeople } from "../ai/extract";
 import { guessEmails } from "./firmcrawl/emailGuess";
 import { enqueueLinkedinDiscovery, enqueueCrunchbaseUrl } from "./firmcrawl/profileFollow";
 import { dispatchProfile } from "./parsers/profile";
+import { classifyPage, isNewsLike } from "../services/pageClassifier";
+import { ingestNewsPage } from "../news/page_ingest";
 
 /**
  * Filter helper used by every enqueue site so ToS-blocked domains never even
@@ -558,6 +560,42 @@ async function processSingleUrl(
 
   await archiveRawHtml(env, url, fetched.html);
   const isNewDomain = await touchSource(env, url);
+
+  // Task #6: page-type gate. News / blog / press-release pages must NOT
+  // become entity rows on the Accounts / Customers dashboard. Route
+  // them to news_items instead. Heuristics fire first (URL, OG,
+  // JSON-LD, domain allowlist) so the common case is free; the AI
+  // fallback is gated by the shared budget/cache.
+  try {
+    const cls = await classifyPage(env, fetched.url || url, fetched.html, jobId);
+    if (isNewsLike(cls.page_type)) {
+      const ing = await ingestNewsPage(env, fetched.url || url, fetched.html);
+      try {
+        await env.DB.prepare(
+          `INSERT INTO fetch_log (job_id, host, url, tier, status, bytes, block_reason, duration_ms, cost_usd, created_at)
+           VALUES (?, ?, ?, 0, 200, 0, ?, 0, 0, ?)`,
+        ).bind(
+          jobId, safeHost(fetched.url || url), fetched.url || url,
+          JSON.stringify({
+            page_classifier: {
+              page_type: cls.page_type,
+              confidence: cls.confidence,
+              source: cls.source,
+              signals: cls.signals,
+              news_item_id: ing.newsItemId,
+              inserted: ing.inserted,
+            },
+          }),
+          new Date().toISOString(),
+        ).run();
+      } catch (e) {
+        console.warn("page_classifier log failed", (e as Error).message);
+      }
+      return { leadsFound, pagesFetched, pagesBlocked, captchaHits, costMs };
+    }
+  } catch (e) {
+    console.warn("classifyPage failed", (e as Error).message);
+  }
 
   const { name: parserName, parser } = selectParser(url);
   const parsed = parser(fetched.html, fetched.url);
