@@ -21,10 +21,16 @@ import type { Env } from "../types";
 import { upsertFirm } from "../scraper/firms_upsert";
 import { extractDomain } from "../scraper/normalize";
 import type { FirmCandidate } from "../scraper/parsers/firmlists/types";
+import { detectHasHeader, synthesizeHeaders, looksLikeTypeString } from "../services/csv/headerDetector";
 
 const INLINE_ROW_CAP = 5000;
 const BATCH_SIZE = 50;
 const ERROR_LOG_CAP = 200;
+// Task #5: buffer the first N records before deciding whether row 0 is
+// a header. The operator's headerless CSV ("500 LGBT Syndicate,VC,…")
+// was being mis-treated as headers; headerDetector.detectHasHeader
+// uses this sample to decide.
+const HEADER_SAMPLE = 10;
 
 interface CsvImportRow {
   id: string;
@@ -65,6 +71,9 @@ export async function processCsvImport(env: Env, importId: string, opts: { insid
     let leftover = "";
     let inQuotes = false;
     const pendingRows: string[][] = [];
+    // Task #5: buffer the first HEADER_SAMPLE records before deciding
+    // whether row 0 is a real header. Cleared once `headers` is set.
+    const headerBuffer: string[][] = [];
 
     // Resume from checkpoint.
     const startCursor = row.processed_rows | 0;
@@ -72,6 +81,7 @@ export async function processCsvImport(env: Env, importId: string, opts: { insid
     let cursor = startCursor;
     const inlineEnd = startCursor + INLINE_ROW_CAP;
     let created = 0, updated = 0;
+    let skippedRows = 0;   // Task #5: rows rejected by pre-insert safeguard
     const errors: Array<{ row_index: number; error: string }> = safeJson<Array<{ row_index: number; error: string }>>(row.error_log_json ?? "") ?? [];
     let droppedErrors = 0;
     let detected: DetectedColumns | null = row.detected_columns_json
@@ -88,6 +98,17 @@ export async function processCsvImport(env: Env, importId: string, opts: { insid
         try {
           const candidate = rowToFirmCandidate(headers!, cells, detected);
           if (!candidate) continue; // skipped (no usable name+domain)
+          // Task #5: pre-insert safeguard. If the proposed `name` matches
+          // the Type/Kind regex ("VC", "Nonprofit, Training Program",
+          // "VC, Fellows Program", …) the CSV column mapping is wrong —
+          // reject before upsertFirm so the corrupted name never lands
+          // in `firms.name`. Counted in skipped_rows + logged.
+          if (looksLikeTypeString(candidate.name)) {
+            skippedRows++;
+            if (errors.length < ERROR_LOG_CAP) errors.push({ row_index: idx, error: `type_string_name_rejected:${candidate.name.slice(0, 80)}` });
+            else droppedErrors++;
+            continue;
+          }
           // Task #3 dedupe contract: lower(trim(name))+canonical(website)
           // +canonical(crunchbase_url). Pre-query firms on the natural key
           // and re-bind candidate.domain to the matched row so the
@@ -104,7 +125,9 @@ export async function processCsvImport(env: Env, importId: string, opts: { insid
       }
       cursor += pendingRows.length;
       pendingRows.length = 0;
-      const payload = droppedErrors > 0 ? { errors, dropped: droppedErrors } : { errors };
+      const payload: Record<string, unknown> = { errors };
+      if (droppedErrors > 0) payload.dropped = droppedErrors;
+      if (skippedRows > 0) payload.skipped_rows = skippedRows;
       await env.DB.prepare(
         `UPDATE csv_imports
            SET processed_rows = ?,
@@ -117,33 +140,56 @@ export async function processCsvImport(env: Env, importId: string, opts: { insid
       created = 0; updated = 0;
     };
 
-    const handleRecord = async (record: string[]): Promise<boolean> => {
-      // Returns true to keep reading, false when the inline cap is hit.
-      if (!headers) { headers = record.map((h) => h.trim()); return true; }
-      // Skip past the resume checkpoint without re-doing work.
+    // Task #5: process one data record — used both by the buffered
+    // header-decision replay path AND by the streaming loop once headers
+    // have been resolved.
+    const processDataRecord = async (record: string[]): Promise<boolean> => {
       if (totalSeen < startCursor) { totalSeen++; return true; }
       if (cursor + pendingRows.length >= inlineEnd) { hitCap = true; return false; }
-
-      // Lazy schema detection: triggers on the FIRST data row of a fresh
-      // import, after we've buffered up to 5 sample rows. On resume, the
-      // cached detected map is reused without re-calling the model.
       pendingRows.push(record);
       totalSeen++;
       if (!detected && pendingRows.length >= Math.min(5, INLINE_ROW_CAP)) {
-        detected = await detectSchema(env, headers, pendingRows.slice(0, 5));
-        if (!detected) {
-          // Strict spec contract: after two failed AI attempts, mark
-          // status='needs_manual_mapping' with detected_columns_json='{}'
-          // and ABORT — no heuristic coercion, no silent success.
-          needsManualMapping = true;
-          return false;
-        }
+        detected = await detectSchema(env, headers!, pendingRows.slice(0, 5));
+        if (!detected) { needsManualMapping = true; return false; }
         await env.DB.prepare(
           "UPDATE csv_imports SET detected_columns_json = ?, updated_at = ? WHERE id = ?",
         ).bind(JSON.stringify(detected), new Date().toISOString(), importId).run();
       }
       if (pendingRows.length >= BATCH_SIZE && detected) await flushBatch();
       return true;
+    };
+
+    // Task #5: decide row 0 = headers vs no-header by sampling the
+    // buffered records, then replay every non-header buffered row
+    // through processDataRecord so the rest of the loop is unchanged.
+    const finalizeHeaders = async (): Promise<boolean> => {
+      if (headers) return true;
+      if (!headerBuffer.length) return true;
+      const hasHeader = detectHasHeader(headerBuffer);
+      let dataRows: string[][];
+      if (hasHeader) {
+        headers = headerBuffer[0].map((h) => h.trim());
+        dataRows = headerBuffer.slice(1);
+      } else {
+        const cols = headerBuffer.reduce((m, r) => Math.max(m, r.length), 0);
+        headers = synthesizeHeaders(cols);
+        dataRows = headerBuffer.slice();
+      }
+      headerBuffer.length = 0;
+      for (const r of dataRows) {
+        if (!(await processDataRecord(r))) return false;
+      }
+      return true;
+    };
+
+    const handleRecord = async (record: string[]): Promise<boolean> => {
+      // Returns true to keep reading, false when the inline cap is hit.
+      if (!headers) {
+        headerBuffer.push(record);
+        if (headerBuffer.length < HEADER_SAMPLE) return true;
+        return finalizeHeaders();
+      }
+      return await processDataRecord(record);
     };
 
     let keepReading = true;
@@ -176,6 +222,10 @@ export async function processCsvImport(env: Env, importId: string, opts: { insid
           await handleRecord(record);
           leftover = "";
         }
+        // Task #5: file ended before the header-sample buffer filled
+        // up. Resolve headers now using whatever rows we have so
+        // short files still flow through processDataRecord.
+        if (!headers && headerBuffer.length) await finalizeHeaders();
         reachedEof = true;
         break;
       }

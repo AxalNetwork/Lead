@@ -37,6 +37,7 @@ import {
   parseCountryIso2, parseCountryIso2List, parseUrl, parseBool, isEmptyCell,
 } from "./coercers";
 import type { TabIntent } from "./tab_intent";
+import { looksLikeTypeString } from "../services/csv/headerDetector";
 
 const BATCH_SIZE = 200;
 
@@ -478,6 +479,13 @@ async function tryUpsertFirm(
   const fields = coerced.fields;
   const name = (fields.name ?? "").trim();
   if (!name) return { action: "skip", firmId: null };
+  // Task #5: pre-insert safeguard. The legacy multi-format upload path
+  // (parse.ts → auto_map.ts → here) can pick the Type/Kind column as
+  // `name` when the operator's CSV has no header row, producing rows
+  // like name='VC' or name='Nonprofit, Training Program' on the
+  // Investors dashboard. Reject before upsertFirm — surfaced as a
+  // skip so the per-tab summary increments rows_skipped.
+  if (looksLikeTypeString(name)) return { action: "skip", firmId: null };
   // Map projected fields back to a header-form so the existing
   // `rowToCandidate` parser can build a FirmCandidate without us re-doing
   // its scalar/array coercion logic.
@@ -540,6 +548,8 @@ async function tryInsertLead(
   const email = (fields.email ?? "").trim().toLowerCase() || null;
   const name = (fields.name ?? "").trim() || null;
   if (!email && !name) return "skip";
+  // Task #5: reject type-string names (see same guard in tryUpsertFirm).
+  if (name && looksLikeTypeString(name)) return "skip";
   const dnc = await checkAndScrubDnc(env, {
     email,
     phone: (fields.phone ?? "").trim() || null,
