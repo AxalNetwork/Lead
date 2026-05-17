@@ -179,6 +179,9 @@ permalink: /dashboard/discovery/
       var r = await fetch(API + "/api/discovery/seed", { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
       var data = await r.json();
       if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
+      // Preserve the runId so subsequent Crawl-frontier clicks recurse
+      // inside the same run (and share its host-quota counters).
+      if (data.runId) { window.__ads_last_run_id = data.runId; }
       loadStats(); loadUrls();
     } catch (e) { alert("Seed failed: " + e.message); }
     finally { this.disabled = false; this.textContent = "Seed"; }
@@ -186,7 +189,9 @@ permalink: /dashboard/discovery/
   document.getElementById("ads-disc-crawl").addEventListener("click", async function () {
     this.disabled = true; this.textContent = "Crawling…";
     try {
-      await fetch(API + "/api/discovery/crawl", { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ limit: 25 }) });
+      var crawlPayload = { limit: 25 };
+      if (window.__ads_last_run_id) crawlPayload.run_id = window.__ads_last_run_id;
+      await fetch(API + "/api/discovery/crawl", { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify(crawlPayload) });
       loadStats(); loadUrls();
     } finally { this.disabled = false; this.textContent = "Crawl frontier"; }
   });

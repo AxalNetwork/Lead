@@ -574,6 +574,20 @@ async function processSingleUrl(
     } catch (e) {
       console.warn("seedDomainDiscovery failed", (e as Error).message);
     }
+    // Task #2: kick the link-discovery layer on every newly-seen domain
+    // so the URL graph keeps growing automatically. Dispatch the durable
+    // workflow when available, otherwise run inline best-effort so a
+    // missing binding never blocks the scrape pipeline.
+    try {
+      if (env.WF_DISCOVER_FROM_SEED) {
+        await env.WF_DISCOVER_FROM_SEED.create({ params: { url, depthMax: 2, maxPerHost: 200 } });
+      } else {
+        const { runDiscoverFromSeed } = await import("../discovery/runDiscovery");
+        await runDiscoverFromSeed(env, { url, depthMax: 2, maxPerHost: 200, html: fetched.html });
+      }
+    } catch (e) {
+      console.warn("discover_from_seed failed", (e as Error).message);
+    }
   }
 
   return { leadsFound, pagesFetched, pagesBlocked, captchaHits, costMs };
