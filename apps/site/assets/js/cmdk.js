@@ -76,11 +76,17 @@
       .then(function (json) {
         clearTimeout(to);
         if (rid !== lastReqId) return;
-        var items = (json && json.results ? json.results : (Array.isArray(json) ? json : [])).slice(0, 8).map(function (x, i) {
-          return { id: "ai:" + i + ":" + (x.url || x.id || x.name || ""),
+        var raw = (json && (json.items || json.results)) || (Array.isArray(json) ? json : []);
+        var items = raw.slice(0, 8).map(function (x, i) {
+          var label = x.title || x.label || x.name || (x.kind ? x.kind + ":" + (x.id || "") : "Result");
+          var href = x.href || x.url || "#";
+          return { id: "ai:" + i + ":" + (href || x.id || label),
                    group: "Search results",
-                   label: x.label || x.name || x.title || (x.kind ? x.kind + ":" + (x.id || "") : "Result"),
-                   href: x.url || x.href || "#" };
+                   label: label,
+                   subtitle: x.subtitle || "",
+                   type: x.type || x.kind || "",
+                   type_label: x.type_label || "",
+                   href: href };
         });
         aiCache[q] = items;
         cb(items);
@@ -167,9 +173,15 @@
       row.setAttribute("role", "option");
       row.setAttribute("data-i", i);
       if (i === 0) row.setAttribute("aria-selected", "true");
-      row.appendChild(el("span", null, it.label));
+      var labelWrap = el("div", "ads-cmdk__item-label");
+      labelWrap.appendChild(el("span", null, it.label));
+      if (it.type_label) {
+        var b = el("span", "ads-cmdk__badge", it.type_label);
+        labelWrap.appendChild(b);
+      }
+      row.appendChild(labelWrap);
       var meta = el("div", "ads-cmdk__item-meta");
-      meta.appendChild(el("span", null, it.href || ""));
+      meta.appendChild(el("span", null, it.subtitle || it.href || ""));
       row.appendChild(meta);
       row.addEventListener("mouseenter", function () { setIdx(i); });
       row.addEventListener("click", function () { activate(it); });
@@ -208,9 +220,15 @@
           var row = el("div", "ads-cmdk__item");
           row.setAttribute("role", "option");
           row.setAttribute("data-i", i);
-          row.appendChild(el("span", null, it.label));
+          var labelWrap2 = el("div", "ads-cmdk__item-label");
+          labelWrap2.appendChild(el("span", null, it.label));
+          if (it.type_label) {
+            var b2 = el("span", "ads-cmdk__badge", it.type_label);
+            labelWrap2.appendChild(b2);
+          }
+          row.appendChild(labelWrap2);
           var meta = el("div", "ads-cmdk__item-meta");
-          meta.appendChild(el("span", null, it.href || ""));
+          meta.appendChild(el("span", null, it.subtitle || it.href || ""));
           row.appendChild(meta);
           row.addEventListener("mouseenter", function () { setIdx(i); });
           row.addEventListener("click", function () { activate(it); });
