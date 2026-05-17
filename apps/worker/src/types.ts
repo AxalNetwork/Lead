@@ -54,6 +54,7 @@ export interface Env {
   // Task #8: persona ↔ entity matching against the unified u_entities graph.
   WF_PERSONA_ENTITY_MATCH?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   WF_PERSONA_MATCH_REFRESH?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+  WF_PERSONA_MATCH_ENTITY?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   WF_MATCH_PROJECT?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   // Task #3: DD scan workflows (per-entity + batch).
   WF_DD_SCAN_ENTITY?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };

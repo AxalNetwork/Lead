@@ -33,3 +33,59 @@ CREATE INDEX IF NOT EXISTS idx_pem_stale
   ON persona_entity_matches(last_scored_at);
 CREATE INDEX IF NOT EXISTS idx_pem_source
   ON persona_entity_matches(persona_id, source);
+
+-- Safety stubs: in case migrations 170 (persona_matches) and 280
+-- (entity_legacy_map) haven't been applied in this DB yet, create
+-- empty placeholder tables so the backfill SELECT below resolves to
+-- zero rows instead of raising "no such table". The real migrations
+-- create these with proper schemas and indexes; CREATE TABLE IF NOT
+-- EXISTS is a no-op when they're already present.
+CREATE TABLE IF NOT EXISTS persona_matches (
+  persona_id TEXT NOT NULL,
+  entity_kind TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  fit_score REAL,
+  components_json TEXT,
+  PRIMARY KEY (persona_id, entity_kind, entity_id)
+);
+CREATE TABLE IF NOT EXISTS entity_legacy_map (
+  legacy_table TEXT NOT NULL,
+  legacy_id TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  PRIMARY KEY (legacy_table, legacy_id)
+);
+CREATE TABLE IF NOT EXISTS u_entities (
+  id TEXT PRIMARY KEY,
+  display_name TEXT,
+  primary_domain TEXT,
+  kind TEXT,
+  status TEXT
+);
+
+-- One-time backfill: copy any existing persona_matches rows (Task #46
+-- accounts/buyers matcher) whose entity_id resolves to a u_entity into
+-- the new entity matches table. Marked source='auto' with a sentinel
+-- last_scored_at='1970-01-01' so the nightly refresh re-scores them
+-- with the v1 entity-graph algorithm on first run. INSERT OR IGNORE
+-- preserves any rows already present (e.g. operator-pinned manual
+-- entries created after the migration ran on dev). Greenfield deploys
+-- get a no-op since persona_matches is empty.
+INSERT OR IGNORE INTO persona_entity_matches (
+  persona_id, entity_id, score, match_evidence_json, source,
+  last_scored_at, model_version, created_at
+)
+SELECT
+  pm.persona_id,
+  elm.entity_id,
+  COALESCE(pm.fit_score, 0) / 100.0,
+  json_object('backfill_from','persona_matches','legacy_kind',pm.entity_kind,'legacy_components',pm.components_json,'legacy_fit_score',pm.fit_score),
+  'auto',
+  '1970-01-01T00:00:00Z',
+  'v0-backfill',
+  datetime('now')
+FROM persona_matches pm
+JOIN entity_legacy_map elm
+  ON elm.legacy_table = CASE pm.entity_kind WHEN 'account' THEN 'accounts' WHEN 'buyer' THEN 'buyers' ELSE pm.entity_kind END
+ AND elm.legacy_id = pm.entity_id
+JOIN u_entities ue ON ue.id = elm.entity_id
+WHERE ue.kind = 'person' AND ue.status = 'active';

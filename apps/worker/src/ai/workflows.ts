@@ -152,6 +152,23 @@ export class PersonaEntityMatchWorkflow {
   }
 }
 
+// Task #8: per-entity re-match across every active persona. Triggered
+// from entity write paths (insertFact, addCareerEntry) so newly-
+// promoted founders flow into matching personas within minutes.
+export class PersonaMatchEntityWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ entityId: string }>, step: WorkflowStep): Promise<{ ok: true; entityId: string; scored: number; errors: number }> {
+    const { entityId } = event.payload;
+    const { scoreEntityAcrossPersonas } = await import("../services/personaMatching");
+    const r = await step.do("score_entity_across_personas", { retries: { limit: 2, backoff: "exponential" } }, async () => {
+      return await scoreEntityAcrossPersonas(this.env, entityId);
+    });
+    return { ok: true, entityId, ...r };
+  }
+}
+
 // Task #8: nightly refresh of stale persona_entity_matches rows
 // (>30 days). Bounded by `limit` so a single tick fits its budget.
 export class PersonaMatchRefreshWorkflow {

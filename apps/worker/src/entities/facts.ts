@@ -6,6 +6,9 @@ import type { Env } from "../types";
 import type { FactInput } from "./model";
 import { sha256 } from "./normalize";
 import { enqueueSummaryRebuild } from "./summaryQueue";
+// Task #8: triggers debounced persona ↔ entity re-match when a fact
+// that materially affects scoring is written. No-op otherwise.
+import { triggerEntityMatchRefresh, isRelevantPredicate } from "../services/personaMatchTrigger";
 
 export async function insertFact(env: Env, f: FactInput): Promise<string | null> {
   if (!f.entity_id || !f.predicate) return null;
@@ -45,6 +48,12 @@ export async function insertFact(env: Env, f: FactInput): Promise<string | null>
     // "fact INSERT → rebuild within ~5s" SLO honest regardless of which
     // caller wrote the fact (dual-write, merge, manual admin, etc.).
     await enqueueSummaryRebuild(env, f.entity_id);
+    if (isRelevantPredicate(f.predicate)) {
+      // Fire-and-forget; debounced via KV inside the trigger.
+      void triggerEntityMatchRefresh(env, f.entity_id).catch((e) => {
+        console.warn("triggerEntityMatchRefresh from insertFact failed", (e as Error).message);
+      });
+    }
     return id;
   } catch (e) {
     // UNIQUE(hash) collision = exact-replay observation. Task #1

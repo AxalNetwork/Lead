@@ -328,6 +328,14 @@ binding = "WF_PERSONA_MATCH_REFRESH"
 name = "persona-match-refresh"
 class_name = "PersonaMatchRefreshWorkflow"
 
+# Task #8: per-entity re-match across every active persona. Triggered
+# from entity write paths (career, title, employer, location facts)
+# so new data flows into matching personas within minutes.
+[[workflows]]
+binding = "WF_PERSONA_MATCH_ENTITY"
+name = "persona-match-entity"
+class_name = "PersonaMatchEntityWorkflow"
+
 [[queues.producers]]
 binding = "LEAD_QUEUE"
 queue = "aidatasignal-lead-jobs"

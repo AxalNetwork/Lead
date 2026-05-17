@@ -286,14 +286,16 @@ personasRoute.post("/:id/run-matching", async (c) => {
   if (c.env.WF_PERSONA_ENTITY_MATCH) {
     try {
       const wf = await c.env.WF_PERSONA_ENTITY_MATCH.create({ params: { personaId: row.id, batchSize, maxEntities } });
-      return c.json({ ok: true, dispatched: "workflow", workflow_id: wf.id, persona_id: row.id });
+      return c.json({ ok: true, dispatched: "workflow", job_id: wf.id, workflow_id: wf.id, persona_id: row.id });
     } catch (e) {
       console.warn("run-matching WF dispatch failed; falling back inline", (e as Error).message);
     }
   }
   // Inline fallback — bounded so a request handler never melts the worker.
+  // job_id is synthesized so callers always have a correlation id.
+  const jobId = `inline-${row.id}-${Date.now()}`;
   const r = await scoreBatchPersonaMatching(c.env, row.id, { batchSize, maxEntities: Math.min(maxEntities, 500) });
-  return c.json({ ok: true, dispatched: "inline", persona_id: row.id, ...r });
+  return c.json({ ok: true, dispatched: "inline", job_id: jobId, persona_id: row.id, ...r });
 });
 
 // GET /:id/candidates?min_score=0.7&limit=50&offset=0

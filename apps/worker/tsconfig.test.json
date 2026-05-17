@@ -55,6 +55,8 @@
     "src/entities/normalize.ts",
     "src/entities/summaryQueue.ts",
     "src/entities/model.ts",
+    "src/services/personaMatchingScorers.ts",
+    "src/services/personaMatchTrigger.ts",
     "src/services/profilers/types.ts",
     "src/services/profilers/privacy.ts",
     "src/services/profilers/rateLimit.ts",

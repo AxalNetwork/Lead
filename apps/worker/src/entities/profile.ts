@@ -331,6 +331,13 @@ export async function addCareerEntry(env: Env, input: CareerEntryInput): Promise
       observedAt: now,
     });
   });
+  // Task #8: career changes materially affect persona match scores
+  // (title, seniority, function, employer industry/size/stage). Fire
+  // the debounced re-match trigger.
+  try {
+    const { triggerEntityMatchRefresh } = await import("../services/personaMatchTrigger.js");
+    void triggerEntityMatchRefresh(env, input.entityId).catch(() => undefined);
+  } catch { /* trigger is best-effort */ }
 }
 
 // =========================================================================
