@@ -44,6 +44,19 @@ alerts.post("/rules", async (c) => {
   if (!["in_app", "email", "slack", "webhook", "digest"].includes(channel)) {
     return c.json({ error: "bad_channel" }, 400);
   }
+  const digestFreq = String(body.digest_frequency ?? "daily");
+  if (!["realtime", "off", "hourly", "daily", "weekly"].includes(digestFreq)) {
+    return c.json({ error: "bad_digest_frequency" }, 400);
+  }
+  // Reject incompatible combos at write-time. `channel=digest` MUST be
+  // paired with a real digest cadence (hourly/daily/weekly) — pairing it
+  // with realtime/off would be a silent no-op at dispatch.
+  if (channel === "digest" && (digestFreq === "realtime" || digestFreq === "off")) {
+    return c.json({
+      error: "incompatible_digest_frequency",
+      message: "channel=digest requires digest_frequency in {hourly,daily,weekly}",
+    }, 400);
+  }
   let channelCfg: Record<string, unknown> = (typeof body.channel_config === "object" && body.channel_config) ? body.channel_config as Record<string, unknown> : {};
   // Webhook: auto-generate secret if absent.
   if (channel === "webhook" && !channelCfg.webhook_secret) {
@@ -59,7 +72,7 @@ alerts.post("/rules", async (c) => {
     body.watchlist_id ?? null, body.entity_id ?? null, body.trigger_kind,
     body.trigger_config ? JSON.stringify(body.trigger_config) : null,
     channel, JSON.stringify(channelCfg),
-    String(body.digest_frequency ?? "daily"),
+    digestFreq,
     Number(body.dedupe_window_seconds ?? 3600),
     body.is_active === false ? 0 : 1,
   ).run();
@@ -75,7 +88,25 @@ alerts.patch("/rules/:id", async (c) => {
   const fields: string[] = [];
   const binds: unknown[] = [];
   for (const k of ["name", "digest_frequency"]) {
-    if (k in body) { fields.push(`${k} = ?`); binds.push(body[k] ?? null); }
+    if (k in body) {
+      if (k === "digest_frequency") {
+        const v = String(body[k] ?? "");
+        if (!["realtime", "off", "hourly", "daily", "weekly"].includes(v)) {
+          return c.json({ error: "bad_digest_frequency" }, 400);
+        }
+        // Re-check compatibility with the existing channel.
+        const cur = await c.env.DB.prepare(
+          `SELECT channel FROM alert_rules WHERE id = ? AND owner_email = ?`,
+        ).bind(id, email).first<{ channel: string }>();
+        if (cur?.channel === "digest" && (v === "realtime" || v === "off")) {
+          return c.json({
+            error: "incompatible_digest_frequency",
+            message: "channel=digest requires digest_frequency in {hourly,daily,weekly}",
+          }, 400);
+        }
+      }
+      fields.push(`${k} = ?`); binds.push(body[k] ?? null);
+    }
   }
   if ("is_active" in body) { fields.push("is_active = ?"); binds.push(body.is_active ? 1 : 0); }
   if ("dedupe_window_seconds" in body) { fields.push("dedupe_window_seconds = ?"); binds.push(Number(body.dedupe_window_seconds) || 3600); }

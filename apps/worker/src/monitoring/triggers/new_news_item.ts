@@ -4,8 +4,12 @@ import type { EvaluatorFn } from "../types";
 // published after the previous evaluation timestamp. Dedupe key is the
 // news mention id (or url hash) so each article fires at most once.
 export const evalNewNewsItem: EvaluatorFn = async (ctx) => {
-  const since = ctx.oldSummary?.last_news_at ?? null;
-  if (!ctx.diff.some((d) => d.field === "last_news_at") && since) return null;
+  // Prefer the per-entity watermark (source-driven cutoff). Fall back to
+  // last_news_at from the summary only when no watermark exists yet
+  // (e.g. first post-baseline tick). News rows can be inserted without
+  // the summary's last_news_at moving (out-of-order publish, backfill),
+  // so the watermark is the authoritative anchor.
+  const since = ctx.sinceWatermark ?? ctx.oldSummary?.last_news_at ?? null;
   try {
     const rows = await ctx.env.DB.prepare(
       `SELECT nem.id AS id, nem.entity_id, na.title AS title, na.url AS url, na.published_at AS published_at

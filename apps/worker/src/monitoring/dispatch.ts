@@ -357,6 +357,13 @@ export async function retryPendingDeliveries(env: Env, limit = 50): Promise<{ re
  * when (a) it is a member of an active watchlist or directly attached to
  * an active rule, AND (b) its last_evaluated_at is older than `staleMs`
  * (or has never been evaluated).
+ *
+ * Note (intentional): we INTENTIONALLY require an active rule (direct or
+ * watchlist-mediated). A watched entity without any active rule produces
+ * no events and would burn evaluation budget for no observer. Product
+ * intent here is "rule-driven monitoring," not "always-on snapshots."
+ * To change this to "every watched entity regardless of rules," drop the
+ * `alert_rules` predicate from the inner OR.
  */
 export async function pickDueEntities(env: Env, opts: { limit?: number; staleMinutes?: number } = {}): Promise<string[]> {
   const limit = opts.limit ?? 200;
