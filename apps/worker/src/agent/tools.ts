@@ -29,6 +29,11 @@ export interface Tool {
   handler: (env: Env, args: Record<string, unknown>, registry: CitationRegistry) => Promise<ToolResult>;
 }
 
+// Re-export the runtime tool-argument validator from its own module so it
+// can be compiled standalone for the acceptance harness.
+export { validateToolArgs } from "./tools-validation";
+export type { ValidationResult, ValidationFailure, ValidationSuccess } from "./tools-validation";
+
 // ---------- helpers ----------------------------------------------------------
 
 function s(v: unknown, fallback = ""): string {

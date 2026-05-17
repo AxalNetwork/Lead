@@ -29,7 +29,7 @@
 
 import type { Env } from "../types";
 import { CitationRegistry, type CitationPayload } from "./registry";
-import { TOOLS, getTool, toolManifest } from "./tools";
+import { TOOLS, getTool, toolManifest, validateToolArgs } from "./tools";
 import { cacheKey, cacheGet, cachePut } from "./cache";
 import { estimateTokens } from "./budget";
 
@@ -226,17 +226,30 @@ export async function runAgentLoop(env: Env, question: string, opts: LoopOptions
   ];
   tokensIn += estimateTokens(messages.map((m) => m.content).join("\n"));
 
+  // When true, the loop forces the model to synthesize a final answer
+  // (no more tool_call branches accepted) on the next turn. We flip this
+  // once the 8-tool cap is reached so the agent still gets one synthesis
+  // pass over the evidence it has gathered.
+  let synthesisOnly = false;
+
   while (true) {
     if (deadlineHit() || await cancelled()) {
       await opts.emit({ type: "partial", answer_markdown: "I needed more time — these are the partial results.\n\nNo final answer was produced before the 30-second wall-clock budget elapsed.", reason: "deadline" });
       return;
     }
-    if (toolCallsUsed >= MAX_TOOL_CALLS) {
-      await opts.emit({ type: "partial", answer_markdown: "I needed more time — these are the partial results.\n\nReached the 8 tool-call cap before producing a final answer.", reason: "tool_cap" });
-      return;
+    if (toolCallsUsed >= MAX_TOOL_CALLS && !synthesisOnly) {
+      // Cap reached — push a system instruction telling the model that
+      // tool calling is closed and it must produce its best final answer
+      // from the evidence already collected. Then re-enter the loop ONE
+      // more time to give it that synthesis turn.
+      synthesisOnly = true;
+      messages.push({
+        role: "system",
+        content: "TOOL CAP REACHED (8/8). You MUST reply with a {\"final\": {\"answer_markdown\": ...}} envelope only — no more tool_call. Synthesize the best cited answer you can from the tool results already returned. Prefix the answer with '_I reached the 8 tool-call cap; this is my best synthesis so far._' and continue with a fully-cited summary.",
+      });
     }
 
-    const isPlan = toolCallsUsed === 0;
+    const isPlan = toolCallsUsed === 0 && !synthesisOnly;
     const model = isPlan ? PLAN_MODEL : PRIMARY_MODEL;
     const res = await callModel(env, model, messages);
     tokensOut += estimateTokens(res.raw);
@@ -250,6 +263,14 @@ export async function runAgentLoop(env: Env, question: string, opts: LoopOptions
     }
 
     // --- tool call branch ---
+    // When synthesisOnly is active we refuse any further tool_call branches
+    // — re-prompt for a final envelope. This prevents the model from
+    // blowing past the 8-call cap on a non-compliant retry.
+    if (synthesisOnly && res.parsed.tool_call?.name) {
+      messages.push({ role: "assistant", content: res.raw });
+      messages.push({ role: "user", content: "Tool calls are closed. Reply with {\"final\":{\"answer_markdown\":...}} only." });
+      continue;
+    }
     if (res.parsed.tool_call?.name) {
       const name = res.parsed.tool_call.name;
       const argsRaw = res.parsed.tool_call.arguments ?? {};
@@ -258,6 +279,19 @@ export async function runAgentLoop(env: Env, question: string, opts: LoopOptions
       if (!tool) {
         messages.push({ role: "assistant", content: res.raw });
         messages.push({ role: "tool", content: JSON.stringify({ error: `unknown tool: ${name}` }) });
+        continue;
+      }
+      // Runtime schema validation — refuse to dispatch the handler when
+      // the model produced malformed arguments. Push the error back so
+      // the model can correct itself on the next turn (counts against
+      // the 8-call cap on purpose so a misbehaving model can't loop).
+      const v = validateToolArgs(tool.schema, args);
+      if (!v.ok) {
+        await opts.emit({ type: "tool_call", name, arguments: args });
+        await opts.emit({ type: "tool_result", name, row_count: 0, note: `schema_invalid: ${v.errors.join("; ")}`, took_ms: 0 });
+        toolCallsUsed += 1;
+        messages.push({ role: "assistant", content: res.raw });
+        messages.push({ role: "tool", content: JSON.stringify({ error: "schema_invalid", details: v.errors }) });
         continue;
       }
 
@@ -377,6 +411,10 @@ export async function runAgentLoop(env: Env, question: string, opts: LoopOptions
         }
       }
 
+      // Stream the synthesized answer as assistant_token events so SSE
+      // consumers can render token-by-token. We chunk on word boundaries
+      // to keep the stream lightweight (one event per ~5 words).
+      await streamAssistantTokens(annotated, opts);
       await opts.emit({ type: "final", answer_markdown: annotated, citations: reg.all(), uncited_sentences: uncited, tokens_in: tokensIn, tokens_out: tokensOut });
       await emitFollowUps(env, question, annotated, opts);
       return;
@@ -385,6 +423,22 @@ export async function runAgentLoop(env: Env, question: string, opts: LoopOptions
     // Malformed — push back and retry one more time.
     messages.push({ role: "assistant", content: res.raw });
     messages.push({ role: "user", content: "Your previous response was not valid protocol JSON. Reply with exactly one of {\"tool_call\":...} or {\"final\":...}." });
+  }
+}
+
+// Stream the assistant answer as assistant_token events so the dashboard
+// can render token-by-token. Chunked on word boundaries (~5 words/chunk)
+// to keep stream volume modest. Best-effort — failure to emit a chunk
+// does not block the final event.
+async function streamAssistantTokens(text: string, opts: LoopOptions): Promise<void> {
+  if (!text) return;
+  const words = text.split(/(\s+)/);
+  const CHUNK = 10; // ~5 words per chunk (words + separators)
+  for (let i = 0; i < words.length; i += CHUNK) {
+    const piece = words.slice(i, i + CHUNK).join("");
+    if (!piece) continue;
+    try { await opts.emit({ type: "assistant_token", text: piece }); }
+    catch { return; }
   }
 }
 

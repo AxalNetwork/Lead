@@ -297,7 +297,12 @@ agent.post("/ask", async (c) => {
             });
           } else if (ev.type === "error") {
             await persistEvent("system", { content: `error: ${ev.message}` });
+          } else if (ev.type === "follow_ups") {
+            await persistEvent("system", { content: `follow_ups`, tool_result_json: { questions: ev.questions } });
           }
+          // assistant_token + partial + final do not get per-event rows —
+          // the buffered assistant summary row written after the loop
+          // captures the full text + citations + tokens for replay.
         },
       });
     } catch (e) {

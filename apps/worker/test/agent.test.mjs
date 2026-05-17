@@ -1,13 +1,12 @@
 // Task #3 acceptance smoke tests — non-blocking initially.
 //
-// These cover the pure pieces of the conversational research agent:
-//   * CitationRegistry: marker stability + W-marker non-collision across
-//     multiple webSearch invocations in the same loop (the bug the code
-//     review caught and we fixed).
-//   * diffAnswers: produces the expected entity / news / fact / score
-//     change rows the dashboard renders above refreshed saved research.
-//   * webSearch fallback contract: web hits are labeled with [W:idx]
-//     pills so the dashboard can render them distinctly from DB pills.
+// Pure-function coverage for the conversational research agent:
+//   * CitationRegistry: stable markers + W-marker non-collision (the bug
+//     code review caught in webSearch fallback) + extractMarkers parser.
+//   * diffAnswers: added/removed entities, new news/facts, score deltas,
+//     empty diff — the contract the nightly saved-research refresh uses.
+//   * validateToolArgs: runtime schema validation refuses malformed args
+//     (required fields, type mismatch, enum violation, maximum bound).
 //
 // The full SSE / agent-loop / climate-hardware acceptance question
 // requires live D1 + Workers AI bindings and is exercised in CI's
@@ -18,6 +17,7 @@ import assert from "node:assert/strict";
 
 const { CitationRegistry } = await import("../test-dist/agent/registry.js");
 const { diffAnswers } = await import("../test-dist/agent/diff.js");
+const { validateToolArgs } = await import("../test-dist/agent/tools-validation.js");
 
 test("CitationRegistry: stable [E:id] markers across re-register", () => {
   const reg = new CitationRegistry();
@@ -32,8 +32,6 @@ test("CitationRegistry: stable [E:id] markers across re-register", () => {
 
 test("CitationRegistry: W markers never collide across rounds", () => {
   const reg = new CitationRegistry();
-  // Simulate two distinct webSearch calls in one loop, each returning
-  // 3 hits. We expect markers W:0..W:5, no duplicates.
   const round1 = [0, 1, 2].map(() => reg.registerWeb({ title: "r1" }));
   const round2 = [0, 1, 2].map(() => reg.registerWeb({ title: "r2" }));
   assert.deepEqual(round1, ["W:0", "W:1", "W:2"]);
@@ -43,8 +41,7 @@ test("CitationRegistry: W markers never collide across rounds", () => {
 
 test("CitationRegistry.extractMarkers: parses [W:0] alongside [E:id]", () => {
   const md = "Acme [E:abc] raised a round [N:n1]. See also [W:0] and [W:1].";
-  const ms = CitationRegistry.extractMarkers(md);
-  assert.deepEqual(ms, ["E:abc", "N:n1", "W:0", "W:1"]);
+  assert.deepEqual(CitationRegistry.extractMarkers(md), ["E:abc", "N:n1", "W:0", "W:1"]);
 });
 
 test("diffAnswers: detects added + removed entities and new news/facts", () => {
@@ -94,4 +91,44 @@ test("diffAnswers: empty diff when nothing changed", () => {
   const cites = [{ marker: "E:1", payload: { kind: "E", ref_id: "1", title: "Acme" } }];
   const d = diffAnswers({ citations: cites }, { citations: cites });
   assert.equal(d.total_changes, 0);
+});
+
+test("validateToolArgs: required field missing", () => {
+  const schema = { type: "object", required: ["q"], properties: { q: { type: "string" } } };
+  const r = validateToolArgs(schema, {});
+  assert.equal(r.ok, false);
+  assert.match(r.errors[0], /missing required field 'q'/);
+});
+
+test("validateToolArgs: type mismatch", () => {
+  const schema = { type: "object", properties: { limit: { type: "number" } } };
+  const r = validateToolArgs(schema, { limit: "ten" });
+  assert.equal(r.ok, false);
+  assert.match(r.errors[0], /'limit' must be number/);
+});
+
+test("validateToolArgs: enum violation rejected", () => {
+  const schema = { type: "object", properties: { sort: { type: "string", enum: ["fit", "intent"] } } };
+  const r = validateToolArgs(schema, { sort: "popularity" });
+  assert.equal(r.ok, false);
+  assert.match(r.errors[0], /must be one of: fit\|intent/);
+});
+
+test("validateToolArgs: maximum bound enforced", () => {
+  const schema = { type: "object", properties: { limit: { type: "number", maximum: 50 } } };
+  const r = validateToolArgs(schema, { limit: 9999 });
+  assert.equal(r.ok, false);
+  assert.match(r.errors[0], /'limit' must be ≤ 50/);
+});
+
+test("validateToolArgs: valid input passes", () => {
+  const schema = { type: "object", required: ["q"], properties: { q: { type: "string" }, limit: { type: "number", maximum: 50 } } };
+  const r = validateToolArgs(schema, { q: "climate hardware", limit: 20 });
+  assert.equal(r.ok, true);
+});
+
+test("validateToolArgs: rejects non-object args (defense vs scalar)", () => {
+  const schema = { type: "object", properties: { q: { type: "string" } } };
+  const r = validateToolArgs(schema, "not an object");
+  assert.equal(r.ok, false);
 });

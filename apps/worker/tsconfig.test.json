@@ -19,6 +19,7 @@
     "src/scraper/parsers/firmlists/types.ts",
     "src/types.ts",
     "src/agent/registry.ts",
-    "src/agent/diff.ts"
+    "src/agent/diff.ts",
+    "src/agent/tools-validation.ts"
   ]
 }
