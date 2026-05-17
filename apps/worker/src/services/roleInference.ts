@@ -1,5 +1,4 @@
 import type { Env } from "../types";
-import { addRole } from "../entities/roles";
 import type { EntityRole } from "../entities/model";
 
 export interface RoleInferenceContext {

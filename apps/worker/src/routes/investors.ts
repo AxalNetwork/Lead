@@ -96,8 +96,13 @@ investors.get("/", async (c) => {
   }
   const limit = Math.min(Math.floor(limRaw), 200);
   const offset = Math.floor(offRaw);
-  const where: string[] = ["l.merged_into IS NULL"];
-  const binds: unknown[] = [];
+  // Task #2: owner isolation — single-tenant in dev, but the schema
+  // already carries `owner_email` so we filter to the authenticated
+  // user (or NULL/global rows) for forward-compatibility with the
+  // multi-tenant build.
+  const ownerEmail = c.var.email;
+  const where: string[] = ["l.merged_into IS NULL", "(l.owner_email = ? OR l.owner_email IS NULL)"];
+  const binds: unknown[] = [ownerEmail];
   const kind = url.searchParams.get("kind");
   if (kind && INVESTOR_KINDS.has(kind)) { where.push("l.investor_kind = ?"); binds.push(kind); }
   const stage = url.searchParams.get("stage");
@@ -141,46 +146,31 @@ function toListItem(r: InvestorRow): Record<string, unknown> {
 
 // --------------------------------------------------------------- AGGREGATE
 investors.get("/aggregate", async (c) => {
-  const total = await c.env.DB.prepare(
-    `SELECT COUNT(DISTINCT l.id) AS n
-       FROM leads l
-       JOIN entity_legacy_map m ON m.legacy_table = 'leads' AND m.legacy_id = l.id
-       JOIN u_entities e ON e.id = m.entity_id
-       JOIN entity_roles er ON er.entity_id = e.id
-      WHERE e.kind = 'person' AND e.status = 'active' AND er.role IN ('investor','investor_firm','angel','vc','gp','lp')`,
-  ).first<{ n: number }>();
+  // Task #2: deduplicate the role-join *before* aggregating so a lead
+  // with multiple matching roles (e.g. both `investor` and `gp`) is
+  // counted once and its SUM contributions aren't multiplied.
+  const ownerEmail = c.var.email;
+  const baseCte = `
+    WITH inv_leads AS (
+      SELECT DISTINCT l.id, l.investor_kind, l.country_iso2,
+             l.investment_count, l.unicorn_count, l.exit_count
+        FROM leads l
+        JOIN entity_legacy_map m ON m.legacy_table = 'leads' AND m.legacy_id = l.id
+        JOIN u_entities e        ON e.id = m.entity_id AND e.status = 'active' AND e.kind = 'person'
+        JOIN entity_roles er     ON er.entity_id = e.id AND er.role IN ('investor','investor_firm','angel','vc','gp','lp')
+       WHERE l.merged_into IS NULL
+         AND (l.owner_email = ? OR l.owner_email IS NULL)
+    )`;
+  const total = await c.env.DB.prepare(`${baseCte} SELECT COUNT(*) AS n FROM inv_leads`).bind(ownerEmail).first<{ n: number }>();
   const byKind = await c.env.DB
-    .prepare(
-      `SELECT l.investor_kind AS k, COUNT(DISTINCT l.id) AS n
-         FROM leads l
-         JOIN entity_legacy_map m ON m.legacy_table = 'leads' AND m.legacy_id = l.id
-         JOIN u_entities e ON e.id = m.entity_id
-         JOIN entity_roles er ON er.entity_id = e.id
-        WHERE e.kind = 'person' AND e.status = 'active' AND er.role IN ('investor','investor_firm','angel','vc','gp','lp')
-        GROUP BY l.investor_kind ORDER BY n DESC`,
-    )
-    .all<{ k: string; n: number }>();
+    .prepare(`${baseCte} SELECT investor_kind AS k, COUNT(*) AS n FROM inv_leads GROUP BY investor_kind ORDER BY n DESC`)
+    .bind(ownerEmail).all<{ k: string; n: number }>();
   const byCountry = await c.env.DB
-    .prepare(
-      `SELECT l.country_iso2 AS k, COUNT(DISTINCT l.id) AS n
-         FROM leads l
-         JOIN entity_legacy_map m ON m.legacy_table = 'leads' AND m.legacy_id = l.id
-         JOIN u_entities e ON e.id = m.entity_id
-         JOIN entity_roles er ON er.entity_id = e.id
-        WHERE e.kind = 'person' AND e.status = 'active' AND er.role IN ('investor','investor_firm','angel','vc','gp','lp') AND l.country_iso2 IS NOT NULL
-        GROUP BY l.country_iso2 ORDER BY n DESC LIMIT 10`,
-    )
-    .all<{ k: string; n: number }>();
+    .prepare(`${baseCte} SELECT country_iso2 AS k, COUNT(*) AS n FROM inv_leads WHERE country_iso2 IS NOT NULL GROUP BY country_iso2 ORDER BY n DESC LIMIT 10`)
+    .bind(ownerEmail).all<{ k: string; n: number }>();
   const totals = await c.env.DB
-    .prepare(
-      `SELECT COALESCE(SUM(l.investment_count),0) AS investments, COALESCE(SUM(l.unicorn_count),0) AS unicorns, COALESCE(SUM(l.exit_count),0) AS exits
-         FROM leads l
-         JOIN entity_legacy_map m ON m.legacy_table = 'leads' AND m.legacy_id = l.id
-         JOIN u_entities e ON e.id = m.entity_id
-         JOIN entity_roles er ON er.entity_id = e.id
-        WHERE e.kind = 'person' AND e.status = 'active' AND er.role IN ('investor','investor_firm','angel','vc','gp','lp')`,
-    )
-    .first<{ investments: number; unicorns: number; exits: number }>();
+    .prepare(`${baseCte} SELECT COALESCE(SUM(investment_count),0) AS investments, COALESCE(SUM(unicorn_count),0) AS unicorns, COALESCE(SUM(exit_count),0) AS exits FROM inv_leads`)
+    .bind(ownerEmail).first<{ investments: number; unicorns: number; exits: number }>();
   return c.json({ total: total?.n ?? 0, by_kind: byKind.results ?? [], by_country: byCountry.results ?? [], totals: totals ?? { investments: 0, unicorns: 0, exits: 0 } });
 });
 
