@@ -206,6 +206,13 @@ watchlists.delete("/watch/:entityId", async (c) => {
   const r = await c.env.DB.prepare(
     `DELETE FROM watchlist_members WHERE watchlist_id = ? AND entity_id = ?`,
   ).bind(def.id, entityId).run();
+  if ((r.meta.changes ?? 0) > 0) {
+    const now = new Date().toISOString();
+    await c.env.DB.prepare(
+      `UPDATE watchlists SET member_count = (SELECT COUNT(*) FROM watchlist_members WHERE watchlist_id = ?),
+         last_changed_at = ?, updated_at = ? WHERE id = ?`,
+    ).bind(def.id, now, now, def.id).run();
+  }
   return c.json({ ok: true, removed: r.meta.changes ?? 0 });
 });
 

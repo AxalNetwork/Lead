@@ -53,13 +53,12 @@ export async function monitorEntity(env: Env, entityId: string): Promise<Monitor
     `SELECT last_evaluated_at FROM entity_monitor_state WHERE entity_id = ?`,
   ).bind(entityId).first<{ last_evaluated_at: string | null }>();
   const sinceWatermark = prior?.last_evaluated_at ?? null;
+  const tickStartedAt = new Date().toISOString();
 
-  // Stamp evaluation timestamp regardless of outcome (idempotency anchor).
-  await env.DB.prepare(
-    `INSERT INTO entity_monitor_state (entity_id, last_evaluated_at, last_hash)
-       VALUES (?, ?, ?)
-       ON CONFLICT(entity_id) DO UPDATE SET last_evaluated_at=excluded.last_evaluated_at, last_hash=excluded.last_hash`,
-  ).bind(entityId, new Date().toISOString(), newHash).run();
+  // Watermark is stamped AFTER evaluation/dispatch completes (see end of
+  // function). Stamping pre-evaluation would skip source-driven events on
+  // partial failures, since the next tick would advance `sinceWatermark`
+  // past the un-dispatched window.
 
   const fingerprintChanged = !last || last.hash !== newHash;
   const schemaBumped = !!last && last.schema_version !== newSummary.schema_version;
@@ -69,6 +68,7 @@ export async function monitorEntity(env: Env, entityId: string): Promise<Monitor
     await persistSnapshot(env, entityId, newSummary, newHash);
     result.schemaBaselined = true;
     result.changed = true;
+    await stampWatermark(env, entityId, tickStartedAt, newHash);
     return result;
   }
 
@@ -118,7 +118,19 @@ export async function monitorEntity(env: Env, entityId: string): Promise<Monitor
     if (dispatched === "suppressed") result.suppressed++;
     else if (dispatched === "delivered") result.delivered++;
   }
+  // Two-phase watermark: only advance once evaluation+dispatch completes.
+  // We anchor at tickStartedAt (not "now") so any source-table rows
+  // inserted DURING this tick are still picked up by the next one.
+  await stampWatermark(env, entityId, tickStartedAt, newHash);
   return result;
+}
+
+async function stampWatermark(env: Env, entityId: string, ts: string, hash: string): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO entity_monitor_state (entity_id, last_evaluated_at, last_hash)
+       VALUES (?, ?, ?)
+       ON CONFLICT(entity_id) DO UPDATE SET last_evaluated_at=excluded.last_evaluated_at, last_hash=excluded.last_hash`,
+  ).bind(entityId, ts, hash).run();
 }
 
 export type DispatchOutcome = "delivered" | "suppressed" | "pending" | "failed" | "digested";
