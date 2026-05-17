@@ -190,12 +190,27 @@ async function runAiJson<T>(
           setTimeout(() => reject(new Error("ai_timeout")), AI_TIMEOUT_MS),
         ),
       ]);
+      let parsed: unknown = null;
       if (typeof res?.response === "string") {
-        try { return JSON.parse(res.response) as T; } catch { return null; }
+        try { parsed = JSON.parse(res.response); } catch { return null; }
+      } else if (res && typeof res === "object") {
+        // Some bindings return the parsed object directly. Strip the
+        // transport-level fields that aren't part of the schema.
+        const { response: _r, usage: _u, ...rest } = res as Record<string, unknown>;
+        parsed = rest;
       }
-      // Some bindings return the parsed object directly.
-      if (res && typeof res === "object") return res as T;
-      return null;
+      if (!parsed || typeof parsed !== "object") return null;
+      // Schema validation: the Workers AI json_schema mode is
+      // best-effort, so we double-check that every `required` key from
+      // the supplied schema is actually present. Anything that fails
+      // returns null so the caller retries (then persists a
+      // confidence=0 audit fact on the second miss).
+      const schemaObj = schema as { required?: string[]; properties?: Record<string, unknown> } | undefined;
+      const required = Array.isArray(schemaObj?.required) ? schemaObj!.required! : [];
+      for (const k of required) {
+        if (!(k in (parsed as Record<string, unknown>))) return null;
+      }
+      return parsed as T;
     } catch (e) {
       console.warn("profileFiller runAiJson failed", (e as Error).message);
       return null;
@@ -648,6 +663,34 @@ export async function corroborateClaims(
       value_json: out.contradicted,
       source_kind: "ai", source: PROFILE_FILLER_VERSION, evidence_url: evidenceUrl, confidence: 0.5,
     });
+    // Spec: "If contradicted, lower confidence on the affected fact."
+    // Claim keys map 1:1 onto the predicates we write in Step E, so we
+    // can directly down-rank the live (is_current=1) fact for each
+    // contradicted predicate that this filler authored. We floor at
+    // 0.2 — the fact stays visible but search-derived contradiction
+    // de-prioritizes it against any future higher-confidence source.
+    const CLAIM_TO_PREDICATE: Record<string, string> = {
+      thesis: "thesis",
+      headquarters_city: "headquarters_city",
+      founded_year: "founded_year",
+      geo_focus: "geo_focus",
+    };
+    for (const claimKey of out.contradicted) {
+      const predicate = CLAIM_TO_PREDICATE[claimKey];
+      if (!predicate) continue;
+      try {
+        await env.DB.prepare(
+          `UPDATE facts
+             SET confidence = MIN(confidence, 0.2)
+           WHERE entity_id = ?
+             AND predicate = ?
+             AND is_current = 1
+             AND source = ?`,
+        ).bind(entityId, predicate, PROFILE_FILLER_VERSION).run();
+      } catch (e) {
+        console.warn("corroborateClaims confidence downrank failed", predicate, (e as Error).message);
+      }
+    }
   }
   return results.length;
 }
