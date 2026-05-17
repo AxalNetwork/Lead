@@ -4,8 +4,9 @@ export type EntityKind = "person" | "org";
 export type EntityStatus = "active" | "merged" | "soft_deleted" | "dnc";
 
 export type EntityRole =
-  | "investor" | "founder" | "operator" | "executive" | "board_member"
-  | "advisor" | "employee" | "customer" | "prospect" | "buyer"
+  | "investor" | "investor_firm" | "angel" | "vc" | "gp" | "lp"
+  | "founder" | "operator" | "executive" | "board_member"
+  | "advisor" | "employee" | "customer" | "prospect" | "buyer" | "lead"
   | "partner" | "firm" | "fund" | "accelerator" | "company"
   | "account" | "school";
 

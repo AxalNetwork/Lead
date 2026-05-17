@@ -128,6 +128,29 @@ export async function upsertFirm(
   } catch (e) {
     console.warn("dualwrite syncFirmToEntity failed", result.firmId, (e as Error).message);
   }
+
+  // Task #2 (Investors): infer roles on the unified firm entity so the
+  // Investors page (which now reads via entity_roles) sees freshly
+  // upserted firms. Best-effort — never block the importer.
+  try {
+    const { getLegacyEntityId: _getLegacy } = await import("../entities/roles");
+    const { inferAndAssignRoles: _infer } = await import("../services/roleInference");
+    const entityId = await _getLegacy(env, "firms", result.firmId);
+    if (entityId) {
+      await _infer(env, entityId, {
+        kind: "org",
+        sourceKind: importCtx?.sourceKind ?? "scrape",
+        sourceUrl: candidate.source_url ?? null,
+        sourceDomain: result.domain ?? null,
+        org: candidate.name,
+        category: candidate.kind ?? null,
+        importLabel: importCtx?.source ?? importedFrom,
+      });
+    }
+  } catch (e) {
+    console.warn("inferAndAssignRoles(upsertFirm) failed", result.firmId, (e as Error).message);
+  }
+
   return result;
 }
 

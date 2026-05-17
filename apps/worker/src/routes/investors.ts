@@ -83,7 +83,7 @@ function investorSql(kindFilter: string | null): { sql: string; binds: unknown[]
   const where = ["e.kind = 'person'", "e.status = 'active'", "er.role IN (?,?,?,?,?,?)"];
   const binds: unknown[] = [...INVESTOR_ROLES];
   if (kindFilter && INVESTOR_KINDS.has(kindFilter)) {
-    where.push("EXISTS (SELECT 1 FROM leads l WHERE l.id = e.ref_id AND l.investor_kind = ?)");
+    where.push("EXISTS (SELECT 1 FROM leads l2 WHERE l2.id = m.legacy_id AND l2.investor_kind = ?)");
     binds.push(kindFilter);
   }
   return {
@@ -180,7 +180,7 @@ investors.get("/aggregate", async (c) => {
 });
 
 // ----------------------------------------------------------------- PROFILE
-investors.get(":id/profile", async (c) => {
+investors.get("/:id/profile", async (c) => {
   const id = c.req.param("id");
   const cacheKey = `profile:investor:${id}`;
   const cached = await c.env.SCRAPE_CACHE.get(cacheKey, "json");

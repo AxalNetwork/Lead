@@ -1,5 +1,6 @@
 import type { Env } from "../types";
 import { addRole } from "../entities/roles";
+import type { EntityRole } from "../entities/model";
 
 export interface RoleInferenceContext {
   sourceKind?: "scrape" | "import" | "manual" | "enrichment" | "ai" | "inferred";
@@ -32,7 +33,7 @@ function hasAny(text: string, needles: string[]): boolean {
 }
 
 export async function inferAndAssignRoles(env: Env, entityId: string, ctx: RoleInferenceContext): Promise<void> {
-  const roles: Array<{ role: string; confidence: number }> = [];
+  const roles: Array<{ role: EntityRole; confidence: number }> = [];
   const text = [ctx.title, ctx.org, ctx.category, ctx.importLabel].map(normalize).join(" ");
   const domain = domainOf(ctx.sourceDomain ?? ctx.sourceUrl ?? null);
   const sourceKind = ctx.sourceKind ?? "inferred";
@@ -72,7 +73,7 @@ export async function inferAndAssignRoles(env: Env, entityId: string, ctx: RoleI
   for (const role of roles) {
     if (seen.has(role.role)) continue;
     seen.add(role.role);
-    await addRole(env, entityId, role.role as never, {
+    await addRole(env, entityId, role.role, {
       confidence: role.confidence,
       source: `role_inference:v1:${sourceKind}`,
       is_primary: role.role === "lead" || role.role === "investor_firm" || role.role === "investor",
