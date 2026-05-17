@@ -57,6 +57,11 @@ AGG_WIKIPEDIA_INFOBOX_CAP = "300"
 # Task #3: profile classifier ideology axes. Set to "off" to disable the
 # political-ideology axes entirely (the five axes stay NULL on every row).
 CLASSIFIER_IDEOLOGY = "on"
+
+# Task #3 (research agent): per-owner daily token budget. Sized to keep
+# every operator inside the AI_DAILY_NEURONS_CAP shared ceiling.
+AGENT_DAILY_TOKEN_BUDGET = "200000"
+AGENT_FALLBACK_PROVIDER = "openai"
 # Set to "true" to enable the Canadian Open Parliament adapter (no key).
 OPENPARLIAMENT_ENABLED = "true"
 
@@ -245,6 +250,12 @@ binding = "WF_REFRESH_GOVERNMENT"
 name = "refresh-government"
 class_name = "RefreshGovernmentWorkflow"
 
+# Task #3: nightly refresh of saved research entries.
+[[workflows]]
+binding = "WF_REFRESH_SAVED_RESEARCH"
+name = "refresh-saved-research"
+class_name = "RefreshSavedResearchWorkflow"
+
 # Task #2: link discovery — seed fan-out + frontier crawler.
 [[workflows]]
 binding = "WF_DISCOVER_FROM_SEED"
@@ -278,5 +289,7 @@ custom_domain = true
 #       → relationship derivation → project match refresh.
 #   `0 4 * * *`     daily — Task #3 DD watchlist refresh + batch scan
 #       (refreshes OpenSanctions/OFAC/EU/UN/UK_HMT snapshots into R2 then
-#       scans the next N due entities oldest-first). 1 slot remaining.
-crons = ["0 * * * *", "0 */6 * * *", "15 3 * * *", "0 4 * * *"]
+#       scans the next N due entities oldest-first).
+#   `30 4 * * *`    daily — Task #3 (research agent) nightly saved-research
+#       refresh: re-runs every saved question and diffs the new answer.
+crons = ["0 * * * *", "0 */6 * * *", "15 3 * * *", "0 4 * * *", "30 4 * * *"]

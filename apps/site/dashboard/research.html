@@ -1,0 +1,424 @@
+---
+layout: default
+title: Research Agent
+permalink: /dashboard/research/
+---
+
+<h1 class="ads-page-title">Research</h1>
+<p class="ads-page-sub">Ask anything about your lead-intel graph in plain English. The agent calls 18 typed tools, cites every claim, and falls back to the web when the database can't help.</p>
+
+<div class="ads-research" id="ads-research">
+  <!-- ── Left rail: sessions + saved ────────────────────────────────────── -->
+  <aside class="ads-research__rail">
+    <div class="ads-research__rail-section">
+      <div class="ads-research__rail-head">
+        <strong>Sessions</strong>
+        <button type="button" class="ads-btn ads-btn--ghost" id="ads-research-new">+ New</button>
+      </div>
+      <ul class="ads-research__list" id="ads-research-sessions"></ul>
+    </div>
+    <div class="ads-research__rail-section">
+      <div class="ads-research__rail-head"><strong>Saved research</strong></div>
+      <ul class="ads-research__list" id="ads-research-saved"></ul>
+    </div>
+    <div class="ads-research__rail-section ads-research__budget" id="ads-research-budget">
+      <div class="ads-muted" style="font-size:11px">Daily token budget</div>
+      <div id="ads-research-budget-bar" class="ads-research__bar"><span></span></div>
+      <div id="ads-research-budget-text" class="ads-muted" style="font-size:11px"></div>
+    </div>
+  </aside>
+
+  <!-- ── Center: conversation ───────────────────────────────────────────── -->
+  <section class="ads-research__main">
+    <div class="ads-research__starters" id="ads-research-starters">
+      <strong>Try a starter question</strong>
+      <div class="ads-research__starter-grid">
+        <button type="button" data-q="Who are the top 10 climate investors in Europe writing $1–5M Series A checks?">Top 10 climate investors in Europe, $1–5M Series A</button>
+        <button type="button" data-q="What changed at Sequoia Capital this week — any new partners, exits, or controversies?">What changed at Sequoia this week?</button>
+        <button type="button" data-q="Compare Tiger Global and Insight Partners head-to-head on sector mix and check size.">Compare Tiger Global vs. Insight Partners</button>
+        <button type="button" data-q="Find me an introduction path from anyone in my network to Brian Singerman at Founders Fund.">Intro path to Brian Singerman</button>
+        <button type="button" data-q="Which B2B SaaS founders raised seed rounds in the last 90 days and now look ready for Series A?">Seed-to-A ready B2B SaaS founders (last 90d)</button>
+        <button type="button" data-q="Summarize the persona match for our 'climate-tech-vp-eng' persona — top 12 buyers with reasons.">Top 12 buyers matching climate-tech-vp-eng</button>
+      </div>
+    </div>
+
+    <ol class="ads-research__messages" id="ads-research-messages"></ol>
+
+    <form class="ads-research__compose" id="ads-research-compose" autocomplete="off">
+      <textarea id="ads-research-input" rows="2" placeholder="Ask anything — e.g. 'Show me investors who led Series A in fintech in 2025'…"></textarea>
+      <div class="ads-research__compose-actions">
+        <span class="ads-muted" id="ads-research-status" style="font-size:11px"></span>
+        <button type="button" id="ads-research-stop" class="ads-btn ads-btn--ghost" style="display:none">Stop</button>
+        <button type="submit" class="ads-btn">Ask</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- ── Right rail: agent steps + citations ────────────────────────────── -->
+  <aside class="ads-research__panel">
+    <div class="ads-research__panel-section">
+      <div class="ads-research__panel-head"><strong>Agent steps</strong> <span class="ads-muted" id="ads-research-step-count" style="font-size:11px">0 / 8</span></div>
+      <ol class="ads-research__steps" id="ads-research-steps"></ol>
+    </div>
+    <div class="ads-research__panel-section">
+      <div class="ads-research__panel-head"><strong>Citations</strong> <span class="ads-muted" id="ads-research-cite-count" style="font-size:11px">0</span></div>
+      <ul class="ads-research__cites" id="ads-research-cites"></ul>
+    </div>
+  </aside>
+</div>
+
+<style>
+.ads-research { display: grid; grid-template-columns: 240px 1fr 320px; gap: 14px; min-height: calc(100vh - 200px); }
+.ads-research__rail, .ads-research__panel { background: #fafbfc; border: 1px solid #e2e4e8; border-radius: 6px; padding: 12px; overflow-y: auto; max-height: calc(100vh - 200px); }
+.ads-research__main { display: flex; flex-direction: column; gap: 12px; background: #fff; border: 1px solid #e2e4e8; border-radius: 6px; padding: 14px; }
+.ads-research__rail-section, .ads-research__panel-section { margin-bottom: 16px; }
+.ads-research__rail-head, .ads-research__panel-head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; margin-bottom: 6px; }
+.ads-research__list { list-style: none; padding: 0; margin: 0; font-size: 12px; }
+.ads-research__list li { padding: 6px 8px; border-radius: 4px; cursor: pointer; margin-bottom: 2px; }
+.ads-research__list li:hover { background: #eef1f5; }
+.ads-research__list li.active { background: #dde6f3; }
+.ads-research__list li .meta { display: block; font-size: 10px; color: #888; margin-top: 2px; }
+.ads-research__list li .diff-badge { display: inline-block; background: #ffe9a8; color: #6a4a00; padding: 1px 5px; border-radius: 3px; font-size: 10px; margin-left: 4px; }
+.ads-research__bar { display: block; height: 6px; background: #e2e4e8; border-radius: 3px; margin: 6px 0; overflow: hidden; }
+.ads-research__bar > span { display: block; height: 100%; background: linear-gradient(90deg,#3a7afe,#1a3a6b); width: 0%; transition: width .25s; }
+.ads-research__bar.over > span { background: #c84030; }
+.ads-research__starters { background: #f5f7fb; border: 1px dashed #c5cdd9; border-radius: 6px; padding: 12px; }
+.ads-research__starter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+.ads-research__starter-grid button { background: #fff; border: 1px solid #d3d7df; border-radius: 4px; padding: 8px 10px; font-size: 12px; text-align: left; cursor: pointer; }
+.ads-research__starter-grid button:hover { border-color: #3a7afe; background: #eff4ff; }
+.ads-research__messages { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; max-height: calc(100vh - 380px); overflow-y: auto; }
+.ads-research__messages li { padding: 10px 12px; border-radius: 6px; font-size: 13px; line-height: 1.5; }
+.ads-research__messages li.role-user { background: #eef4ff; align-self: flex-end; max-width: 90%; }
+.ads-research__messages li.role-assistant { background: #fafbfc; border: 1px solid #e2e4e8; }
+.ads-research__messages li.role-assistant .ads-research__answer-actions { margin-top: 8px; font-size: 11px; display: flex; gap: 6px; align-items: center; }
+.ads-research__messages li .diff-banner { background: #fff7d6; border: 1px solid #f0d878; padding: 6px 8px; border-radius: 4px; font-size: 11px; margin-bottom: 6px; }
+.ads-research__messages .pill { display: inline-block; background: #1a3a6b; color: #fff; padding: 1px 5px; border-radius: 3px; font-size: 10px; margin: 0 1px; cursor: pointer; }
+.ads-research__messages .pill.kind-W { background: #c8741a; }
+.ads-research__messages .pill.kind-N { background: #2a7a4a; }
+.ads-research__messages .pill.kind-F { background: #4a4a8a; }
+.ads-research__messages .pill.kind-T { background: #8a4a8a; }
+.ads-research__messages .pill.kind-R { background: #6a3a3a; }
+.ads-research__messages .pill.kind-M { background: #5a5a5a; }
+.ads-research__compose { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid #e2e4e8; padding-top: 10px; }
+.ads-research__compose textarea { width: 100%; padding: 8px; border: 1px solid #d3d7df; border-radius: 4px; font: inherit; resize: vertical; }
+.ads-research__compose-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; }
+.ads-research__steps { list-style: none; padding: 0; margin: 0; font-size: 11px; }
+.ads-research__steps li { padding: 4px 6px; border-left: 3px solid #3a7afe; margin-bottom: 4px; background: #fff; }
+.ads-research__steps li.kind-result { border-color: #2a7a4a; color: #444; }
+.ads-research__steps li.kind-cached { border-color: #aaa; }
+.ads-research__steps li.kind-error { border-color: #c84030; color: #8a2010; }
+.ads-research__cites { list-style: none; padding: 0; margin: 0; font-size: 11px; }
+.ads-research__cites li { padding: 6px; border-bottom: 1px solid #e2e4e8; }
+.ads-research__cites li a { color: #3a7afe; text-decoration: none; }
+.ads-research__follow-ups { margin-top: 8px; }
+.ads-research__follow-ups button { background: #fff; border: 1px solid #d3d7df; border-radius: 3px; padding: 4px 8px; font-size: 11px; margin: 2px; cursor: pointer; }
+.ads-research__follow-ups button:hover { background: #eef4ff; border-color: #3a7afe; }
+@media (max-width: 1100px) { .ads-research { grid-template-columns: 1fr; } .ads-research__rail, .ads-research__panel { max-height: 360px; } }
+</style>
+
+<script>
+(function () {
+  const API = (window.ADS_API_BASE || "https://api.aidatasignal.com");
+  const $ = (id) => document.getElementById(id);
+
+  const state = {
+    sessionId: null,
+    currentEvents: [],
+    citations: new Map(),       // marker -> payload
+    toolCalls: 0,
+    streaming: null,            // AbortController for the in-flight ask
+  };
+
+  const escapeHtml = (s) => String(s || "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+
+  const renderPills = (md) => {
+    // Replace [K:id] markers with clickable pills. Unknown markers render
+    // as plain text (the loop already stripped orphans, this is defensive).
+    return escapeHtml(md).replace(/\[([EFNTRMW]):([^\]]+)\]/g, (_full, kind, id) => {
+      const marker = `${kind}:${id}`;
+      const p = state.citations.get(marker);
+      const label = p ? `${kind}:${id}` : `${kind}:${id}`;
+      const title = p ? `${p.title}${p.snippet ? ' — ' + p.snippet : ''}` : 'citation';
+      return `<span class="pill kind-${kind}" data-marker="${escapeHtml(marker)}" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
+    }).replace(/\n/g, "<br>");
+  };
+
+  // ---------- API helpers --------------------------------------------------
+  const apiFetch = async (path, opts = {}) => {
+    const r = await fetch(`${API}/api/agent${path}`, {
+      credentials: "include",
+      ...opts,
+      headers: { "content-type": "application/json", ...(opts.headers || {}) },
+    });
+    if (!r.ok) throw new Error(`${path} ${r.status}`);
+    return r.json();
+  };
+
+  // ---------- sessions list ------------------------------------------------
+  const loadSessions = async () => {
+    try {
+      const { items } = await apiFetch("/sessions");
+      const ul = $("ads-research-sessions");
+      ul.innerHTML = items.map((s) => `<li data-id="${s.id}" class="${s.id === state.sessionId ? 'active' : ''}">${escapeHtml(s.title || 'Untitled')}<span class="meta">${s.message_count || 0} messages · ${new Date(s.last_message_at + 'Z').toLocaleString()}</span></li>`).join("") || `<li class="ads-muted">No sessions yet.</li>`;
+      ul.querySelectorAll("li[data-id]").forEach((li) => li.addEventListener("click", () => openSession(li.dataset.id)));
+    } catch (e) { console.warn("loadSessions", e); }
+  };
+
+  // ---------- saved list ---------------------------------------------------
+  const loadSaved = async () => {
+    try {
+      const { items } = await apiFetch("/saved");
+      const ul = $("ads-research-saved");
+      ul.innerHTML = items.map((s) => `<li data-id="${s.id}">${escapeHtml(s.title || s.question)}${s.has_diff ? '<span class="diff-badge">changes</span>' : ''}<span class="meta">${s.last_refreshed_at ? 'refreshed ' + new Date(s.last_refreshed_at + 'Z').toLocaleDateString() : 'saved ' + new Date(s.created_at + 'Z').toLocaleDateString()}</span></li>`).join("") || `<li class="ads-muted">No saved research yet — click "Save" on any answer.</li>`;
+      ul.querySelectorAll("li[data-id]").forEach((li) => li.addEventListener("click", () => openSaved(li.dataset.id)));
+    } catch (e) { console.warn("loadSaved", e); }
+  };
+
+  // ---------- budget -------------------------------------------------------
+  const loadBudget = async () => {
+    try {
+      const b = await apiFetch("/budget");
+      const bar = $("ads-research-budget-bar");
+      const pct = Math.min(100, Math.round((b.used / b.cap) * 100));
+      bar.querySelector("span").style.width = pct + "%";
+      bar.classList.toggle("over", b.exceeded);
+      $("ads-research-budget-text").textContent = `${b.used.toLocaleString()} / ${b.cap.toLocaleString()} tokens (${pct}%)`;
+    } catch (e) { /* ignore */ }
+  };
+
+  // ---------- session open -------------------------------------------------
+  const openSession = async (id) => {
+    state.sessionId = id;
+    state.citations.clear();
+    state.currentEvents = [];
+    $("ads-research-messages").innerHTML = "";
+    $("ads-research-starters").style.display = "none";
+    $("ads-research-steps").innerHTML = "";
+    $("ads-research-cites").innerHTML = "";
+    $("ads-research-step-count").textContent = "0 / 8";
+    $("ads-research-cite-count").textContent = "0";
+    try {
+      const { messages } = await apiFetch(`/sessions/${id}`);
+      for (const m of messages) {
+        if (m.role === "user") {
+          appendMessage("user", m.content, null);
+        } else if (m.role === "assistant") {
+          const cites = JSON.parse(m.citations_json || "[]");
+          for (const c of cites) state.citations.set(c.marker, c.payload);
+          appendMessage("assistant", m.content, cites);
+        }
+      }
+      loadSessions();
+    } catch (e) { console.warn("openSession", e); }
+  };
+
+  // ---------- saved open ---------------------------------------------------
+  const openSaved = async (id) => {
+    try {
+      const r = await apiFetch(`/saved/${id}`);
+      state.sessionId = null;
+      state.citations.clear();
+      $("ads-research-messages").innerHTML = "";
+      $("ads-research-starters").style.display = "none";
+      const cites = JSON.parse(r.citations_json || "[]");
+      for (const c of cites) state.citations.set(c.marker, c.payload);
+      appendMessage("user", r.question, null);
+      const diff = r.diff_json ? JSON.parse(r.diff_json) : null;
+      appendMessage("assistant", r.answer_markdown, cites, { diff, savedId: id });
+    } catch (e) { console.warn("openSaved", e); }
+  };
+
+  // ---------- render messages ---------------------------------------------
+  const appendMessage = (role, content, citations, opts = {}) => {
+    const ol = $("ads-research-messages");
+    const li = document.createElement("li");
+    li.className = "role-" + role;
+    let html = "";
+    if (role === "assistant" && opts.diff && opts.diff.total_changes) {
+      const d = opts.diff;
+      const parts = [];
+      if (d.added_entities.length) parts.push(`${d.added_entities.length} new entities`);
+      if (d.removed_entities.length) parts.push(`${d.removed_entities.length} dropped`);
+      if (d.new_news.length) parts.push(`${d.new_news.length} new news items`);
+      if (d.new_facts.length) parts.push(`${d.new_facts.length} new facts`);
+      if (d.score_deltas.length) parts.push(`${d.score_deltas.length} score changes`);
+      html += `<div class="diff-banner">📊 Since you last asked: ${parts.join(", ")}.</div>`;
+    }
+    html += `<div class="ads-research__answer">${renderPills(content)}</div>`;
+    if (role === "assistant") {
+      html += `<div class="ads-research__answer-actions">`
+        + `<button type="button" data-action="save">⭐ Save</button>`
+        + (opts.savedId ? `<button type="button" data-action="refresh" data-id="${opts.savedId}">↻ Refresh now</button>` : "")
+        + `</div>`;
+      html += `<div class="ads-research__follow-ups" data-follow-ups></div>`;
+    }
+    li.innerHTML = html;
+    if (role === "assistant") {
+      li.querySelector('[data-action="save"]')?.addEventListener("click", () => saveAnswer(li, content, citations));
+      li.querySelector('[data-action="refresh"]')?.addEventListener("click", (e) => refreshSaved(e.target.dataset.id));
+    }
+    ol.appendChild(li);
+    ol.scrollTop = ol.scrollHeight;
+    return li;
+  };
+
+  const saveAnswer = async (li, answer, citations) => {
+    // Need the question — find the previous user message in the DOM.
+    const prev = li.previousElementSibling;
+    const q = prev?.classList?.contains("role-user") ? prev.textContent : "Saved research";
+    try {
+      await apiFetch("/saved", { method: "POST", body: JSON.stringify({ question: q, answer_markdown: answer, citations, session_id: state.sessionId }) });
+      loadSaved();
+      li.querySelector('[data-action="save"]').textContent = "✓ Saved";
+    } catch (e) { alert("Save failed: " + e.message); }
+  };
+
+  const refreshSaved = async (id) => {
+    try {
+      await apiFetch(`/saved/${id}/refresh`, { method: "POST" });
+      openSaved(id);
+      loadSaved();
+    } catch (e) { alert("Refresh failed: " + e.message); }
+  };
+
+  // ---------- agent steps panel -------------------------------------------
+  const appendStep = (kind, text) => {
+    const ol = $("ads-research-steps");
+    const li = document.createElement("li");
+    li.className = "kind-" + kind;
+    li.innerHTML = text;
+    ol.appendChild(li);
+    ol.scrollTop = ol.scrollHeight;
+  };
+  const appendCitation = (marker, payload) => {
+    if (state.citations.has(marker)) return;
+    state.citations.set(marker, payload);
+    const ul = $("ads-research-cites");
+    const li = document.createElement("li");
+    const url = payload.url ? `<a href="${escapeHtml(payload.url)}" target="_blank" rel="noopener">↗</a>` : "";
+    li.innerHTML = `<strong>[${escapeHtml(marker)}]</strong> ${escapeHtml(payload.title)} ${url}<br><span class="ads-muted" style="font-size:10px">${escapeHtml(payload.snippet || "")}</span>`;
+    ul.appendChild(li);
+    $("ads-research-cite-count").textContent = state.citations.size;
+  };
+
+  // ---------- SSE ask ------------------------------------------------------
+  const ask = async (question) => {
+    appendMessage("user", question, null);
+    $("ads-research-starters").style.display = "none";
+    $("ads-research-steps").innerHTML = "";
+    $("ads-research-cites").innerHTML = "";
+    state.citations.clear();
+    state.toolCalls = 0;
+    $("ads-research-cite-count").textContent = "0";
+    $("ads-research-step-count").textContent = "0 / 8";
+    $("ads-research-status").textContent = "thinking…";
+    $("ads-research-stop").style.display = "";
+
+    const placeholder = appendMessage("assistant", "_…thinking…_", []);
+    const ctrl = new AbortController();
+    state.streaming = ctrl;
+    try {
+      const res = await fetch(`${API}/api/agent/ask`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify({ question, session_id: state.sessionId }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        // Parse SSE — events are separated by blank lines.
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) !== -1) {
+          const chunk = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          let event = "message", data = "";
+          for (const line of chunk.split("\n")) {
+            if (line.startsWith("event:")) event = line.slice(6).trim();
+            else if (line.startsWith("data:")) data += line.slice(5).trim();
+          }
+          try { handleEvent(event, JSON.parse(data), placeholder); }
+          catch (e) { console.warn("SSE parse", e, data); }
+        }
+      }
+    } catch (e) {
+      if (e.name !== "AbortError") {
+        placeholder.querySelector(".ads-research__answer").innerHTML = `<em>Error: ${escapeHtml(e.message)}</em>`;
+      }
+    } finally {
+      $("ads-research-status").textContent = "";
+      $("ads-research-stop").style.display = "none";
+      state.streaming = null;
+      loadBudget();
+      loadSessions();
+    }
+  };
+
+  const handleEvent = (event, data, placeholder) => {
+    if (event === "session")          { state.sessionId = data.session_id; }
+    else if (event === "budget")      { /* already loaded */ }
+    else if (event === "tool_call")   {
+      state.toolCalls++;
+      $("ads-research-step-count").textContent = `${state.toolCalls} / 8`;
+      const cached = data.cached ? " (cached)" : "";
+      appendStep(data.cached ? "cached" : "call", `→ <strong>${escapeHtml(data.name)}</strong>${cached}<br><code style="font-size:10px">${escapeHtml(JSON.stringify(data.arguments || {}).slice(0, 140))}</code>`);
+    } else if (event === "tool_result") {
+      appendStep("result", `← <strong>${escapeHtml(data.name)}</strong> · ${data.row_count} rows · ${data.took_ms}ms${data.note ? '<br><em>' + escapeHtml(data.note) + '</em>' : ''}`);
+    } else if (event === "citation_registered") {
+      appendCitation(data.marker, data.payload);
+    } else if (event === "final" || event === "partial") {
+      placeholder.querySelector(".ads-research__answer").innerHTML = renderPills(data.answer_markdown);
+      if (event === "partial") {
+        placeholder.querySelector(".ads-research__answer").insertAdjacentHTML("afterbegin", `<div class="diff-banner">⏱ ${escapeHtml(data.reason === 'deadline' ? '30-second deadline reached.' : '8-tool-call cap reached.')}</div>`);
+      }
+    } else if (event === "follow_ups") {
+      const wrap = placeholder.querySelector("[data-follow-ups]");
+      if (wrap) {
+        wrap.innerHTML = "<div class='ads-muted' style='font-size:11px;margin-bottom:4px'>You might also ask:</div>" + data.questions.map((q) => `<button type="button">${escapeHtml(q)}</button>`).join("");
+        wrap.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => { $("ads-research-input").value = b.textContent; }));
+      }
+    } else if (event === "error") {
+      appendStep("error", `error: ${escapeHtml(data.message || "unknown")}`);
+    } else if (event === "budget_exceeded") {
+      placeholder.querySelector(".ads-research__answer").innerHTML = `<div class="diff-banner">Daily token budget exceeded (${data.used.toLocaleString()} / ${data.cap.toLocaleString()}).</div>`;
+    }
+  };
+
+  // ---------- wire-up ------------------------------------------------------
+  document.querySelectorAll("#ads-research-starters [data-q]").forEach((b) =>
+    b.addEventListener("click", () => { $("ads-research-input").value = b.dataset.q; $("ads-research-compose").requestSubmit(); }));
+  $("ads-research-compose").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const q = $("ads-research-input").value.trim();
+    if (!q) return;
+    $("ads-research-input").value = "";
+    ask(q);
+  });
+  $("ads-research-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) $("ads-research-compose").requestSubmit();
+  });
+  $("ads-research-stop").addEventListener("click", () => state.streaming?.abort());
+  $("ads-research-new").addEventListener("click", () => {
+    state.sessionId = null;
+    state.citations.clear();
+    $("ads-research-messages").innerHTML = "";
+    $("ads-research-starters").style.display = "";
+    $("ads-research-steps").innerHTML = "";
+    $("ads-research-cites").innerHTML = "";
+    $("ads-research-step-count").textContent = "0 / 8";
+    $("ads-research-cite-count").textContent = "0";
+    loadSessions();
+  });
+
+  loadSessions(); loadSaved(); loadBudget();
+  setInterval(loadBudget, 30_000);
+})();
+</script>

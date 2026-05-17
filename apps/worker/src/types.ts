@@ -133,6 +133,16 @@ export interface Env {
   WF_CRAWL_FRONTIER?:     { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   // Set to "off" to disable ideology axes entirely (axes stay NULL).
   CLASSIFIER_IDEOLOGY?: string;
+  // ---- Task #3 (this task): conversational research agent ----
+  // Optional Anthropic/OpenAI fallback when Workers AI fails / returns
+  // malformed JSON. Absent ⇒ Workers-AI-only.
+  AGENT_FALLBACK_KEY?: string;
+  // Provider for the fallback key: "anthropic" | "openai". Default openai.
+  AGENT_FALLBACK_PROVIDER?: string;
+  // Per-owner daily token budget. Default 200000.
+  AGENT_DAILY_TOKEN_BUDGET?: string;
+  // Saved-research nightly refresh workflow.
+  WF_REFRESH_SAVED_RESEARCH?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   // FEC + OpenSecrets political-donation source keys (both optional).
   FEC_API_KEY?: string;
   OPENSECRETS_API_KEY?: string;

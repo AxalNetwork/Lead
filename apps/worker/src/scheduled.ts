@@ -141,6 +141,31 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
   // Cron 0 4 * * * → Task #3 daily DD watchlist refresh + batch scan.
   // Dispatches DDScanBatchWorkflow when bound; otherwise runs inline so
   // dev environments without workflows still produce risk scores.
+  // Cron 30 4 * * * → Task #3 (research agent) nightly saved-research
+  // refresh. Re-runs every saved question (headless agent loop) and
+  // writes a structured diff back to saved_research.diff_json. Capped
+  // at 50 saved rows / tick inside the workflow itself.
+  if (event && (event as ScheduledEvent).cron === "30 4 * * *") {
+    ctx.waitUntil((async () => {
+      try {
+        if (env.WF_REFRESH_SAVED_RESEARCH) {
+          await env.WF_REFRESH_SAVED_RESEARCH.create({ params: {} });
+          console.log("refresh-saved-research workflow dispatched");
+        } else {
+          const { RefreshSavedResearchWorkflow } = await import("./agent/workflow");
+          const wf = new RefreshSavedResearchWorkflow(ctx, env);
+          const r = await wf.run({ payload: {} }, {
+            do: async (_n, _o, fn) => fn(),
+            sleep: async () => undefined,
+          });
+          console.log("refresh-saved-research inline", JSON.stringify(r));
+        }
+      } catch (e) {
+        console.error("refresh-saved-research failed", (e as Error).message);
+      }
+    })());
+    return;
+  }
   if (event && (event as ScheduledEvent).cron === "0 4 * * *") {
     ctx.waitUntil((async () => {
       try {
