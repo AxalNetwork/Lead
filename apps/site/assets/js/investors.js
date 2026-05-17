@@ -55,11 +55,13 @@
       var html = "";
       if (!append) {
         html += '<div class="ads-table-wrap"><table class="ads-table"><thead><tr>'
+          + '<th style="width:32px"><input type="checkbox" id="ads-bulk-header-check" title="Select page (click twice for all matching)"></th>'
           + '<th>Name</th><th>Kind</th><th>Org / Title</th><th>Location</th>'
           + '<th>Sweet spot</th><th>#Inv</th><th>Unicorns</th><th>Avg check</th></tr></thead><tbody id="ads-investors-tbody">';
       }
       items.forEach(function (it) {
-        html += '<tr>'
+        html += '<tr data-id="' + esc(it.id) + '">'
+          + '<td><input type="checkbox" class="ads-bulk-check" data-id="' + esc(it.id) + '"></td>'
           + '<td><a href="/dashboard/investors/detail/?id=' + encodeURIComponent(it.id) + '">' + esc(it.name || "—") + '</a></td>'
           + '<td>' + esc(it.investor_kind || "—") + '</td>'
           + '<td>' + esc(it.org || "—") + (it.title ? ' <span class="ads-muted">· ' + esc(it.title) + '</span>' : "") + '</td>'
@@ -113,6 +115,28 @@
 
     loadAggregate();
     load(false);
+
+    if (window.adsBulkBar) {
+      window.adsBulkBar.init({
+        pageId: "investors",
+        getRowHost: function () { return document.getElementById("ads-investors-list"); },
+        getRows: function () { return document.querySelectorAll("#ads-investors-tbody tr[data-id]"); },
+        fetchAllMatchingIds: function () {
+          // Server caps `limit` at 200 — paginate until cap (5000) or empty.
+          var all = []; var off = 0;
+          function nextPage() {
+            var p = buildQuery(); p.set("limit", "200"); p.set("offset", String(off));
+            return api("/api/investors?" + p.toString()).then(function (d) {
+              var items = d.items || [];
+              for (var i = 0; i < items.length && all.length < 5000; i++) all.push(items[i].id);
+              if (d.nextOffset != null && all.length < 5000) { off = d.nextOffset; return nextPage(); }
+              return all;
+            });
+          }
+          return nextPage();
+        },
+      });
+    }
   }
   document.addEventListener("DOMContentLoaded", init);
 

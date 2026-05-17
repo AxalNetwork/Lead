@@ -49,10 +49,13 @@
       }
       var html = "";
       if (!append) {
-        html += '<div class="ads-table-wrap"><table class="ads-table"><thead><tr><th>Name</th><th>Stage</th><th>Funding</th><th>Last round</th><th>Valuation</th><th>Status</th><th>Location</th></tr></thead><tbody id="ads-companies-tbody">';
+        html += '<div class="ads-table-wrap"><table class="ads-table"><thead><tr>'
+          + '<th style="width:32px"><input type="checkbox" id="ads-bulk-header-check" title="Select page (click twice for all matching)"></th>'
+          + '<th>Name</th><th>Stage</th><th>Funding</th><th>Last round</th><th>Valuation</th><th>Status</th><th>Location</th></tr></thead><tbody id="ads-companies-tbody">';
       }
       items.forEach(function (it) {
-        html += '<tr>'
+        html += '<tr data-id="' + esc(it.id) + '">'
+          + '<td><input type="checkbox" class="ads-bulk-check" data-id="' + esc(it.id) + '"></td>'
           + '<td><a href="/dashboard/companies/detail/?id=' + encodeURIComponent(it.id) + '">' + esc(it.name) + '</a>'
           + (it.unicorn ? ' <span class="ads-pill warn">🦄</span>' : "") + '</td>'
           + '<td>' + esc(it.stage || "—") + '</td>'
@@ -101,6 +104,27 @@
 
     loadAggregate();
     load(false);
+
+    if (window.adsBulkBar) {
+      window.adsBulkBar.init({
+        pageId: "companies",
+        getRowHost: function () { return document.getElementById("ads-companies-list"); },
+        getRows: function () { return document.querySelectorAll("#ads-companies-tbody tr[data-id]"); },
+        fetchAllMatchingIds: function () {
+          var all = []; var off = 0;
+          function nextPage() {
+            var p = buildQuery(); p.set("limit", "200"); p.set("offset", String(off));
+            return api("/api/companies?" + p.toString()).then(function (d) {
+              var items = d.items || [];
+              for (var i = 0; i < items.length && all.length < 5000; i++) all.push(items[i].id);
+              if (d.nextOffset != null && all.length < 5000) { off = d.nextOffset; return nextPage(); }
+              return all;
+            });
+          }
+          return nextPage();
+        },
+      });
+    }
   }
   document.addEventListener("DOMContentLoaded", init);
 

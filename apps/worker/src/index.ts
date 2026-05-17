@@ -46,6 +46,7 @@ import { osint as osintRoute } from "./routes/osint";
 import { profilers as profilersRoute } from "./routes/profilers";
 import { profileComments as profileCommentsRoute } from "./routes/profile_comments";
 import { opsCrawlerRoute } from "./routes/ops_crawler";
+import { bulk } from "./routes/bulk";
 export { EntityLock } from "./do/EntityLock";
 export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, PersonaEntityMatchWorkflow, PersonaMatchRefreshWorkflow, PersonaMatchEntityWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, AIProfileFillerWorkflow, AIProfileFillerBatchWorkflow, RefreshGovernmentWorkflow, DiscoverFromSeedWorkflow, CrawlFrontierWorkflow, MonitorEntityWorkflow, MonitorBatchWorkflow, DigestWorkflow, IndividualProfilerWorkflow } from "./ai/workflows";
 export { CsvImportWorkflow } from "./imports/csv_import_workflow";
@@ -142,6 +143,7 @@ api.route("/api/leads", leadsDncActions);
 api.route("/api/leads", leadsCampaignActions);
 api.route("/api/errors", errorsRoute);
 api.route("/api/admin", admin);
+api.route("/api/bulk", bulk);
 
 api.notFound((c) => c.json({ error: "not_found", request_id: c.var.request_id }, 404));
 api.onError((err, c) => {

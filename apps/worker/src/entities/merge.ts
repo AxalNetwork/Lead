@@ -187,3 +187,11 @@ export async function mergeEntities(env: Env, idA: string, idB: string): Promise
   // (the DO currently only exposes /merge_lead etc., not /acquire).
   return mergeCore(env, primary, secondary);
 }
+
+// Caller-chosen canonical: used by the bulk-merge endpoint so the
+// operator's selected canonical row always survives, regardless of
+// quality-score ordering.
+export async function mergeWithCanonical(env: Env, canonical: string, secondary: string): Promise<MergeResult> {
+  if (canonical === secondary) throw new Error("merge: cannot merge entity into itself");
+  return mergeCore(env, canonical, secondary);
+}
