@@ -133,11 +133,12 @@ test("addInterest rejects writes without source_url", async () => {
   );
 });
 
-test("addFamilyTie rejects writes without source_url (even is_public=false)", async () => {
+test("addFamilyTie rejects writes without source_url (even is_public=false, operator-asserted)", async () => {
   const env = mockEnv();
   await assert.rejects(
     () => EntityService.addFamilyTie(env, {
-      entityId: "e1", relationType: "spouse", relatedName: "Jane", isPublic: false, sourceUrl: "",
+      entityId: "e1", relationType: "spouse", relatedName: "Jane",
+      isPublic: false, isOperatorAsserted: true, sourceUrl: "",
     }),
     /source_url is required/,
   );

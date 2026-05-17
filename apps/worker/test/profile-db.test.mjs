@@ -120,8 +120,11 @@ const inputs = {
     field: "CS", startedYear: 2003, endedYear: 2007, sourceUrl: SRC,
   },
   addFamilyTie: {
+    // Default smoke uses a PUBLIC tie so the helper mirrors to `facts`
+    // (matching the expectations table below which asserts 1 fact row
+    // per helper). Private ties are tested separately further down.
     entityId: ENTITY_ID, relationType: "spouse", relatedName: "Jane Doe",
-    isPublic: false, sourceUrl: SRC,
+    isPublic: true, sourceUrl: SRC,
   },
   addPreference: {
     entityId: ENTITY_ID, preferenceKey: "coffee_order",
@@ -247,6 +250,57 @@ test("DB-backed smoke: same predicate from a DIFFERENT source_url DOES create a 
   await EntityService.addInterest(env, { ...inputs.addInterest, sourceUrl: "https://other.example/profile" });
   const factRows = countRows(env, `SELECT COUNT(*) AS c FROM facts WHERE entity_id = ? AND predicate = ?`, ENTITY_ID, "person.interest.topic");
   assert.equal(factRows, 2, "two distinct source_urls must yield two facts rows (multi-source corroboration)");
+});
+
+test("DB-backed smoke: addFamilyTie rejects implicit (undefined isPublic) writes", async () => {
+  const env = makeEnv();
+  await assert.rejects(
+    () => EntityService.addFamilyTie(env, {
+      entityId: ENTITY_ID, relationType: "parent", relatedName: "Mom",
+      sourceUrl: SRC,
+    }),
+    /isPublic is required/,
+  );
+});
+
+test("DB-backed smoke: addFamilyTie rejects private writes without operator assertion", async () => {
+  const env = makeEnv();
+  await assert.rejects(
+    () => EntityService.addFamilyTie(env, {
+      entityId: ENTITY_ID, relationType: "child", relatedName: "Kid",
+      isPublic: false, sourceUrl: SRC,
+    }),
+    /isOperatorAsserted=true/,
+  );
+});
+
+test("DB-backed smoke: private family ties write the structured row but DO NOT mirror to facts", async () => {
+  const env = makeEnv();
+  await EntityService.addFamilyTie(env, {
+    entityId: ENTITY_ID, relationType: "sibling", relatedName: "Private Sibling",
+    isPublic: false, isOperatorAsserted: true, sourceUrl: SRC,
+  });
+  const struct = countRows(env, `SELECT COUNT(*) AS c FROM family_ties WHERE entity_id = ? AND is_public = 0`, ENTITY_ID);
+  assert.equal(struct, 1, "private family tie must be persisted to family_ties");
+  const facts = countRows(env, `SELECT COUNT(*) AS c FROM facts WHERE entity_id = ? AND predicate = ?`, ENTITY_ID, "person.family_tie");
+  assert.equal(facts, 0, "private family ties must NOT appear in the facts retrieval surface (PII firewall)");
+});
+
+test("DB-backed smoke: career_history natural key ignores organization_name drift", async () => {
+  const env = makeEnv();
+  // Same entity + same org_entity_id + same started_at, but the display
+  // name drifts from "Acme VC" to "Acme Ventures" (common source variation).
+  // Stable key contract: must collapse to exactly one row.
+  await EntityService.addCareerEntry(env, {
+    entityId: ENTITY_ID, organizationEntityId: "org_acme",
+    organizationName: "Acme VC", startedAt: "2020-01", sourceUrl: SRC,
+  });
+  await EntityService.addCareerEntry(env, {
+    entityId: ENTITY_ID, organizationEntityId: "org_acme",
+    organizationName: "Acme Ventures", startedAt: "2020-01", sourceUrl: SRC,
+  });
+  const rows = countRows(env, `SELECT COUNT(*) AS c FROM career_history WHERE entity_id = ? AND organization_entity_id = ?`, ENTITY_ID, "org_acme");
+  assert.equal(rows, 1, "career_history must dedupe by (entity, org_entity_id, started_at) regardless of display-name drift");
 });
 
 test("DB-backed smoke: nullable-key components do not break ON CONFLICT idempotency", async () => {

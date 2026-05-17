@@ -66,8 +66,16 @@ CREATE TABLE IF NOT EXISTS career_history (
 -- Expression index over COALESCE(...) — SQLite treats NULL as distinct in
 -- UNIQUE, so we coerce nullable key components to '' for idempotent upsert.
 -- Helpers issue ON CONFLICT against the exact same expression list.
+--
+-- Stable key per task spec: (entity_id, organization_entity_id, started_at).
+-- organization_name is intentionally NOT part of the key: it's a display
+-- attribute that can drift across sources ("Acme VC" vs "Acme Ventures")
+-- and including it would create duplicates of the same role each time
+-- the name normalization changes. organization_entity_id is the stable
+-- identifier; once it's filled in by resolve, the row collapses.
+DROP INDEX IF EXISTS uq_career_natural;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_career_natural
-  ON career_history(entity_id, COALESCE(organization_entity_id,''), organization_name, COALESCE(started_at,''));
+  ON career_history(entity_id, COALESCE(organization_entity_id,''), COALESCE(started_at,''));
 CREATE INDEX IF NOT EXISTS idx_career_entity         ON career_history(entity_id);
 CREATE INDEX IF NOT EXISTS idx_career_entity_current ON career_history(entity_id, is_current);
 CREATE INDEX IF NOT EXISTS idx_career_org            ON career_history(organization_entity_id) WHERE organization_entity_id IS NOT NULL;

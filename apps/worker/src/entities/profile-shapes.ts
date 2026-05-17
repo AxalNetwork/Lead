@@ -95,7 +95,13 @@ export interface FamilyTieInput {
   relatedName: string;
   relatedEntityId?: string | null;
   notes?: string | null;
-  isPublic?: boolean;
+  // Privacy gate: explicit boolean required (no default). When false,
+  // the caller MUST also set isOperatorAsserted=true to acknowledge
+  // that they are knowingly storing a private relationship; helper
+  // throws otherwise. Private rows are NEVER mirrored into `facts`,
+  // so they cannot leak through the public/agent retrieval surface.
+  isPublic: boolean;
+  isOperatorAsserted?: boolean;
   sourceUrl: string;
   confidence?: number;
   observedAt?: string;

@@ -43,6 +43,20 @@ import type {
 // Mirrors the OSINT resolver's acquire/release pattern so all rich-profile
 // writes for a given entity_id serialize against OSINT, dual-write, and
 // any other caller that already uses the same DO id-namespace.
+//
+// Strict serialization (task contract): when the ENTITY_LOCK binding is
+// present we MUST hold the lock for the duration of the write. If the
+// DO is unreachable or the lock is currently held by another writer we
+// retry with exponential backoff and then fail loudly rather than
+// silently racing. The only bypass is when the binding itself is absent
+// — that's how the in-memory unit tests run, and it's explicit.
+export class ProfileLockError extends Error {
+  constructor(entityId: string, reason: string) {
+    super(`profile lock for ${entityId}: ${reason}`);
+    this.name = "ProfileLockError";
+  }
+}
+
 async function withProfileLock<T>(
   env: Env,
   entityId: string,
@@ -52,26 +66,40 @@ async function withProfileLock<T>(
   const stub = env.ENTITY_LOCK.get(env.ENTITY_LOCK.idFromName(entityId));
   const token = crypto.randomUUID();
   let acquired = false;
-  try {
-    const res = await stub.fetch("https://lock/acquire", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token, ttlMs: 60_000 }),
-    });
-    acquired = res.ok;
-  } catch { /* lock unavailable – proceed best-effort */ }
+  let lastErr: string = "unknown";
+  // 5 attempts, 50 / 100 / 200 / 400 / 800ms backoff = ≤1.55s total.
+  // Beyond that we surface the error so the caller can decide (retry the
+  // job, surface to the operator, etc.) rather than corrupt with a
+  // racy write.
+  for (let attempt = 0; attempt < 5 && !acquired; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, 50 * 2 ** (attempt - 1)));
+    }
+    try {
+      const res = await stub.fetch("https://lock/acquire", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, ttlMs: 60_000 }),
+      });
+      if (res.ok) { acquired = true; break; }
+      lastErr = `acquire returned ${res.status}`;
+    } catch (e) {
+      lastErr = (e as Error).message || "fetch failed";
+    }
+  }
+  if (!acquired) {
+    throw new ProfileLockError(entityId, lastErr);
+  }
   try {
     return await fn();
   } finally {
-    if (acquired) {
-      try {
-        await stub.fetch("https://lock/release", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token }),
-        });
-      } catch { /* ignore */ }
-    }
+    try {
+      await stub.fetch("https://lock/release", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+    } catch { /* lock will TTL out after 60s */ }
   }
 }
 
@@ -257,7 +285,8 @@ export async function addCareerEntry(env: Env, input: CareerEntryInput): Promise
          seniority, department, started_at, ended_at, is_current, summary,
          source_url, confidence, observed_at, updated_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(entity_id, COALESCE(organization_entity_id,''), organization_name, COALESCE(started_at,'')) DO UPDATE SET
+       ON CONFLICT(entity_id, COALESCE(organization_entity_id,''), COALESCE(started_at,'')) DO UPDATE SET
+         organization_name = COALESCE(excluded.organization_name, career_history.organization_name),
          role_title  = COALESCE(excluded.role_title, career_history.role_title),
          seniority   = COALESCE(excluded.seniority,  career_history.seniority),
          department  = COALESCE(excluded.department, career_history.department),
@@ -417,14 +446,36 @@ export async function addEducation(env: Env, input: EducationInput): Promise<voi
 
 // =========================================================================
 // 5. addFamilyTie — natural key (entity_id, relation_type, related_name).
-//    Private (is_public=false) rows MUST be excluded from public APIs and
-//    from the agent's retrievable context at the route layer (out of scope
-//    for this helper).
+//
+// Privacy gate (task contract, "No PII leakage"):
+//   * `isPublic` is required — no defaulting (the helper throws if it's
+//     undefined / not a boolean), so a caller can never implicitly create
+//     a private row by omission.
+//   * `isPublic === false` additionally requires `isOperatorAsserted ===
+//     true`. This is the explicit operator-intent marker the task calls
+//     out: only the human operator (via an authenticated route handler
+//     that sets this flag) can stash a private relationship. Background
+//     enrichment, agents, and scrapers will never have it set and will
+//     be rejected.
+//   * Private rows are NEVER mirrored into `facts` — `facts` is the
+//     public/agent retrieval surface, and routing PII through it would
+//     undermine row-level filtering downstream. The structured
+//     `family_ties` row is the only store for private ties, and the
+//     route layer is responsible for gating reads by operator identity.
 // =========================================================================
 export async function addFamilyTie(env: Env, input: FamilyTieInput): Promise<void> {
   requireNonEmpty("addFamilyTie", "entityId", input.entityId);
   requireNonEmpty("addFamilyTie", "relationType", input.relationType);
   requireNonEmpty("addFamilyTie", "relatedName", input.relatedName);
+  if (typeof input.isPublic !== "boolean") {
+    throw new Error("profile.addFamilyTie: isPublic is required and must be an explicit boolean");
+  }
+  if (input.isPublic === false && input.isOperatorAsserted !== true) {
+    throw new Error(
+      "profile.addFamilyTie: private family ties (isPublic=false) require " +
+      "isOperatorAsserted=true; background enrichers and agents cannot store private relationships",
+    );
+  }
   const sourceUrl = requireSourceUrl("addFamilyTie", input.sourceUrl);
   const now = input.observedAt ?? nowIso();
   await withProfileLock(env, input.entityId, async () => {
@@ -453,20 +504,24 @@ export async function addFamilyTie(env: Env, input: FamilyTieInput): Promise<voi
       now,
       now,
     ).run();
-    await mirrorFact(env, {
-      entityId: input.entityId,
-      predicate: "person.family_tie",
-      sourceUrl,
-      valueJson: {
-        relation_type: input.relationType,
-        related_name: input.relatedName,
-        related_entity_id: input.relatedEntityId ?? null,
-        notes: input.notes ?? null,
-        is_public: input.isPublic === true,
-      },
-      confidence: input.confidence,
-      observedAt: now,
-    });
+    // PII firewall: only public ties are projected to `facts`. The
+    // structured row above is still written for the operator-only UI.
+    if (input.isPublic === true) {
+      await mirrorFact(env, {
+        entityId: input.entityId,
+        predicate: "person.family_tie",
+        sourceUrl,
+        valueJson: {
+          relation_type: input.relationType,
+          related_name: input.relatedName,
+          related_entity_id: input.relatedEntityId ?? null,
+          notes: input.notes ?? null,
+          is_public: true,
+        },
+        confidence: input.confidence,
+        observedAt: now,
+      });
+    }
   });
 }
 
