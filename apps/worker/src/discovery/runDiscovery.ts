@@ -20,7 +20,7 @@ import {
 import { predictYield } from "./predictYield";
 import {
   upsertDiscoveredUrl, insertLinkEdge, enqueueFrontier, popFrontier,
-  markCrawled, markFrontierError, bumpRunHostCount, getRunHostCount,
+  markCrawled, markFrontierError, deferFrontier, bumpRunHostCount, getRunHostCount,
 } from "./store.discovery";
 import { computePriority, assertHostPolite } from "./scheduler";
 
@@ -233,8 +233,9 @@ export async function runCrawlFrontier(env: Env, opts: FrontierOpts = {}): Promi
 
   for (const it of items) {
     if (!(await assertHostPolite(env, it.host))) {
-      // Skip — leave on the frontier with a future re-attempt window.
-      await markFrontierError(env, it.url_id, "host_rate_limited");
+      // Pacing skip, not an error — short re-attempt window, no
+      // attempts++. Avoids 10-minute stalls on normal politeness gates.
+      await deferFrontier(env, it.url_id, "host_rate_limited", 10);
       continue;
     }
     try {

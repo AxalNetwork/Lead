@@ -222,6 +222,22 @@ export async function markFrontierError(env: Env, urlId: string, error: string):
   ).bind(error.slice(0, 400), urlId).run();
 }
 
+/**
+ * Soft deferral for *non-error* pacing events (e.g. host rate-limit
+ * gate). We do NOT bump `attempts` and we use a short retry window so
+ * the URL re-enters the frontier within seconds rather than 10 minutes.
+ * This separates "we deferred you because of politeness" from "you
+ * actually failed" for clearer operator telemetry + better throughput.
+ */
+export async function deferFrontier(env: Env, urlId: string, reason: string, seconds = 10): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE crawl_frontier SET
+       last_error = ?,
+       next_attempt_at = datetime('now', '+' || ? || ' seconds')
+     WHERE url_id = ?`,
+  ).bind(reason.slice(0, 400), seconds, urlId).run();
+}
+
 export async function getDiscoveredUrl(env: Env, id: string): Promise<DiscoveredUrlRow | null> {
   return await env.DB.prepare(`SELECT * FROM discovered_urls WHERE id = ?`).bind(id).first<DiscoveredUrlRow>();
 }
