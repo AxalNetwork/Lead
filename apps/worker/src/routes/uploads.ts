@@ -11,11 +11,17 @@
 //   POST   /api/uploads/:id/save-template body: {name}
 //   GET    /api/uploads/:id/templates    list templates matching this signature
 //   POST   /api/uploads/:id/templates/:tplId/apply
-//   POST   /api/uploads/:id/rerun        re-enqueue parse_file
+//   POST   /api/uploads/:id/rerun        re-enqueue parse_file (unconditional)
+//   POST   /api/uploads/:id/retry        re-enqueue parse_file or import_file
+//                                        (status-gated: only failed/cancelled)
 //   DELETE /api/uploads/:id              remove R2 object + row
+//
+// Task #3: every read/mutate path is scoped to `c.var.email` (the
+// Cloudflare Access JWT subject) so an allowlisted operator can only
+// see and mutate their own imports.
 
 import { Hono } from "hono";
-import type { Env, JobMessage } from "../types";
+import type { Env, JobMessage, JobKind } from "../types";
 
 export const uploads = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
@@ -101,21 +107,38 @@ uploads.post("/url", async (c) => {
   return c.json({ id, filename, format, status: "uploaded", tab_count: tables.length }, 201);
 });
 
+// Task #3: operator isolation. Every read path filters by `created_by =
+// c.var.email` so an allowlisted operator only sees their own imports.
+// The Access JWT-derived email is the single source of truth; the
+// special token "system" matches NULL-owner rows (legacy imports inserted
+// before created_by was populated) so they remain reachable for cleanup.
+function ownerFilterSql(email: string | null): { sql: string; binds: unknown[] } {
+  if (!email) return { sql: "created_by IS NULL", binds: [] };
+  return { sql: "(created_by = ? OR (created_by IS NULL AND ? = 'system'))", binds: [email, email] };
+}
+
 uploads.get("/", async (c) => {
   const limit = Math.min(Number(c.req.query("limit") ?? "50"), 200);
+  const email = c.get("email") ?? null;
+  const own = ownerFilterSql(email);
   const r = await c.env.DB
     .prepare(`SELECT id, filename, mime, size, status, format, entity, row_count, rows_imported, tab_count,
                      firms_created, firms_updated, leads_created, leads_updated,
                      queued_jobs, urls_found, error, created_by, created_at, updated_at
-              FROM file_imports ORDER BY created_at DESC LIMIT ?`)
-    .bind(limit)
+              FROM file_imports WHERE ${own.sql} ORDER BY created_at DESC LIMIT ?`)
+    .bind(...own.binds, limit)
     .all();
   return c.json({ items: r.results ?? [] });
 });
 
 uploads.get("/:id", async (c) => {
   const id = c.req.param("id");
-  const row = await c.env.DB.prepare("SELECT * FROM file_imports WHERE id = ?").bind(id).first<Record<string, unknown>>();
+  const email = c.get("email") ?? null;
+  const own = ownerFilterSql(email);
+  const row = await c.env.DB
+    .prepare(`SELECT * FROM file_imports WHERE id = ? AND ${own.sql}`)
+    .bind(id, ...own.binds)
+    .first<Record<string, unknown>>();
   if (!row) return c.json({ error: "not_found" }, 404);
   const previewRaw = await c.env.SCRAPE_CACHE.get(`upload_preview:${id}`);
   const tabPreviewsRaw = await c.env.SCRAPE_CACHE.get(`upload_tab_previews:${id}`);
@@ -164,7 +187,12 @@ uploads.post("/:id/confirm-map", async (c) => {
     | { column_map?: Record<string, string>; entity?: "firms" | "leads"; scrape_urls?: boolean | number;
         tabs?: Array<{ tab_index: number; intent?: string; intent_subkind?: string | null; column_map?: Record<string, string> }>; }
     | null;
-  const row = await c.env.DB.prepare("SELECT id, status, entity FROM file_imports WHERE id = ?").bind(id).first<{ id: string; status: string; entity: string | null }>();
+  const email = c.get("email") ?? null;
+  const own = ownerFilterSql(email);
+  const row = await c.env.DB
+    .prepare(`SELECT id, status, entity FROM file_imports WHERE id = ? AND ${own.sql}`)
+    .bind(id, ...own.binds)
+    .first<{ id: string; status: string; entity: string | null }>();
   if (!row) return c.json({ error: "not_found" }, 404);
   if (row.status === "importing" || row.status === "done") {
     return c.json({ error: "bad_state", status: row.status }, 409);
@@ -225,6 +253,16 @@ uploads.post("/:id/save-template", async (c) => {
         tabs?: Array<{ tab_index: number; intent?: string; intent_subkind?: string | null; column_map?: Record<string, string> }>; }
     | null;
   const name = (body?.name ?? "").trim() || `template-${id.slice(0, 8)}`;
+  // Validate ownership BEFORE any tab mutations so an unauthorized caller
+  // cannot mutate another operator's `file_import_tabs` rows.
+  const email = c.get("email") ?? null;
+  const own = ownerFilterSql(email);
+  const row = await c.env.DB
+    .prepare(`SELECT source_signature, format FROM file_imports WHERE id = ? AND ${own.sql}`)
+    .bind(id, ...own.binds)
+    .first<{ source_signature: string | null; format: string | null }>();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  if (!row.source_signature) return c.json({ error: "no_signature", message: "parse the file first" }, 409);
   // Persist any pending in-memory UI edits before snapshotting, so the
   // saved template reflects the operator's current state.
   if (Array.isArray(body?.tabs) && body!.tabs!.length) {
@@ -239,9 +277,6 @@ uploads.post("/:id/save-template", async (c) => {
         .bind(...binds).run();
     }
   }
-  const row = await c.env.DB.prepare("SELECT source_signature, format FROM file_imports WHERE id = ?")
-    .bind(id).first<{ source_signature: string | null; format: string | null }>();
-  if (!row?.source_signature) return c.json({ error: "no_signature", message: "parse the file first" }, 409);
   const tabs = await c.env.DB.prepare(
     "SELECT sheet_name, intent, intent_subkind, column_map_json FROM file_import_tabs WHERE import_id = ? ORDER BY tab_index",
   ).bind(id).all<{ sheet_name: string | null; intent: string; intent_subkind: string | null; column_map_json: string | null }>();
@@ -262,9 +297,14 @@ uploads.post("/:id/save-template", async (c) => {
 
 uploads.get("/:id/templates", async (c) => {
   const id = c.req.param("id");
-  const row = await c.env.DB.prepare("SELECT source_signature FROM file_imports WHERE id = ?")
-    .bind(id).first<{ source_signature: string | null }>();
-  if (!row?.source_signature) return c.json({ items: [] });
+  const email = c.get("email") ?? null;
+  const own = ownerFilterSql(email);
+  const row = await c.env.DB
+    .prepare(`SELECT source_signature FROM file_imports WHERE id = ? AND ${own.sql}`)
+    .bind(id, ...own.binds)
+    .first<{ source_signature: string | null }>();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  if (!row.source_signature) return c.json({ items: [] });
   const r = await c.env.DB.prepare(
     "SELECT id, name, format, use_count, last_used_at, created_at FROM import_templates WHERE source_signature = ? ORDER BY use_count DESC LIMIT 20",
   ).bind(row.source_signature).all();
@@ -274,6 +314,16 @@ uploads.get("/:id/templates", async (c) => {
 uploads.post("/:id/templates/:tplId/apply", async (c) => {
   const id = c.req.param("id");
   const tplId = c.req.param("tplId");
+  // Validate the operator owns the target import BEFORE applying the
+  // template — otherwise an unauthorized caller could mutate another
+  // operator's `file_import_tabs` rows.
+  const email = c.get("email") ?? null;
+  const own = ownerFilterSql(email);
+  const ownsImport = await c.env.DB
+    .prepare(`SELECT 1 AS ok FROM file_imports WHERE id = ? AND ${own.sql}`)
+    .bind(id, ...own.binds)
+    .first<{ ok: number }>();
+  if (!ownsImport) return c.json({ error: "not_found" }, 404);
   const tpl = await c.env.DB.prepare("SELECT tabs_json FROM import_templates WHERE id = ?")
     .bind(tplId).first<{ tabs_json: string }>();
   if (!tpl) return c.json({ error: "template_not_found" }, 404);
@@ -303,7 +353,12 @@ uploads.post("/:id/rerun", async (c) => {
   const id = c.req.param("id");
   const body = await c.req.json<{ skip_ocr?: boolean }>().catch(() => ({} as { skip_ocr?: boolean }));
   const skipOcr = body?.skip_ocr === true;
-  const row = await c.env.DB.prepare("SELECT id, filename FROM file_imports WHERE id = ?").bind(id).first<{ id: string; filename: string }>();
+  const email = c.get("email") ?? null;
+  const own = ownerFilterSql(email);
+  const row = await c.env.DB
+    .prepare(`SELECT id, filename FROM file_imports WHERE id = ? AND ${own.sql}`)
+    .bind(id, ...own.binds)
+    .first<{ id: string; filename: string }>();
   if (!row) return c.json({ error: "not_found" }, 404);
   await c.env.DB
     .prepare("UPDATE file_imports SET status = 'uploaded', error = NULL, updated_at = ? WHERE id = ?")
@@ -324,15 +379,65 @@ uploads.post("/:id/rerun", async (c) => {
   return c.json({ ok: true, jobId, skip_ocr: skipOcr }, 202);
 });
 
+// Task #3: status-gated retry. Unlike /rerun (which always re-parses from
+// scratch), /retry only fires when the import is in a terminal-failure
+// state and deterministically resumes from the correct stage by
+// inspecting the most recent job row for this import:
+//   - last job kind = 'parse_file'  → re-enqueue parse_file (status → 'uploaded')
+//   - last job kind = 'import_file' → re-enqueue import_file (status → 'mapped')
+// Failure status in `parse.ts` / `import.ts` is consistently 'error';
+// 'cancelled' is honored if a future sweeper adopts that terminal value.
+// Any other status returns 409 bad_state so the operator can't accidentally
+// double-enqueue a running import.
+uploads.post("/:id/retry", async (c) => {
+  const id = c.req.param("id");
+  const email = c.get("email") ?? null;
+  const own = ownerFilterSql(email);
+  const row = await c.env.DB
+    .prepare(`SELECT id, filename, status FROM file_imports WHERE id = ? AND ${own.sql}`)
+    .bind(id, ...own.binds)
+    .first<{ id: string; filename: string; status: string }>();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  if (row.status !== "error" && row.status !== "cancelled") {
+    return c.json({ error: "bad_state", status: row.status, message: "retry only allowed on error/cancelled imports" }, 409);
+  }
+  // Deterministic stage selection: look up the most recent job for this
+  // import and resume that exact stage. This is more robust than
+  // inferring stage from `column_map_json` presence (which can persist
+  // across reruns and would misroute parse-stage failures to import).
+  const lastJob = await c.env.DB
+    .prepare("SELECT kind FROM jobs WHERE target = ? AND kind IN ('parse_file','import_file') ORDER BY created_at DESC LIMIT 1")
+    .bind(id)
+    .first<{ kind: string }>();
+  const kind: JobKind = lastJob?.kind === "import_file" ? "import_file" : "parse_file";
+  const nextStatus = kind === "import_file" ? "mapped" : "uploaded";
+  await c.env.DB
+    .prepare("UPDATE file_imports SET status = ?, error = NULL, updated_at = ? WHERE id = ?")
+    .bind(nextStatus, new Date().toISOString(), id)
+    .run();
+  const jobId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const cfg = { importId: id, retry: true };
+  await c.env.DB.prepare(
+    `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
+     VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
+  ).bind(jobId, `${kind}:${row.filename}`, "upload", kind, id, JSON.stringify(cfg), now, now).run();
+  const msg: JobMessage = { jobId, kind, target: id, config: cfg };
+  await c.env.LEAD_QUEUE.send(msg);
+  return c.json({ ok: true, jobId, kind, status: nextStatus }, 202);
+});
+
 /** Dry-run import: project each tab's rows through its saved column_map
  *  (header → "firms.field"), then enumerate rows that would be created
  *  vs. updated and return a small sample of column-level diffs. Only
  *  inspects firms-intent tabs (the only entity with stable upsert keys). */
 uploads.post("/:id/diff-preview", async (c) => {
   const id = c.req.param("id");
+  const email = c.get("email") ?? null;
+  const own = ownerFilterSql(email);
   const row = await c.env.DB.prepare(
-    "SELECT id, summary_json FROM file_imports WHERE id = ?",
-  ).bind(id).first<{ id: string; summary_json: string | null }>();
+    `SELECT id, summary_json FROM file_imports WHERE id = ? AND ${own.sql}`,
+  ).bind(id, ...own.binds).first<{ id: string; summary_json: string | null }>();
   if (!row) return c.json({ error: "not_found" }, 404);
   const rowsRaw = await c.env.SCRAPE_CACHE.get(`upload_rows:${id}`);
   const tabRows: Record<string, Array<Record<string, string>>> =
@@ -425,7 +530,12 @@ uploads.post("/:id/diff-preview", async (c) => {
 
 uploads.delete("/:id", async (c) => {
   const id = c.req.param("id");
-  const row = await c.env.DB.prepare("SELECT r2_key FROM file_imports WHERE id = ?").bind(id).first<{ r2_key: string }>();
+  const email = c.get("email") ?? null;
+  const own = ownerFilterSql(email);
+  const row = await c.env.DB
+    .prepare(`SELECT r2_key FROM file_imports WHERE id = ? AND ${own.sql}`)
+    .bind(id, ...own.binds)
+    .first<{ r2_key: string }>();
   if (!row) return c.json({ error: "not_found" }, 404);
   try { await c.env.UPLOADS.delete(row.r2_key); } catch { /* best-effort */ }
   await c.env.SCRAPE_CACHE.delete(`upload_preview:${id}`).catch(() => undefined);
