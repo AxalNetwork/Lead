@@ -46,6 +46,19 @@ export async function createEntity(
       void triggerEntityMatchRefresh(env, id).catch(() => undefined);
     } catch { /* best-effort */ }
   }
+  // Task #3 (AI Profile Filler): auto-trigger a profile fill for newly
+  // created org entities that have a website but no facts yet (the
+  // signal-poor "low confidence" case the spec calls out). Dispatched
+  // via WF binding when available so the cost is async and respects
+  // the daily neuron cap. No-op when the binding isn't configured.
+  if (init.kind === "org" && (init.primary_url || init.primary_domain)) {
+    const wf = (env as Env & { WF_PROFILE_FILLER?: { create: (o: { params: Record<string, unknown> }) => Promise<{ id: string }> } }).WF_PROFILE_FILLER;
+    if (wf) {
+      try {
+        void wf.create({ params: { entityId: id, force: false, triggeredBy: "auto:entity_created" } }).catch(() => undefined);
+      } catch { /* best-effort */ }
+    }
+  }
   return (await env.DB.prepare(`SELECT * FROM u_entities WHERE id = ?`).bind(id).first<EntityRow>())!;
 }
 

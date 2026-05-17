@@ -150,7 +150,21 @@ profileRoute.post("/classify/:id/dispatch", async (c) => {
 profileRoute.post("/:id/fill", async (c) => {
   const id = c.req.param("id");
   const body = await c.req.json<{ force?: boolean }>().catch(() => ({} as { force?: boolean }));
-  const email = c.var.email || "anonymous";
+  const email = c.var.email;
+
+  // Owner isolation (spec "Owner isolation"): manual triggers require a
+  // resolved Access JWT email. Anonymous callers can't burn AI spend on
+  // arbitrary entity IDs.
+  if (!email) {
+    return c.json({ ok: false, error: "unauthenticated" }, 401);
+  }
+  // Confirm the entity exists + is active before incurring any AI cost
+  // or rate-limit state. (Profile facts are global per spec, but the
+  // trigger itself is operator-scoped.)
+  const ent = await c.env.DB.prepare(
+    `SELECT id FROM u_entities WHERE id = ? AND status = 'active'`,
+  ).bind(id).first<{ id: string }>().catch(() => null);
+  if (!ent) return c.json({ ok: false, error: "entity_not_found" }, 404);
 
   // Per-(user, entity) 1 fill/min throttle so the manual endpoint can't
   // hammer Workers AI from a stuck button click.

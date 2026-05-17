@@ -216,6 +216,16 @@ async function r2HtmlGet(env: Env, key: string): Promise<string | null> {
   try {
     const obj = await env.RAW_HTML.get(key);
     if (!obj) return null;
+    // Spec: enforce a 24h TTL on cached HTML so a long-running R2
+    // bucket can't serve stale pages forever. R2 object expiration
+    // isn't guaranteed for KV-style TTLs, so we also check the
+    // `stored_at` customMetadata at read-time and treat anything
+    // older than HTML_R2_TTL_SECONDS as a miss.
+    const storedAt = obj.customMetadata?.stored_at;
+    if (storedAt) {
+      const ageSec = (Date.now() - new Date(storedAt).getTime()) / 1000;
+      if (!Number.isFinite(ageSec) || ageSec > HTML_R2_TTL_SECONDS) return null;
+    }
     return await obj.text();
   } catch { return null; }
 }
