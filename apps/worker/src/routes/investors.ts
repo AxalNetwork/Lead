@@ -22,6 +22,7 @@ export const investors = new Hono<{ Bindings: Env; Variables: { email: string } 
 
 const PROFILE_TTL_SEC = 300;
 const INVESTOR_KINDS = new Set(["gp", "angel", "operator", "lp", "scout", "principal", "associate"]);
+const INVESTOR_ROLES = ["investor", "investor_firm", "angel", "vc", "gp", "lp"];
 
 interface InvestorRow {
   id: string;
@@ -78,6 +79,26 @@ function parseJson<T>(raw: string | null | undefined, fallback: T): T {
   }
 }
 
+function investorSql(kindFilter: string | null): { sql: string; binds: unknown[] } {
+  const where = ["e.kind = 'person'", "e.status = 'active'", "er.role IN (?,?,?,?,?,?)"];
+  const binds: unknown[] = [...INVESTOR_ROLES];
+  if (kindFilter && INVESTOR_KINDS.has(kindFilter)) {
+    where.push("EXISTS (SELECT 1 FROM leads l WHERE l.id = e.ref_id AND l.investor_kind = ?)");
+    binds.push(kindFilter);
+  }
+  return {
+    sql: `SELECT DISTINCT l.*
+            FROM leads l
+            JOIN entity_legacy_map m ON m.legacy_table = 'leads' AND m.legacy_id = l.id
+            JOIN u_entities e ON e.id = m.entity_id
+            JOIN entity_roles er ON er.entity_id = e.id
+           WHERE ${where.join(" AND ")}
+           ORDER BY l.investment_count DESC NULLS LAST, l.unicorn_count DESC NULLS LAST, l.id DESC
+           LIMIT ? OFFSET ?`,
+    binds,
+  };
+}
+
 // -------------------------------------------------------------------- LIST
 investors.get("/", async (c) => {
   const url = new URL(c.req.url);
@@ -88,31 +109,12 @@ investors.get("/", async (c) => {
   }
   const limit = Math.min(Math.floor(limRaw), 200);
   const offset = Math.floor(offRaw);
-  const where: string[] = ["l.merged_into IS NULL", "l.investor_kind IS NOT NULL"];
-  const binds: unknown[] = [];
   const kind = url.searchParams.get("kind");
-  if (kind && INVESTOR_KINDS.has(kind)) { where.push("l.investor_kind = ?"); binds.push(kind); }
-  const stage = url.searchParams.get("stage");
-  if (stage) { where.push("(l.stage_focus_json LIKE ? OR l.sweet_spot_stage = ?)"); binds.push(`%"${stage}"%`, stage); }
-  const sector = url.searchParams.get("sector");
-  if (sector) { where.push("l.sector_focus_slugs_json LIKE ?"); binds.push(`%"${sector}"%`); }
-  const country = url.searchParams.get("country");
-  if (country) { where.push("l.country_iso2 = ?"); binds.push(country.toUpperCase()); }
-  const minCheck = Number(url.searchParams.get("min_check_usd") ?? "0");
-  if (minCheck > 0) { where.push("(l.check_size_typical_usd >= ? OR l.check_size_max_usd >= ?)"); binds.push(minCheck, minCheck); }
-  const q = url.searchParams.get("q");
-  if (q) { where.push("(lower(l.name) LIKE ? OR lower(l.org) LIKE ?)"); binds.push(`%${q.toLowerCase()}%`, `%${q.toLowerCase()}%`); }
-  const sql = `SELECT l.* FROM leads l WHERE ${where.join(" AND ")}
-               ORDER BY l.investment_count DESC NULLS LAST, l.unicorn_count DESC NULLS LAST, l.id DESC
-               LIMIT ? OFFSET ?`;
-  binds.push(limit + 1, offset);
-  const r = await c.env.DB.prepare(sql).bind(...binds).all<InvestorRow>();
+  const { sql, binds } = investorSql(kind);
+  const r = await c.env.DB.prepare(sql).bind(...binds, limit + 1, offset).all<InvestorRow>();
   const rows = r.results ?? [];
   const hasMore = rows.length > limit;
-  return c.json({
-    items: (hasMore ? rows.slice(0, limit) : rows).map(toListItem),
-    nextOffset: hasMore ? offset + limit : null,
-  });
+  return c.json({ items: (hasMore ? rows.slice(0, limit) : rows).map(toListItem), nextOffset: hasMore ? offset + limit : null });
 });
 
 function toListItem(r: InvestorRow): Record<string, unknown> {
@@ -134,27 +136,51 @@ function toListItem(r: InvestorRow): Record<string, unknown> {
 
 // --------------------------------------------------------------- AGGREGATE
 investors.get("/aggregate", async (c) => {
-  const where = "l.merged_into IS NULL AND l.investor_kind IS NOT NULL";
-  const total = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM leads l WHERE ${where}`).first<{ n: number }>();
+  const total = await c.env.DB.prepare(
+    `SELECT COUNT(DISTINCT l.id) AS n
+       FROM leads l
+       JOIN entity_legacy_map m ON m.legacy_table = 'leads' AND m.legacy_id = l.id
+       JOIN u_entities e ON e.id = m.entity_id
+       JOIN entity_roles er ON er.entity_id = e.id
+      WHERE e.kind = 'person' AND e.status = 'active' AND er.role IN ('investor','investor_firm','angel','vc','gp','lp')`,
+  ).first<{ n: number }>();
   const byKind = await c.env.DB
-    .prepare(`SELECT l.investor_kind AS k, COUNT(*) AS n FROM leads l WHERE ${where} GROUP BY l.investor_kind ORDER BY n DESC`)
+    .prepare(
+      `SELECT l.investor_kind AS k, COUNT(DISTINCT l.id) AS n
+         FROM leads l
+         JOIN entity_legacy_map m ON m.legacy_table = 'leads' AND m.legacy_id = l.id
+         JOIN u_entities e ON e.id = m.entity_id
+         JOIN entity_roles er ON er.entity_id = e.id
+        WHERE e.kind = 'person' AND e.status = 'active' AND er.role IN ('investor','investor_firm','angel','vc','gp','lp')
+        GROUP BY l.investor_kind ORDER BY n DESC`,
+    )
     .all<{ k: string; n: number }>();
   const byCountry = await c.env.DB
-    .prepare(`SELECT l.country_iso2 AS k, COUNT(*) AS n FROM leads l WHERE ${where} AND l.country_iso2 IS NOT NULL GROUP BY l.country_iso2 ORDER BY n DESC LIMIT 10`)
+    .prepare(
+      `SELECT l.country_iso2 AS k, COUNT(DISTINCT l.id) AS n
+         FROM leads l
+         JOIN entity_legacy_map m ON m.legacy_table = 'leads' AND m.legacy_id = l.id
+         JOIN u_entities e ON e.id = m.entity_id
+         JOIN entity_roles er ON er.entity_id = e.id
+        WHERE e.kind = 'person' AND e.status = 'active' AND er.role IN ('investor','investor_firm','angel','vc','gp','lp') AND l.country_iso2 IS NOT NULL
+        GROUP BY l.country_iso2 ORDER BY n DESC LIMIT 10`,
+    )
     .all<{ k: string; n: number }>();
   const totals = await c.env.DB
-    .prepare(`SELECT COALESCE(SUM(l.investment_count),0) AS investments, COALESCE(SUM(l.unicorn_count),0) AS unicorns, COALESCE(SUM(l.exit_count),0) AS exits FROM leads l WHERE ${where}`)
+    .prepare(
+      `SELECT COALESCE(SUM(l.investment_count),0) AS investments, COALESCE(SUM(l.unicorn_count),0) AS unicorns, COALESCE(SUM(l.exit_count),0) AS exits
+         FROM leads l
+         JOIN entity_legacy_map m ON m.legacy_table = 'leads' AND m.legacy_id = l.id
+         JOIN u_entities e ON e.id = m.entity_id
+         JOIN entity_roles er ON er.entity_id = e.id
+        WHERE e.kind = 'person' AND e.status = 'active' AND er.role IN ('investor','investor_firm','angel','vc','gp','lp')`,
+    )
     .first<{ investments: number; unicorns: number; exits: number }>();
-  return c.json({
-    total: total?.n ?? 0,
-    by_kind: byKind.results ?? [],
-    by_country: byCountry.results ?? [],
-    totals: totals ?? { investments: 0, unicorns: 0, exits: 0 },
-  });
+  return c.json({ total: total?.n ?? 0, by_kind: byKind.results ?? [], by_country: byCountry.results ?? [], totals: totals ?? { investments: 0, unicorns: 0, exits: 0 } });
 });
 
 // ----------------------------------------------------------------- PROFILE
-investors.get("/:id/profile", async (c) => {
+investors.get(":id/profile", async (c) => {
   const id = c.req.param("id");
   const cacheKey = `profile:investor:${id}`;
   const cached = await c.env.SCRAPE_CACHE.get(cacheKey, "json");
@@ -186,7 +212,6 @@ investors.get("/:id/profile", async (c) => {
   ).bind(id).all<Record<string, unknown>>();
   const investments = invR.results ?? [];
 
-  // Stage / sector / geography breakdowns from investments.
   const stageBreakdown: Record<string, number> = {};
   const sectorBreakdown: Record<string, number> = {};
   const geoBreakdown: Record<string, number> = {};
@@ -194,14 +219,9 @@ investors.get("/:id/profile", async (c) => {
     const s = (inv.stage as string | null) ?? "unknown";
     stageBreakdown[s] = (stageBreakdown[s] ?? 0) + 1;
   }
-  for (const slug of parseJson<string[]>(row.sector_focus_slugs_json, [])) {
-    sectorBreakdown[slug] = (sectorBreakdown[slug] ?? 0) + 1;
-  }
-  for (const g of parseJson<string[]>(row.geo_focus_json, [])) {
-    geoBreakdown[g] = (geoBreakdown[g] ?? 0) + 1;
-  }
+  for (const slug of parseJson<string[]>(row.sector_focus_slugs_json, [])) sectorBreakdown[slug] = (sectorBreakdown[slug] ?? 0) + 1;
+  for (const g of parseJson<string[]>(row.geo_focus_json, [])) geoBreakdown[g] = (geoBreakdown[g] ?? 0) + 1;
 
-  // Co-investors: every other investor that touched the same companies.
   const companyIds = investments.map((i) => i.company_id).filter(Boolean) as number[];
   let coInvestors: Array<{ investor_lead_id: string; name: string; shared: number }> = [];
   if (companyIds.length) {
@@ -220,8 +240,6 @@ investors.get("/:id/profile", async (c) => {
     coInvestors = r2.results ?? [];
   }
 
-  // Recent media — pulled from company_news rows for portfolio companies
-  // (a cheap stand-in for a dedicated investor_media table; expand later).
   let media: Array<Record<string, unknown>> = [];
   if (companyIds.length) {
     const placeholders = companyIds.map(() => "?").join(",");
@@ -234,78 +252,18 @@ investors.get("/:id/profile", async (c) => {
     media = r3.results ?? [];
   }
 
-  // History — last 50 lead_history changes for this lead.
   const historyR = await c.env.DB
     .prepare(`SELECT field, old_value, new_value, source, evidence_url, changed_at FROM lead_history WHERE lead_id = ? ORDER BY changed_at DESC LIMIT 50`)
     .bind(id).all<Record<string, unknown>>();
 
-  // Boards & advisory — pulled from leads.board_seats_json.
   const boards = parseJson<Array<Record<string, unknown>>>((row as unknown as Record<string, string | null>).board_seats_json ?? null, []);
 
-  const profile = {
-    id: row.id,
-    name: row.name, email: row.email, org: row.org, title: row.title,
-    category: row.category,
-    investor_kind: row.investor_kind,
-    bio: row.bio,
-    location: { country_iso2: row.country_iso2, region: row.region, city: row.city },
-    contact: {
-      email: row.email,
-      linkedin_url: row.linkedin_url,
-      twitter_url: row.twitter_url,
-      github_url: row.github_url,
-      personal_url: row.personal_url,
-      office_hours_url: row.office_hours_url,
-      pitch_form_url: row.pitch_form_url,
-      calendly_url: row.calendly_url,
-    },
-    profiles: {
-      signal_nfx_url: row.signal_nfx_url,
-      crunchbase_url: row.crunchbase_url,
-      wikipedia_url: row.wikipedia_url,
-    },
-    thesis: row.thesis,
-    check_size: {
-      min_usd: row.check_size_min_usd,
-      max_usd: row.check_size_max_usd,
-      typical_usd: row.check_size_typical_usd,
-    },
-    sweet_spot_stage: row.sweet_spot_stage,
-    stage_focus: parseJson<string[]>(row.stage_focus_json, []),
-    sector_focus: parseJson<string[]>(row.sector_focus_slugs_json, []),
-    geo_focus: parseJson<string[]>(row.geo_focus_json, []),
-    fund,
-    current_role_title: row.current_role_title,
-    counters: {
-      investment_count: row.investment_count ?? 0,
-      unicorn_count: row.unicorn_count ?? 0,
-      exit_count: row.exit_count ?? 0,
-      avg_check_usd: row.avg_check_usd,
-      total_deployed_usd: row.total_deployed_usd,
-      board_seats_count: row.board_seats_count ?? 0,
-      media_count: media.length,
-      podcast_count: row.podcast_count ?? 0,
-    },
-    portfolio: investments,
-    breakdowns: { stage: stageBreakdown, sector: sectorBreakdown, geography: geoBreakdown },
-    co_investors: coInvestors,
-    boards,
-    media,
-    history: historyR.results ?? [],
-    last_enriched_at: row.last_enriched_at,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-  };
+  const profile = { id: row.id, name: row.name, email: row.email, org: row.org, title: row.title, category: row.category, investor_kind: row.investor_kind, bio: row.bio, location: { country_iso2: row.country_iso2, region: row.region, city: row.city }, contact: { email: row.email, linkedin_url: row.linkedin_url, twitter_url: row.twitter_url, github_url: row.github_url, personal_url: row.personal_url, office_hours_url: row.office_hours_url, pitch_form_url: row.pitch_form_url, calendly_url: row.calendly_url }, profiles: { signal_nfx_url: row.signal_nfx_url, crunchbase_url: row.crunchbase_url, wikipedia_url: row.wikipedia_url }, thesis: row.thesis, check_size: { min_usd: row.check_size_min_usd, max_usd: row.check_size_max_usd, typical_usd: row.check_size_typical_usd }, sweet_spot_stage: row.sweet_spot_stage, stage_focus: parseJson<string[]>(row.stage_focus_json, []), sector_focus: parseJson<string[]>(row.sector_focus_slugs_json, []), geo_focus: parseJson<string[]>(row.geo_focus_json, []), fund, current_role_title: row.current_role_title, counters: { investment_count: row.investment_count ?? 0, unicorn_count: row.unicorn_count ?? 0, exit_count: row.exit_count ?? 0, avg_check_usd: row.avg_check_usd, total_deployed_usd: row.total_deployed_usd, board_seats_count: row.board_seats_count ?? 0, media_count: media.length, podcast_count: row.podcast_count ?? 0 }, portfolio: investments, breakdowns: { stage: stageBreakdown, sector: sectorBreakdown, geography: geoBreakdown }, co_investors: coInvestors, boards, media, history: historyR.results ?? [], last_enriched_at: row.last_enriched_at, created_at: row.created_at, updated_at: row.updated_at };
 
   await c.env.SCRAPE_CACHE.put(cacheKey, JSON.stringify(profile), { expirationTtl: PROFILE_TTL_SEC });
   return c.json(profile);
 });
 
-// ------------------------------------------------------------------ ENRICH
-// Investors are leads, so enrichment routes through the canonical
-// enrichment orchestrator (every configured provider, budget-aware,
-// 14d KV cached, lead_history-audited). The orchestrator's LeadsRepo
-// is constructed with the env so cache busting happens inside updateLead.
 investors.post("/:id/enrich", async (c) => {
   const id = c.req.param("id");
   const lead = await c.env.DB.prepare("SELECT id FROM leads WHERE id = ?").bind(id).first();
@@ -317,8 +275,6 @@ investors.post("/:id/enrich", async (c) => {
   return c.json({ status: "ok", outcome });
 });
 
-// Bulk enrich enqueues one job per id so the queue consumer can pace the
-// orchestrator (each invocation may call several rate-limited providers).
 investors.post("/enrich/bulk", async (c) => {
   const body = (await c.req.json().catch(() => null)) as { ids?: string[] } | null;
   const ids = (body?.ids ?? []).slice(0, 200);
@@ -343,12 +299,6 @@ investors.post("/enrich/bulk", async (c) => {
   return c.json({ queued: queued.length, jobIds: queued });
 });
 
-// -------------------------------------------------- "Path to this investor"
-// The graph lives in the `entities` + `relationships` tables (Task #21), keyed
-// by integer entity IDs — not lead UUIDs. We resolve both leads to their
-// entity rows and then 307-redirect to the canonical /api/relationships/path
-// endpoint, which performs a bidirectional BFS over the full graph (not just
-// edges incident on the two endpoints).
 investors.get("/:id/path", async (c) => {
   const id = c.req.param("id");
   const to = c.req.query("to");
