@@ -17,6 +17,8 @@
     "src/scraper/html.ts",
     "src/scraper/firmcrawl/personExtract.ts",
     "src/scraper/parsers/firmlists/types.ts",
-    "src/types.ts"
+    "src/types.ts",
+    "src/agent/registry.ts",
+    "src/agent/diff.ts"
   ]
 }

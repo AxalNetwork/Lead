@@ -28,9 +28,20 @@ export class RefreshSavedResearchWorkflow {
   ctx: ExecutionContext;
   constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
 
-  async run(_event: WorkflowEvent<Record<string, unknown>>, step: WorkflowStep): Promise<{ ok: true; refreshed: number; skipped: number }> {
+  // payload.saved_id (optional): when set, refresh exactly that one row
+  // (used by the manual "Refresh now" button). When absent, run the
+  // nightly batch over the oldest NIGHTLY_LIMIT rows.
+  async run(event: WorkflowEvent<{ saved_id?: string }>, step: WorkflowStep): Promise<{ ok: true; refreshed: number; skipped: number }> {
     const env = this.env;
+    const targetId = event?.payload?.saved_id;
     const due = await step.do("load_due", { retries: { limit: 2, backoff: "exponential" } }, async () => {
+      if (targetId) {
+        const r = await env.DB.prepare(
+          `SELECT id, owner_email, question, answer_markdown, citations_json
+             FROM saved_research WHERE id = ?`,
+        ).bind(targetId).all<{ id: string; owner_email: string; question: string; answer_markdown: string; citations_json: string | null }>();
+        return r.results ?? [];
+      }
       const r = await env.DB.prepare(
         `SELECT id, owner_email, question, answer_markdown, citations_json
            FROM saved_research

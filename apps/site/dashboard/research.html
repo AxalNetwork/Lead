@@ -15,7 +15,9 @@ permalink: /dashboard/research/
         <strong>Sessions</strong>
         <button type="button" class="ads-btn ads-btn--ghost" id="ads-research-new">+ New</button>
       </div>
+      <input type="search" id="ads-research-session-search" placeholder="Search sessions…" class="ads-research__search">
       <ul class="ads-research__list" id="ads-research-sessions"></ul>
+      <div class="ads-research__pager" id="ads-research-session-pager"></div>
     </div>
     <div class="ads-research__rail-section">
       <div class="ads-research__rail-head"><strong>Saved research</strong></div>
@@ -33,12 +35,12 @@ permalink: /dashboard/research/
     <div class="ads-research__starters" id="ads-research-starters">
       <strong>Try a starter question</strong>
       <div class="ads-research__starter-grid">
-        <button type="button" data-q="Who are the top 10 climate investors in Europe writing $1–5M Series A checks?">Top 10 climate investors in Europe, $1–5M Series A</button>
-        <button type="button" data-q="What changed at Sequoia Capital this week — any new partners, exits, or controversies?">What changed at Sequoia this week?</button>
-        <button type="button" data-q="Compare Tiger Global and Insight Partners head-to-head on sector mix and check size.">Compare Tiger Global vs. Insight Partners</button>
-        <button type="button" data-q="Find me an introduction path from anyone in my network to Brian Singerman at Founders Fund.">Intro path to Brian Singerman</button>
-        <button type="button" data-q="Which B2B SaaS founders raised seed rounds in the last 90 days and now look ready for Series A?">Seed-to-A ready B2B SaaS founders (last 90d)</button>
-        <button type="button" data-q="Summarize the persona match for our 'climate-tech-vp-eng' persona — top 12 buyers with reasons.">Top 12 buyers matching climate-tech-vp-eng</button>
+        <button type="button" data-q="Best 10 European seed investors for climate hardware">Best 10 European seed investors for climate hardware</button>
+        <button type="button" data-q="Who are likely 1st customers for a B2B AI compliance tool?">Who are likely 1st customers for a B2B AI compliance tool?</button>
+        <button type="button" data-q="Compare a16z and Sequoia's recent fintech investments">Compare a16z and Sequoia's recent fintech investments</button>
+        <button type="button" data-q="Who should I ask for an intro to Reid Hoffman?">Who should I ask for an intro to Reid Hoffman?</button>
+        <button type="button" data-q="Which of my Investors page entities are most likely to raise a new fund this year?">Which of my Investors page entities are most likely to raise a new fund this year?</button>
+        <button type="button" data-q="Generate a target list for our Series A based on Project XYZ">Generate a target list for our Series A based on Project XYZ</button>
       </div>
     </div>
 
@@ -92,7 +94,13 @@ permalink: /dashboard/research/
 .ads-research__messages li.role-assistant { background: #fafbfc; border: 1px solid #e2e4e8; }
 .ads-research__messages li.role-assistant .ads-research__answer-actions { margin-top: 8px; font-size: 11px; display: flex; gap: 6px; align-items: center; }
 .ads-research__messages li .diff-banner { background: #fff7d6; border: 1px solid #f0d878; padding: 6px 8px; border-radius: 4px; font-size: 11px; margin-bottom: 6px; }
-.ads-research__messages .pill { display: inline-block; background: #1a3a6b; color: #fff; padding: 1px 5px; border-radius: 3px; font-size: 10px; margin: 0 1px; cursor: pointer; }
+.ads-research__search { width: 100%; padding: 4px 6px; border: 1px solid #d3d7df; border-radius: 4px; font-size: 11px; margin-bottom: 6px; }
+.ads-research__pager { display: flex; gap: 4px; justify-content: space-between; margin-top: 4px; font-size: 10px; color: #888; }
+.ads-research__pager button { background: #fff; border: 1px solid #d3d7df; border-radius: 3px; padding: 1px 6px; font-size: 10px; cursor: pointer; }
+.ads-research__pager button[disabled] { opacity: 0.4; cursor: default; }
+.ads-research__cites li.highlighted { background: #fff7d6; border-left: 3px solid #f0d878; padding-left: 5px; }
+.ads-research__messages .pill { display: inline-block; background: #1a3a6b; color: #fff; padding: 1px 6px; border-radius: 8px; font-size: 10px; margin: 0 1px; cursor: pointer; font-weight: 600; }
+.ads-research__messages .pill.uncited { background: #c84030; }
 .ads-research__messages .pill.kind-W { background: #c8741a; }
 .ads-research__messages .pill.kind-N { background: #2a7a4a; }
 .ads-research__messages .pill.kind-F { background: #4a4a8a; }
@@ -125,6 +133,7 @@ permalink: /dashboard/research/
     sessionId: null,
     currentEvents: [],
     citations: new Map(),       // marker -> payload
+    citationOrder: [],          // markers in registration order (drives [1][2][3])
     toolCalls: 0,
     streaming: null,            // AbortController for the in-flight ask
   };
@@ -133,16 +142,39 @@ permalink: /dashboard/research/
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
 
+  // Per-message citation numbering: assign [1] [2] [3] in order of first
+  // appearance so the pill the user sees matches the numbered Sources list.
+  // The underlying [K:id] marker is preserved on the pill for drill-down
+  // (clicking [3] highlights the corresponding right-rail Sources entry).
   const renderPills = (md) => {
-    // Replace [K:id] markers with clickable pills. Unknown markers render
-    // as plain text (the loop already stripped orphans, this is defensive).
-    return escapeHtml(md).replace(/\[([EFNTRMW]):([^\]]+)\]/g, (_full, kind, id) => {
+    const order = new Map();   // marker -> 1-based display index
+    let next = 1;
+    const escaped = escapeHtml(md);
+    const withPills = escaped.replace(/\[([EFNTRMW]):([^\]]+)\]/g, (_full, kind, id) => {
       const marker = `${kind}:${id}`;
-      const p = state.citations.get(marker);
-      const label = p ? `${kind}:${id}` : `${kind}:${id}`;
-      const title = p ? `${p.title}${p.snippet ? ' — ' + p.snippet : ''}` : 'citation';
-      return `<span class="pill kind-${kind}" data-marker="${escapeHtml(marker)}" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
-    }).replace(/\n/g, "<br>");
+      if (!order.has(marker)) { order.set(marker, next++); state.citations.has(marker) || state.citations.set(marker, { title: marker, snippet: "" }); }
+      const num = order.get(marker);
+      const p = state.citations.get(marker) || {};
+      const title = p.title ? `${p.title}${p.snippet ? ' — ' + p.snippet : ''}` : `citation ${marker}`;
+      return `<span class="pill kind-${kind}" data-marker="${escapeHtml(marker)}" title="${escapeHtml(title)}">${num}</span>`;
+    });
+    // "uncited claim" pills emitted by the loop as the literal italic token
+    // *(uncited claim — verify manually)*; render them red and non-clickable.
+    const withUncited = withPills.replace(/\*\(uncited claim[^)]*\)\*/g, '<span class="pill uncited" title="The model could not back this sentence with a citation.">uncited</span>');
+    return withUncited.replace(/\n/g, "<br>");
+  };
+
+  // Drill-down click handler — wire after pills are rendered.
+  const wirePillClicks = (container) => {
+    container.querySelectorAll(".pill[data-marker]").forEach((pill) => {
+      pill.addEventListener("click", () => {
+        const marker = pill.dataset.marker;
+        const ul = $("ads-research-cites");
+        ul.querySelectorAll("li").forEach((li) => li.classList.remove("highlighted"));
+        const target = ul.querySelector(`li[data-marker="${CSS.escape(marker)}"]`);
+        if (target) { target.classList.add("highlighted"); target.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
+      });
+    });
   };
 
   // ---------- API helpers --------------------------------------------------
@@ -157,12 +189,20 @@ permalink: /dashboard/research/
   };
 
   // ---------- sessions list ------------------------------------------------
+  const sessionPage = { offset: 0, limit: 20, q: "" };
   const loadSessions = async () => {
     try {
-      const { items } = await apiFetch("/sessions");
+      const qs = new URLSearchParams({ offset: String(sessionPage.offset), limit: String(sessionPage.limit) });
+      if (sessionPage.q) qs.set("q", sessionPage.q);
+      const { items, total, offset, limit } = await apiFetch("/sessions?" + qs.toString());
       const ul = $("ads-research-sessions");
-      ul.innerHTML = items.map((s) => `<li data-id="${s.id}" class="${s.id === state.sessionId ? 'active' : ''}">${escapeHtml(s.title || 'Untitled')}<span class="meta">${s.message_count || 0} messages · ${new Date(s.last_message_at + 'Z').toLocaleString()}</span></li>`).join("") || `<li class="ads-muted">No sessions yet.</li>`;
+      ul.innerHTML = items.map((s) => `<li data-id="${s.id}" class="${s.id === state.sessionId ? 'active' : ''}">${escapeHtml(s.title || 'Untitled')}<span class="meta">${s.message_count || 0} messages · ${s.last_message_at ? new Date(s.last_message_at + 'Z').toLocaleString() : '—'}</span></li>`).join("") || `<li class="ads-muted">No sessions yet.</li>`;
       ul.querySelectorAll("li[data-id]").forEach((li) => li.addEventListener("click", () => openSession(li.dataset.id)));
+      const pg = $("ads-research-session-pager");
+      const end = Math.min(offset + limit, total);
+      pg.innerHTML = `<button type="button" id="ads-research-prev" ${offset === 0 ? 'disabled' : ''}>‹ prev</button><span>${total ? (offset + 1) : 0}–${end} of ${total}</span><button type="button" id="ads-research-next" ${end >= total ? 'disabled' : ''}>next ›</button>`;
+      $("ads-research-prev")?.addEventListener("click", () => { sessionPage.offset = Math.max(0, sessionPage.offset - sessionPage.limit); loadSessions(); });
+      $("ads-research-next")?.addEventListener("click", () => { sessionPage.offset = sessionPage.offset + sessionPage.limit; loadSessions(); });
     } catch (e) { console.warn("loadSessions", e); }
   };
 
@@ -192,6 +232,7 @@ permalink: /dashboard/research/
   const openSession = async (id) => {
     state.sessionId = id;
     state.citations.clear();
+    state.citationOrder = [];
     state.currentEvents = [];
     $("ads-research-messages").innerHTML = "";
     $("ads-research-starters").style.display = "none";
@@ -220,10 +261,12 @@ permalink: /dashboard/research/
       const r = await apiFetch(`/saved/${id}`);
       state.sessionId = null;
       state.citations.clear();
+      state.citationOrder = [];
       $("ads-research-messages").innerHTML = "";
+      $("ads-research-cites").innerHTML = "";
       $("ads-research-starters").style.display = "none";
       const cites = JSON.parse(r.citations_json || "[]");
-      for (const c of cites) state.citations.set(c.marker, c.payload);
+      for (const c of cites) appendCitation(c.marker, c.payload);
       appendMessage("user", r.question, null);
       const diff = r.diff_json ? JSON.parse(r.diff_json) : null;
       appendMessage("assistant", r.answer_markdown, cites, { diff, savedId: id });
@@ -261,6 +304,7 @@ permalink: /dashboard/research/
     }
     ol.appendChild(li);
     ol.scrollTop = ol.scrollHeight;
+    wirePillClicks(li);
     return li;
   };
 
@@ -293,12 +337,16 @@ permalink: /dashboard/research/
     ol.scrollTop = ol.scrollHeight;
   };
   const appendCitation = (marker, payload) => {
-    if (state.citations.has(marker)) return;
+    if (state.citations.has(marker) && state.citationOrder?.includes(marker)) return;
     state.citations.set(marker, payload);
+    state.citationOrder = state.citationOrder || [];
+    if (!state.citationOrder.includes(marker)) state.citationOrder.push(marker);
+    const num = state.citationOrder.indexOf(marker) + 1;
     const ul = $("ads-research-cites");
     const li = document.createElement("li");
+    li.dataset.marker = marker;
     const url = payload.url ? `<a href="${escapeHtml(payload.url)}" target="_blank" rel="noopener">↗</a>` : "";
-    li.innerHTML = `<strong>[${escapeHtml(marker)}]</strong> ${escapeHtml(payload.title)} ${url}<br><span class="ads-muted" style="font-size:10px">${escapeHtml(payload.snippet || "")}</span>`;
+    li.innerHTML = `<strong>[${num}]</strong> <span class="ads-muted" style="font-size:9px">${escapeHtml(marker)}</span> ${escapeHtml(payload.title || marker)} ${url}<br><span class="ads-muted" style="font-size:10px">${escapeHtml(payload.snippet || "")}</span>`;
     ul.appendChild(li);
     $("ads-research-cite-count").textContent = state.citations.size;
   };
@@ -406,6 +454,12 @@ permalink: /dashboard/research/
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) $("ads-research-compose").requestSubmit();
   });
   $("ads-research-stop").addEventListener("click", () => state.streaming?.abort());
+
+  let searchTimer = null;
+  $("ads-research-session-search")?.addEventListener("input", (e) => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { sessionPage.q = e.target.value.trim(); sessionPage.offset = 0; loadSessions(); }, 200);
+  });
   $("ads-research-new").addEventListener("click", () => {
     state.sessionId = null;
     state.citations.clear();
