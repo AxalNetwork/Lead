@@ -154,8 +154,9 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         // Migration-order guard: if 331's safety stubs are the only
         // copies of persona_matches / entity_legacy_map / u_entities
         // in this DB, the canonical migrations (170/200/280) never
-        // ran here. Fail loudly so ops sees it instead of silently
-        // matching against empty stubs in production.
+        // ran here. In production this hard-fails the cron tick so
+        // ops sees it; in dev it only logs.
+        let stubMissingCanonical = false;
         try {
           const stubCheck = await env.DB.prepare(
             `SELECT name FROM sqlite_master WHERE type='table' AND name='u_entities'`,
@@ -166,18 +167,24 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
             // Canonical u_entities (mig 200) has display_name + quality_score;
             // the stub only carries id/kind/status. Missing cols => stub is canonical.
             if (!cols.includes("display_name") || !cols.includes("quality_score")) {
-              const envName = (env as { ENVIRONMENT?: string }).ENVIRONMENT ?? "unknown";
-              const msg = `SLO_VIOLATION migration_order_stub_active u_entities — apply migration 200 before relying on 331 (env=${envName})`;
-              console.error(msg);
-              // Hard-fail in production so deploys don't silently match
-              // against empty stubs. Dev environments only log the warning.
-              if (envName === "production") {
-                throw new Error(msg);
-              }
+              stubMissingCanonical = true;
             }
           }
         } catch (e) {
-          console.warn("migration-order guard failed", (e as Error).message);
+          // PRAGMA / sqlite_master failures are environmental noise and
+          // should not block the cron tick. Distinct from the
+          // stubMissingCanonical signal which always propagates.
+          console.warn("migration-order guard probe failed", (e as Error).message);
+        }
+        if (stubMissingCanonical) {
+          const envName = (env as { ENVIRONMENT?: string }).ENVIRONMENT ?? "unknown";
+          const msg = `SLO_VIOLATION migration_order_stub_active u_entities — apply migration 200 before relying on 331 (env=${envName})`;
+          console.error(msg);
+          // Hard-fail outside the probe try/catch so the throw is not
+          // swallowed. Production deploys fail the cron tick; dev keeps going.
+          if (envName === "production") {
+            throw new Error(msg);
+          }
         }
 
         if (env.WF_PERSONA_MATCH_REFRESH) {
