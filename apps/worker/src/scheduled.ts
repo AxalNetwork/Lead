@@ -166,7 +166,14 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
             // Canonical u_entities (mig 200) has display_name + quality_score;
             // the stub only carries id/kind/status. Missing cols => stub is canonical.
             if (!cols.includes("display_name") || !cols.includes("quality_score")) {
-              console.error("SLO_VIOLATION migration_order_stub_active u_entities — apply migration 200 before relying on 331");
+              const envName = (env as { ENVIRONMENT?: string }).ENVIRONMENT ?? "unknown";
+              const msg = `SLO_VIOLATION migration_order_stub_active u_entities — apply migration 200 before relying on 331 (env=${envName})`;
+              console.error(msg);
+              // Hard-fail in production so deploys don't silently match
+              // against empty stubs. Dev environments only log the warning.
+              if (envName === "production") {
+                throw new Error(msg);
+              }
             }
           }
         } catch (e) {

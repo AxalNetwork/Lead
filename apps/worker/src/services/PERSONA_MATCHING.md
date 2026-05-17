@@ -90,3 +90,23 @@ FROM persona_match_jobs
 WHERE json_extract(details_json, '$.slo_violation') = 1
 ORDER BY created_at DESC LIMIT 50;
 ```
+
+### Alerting
+
+Wire this query into the monitoring dashboard with a 15-minute
+rolling window threshold of `count(*) >= 3` to detect workflow-plane
+outages quickly. The console-log token `SLO_VIOLATION` is also
+indexed by log aggregators and can drive a parallel page-on-error
+alert. The nightly cron's migration-order guard (`scheduled.ts`)
+throws hard in `ENVIRONMENT=production` if it detects the 331 stub
+serving as canonical `u_entities`, so a misconfigured prod deploy
+fails the cron tick instead of silently returning empty matches.
+
+### Deferred follow-up
+
+A route-level integration test for `GET /api/personas/:id/candidates`
+(asserting component keys + rationale + source through the actual
+Hono handler) is tracked as follow-up — it requires a Miniflare
+harness not currently wired into the node:test runner. The DB
+contract test (`test/personaMatchingDbContract.test.mjs`) covers
+the storage layer; the acceptance harness covers ranking quality.
