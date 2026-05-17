@@ -374,6 +374,23 @@ function buildDetectPrompt(headers: string[], sample: string[][]): string {
   return `Headers: ${headers.join(", ")}\n\nFirst rows:\n${sampleStr}\n\nMap each header to a predicate (e.g. firm.name, firm.website, firm.crunchbase_url, firm.linkedin_url, firm.hq_country_iso2, firm.thesis, firm.stages, firm.sectors, firm.aum_usd). Use null for unknown columns.`;
 }
 
+// Task #3 reviewer R5: strict predicate allowlist. The detector mustn't
+// persist fabricated predicate strings into detected_columns_json — any
+// downstream upsertFirm only honours these exact predicates anyway, so
+// unknown predicates are normalized to `null` with a notes message
+// explaining the rejection. This is the registry-backed allowlist for
+// CSV-import detection (firm-table-backed predicates the upsert path
+// actually reads, mirroring src/entities/profile-predicates.ts's
+// person.* allowlist for the rich-profile surface).
+export const CSV_IMPORT_ALLOWED_PREDICATES: ReadonlySet<string> = new Set([
+  "firm.name", "firm.legal_name", "firm.website",
+  "firm.hq_country_iso2", "firm.hq_city", "firm.hq_region",
+  "firm.crunchbase_url", "firm.linkedin_url", "firm.twitter_handle",
+  "firm.thesis", "firm.stages", "firm.sectors",
+  "firm.aum_usd", "firm.founded_year", "firm.team_size",
+  "firm.contact_email",
+]);
+
 function parseDetectResponse(res: { response?: string; entity_type?: string; column_map?: unknown }): DetectedColumns | null {
   let obj: { entity_type?: string; column_map?: unknown } | null = null;
   if (res && typeof res === "object" && typeof res.entity_type === "string") obj = res;
@@ -385,7 +402,33 @@ function parseDetectResponse(res: { response?: string; entity_type?: string; col
   if (et !== "person" && et !== "company" && et !== "fund") return null;
   const cm = obj.column_map;
   if (!cm || typeof cm !== "object") return null;
-  return { entity_type: et, column_map: cm as DetectedColumns["column_map"] };
+  // Strict allowlist enforcement: any predicate the model returns that
+  // isn't in CSV_IMPORT_ALLOWED_PREDICATES is normalized to predicate:null
+  // with a notes field recording the rejected string. This prevents
+  // fabricated mappings ever reaching the upsert path.
+  const sanitized: DetectedColumns["column_map"] = {};
+  for (const [header, entry] of Object.entries(cm as Record<string, unknown>)) {
+    if (!entry || typeof entry !== "object") {
+      sanitized[header] = { predicate: null, value_type: "text", confidence: 0, notes: "invalid entry shape" };
+      continue;
+    }
+    const e = entry as { predicate?: unknown; value_type?: unknown; confidence?: unknown; notes?: unknown };
+    const pred = typeof e.predicate === "string" ? e.predicate.trim() : null;
+    const vt = typeof e.value_type === "string" ? e.value_type : "text";
+    const conf = typeof e.confidence === "number" ? e.confidence : 0;
+    const notes = typeof e.notes === "string" ? e.notes : undefined;
+    if (pred && CSV_IMPORT_ALLOWED_PREDICATES.has(pred)) {
+      sanitized[header] = { predicate: pred, value_type: vt, confidence: conf, ...(notes ? { notes } : {}) };
+    } else {
+      sanitized[header] = {
+        predicate: null,
+        value_type: vt,
+        confidence: 0,
+        notes: pred ? `unknown predicate '${pred}' rejected by allowlist` : (notes ?? "no predicate"),
+      };
+    }
+  }
+  return { entity_type: et, column_map: sanitized };
 }
 
 // Heuristic header → predicate map. Recognizes the common columns from

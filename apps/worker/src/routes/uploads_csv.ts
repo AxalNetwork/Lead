@@ -15,15 +15,11 @@
 
 import { Hono } from "hono";
 import type { Env, CsvImportEnvelopeMessage } from "../types";
+import { streamFileFieldToR2 } from "../imports/multipart_stream";
 
 export const uploadsCsv = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
 const MAX_BYTES = 50 * 1024 * 1024;
-const CSV_MIMES = new Set([
-  "text/csv", "text/plain", "application/csv",
-  "application/vnd.ms-excel", // Excel exports CSV as this in some browsers
-  "application/octet-stream", // some browsers strip type; we sniff by extension
-]);
 
 function safeFilename(name: string): string {
   return name.replace(/[^\w.\-]+/g, "_").slice(0, 200) || "upload.csv";
@@ -32,42 +28,103 @@ function safeFilename(name: string): string {
 uploadsCsv.post("/", async (c) => {
   const email = c.get("email");
   if (!email) return c.json({ error: "unauthorized" }, 401);
-  let form: FormData;
-  try { form = await c.req.formData(); }
-  catch { return c.json({ error: "bad_request", message: "expected multipart/form-data" }, 400); }
-  const f = form.get("file") as unknown as { name?: string; size?: number; type?: string; stream: () => ReadableStream } | null;
-  if (!f || typeof f !== "object" || typeof f.size !== "number" || typeof f.stream !== "function") {
-    return c.json({ error: "bad_request", message: "file field required" }, 400);
-  }
-  if (f.size > MAX_BYTES) return c.json({ error: "too_large", message: "max 50 MB" }, 413);
-  const filename = safeFilename(f.name || "upload.csv");
-  const ext = (/\.([a-z0-9]+)$/i.exec(filename)?.[1] ?? "").toLowerCase();
-  const mime = (f.type || "").toLowerCase();
-  // Accept by EITHER mime or extension; the multipart layer is permissive.
-  if (!CSV_MIMES.has(mime) && ext !== "csv" && ext !== "tsv") {
-    return c.json({ error: "unsupported_type", message: "CSV only", mime, ext }, 415);
-  }
+  const ct = c.req.header("content-type") ?? "";
   if (!c.env.IMPORTS) return c.json({ error: "misconfigured", message: "IMPORTS bucket not bound" }, 500);
   const importId = crypto.randomUUID();
   const r2Key = `csv-imports/${importId}.csv`;
-  await c.env.IMPORTS.put(r2Key, f.stream(), {
-    httpMetadata: { contentType: "text/csv" },
-  });
+
+  // Task #3 spec: "Stream, never buffer." We avoid c.req.formData() —
+  // that materializes every multipart part in memory and would blow the
+  // 128 MB Worker isolate cap on 50 MB uploads. Instead we use a
+  // streaming multipart parser (streamFileFieldToR2) that pipes the
+  // `file` field's bytes straight into R2.put as a ReadableStream.
+  //
+  // Two transport shapes are accepted:
+  //  1. multipart/form-data (browser uploads via <input type="file">)
+  //  2. raw body (programmatic uploads — content-type:text/csv) where
+  //     filename comes from the X-Filename header.
+  let filename = "upload.csv";
+  let totalBytes = 0;
+  try {
+    if (ct.toLowerCase().startsWith("multipart/form-data")) {
+      const field = streamFileFieldToR2(c.req.raw, "file");
+      // Tee the inbound stream so we can both (a) put to R2 and
+      // (b) enforce the 50 MB cap mid-stream. R2.put is happy with a
+      // ReadableStream of unknown length.
+      const [a, b] = field.stream.tee();
+      // Cap enforcement runs in parallel; if exceeded we abort.
+      let aborted = false;
+      const capPromise = (async () => {
+        const reader = b.getReader();
+        let running = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          running += value.byteLength;
+          if (running > MAX_BYTES) {
+            aborted = true;
+            try { reader.cancel(); } catch { /* noop */ }
+            break;
+          }
+        }
+      })();
+      await c.env.IMPORTS.put(r2Key, a, { httpMetadata: { contentType: "text/csv" } });
+      await capPromise;
+      const meta = await field.done;
+      if (aborted || meta.size > MAX_BYTES) {
+        try { await c.env.IMPORTS.delete(r2Key); } catch { /* noop */ }
+        return c.json({ error: "too_large", message: "max 50 MB" }, 413);
+      }
+      filename = safeFilename(field.filename || "upload.csv");
+      totalBytes = meta.size;
+    } else {
+      // Raw-body path.
+      filename = safeFilename(c.req.header("x-filename") || "upload.csv");
+      const body = c.req.raw.body;
+      if (!body) return c.json({ error: "bad_request", message: "empty body" }, 400);
+      const [a, b] = body.tee();
+      let aborted = false;
+      let running = 0;
+      const capPromise = (async () => {
+        const reader = b.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          running += value.byteLength;
+          if (running > MAX_BYTES) { aborted = true; try { reader.cancel(); } catch { /* noop */ } break; }
+        }
+      })();
+      await c.env.IMPORTS.put(r2Key, a, { httpMetadata: { contentType: "text/csv" } });
+      await capPromise;
+      if (aborted) {
+        try { await c.env.IMPORTS.delete(r2Key); } catch { /* noop */ }
+        return c.json({ error: "too_large", message: "max 50 MB" }, 413);
+      }
+      totalBytes = running;
+    }
+  } catch (e) {
+    try { await c.env.IMPORTS.delete(r2Key); } catch { /* noop */ }
+    return c.json({ error: "bad_request", message: `upload_stream_failed: ${(e as Error).message}` }, 400);
+  }
+
+  const ext = (/\.([a-z0-9]+)$/i.exec(filename)?.[1] ?? "").toLowerCase();
+  if (ext && ext !== "csv" && ext !== "tsv") {
+    try { await c.env.IMPORTS.delete(r2Key); } catch { /* noop */ }
+    return c.json({ error: "unsupported_type", message: "CSV only", ext }, 415);
+  }
+
   const now = new Date().toISOString();
   await c.env.DB.prepare(
     `INSERT INTO csv_imports (id, user_email, filename, size_bytes, r2_key, status, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)`,
-  ).bind(importId, email, filename, f.size, r2Key, now, now).run();
+  ).bind(importId, email, filename, totalBytes, r2Key, now, now).run();
 
-  const jobId = crypto.randomUUID();
-  await c.env.DB.prepare(
-    `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
-     VALUES (?, ?, ?, 'queued', 'csv_import', ?, ?, ?, ?)`,
-  ).bind(jobId, `csv_import:${filename}`, "csv_import", importId, JSON.stringify({ importId }), now, now).run();
+  // Task #3: do NOT pre-create a `jobs` row here. The queue consumer
+  // (index.ts envelope dispatcher) owns the jobs-row lifecycle for
+  // csv_import envelopes — it inserts a row and immediately runs it, so
+  // an upfront insert here would leave an orphan queued row in
+  // operational dashboards.
   try {
-    // Task #3 spec envelope: {type:'csv_import', import_id}. The queue
-    // dispatcher in index.ts recognizes this shape and synthesizes the
-    // JobMessage internally so the audit trail stays consistent.
     const msg: CsvImportEnvelopeMessage = { type: "csv_import", import_id: importId };
     await c.env.LEAD_QUEUE.send(msg);
   } catch (e) {
@@ -126,12 +183,9 @@ uploadsCsv.post("/:id/retry", async (c) => {
   await c.env.DB.prepare(
     "UPDATE csv_imports SET status = 'queued', processed_rows = 0, error_log_json = NULL, updated_at = ? WHERE id = ?",
   ).bind(new Date().toISOString(), id).run();
-  const jobId = crypto.randomUUID();
-  const now = new Date().toISOString();
-  await c.env.DB.prepare(
-    `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
-     VALUES (?, ?, ?, 'queued', 'csv_import', ?, ?, ?, ?)`,
-  ).bind(jobId, `csv_import:retry:${row.filename}`, "csv_import", id, JSON.stringify({ importId: id, retry: true }), now, now).run();
+  // Task #3: jobs-row creation is owned by the queue envelope dispatcher
+  // (index.ts) — see the matching comment in POST /. Don't pre-create
+  // here, or every retry leaves an orphan queued jobs row.
   try {
     const msg: CsvImportEnvelopeMessage = { type: "csv_import", import_id: id };
     await c.env.LEAD_QUEUE.send(msg);
@@ -141,9 +195,7 @@ uploadsCsv.post("/:id/retry", async (c) => {
     ).bind(priorStatus,
             JSON.stringify({ errors: [{ row_index: -1, error: `retry_enqueue_failed: ${(e as Error).message}`.slice(0, 500) }] }),
             new Date().toISOString(), id).run();
-    await c.env.DB.prepare("UPDATE jobs SET status = 'failed', error = ? WHERE id = ?")
-      .bind((e as Error).message.slice(0, 500), jobId).run();
     return c.json({ error: "enqueue_failed", message: (e as Error).message }, 502);
   }
-  return c.json({ ok: true, import_id: id, jobId, status: "queued" }, 202);
+  return c.json({ ok: true, import_id: id, status: "queued" }, 202);
 });
