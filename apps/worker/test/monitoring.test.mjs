@@ -23,7 +23,7 @@ const { diffSummaries } = await import("../test-dist/monitoring/diff.js");
 const { ALL_TRIGGER_KINDS } = await import("../test-dist/monitoring/types.js");
 const { EVALUATORS, SOURCE_DRIVEN_TRIGGERS } = await import("../test-dist/monitoring/triggers/index.js");
 const { computeDigestScheduledFor } = await import("../test-dist/monitoring/schedule.js");
-const { canonicalJson, signHmac } = await import("../test-dist/monitoring/channels/webhook.js");
+const { canonicalJson, signHmac, deliverWebhook } = await import("../test-dist/monitoring/channels/webhook.js");
 
 function baseSummary(overrides = {}) {
   return {
@@ -115,5 +115,59 @@ test("source-driven trigger set is non-empty and a subset of the registry", () =
   assert.ok(SOURCE_DRIVEN_TRIGGERS.size > 0, "no source-driven triggers declared");
   for (const k of SOURCE_DRIVEN_TRIGGERS) {
     assert.ok(ALL_TRIGGER_KINDS.includes(k), `${k} not in enum`);
+  }
+});
+
+// Integration-style: walk the webhook lifecycle through three responses
+// (500 → 500 → 200). Each attempt must (a) send the SAME signed body so
+// the downstream HMAC stays stable and (b) classify the 5xx as retryable
+// and the 2xx as terminal-ok. Mocks globalThis.fetch.
+test("webhook retry lifecycle 500→500→200 keeps signature stable and classifies retryable", async () => {
+  const origFetch = globalThis.fetch;
+  const calls = [];
+  const responses = [
+    new Response("upstream down", { status: 500 }),
+    new Response("still down", { status: 500 }),
+    new Response("ok", { status: 200 }),
+  ];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, body: init.body, sig: init.headers["X-AIDS-Signature"] });
+    return responses.shift();
+  };
+  try {
+    const env = { RL_HOST: null };
+    const body = { event_id: "evt-1", entity_id: "ent-1", trigger_kind: "any_change",
+                   occurred_at: "2026-01-01T00:00:00Z", title: "t", body: "b", diff: [], payload: {} };
+    const p = { url: "https://example.test/hook", secret: "s3cr3t", body };
+    const r1 = await deliverWebhook(env, p);
+    const r2 = await deliverWebhook(env, p);
+    const r3 = await deliverWebhook(env, p);
+    assert.equal(r1.ok, false); assert.equal(r1.retryable, true); assert.equal(r1.status, 500);
+    assert.equal(r2.ok, false); assert.equal(r2.retryable, true);
+    assert.equal(r3.ok, true);  assert.equal(r3.status, 200);
+    assert.equal(calls.length, 3);
+    assert.equal(calls[0].body, calls[1].body, "retry body must match original");
+    assert.equal(calls[1].body, calls[2].body, "success body must match retry");
+    assert.equal(calls[0].sig, calls[1].sig, "retry signature must match original");
+    assert.equal(calls[1].sig, calls[2].sig, "success signature must match retry");
+    assert.ok(calls[0].sig.startsWith("sha256="));
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+// Integration-style: a 4xx (non-429/408) response is a permanent failure;
+// the dispatcher must NOT schedule a retry in that case.
+test("webhook 4xx (non-429/408) is classified as non-retryable", async () => {
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("bad request", { status: 400 });
+  try {
+    const r = await deliverWebhook({ RL_HOST: null },
+      { url: "https://example.test/hook", secret: "s", body: { x: 1 } });
+    assert.equal(r.ok, false);
+    assert.equal(r.retryable, false);
+    assert.equal(r.status, 400);
+  } finally {
+    globalThis.fetch = origFetch;
   }
 });

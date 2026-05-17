@@ -72,6 +72,22 @@
     closeDropdown();
   });
 
+  // Per-item read marking: clicking an alert link in the dropdown
+  // fires-and-forgets a POST to /events/:id/read so the badge stays in
+  // sync without forcing the operator to use "mark all read".
+  list.addEventListener("click", function (e) {
+    var a = e.target && (e.target.closest ? e.target.closest("a[data-event-id]") : null);
+    if (!a) return;
+    var id = a.getAttribute("data-event-id");
+    if (!id) return;
+    var li = a.closest ? a.closest("li") : null;
+    if (li && li.classList) li.classList.remove("is-unread");
+    fetch(apiUrl("/api/alerts/events/" + encodeURIComponent(id) + "/read"),
+      { method: "POST", credentials: "include", keepalive: true })
+      .then(fetchUnread).then(function (r) { setBadge(Number(r.unread) || 0); })
+      .catch(function () {});
+  });
+
   if (readAll) {
     readAll.addEventListener("click", function (e) {
       e.preventDefault();
