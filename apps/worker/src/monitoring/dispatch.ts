@@ -361,7 +361,7 @@ function escapeHtml(s: string): string {
  * OPERATIONAL NOTE: this sweeper runs on the shared hourly cron slot
  * (see scheduled.ts — Cloudflare free plan caps cron slots at 5 and
  * the existing `0 * * * *` slot is reused; we cannot register a
- * dedicated `*/1 * * * *` slot). The per-attempt exponential backoff
+ * dedicated per-minute slot). The per-attempt exponential backoff
  * computed at failure time (1m, 2m, 4m, …) is therefore the LOWER
  * bound on retry latency — the actual retry executes on the next
  * hourly cron tick after next_attempt_at falls due. Operators should
