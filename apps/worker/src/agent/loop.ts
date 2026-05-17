@@ -233,19 +233,28 @@ export async function runAgentLoop(env: Env, question: string, opts: LoopOptions
   let synthesisOnly = false;
 
   while (true) {
+    // Mandated short-circuit on hard caps. Both the 30s wall-clock and the
+    // 8-tool ceiling MUST emit a `partial` event prefixed with the exact
+    // string "I needed more time — these are the partial results." so the
+    // dashboard can render the partial banner uniformly. We still do ONE
+    // best-effort synthesis turn on tool-cap so the partial body carries
+    // a cited summary of the evidence already gathered, but the event
+    // type and prefix stay the same as the deadline branch.
     if (deadlineHit() || await cancelled()) {
-      await opts.emit({ type: "partial", answer_markdown: "I needed more time — these are the partial results.\n\nNo final answer was produced before the 30-second wall-clock budget elapsed.", reason: "deadline" });
+      const body = synthesizePartial(allRowCounts, reg);
+      const { annotated } = flagUncited(body, reg);
+      await opts.emit({ type: "partial", answer_markdown: `I needed more time — these are the partial results.\n\n${annotated}`, reason: "deadline" });
       return;
     }
     if (toolCallsUsed >= MAX_TOOL_CALLS && !synthesisOnly) {
-      // Cap reached — push a system instruction telling the model that
-      // tool calling is closed and it must produce its best final answer
-      // from the evidence already collected. Then re-enter the loop ONE
-      // more time to give it that synthesis turn.
+      // Push a synthesis instruction and take ONE more model turn (still
+      // counted as a synthesis pass, no tool_call allowed) to produce a
+      // body for the partial response. If the model misbehaves or errors,
+      // we fall back to synthesizePartial below.
       synthesisOnly = true;
       messages.push({
         role: "system",
-        content: "TOOL CAP REACHED (8/8). You MUST reply with a {\"final\": {\"answer_markdown\": ...}} envelope only — no more tool_call. Synthesize the best cited answer you can from the tool results already returned. Prefix the answer with '_I reached the 8 tool-call cap; this is my best synthesis so far._' and continue with a fully-cited summary.",
+        content: "TOOL CAP REACHED (8/8). Tool calls are closed. Reply with {\"final\":{\"answer_markdown\":...}} only — a fully-cited synthesis of the tool results already returned.",
       });
     }
 
@@ -411,12 +420,33 @@ export async function runAgentLoop(env: Env, question: string, opts: LoopOptions
         }
       }
 
+      // When the cap forced a synthesis-only turn, the spec requires the
+      // result be returned as a `partial` event prefixed with the
+      // mandated string — uniform with the deadline branch.
+      if (synthesisOnly) {
+        const prefixed = `I needed more time — these are the partial results.\n\n${annotated}`;
+        await streamAssistantTokens(prefixed, opts);
+        await opts.emit({ type: "partial", answer_markdown: prefixed, reason: "tool_cap" });
+        await emitFollowUps(env, question, annotated, opts);
+        return;
+      }
       // Stream the synthesized answer as assistant_token events so SSE
       // consumers can render token-by-token. We chunk on word boundaries
       // to keep the stream lightweight (one event per ~5 words).
       await streamAssistantTokens(annotated, opts);
       await opts.emit({ type: "final", answer_markdown: annotated, citations: reg.all(), uncited_sentences: uncited, tokens_in: tokensIn, tokens_out: tokensOut });
       await emitFollowUps(env, question, annotated, opts);
+      return;
+    }
+
+    // If synthesisOnly is active but the model still didn't produce a
+    // final envelope, fall back to the deterministic partial summary so
+    // the cap-overrun contract is honored even on a misbehaving model.
+    if (synthesisOnly) {
+      const body = synthesizePartial(allRowCounts, reg);
+      const { annotated } = flagUncited(body, reg);
+      const prefixed = `I needed more time — these are the partial results.\n\n${annotated}`;
+      await opts.emit({ type: "partial", answer_markdown: prefixed, reason: "tool_cap" });
       return;
     }
 

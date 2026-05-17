@@ -18,7 +18,7 @@
 // in this deployment (one allowlisted operator), but the schema and the
 // queries are tenant-aware so multi-user comes for free later.
 
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { Env } from "../types";
 import { runAgentLoop, MAX_TOOL_CALLS, WALL_CLOCK_MS, toolManifest } from "../agent/loop";
@@ -62,16 +62,18 @@ agent.get("/sessions", async (c) => {
     const like = `%${q.toLowerCase()}%`;
     binds.push(like, c.var.email, like);
   }
-  binds.push(limit, offset);
+  const pageBinds = [...binds, limit, offset];
   const r = await c.env.DB.prepare(
     `SELECT id, title, created_at, last_message_at,
             (SELECT COUNT(*) FROM agent_messages m WHERE m.session_id = s.id) AS message_count
        FROM agent_sessions s WHERE ${where}
        ORDER BY last_message_at DESC LIMIT ? OFFSET ?`,
-  ).bind(...binds).all();
+  ).bind(...pageBinds).all();
+  // Total MUST honor the same `q` filter so the dashboard pager renders
+  // correct "X–Y of N" counts when the user is searching.
   const total = await c.env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM agent_sessions WHERE owner_email = ?`,
-  ).bind(c.var.email).first<{ n: number }>();
+    `SELECT COUNT(*) AS n FROM agent_sessions s WHERE ${where}`,
+  ).bind(...binds).first<{ n: number }>();
   return c.json({ items: r.results ?? [], limit, offset, total: total?.n ?? 0, q });
 });
 
@@ -85,8 +87,29 @@ agent.get("/sessions/:id", async (c) => {
   const msgs = await c.env.DB.prepare(
     `SELECT id, role, content, tool_name, tool_call_json, tool_result_json, citations_json, tokens_in, tokens_out, created_at
        FROM agent_messages WHERE session_id = ? AND owner_email = ? ORDER BY created_at ASC`,
-  ).bind(id, c.var.email).all();
-  return c.json({ session: sess, messages: msgs.results ?? [] });
+  ).bind(id, c.var.email).all<Record<string, unknown>>();
+
+  // Resolve citations per message + a session-wide deduped citation map so
+  // the dashboard can re-render pills without re-running the loop. Each
+  // assistant row's citations_json holds the marker→payload list that was
+  // emitted with the final answer; we parse + decorate it with a 1-based
+  // display number for the per-message Sources footer.
+  const sessionCitations = new Map<string, Record<string, unknown>>();
+  const messages = (msgs.results ?? []).map((m) => {
+    let citations: Array<{ marker: string; payload: Record<string, unknown>; n: number }> = [];
+    if (m.role === "assistant" && typeof m.citations_json === "string") {
+      try {
+        const raw = JSON.parse(m.citations_json) as Array<{ marker: string; payload: Record<string, unknown> }>;
+        citations = raw.map((c, i) => {
+          sessionCitations.set(c.marker, c.payload);
+          return { marker: c.marker, payload: c.payload, n: i + 1 };
+        });
+      } catch { /* swallow malformed */ }
+    }
+    return { ...m, citations };
+  });
+  const citation_index = [...sessionCitations.entries()].map(([marker, payload], i) => ({ marker, payload, n: i + 1 }));
+  return c.json({ session: sess, messages, citation_index });
 });
 
 agent.delete("/sessions/:id", async (c) => {
@@ -96,7 +119,10 @@ agent.delete("/sessions/:id", async (c) => {
 
 // ---- saved research ---------------------------------------------------------
 
-agent.post("/saved", async (c) => {
+// Spec-compatibility alias: `POST /api/agent/save` is the documented
+// contract surface. It MUST behave identically to `POST /api/agent/saved`.
+// Implemented here as a small shim so both paths share one handler.
+const savedHandler = async (c: Context<{ Bindings: Env; Variables: { email: string; request_id: string } }>) => {
   const body = await c.req.json<{ title?: string; question: string; answer_markdown: string; citations?: unknown; pinned_entity_ids?: string[]; session_id?: string }>().catch(() => null);
   if (!body || !body.question || !body.answer_markdown) return c.json({ error: "missing_fields" }, 400);
   // Validate session_id ownership when supplied — never let a caller
@@ -122,7 +148,9 @@ agent.post("/saved", async (c) => {
     sessionId,
   ).run();
   return c.json({ id }, 201);
-});
+};
+agent.post("/saved", savedHandler);
+agent.post("/save", savedHandler);
 
 agent.get("/saved", async (c) => {
   const r = await c.env.DB.prepare(

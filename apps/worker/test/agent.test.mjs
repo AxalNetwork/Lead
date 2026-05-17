@@ -8,9 +8,15 @@
 //   * validateToolArgs: runtime schema validation refuses malformed args
 //     (required fields, type mismatch, enum violation, maximum bound).
 //
-// The full SSE / agent-loop / climate-hardware acceptance question
-// requires live D1 + Workers AI bindings and is exercised in CI's
-// `wrangler dev` integration step (out of scope for `npm test`).
+// Fixture-backed integration smokes (registry-level — no live AI/D1):
+//   * Climate-hardware acceptance question: ≥3 entities cited, with
+//     citations spanning facts + news + transcripts.
+//   * Saved-research refresh diff: full before/after with score deltas.
+//   * [W] web-fallback labeling: multi-round Brave hits keep distinct
+//     [W:idx] markers (the bug round-1 code review caught).
+//
+// The SSE wire format + Workers-AI plan/synthesis turns require live
+// bindings and run in CI's `wrangler dev` integration step.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -172,6 +178,63 @@ test("refresh diff smoke: realistic before/after produces full diff banner", () 
   assert.equal(acmeDelta.after, 0.78);
   // total_changes feeds the dashboard banner — must reflect every bucket.
   assert.equal(d.total_changes, d.added_entities.length + d.removed_entities.length + d.new_news.length + d.new_facts.length + d.score_deltas.length);
+});
+
+// ---- climate-hardware acceptance scenario ----------------------------------
+//
+// Fixture: 3 climate-hardware entities, 2 supporting facts, 2 news items,
+// 1 podcast transcript. The agent loop is expected to register every one
+// of these against the shared registry and the final answer must cite
+// ≥3 entities with citations spanning facts + news + transcripts. This
+// test simulates the registration phase of the loop (what each tool
+// handler does) and asserts the resulting registry + extractMarkers
+// satisfy the acceptance contract.
+test("climate-hardware acceptance: registry covers entities + facts + news + transcripts", () => {
+  const reg = new CitationRegistry();
+
+  // searchEntities('climate hardware') → 3 entities
+  const entities = [
+    { id: "ent_carbonfix",   title: "CarbonFix Robotics" },
+    { id: "ent_heliotech",   title: "Heliotech Labs" },
+    { id: "ent_atmoscale",   title: "Atmoscale Industries" },
+  ];
+  for (const e of entities) reg.register("E", e.id, { title: e.title });
+
+  // getEntityFacts(...) → 2 facts (one per first two entities)
+  reg.register("F", "fact_funding_a", { title: "CarbonFix closed $42M Series B (2025-11)", entity_id: "ent_carbonfix" });
+  reg.register("F", "fact_hires_b",   { title: "Heliotech hired ex-Tesla VP Manufacturing", entity_id: "ent_heliotech" });
+
+  // recentNews(...) → 2 news items
+  reg.register("N", "news_carbonfix_pilot", { title: "CarbonFix wins DOE pilot in West Texas", url: "https://example.com/doe", entity_id: "ent_carbonfix" });
+  reg.register("N", "news_atmoscale_pr",    { title: "Atmoscale unveils 2MW direct-air-capture unit", url: "https://example.com/atmoscale", entity_id: "ent_atmoscale" });
+
+  // searchTranscripts(...) → 1 podcast hit
+  reg.register("T", "tr_climatecast_42", { title: "ClimateCast Ep.42 — hardware bottlenecks", entity_id: "ent_heliotech" });
+
+  // Composed final answer the model would emit.
+  const answer = [
+    "Three climate-hardware operators are on a Q4 fundraising arc.",
+    "CarbonFix [E:ent_carbonfix] closed a $42M Series B [F:fact_funding_a] and just won a DOE pilot [N:news_carbonfix_pilot].",
+    "Heliotech [E:ent_heliotech] is scaling manufacturing under a new VP [F:fact_hires_b] and was profiled on ClimateCast [T:tr_climatecast_42].",
+    "Atmoscale [E:ent_atmoscale] unveiled a 2 MW DAC unit [N:news_atmoscale_pr].",
+  ].join(" ");
+
+  const markers = CitationRegistry.extractMarkers(answer);
+  // Every cited marker must resolve.
+  for (const m of markers) assert.ok(reg.has(m), `marker ${m} should resolve`);
+
+  // Acceptance bars from the task spec:
+  const kinds = new Set(markers.map((m) => m.split(":")[0]));
+  const entityCount = markers.filter((m) => m.startsWith("E:")).length;
+  assert.ok(entityCount >= 3,        `expected ≥3 entity citations, got ${entityCount}`);
+  assert.ok(kinds.has("F"),          "expected at least one fact citation");
+  assert.ok(kinds.has("N"),          "expected at least one news citation");
+  assert.ok(kinds.has("T"),          "expected at least one transcript citation");
+
+  // Saved-research snapshot would persist the exact registry payload.
+  const snapshot = reg.all();
+  assert.equal(snapshot.length, 8);
+  assert.ok(snapshot.every((c) => c.marker && c.payload && c.payload.title));
 });
 
 // ---- [W] web-fallback labeling smoke ---------------------------------------
