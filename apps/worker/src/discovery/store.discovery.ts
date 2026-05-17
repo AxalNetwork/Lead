@@ -64,15 +64,25 @@ export async function upsertDiscoveredUrl(env: Env, input: DiscoveredUrlInput): 
     // `rejected` or `promoted` by an operator (or by a prior obvious-
     // reject check) must NOT silently become eligible for queueing again.
     const newYield = Math.max(existing.expected_yield_score ?? 0, input.expectedYieldScore ?? 0);
+    // If the row was previously stored without a rejected verdict but
+    // now matches an obvious-reject rule (e.g. our reject heuristics
+    // improved between runs), persist the rejected state explicitly so
+    // DB queries / dashboards stop showing this URL as eligible.
+    const persistReject = reject && existing.status === "new";
     await env.DB.prepare(
       `UPDATE discovered_urls SET
          last_seen = CURRENT_TIMESTAMP,
          expected_yield_score = ?,
          link_text = COALESCE(link_text, ?),
          link_context = COALESCE(link_context, ?),
-         likely_kind = COALESCE(likely_kind, ?)
+         likely_kind = COALESCE(likely_kind, ?),
+         status = CASE WHEN ? = 1 THEN 'rejected' ELSE status END,
+         rejected_reason = CASE WHEN ? = 1 THEN ? ELSE rejected_reason END
        WHERE id = ?`,
-    ).bind(newYield, input.linkText ?? null, input.linkContext ?? null, input.likelyKind ?? null, existing.id).run();
+    ).bind(
+      newYield, input.linkText ?? null, input.linkContext ?? null, input.likelyKind ?? null,
+      persistReject ? 1 : 0, persistReject ? 1 : 0, rejected_reason, existing.id,
+    ).run();
     const terminal = existing.status === "rejected" || existing.status === "promoted" || existing.status === "crawled";
     return {
       id: existing.id,
