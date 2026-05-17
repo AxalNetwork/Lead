@@ -57,8 +57,27 @@ export async function inferAndAssignRoles(env: Env, entityId: string, ctx: RoleI
     if (ctx.kind === "person") roles.push({ role: "investor", confidence: 0.8 });
   }
 
-  if (ctx.kind === "person" && hasAny(text, ["partner", "principal", "associate", "venture", "investor", "gp", "md"])) {
-    roles.push({ role: "investor", confidence: 0.8 });
+  // Partner/principal title — high confidence only if the person's
+  // company entity is itself flagged as an investor_firm. Otherwise
+  // (no company context) we still emit a lower-confidence guess based
+  // on title keywords alone.
+  if (ctx.kind === "person" && hasAny(text, ["partner", "principal", "associate", "venture", "investor", " gp ", "managing director"])) {
+    let atInvestorFirm = false;
+    if (ctx.org) {
+      try {
+        const row = await env.DB
+          .prepare(
+            `SELECT 1 AS n
+               FROM firms f
+               JOIN entity_legacy_map m ON m.legacy_table = 'firms' AND m.legacy_id = CAST(f.id AS TEXT)
+               JOIN entity_roles r     ON r.entity_id = m.entity_id AND r.role = 'investor_firm'
+              WHERE LOWER(f.name) = LOWER(?) LIMIT 1`,
+          )
+          .bind(ctx.org).first<{ n: number }>();
+        atInvestorFirm = !!row;
+      } catch { /* best-effort */ }
+    }
+    roles.push({ role: "investor", confidence: atInvestorFirm ? 0.95 : 0.7 });
   }
 
   if (hasAny(text, ["customers", "case studies", "trusted by", "used by"])) {

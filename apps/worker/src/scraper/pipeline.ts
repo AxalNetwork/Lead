@@ -24,7 +24,6 @@ import { enqueueLinkedinDiscovery, enqueueCrunchbaseUrl } from "./firmcrawl/prof
 import { dispatchProfile } from "./parsers/profile";
 import { classifyPage, isNewsLike } from "../services/pageClassifier";
 import { ingestNewsPage } from "../news/page_ingest";
-import { inferAndAssignRoles } from "../services/roleInference";
 
 /**
  * Filter helper used by every enqueue site so ToS-blocked domains never even
@@ -296,26 +295,9 @@ export async function insertLead(
     await recordReview(env.DB, decision.candidate.id, id, decision.score, decision.reasons);
   }
 
-  // Task #2 (Investors): auto-assign roles on the unified entity so the
-  // Investors page (which reads from entity_roles) picks up freshly
-  // inserted people. Best-effort; never block the insert path.
-  try {
-    const entityId = await getLegacyEntityId(env, "leads", id);
-    if (entityId) {
-      await inferAndAssignRoles(env, entityId, {
-        kind: "person",
-        sourceKind: importCtx?.sourceKind ?? "scrape",
-        sourceUrl: parsed.source_url ?? null,
-        sourceDomain: parsed.source_domain ?? null,
-        title: lead.title,
-        org: lead.org,
-        category: lead.category,
-        importLabel: importCtx?.source ?? null,
-      });
-    }
-  } catch (e) {
-    console.warn("inferAndAssignRoles(insertLead) failed", (e as Error).message);
-  }
+  // Role inference now runs centrally inside syncLeadToEntity (the
+  // unified entity write path), so we no longer call it here. See
+  // apps/worker/src/entities/dualwrite.ts.
 
   return id;
 }

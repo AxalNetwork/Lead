@@ -22,8 +22,6 @@ export const investors = new Hono<{ Bindings: Env; Variables: { email: string } 
 
 const PROFILE_TTL_SEC = 300;
 const INVESTOR_KINDS = new Set(["gp", "angel", "operator", "lp", "scout", "principal", "associate"]);
-const INVESTOR_ROLES = ["investor", "investor_firm", "angel", "vc", "gp", "lp"];
-
 interface InvestorRow {
   id: string;
   name: string | null;
@@ -79,25 +77,14 @@ function parseJson<T>(raw: string | null | undefined, fallback: T): T {
   }
 }
 
-function investorSql(kindFilter: string | null): { sql: string; binds: unknown[] } {
-  const where = ["e.kind = 'person'", "e.status = 'active'", "er.role IN (?,?,?,?,?,?)"];
-  const binds: unknown[] = [...INVESTOR_ROLES];
-  if (kindFilter && INVESTOR_KINDS.has(kindFilter)) {
-    where.push("EXISTS (SELECT 1 FROM leads l2 WHERE l2.id = m.legacy_id AND l2.investor_kind = ?)");
-    binds.push(kindFilter);
-  }
-  return {
-    sql: `SELECT DISTINCT l.*
-            FROM leads l
-            JOIN entity_legacy_map m ON m.legacy_table = 'leads' AND m.legacy_id = l.id
-            JOIN u_entities e ON e.id = m.entity_id
-            JOIN entity_roles er ON er.entity_id = e.id
-           WHERE ${where.join(" AND ")}
-           ORDER BY l.investment_count DESC NULLS LAST, l.unicorn_count DESC NULLS LAST, l.id DESC
-           LIMIT ? OFFSET ?`,
-    binds,
-  };
-}
+// Build the role-join clause shared by list/aggregate. Persons are
+// "investor-like" when their unified entity has at least one of the
+// investor roles. Filtering happens on the legacy `leads` row.
+const ROLE_JOIN = `
+  JOIN entity_legacy_map m ON m.legacy_table = 'leads' AND m.legacy_id = l.id
+  JOIN u_entities e        ON e.id = m.entity_id AND e.status = 'active' AND e.kind = 'person'
+  JOIN entity_roles er     ON er.entity_id = e.id AND er.role IN ('investor','investor_firm','angel','vc','gp','lp')
+`;
 
 // -------------------------------------------------------------------- LIST
 investors.get("/", async (c) => {
@@ -109,9 +96,27 @@ investors.get("/", async (c) => {
   }
   const limit = Math.min(Math.floor(limRaw), 200);
   const offset = Math.floor(offRaw);
+  const where: string[] = ["l.merged_into IS NULL"];
+  const binds: unknown[] = [];
   const kind = url.searchParams.get("kind");
-  const { sql, binds } = investorSql(kind);
-  const r = await c.env.DB.prepare(sql).bind(...binds, limit + 1, offset).all<InvestorRow>();
+  if (kind && INVESTOR_KINDS.has(kind)) { where.push("l.investor_kind = ?"); binds.push(kind); }
+  const stage = url.searchParams.get("stage");
+  if (stage) { where.push("(l.stage_focus_json LIKE ? OR l.sweet_spot_stage = ?)"); binds.push(`%"${stage}"%`, stage); }
+  const sector = url.searchParams.get("sector");
+  if (sector) { where.push("l.sector_focus_slugs_json LIKE ?"); binds.push(`%"${sector}"%`); }
+  const country = url.searchParams.get("country");
+  if (country) { where.push("l.country_iso2 = ?"); binds.push(country.toUpperCase()); }
+  const minCheck = Number(url.searchParams.get("min_check_usd") ?? "0");
+  if (minCheck > 0) { where.push("(l.check_size_typical_usd >= ? OR l.check_size_max_usd >= ?)"); binds.push(minCheck, minCheck); }
+  const q = url.searchParams.get("q");
+  if (q) { where.push("(lower(l.name) LIKE ? OR lower(l.org) LIKE ?)"); binds.push(`%${q.toLowerCase()}%`, `%${q.toLowerCase()}%`); }
+
+  const sql = `SELECT DISTINCT l.* FROM leads l ${ROLE_JOIN}
+               WHERE ${where.join(" AND ")}
+               ORDER BY l.investment_count DESC NULLS LAST, l.unicorn_count DESC NULLS LAST, l.id DESC
+               LIMIT ? OFFSET ?`;
+  binds.push(limit + 1, offset);
+  const r = await c.env.DB.prepare(sql).bind(...binds).all<InvestorRow>();
   const rows = r.results ?? [];
   const hasMore = rows.length > limit;
   return c.json({ items: (hasMore ? rows.slice(0, limit) : rows).map(toListItem), nextOffset: hasMore ? offset + limit : null });

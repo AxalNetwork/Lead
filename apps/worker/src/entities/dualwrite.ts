@@ -207,6 +207,21 @@ export async function syncFirmToEntity(
     if (!entityId) return null;
     await addRole(env, entityId, "firm", { is_primary: true, source });
     if (f.kind && /accelerator/i.test(f.kind)) await addRole(env, entityId, "accelerator", { source });
+    // Task #2: cascading role inference on the unified write path so
+    // investor_firm / customer / prospect get assigned without each
+    // call-site having to know.
+    try {
+      const { inferAndAssignRoles } = await import("../services/roleInference");
+      await inferAndAssignRoles(env, entityId, {
+        kind: "org",
+        sourceKind,
+        sourceUrl: f.website ?? null,
+        sourceDomain: domain ?? null,
+        org: f.name ?? null,
+        category: f.kind ?? null,
+        importLabel: source,
+      });
+    } catch (e) { console.warn("inferAndAssignRoles(firm) failed", entityId, (e as Error).message); }
     const patches: FactPatch[] = [
       { predicate: "name", value_text: f.name },
       { predicate: "legal_name", value_text: f.legal_name ?? null },
@@ -264,6 +279,23 @@ export async function syncLeadToEntity(
     // Role inference: investor_kind set → investor; otherwise generic person.
     if (l.investor_kind) await addRole(env, entityId, "investor", { is_primary: true, source });
     if (l.category && /founder|ceo|cto/i.test(l.category)) await addRole(env, entityId, "founder", { source });
+    // Task #2: cascading role inference on the unified write path. Runs
+    // for every person sync so the Investors page (which reads from
+    // entity_roles) picks up freshly-ingested people. Looks up the
+    // person's company entity for partner-title inheritance.
+    try {
+      const { inferAndAssignRoles } = await import("../services/roleInference");
+      await inferAndAssignRoles(env, entityId, {
+        kind: "person",
+        sourceKind,
+        sourceUrl: l.personal_url ?? null,
+        sourceDomain: null,
+        title: l.title ?? null,
+        org: l.org ?? null,
+        category: l.category ?? null,
+        importLabel: source,
+      });
+    } catch (e) { console.warn("inferAndAssignRoles(lead) failed", entityId, (e as Error).message); }
     const patches: FactPatch[] = [
       { predicate: "name", value_text: l.name ?? null },
       { predicate: "title", value_text: l.title ?? null },
