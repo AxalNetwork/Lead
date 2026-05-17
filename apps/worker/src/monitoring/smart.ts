@@ -17,6 +17,8 @@
 //     limit?: number }              // default 500, capped at 5000
 
 import type { Env } from "../types";
+import { dispatchEvent } from "./dispatch";
+import type { AlertRuleRow } from "./types";
 
 interface SmartFilter {
   entity_kind?: string;
@@ -87,6 +89,41 @@ export async function reevaluateSmartWatchlist(env: Env, watchlistId: string, fi
        last_changed_at = CASE WHEN ? > 0 OR ? > 0 THEN ? ELSE last_changed_at END,
        last_evaluated_at = ?, updated_at = ? WHERE id = ?`,
   ).bind(watchlistId, toAdd.length, toRemove.length, now, now, now, watchlistId).run();
+
+  // Spec: membership changes count as any_change-style events when an
+  // explicit rule is attached to the watchlist. Emit one event per
+  // (added|removed) entity per matching rule via the standard dispatch
+  // path (so dedupe, digest routing, channel + retry all reuse the
+  // same machinery as entity-driven events).
+  if (toAdd.length || toRemove.length) {
+    const ruleRows = await env.DB.prepare(
+      `SELECT id, owner_email, name, watchlist_id, entity_id, trigger_kind,
+              trigger_config_json, channel, channel_config_json, digest_frequency,
+              dedupe_window_seconds, is_active, last_fired_at, fire_count
+         FROM alert_rules
+        WHERE watchlist_id = ? AND is_active = 1 AND trigger_kind = 'any_change'`,
+    ).bind(watchlistId).all<AlertRuleRow>();
+    for (const rule of ruleRows.results ?? []) {
+      for (const id of toAdd) {
+        await dispatchEvent(env, rule, {
+          dedupe_key: `member_added:${id}`,
+          title: `Watchlist member added: ${id}`,
+          body: `${id} now matches the smart watchlist filter.`,
+          diff: [{ field: "watchlist_membership", old: null, new: "added" }],
+          payload: { watchlist_id: watchlistId, entity_id: id, change: "added" },
+        }, id).catch((e) => console.warn("smart member_added dispatch failed", id, (e as Error).message));
+      }
+      for (const id of toRemove) {
+        await dispatchEvent(env, rule, {
+          dedupe_key: `member_removed:${id}`,
+          title: `Watchlist member removed: ${id}`,
+          body: `${id} no longer matches the smart watchlist filter.`,
+          diff: [{ field: "watchlist_membership", old: "added", new: null }],
+          payload: { watchlist_id: watchlistId, entity_id: id, change: "removed" },
+        }, id).catch((e) => console.warn("smart member_removed dispatch failed", id, (e as Error).message));
+      }
+    }
+  }
 
   return { added: toAdd.length, removed: toRemove.length };
 }

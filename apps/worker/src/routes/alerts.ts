@@ -222,6 +222,7 @@ alerts.post("/test/:rule_id", async (c) => {
   const evt = await evaluate(rule.trigger_kind as never, {
     env: c.env, entityId, ownerEmail: email,
     oldSummary: synthetic, newSummary: current, diff, ruleConfig: (cfg as Record<string, unknown>) ?? {},
+    sinceWatermark: null,
   });
   return c.json({
     ok: true, dry_run: true, entity_id: entityId,

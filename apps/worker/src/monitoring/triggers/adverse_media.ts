@@ -7,7 +7,7 @@ import type { EvaluatorFn } from "../types";
 const NEG_KEYWORDS = /(lawsuit|fraud|scandal|charged|indict|sec\s*probe|investigation|fired|resign|breach|hack|leak|fine|penalt)/i;
 
 export const evalAdverseMedia: EvaluatorFn = async (ctx) => {
-  const since = ctx.oldSummary?.last_news_at ?? null;
+  const since = ctx.sinceWatermark ?? ctx.oldSummary?.last_news_at ?? null;
   try {
     const rows = await ctx.env.DB.prepare(
       `SELECT nem.id AS id, na.title AS title, na.url AS url, na.published_at AS published_at,

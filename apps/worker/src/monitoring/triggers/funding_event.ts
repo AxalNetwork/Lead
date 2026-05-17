@@ -6,7 +6,7 @@ import type { EvaluatorFn } from "../types";
 const FUND_KW = /(raise[ds]?|round|series\s*[a-f]|seed|funding|capital)/i;
 
 export const evalFundingEvent: EvaluatorFn = async (ctx) => {
-  const since = ctx.oldSummary?.last_news_at ?? null;
+  const since = ctx.sinceWatermark ?? ctx.oldSummary?.last_news_at ?? null;
   // (1) investor_investments where this entity is the company.
   try {
     const rows = await ctx.env.DB.prepare(

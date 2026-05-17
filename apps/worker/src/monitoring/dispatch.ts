@@ -47,6 +47,13 @@ export async function monitorEntity(env: Env, entityId: string): Promise<Monitor
   const newHash = await fingerprintSummary(newSummary);
   const last = await loadLatestSnapshot(env, entityId);
 
+  // Capture the prior watermark BEFORE stamping a new one — this is the
+  // source-table cutoff source-driven evaluators filter against.
+  const prior = await env.DB.prepare(
+    `SELECT last_evaluated_at FROM entity_monitor_state WHERE entity_id = ?`,
+  ).bind(entityId).first<{ last_evaluated_at: string | null }>();
+  const sinceWatermark = prior?.last_evaluated_at ?? null;
+
   // Stamp evaluation timestamp regardless of outcome (idempotency anchor).
   await env.DB.prepare(
     `INSERT INTO entity_monitor_state (entity_id, last_evaluated_at, last_hash)
@@ -102,6 +109,7 @@ export async function monitorEntity(env: Env, entityId: string): Promise<Monitor
     const ctx: EvalContext = {
       env, entityId, ownerEmail: rule.owner_email,
       oldSummary: last?.summary ?? null, newSummary, diff, ruleConfig: cfg,
+      sinceWatermark,
     };
     const evt = await evaluate(rule.trigger_kind as TriggerKind, ctx);
     if (!evt) continue;
@@ -113,9 +121,9 @@ export async function monitorEntity(env: Env, entityId: string): Promise<Monitor
   return result;
 }
 
-type DispatchOutcome = "delivered" | "suppressed" | "pending" | "failed" | "digested";
+export type DispatchOutcome = "delivered" | "suppressed" | "pending" | "failed" | "digested";
 
-async function dispatchEvent(env: Env, rule: AlertRuleRow, evt: EvaluatedAlert, entityId: string): Promise<DispatchOutcome> {
+export async function dispatchEvent(env: Env, rule: AlertRuleRow, evt: EvaluatedAlert, entityId: string): Promise<DispatchOutcome> {
   // 1. Dedupe check. The entity id is part of the hash so watchlist-scoped
   //    rules dedupe per-entity rather than collapsing across members.
   const hash = await sha256Hex(`${rule.id}|${entityId}|${rule.trigger_kind}|${evt.dedupe_key}`);

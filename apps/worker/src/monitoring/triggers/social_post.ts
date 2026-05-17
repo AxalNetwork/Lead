@@ -5,7 +5,9 @@ import type { EvaluatorFn } from "../types";
 // table is optional.
 export function makeSocialPostEvaluator(platform: string, kindLabel: string): EvaluatorFn {
   return async (ctx) => {
-    const since = (ctx.oldSummary as Record<string, unknown> | null)?.["last_post_at"] as string | null ?? null;
+    const since = ctx.sinceWatermark
+      ?? ((ctx.oldSummary as Record<string, unknown> | null)?.["last_post_at"] as string | null)
+      ?? null;
     try {
       const rows = await ctx.env.DB.prepare(
         `SELECT id, platform, posted_at, url, snippet

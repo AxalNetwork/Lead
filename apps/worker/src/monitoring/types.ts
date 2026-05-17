@@ -69,6 +69,14 @@ export interface EvalContext {
   newSummary: CanonicalSummary;
   diff: FieldDiff[];
   ruleConfig: Record<string, unknown>;
+  /**
+   * Watermark — the prior monitor tick's `last_evaluated_at` for this
+   * entity. Source-driven evaluators MUST filter their source-table
+   * queries by `> sinceWatermark` so they don't re-emit the same row on
+   * every tick (the dedupe window only suppresses for ~1h; the watermark
+   * is the durable "we already saw this" anchor).
+   */
+  sinceWatermark: string | null;
 }
 
 export type EvaluatorFn = (ctx: EvalContext) => Promise<EvaluatedAlert | null>;

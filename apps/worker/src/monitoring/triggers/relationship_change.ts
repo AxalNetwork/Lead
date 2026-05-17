@@ -3,7 +3,9 @@ import type { EvaluatorFn } from "../types";
 // Fires when this entity is on either side of a fresh row in the
 // relationships table (e.g. board appointment, co-investment, advisor).
 export const evalRelationshipChange: EvaluatorFn = async (ctx) => {
-  const since = (ctx.oldSummary as Record<string, unknown> | null)?.["last_relationship_at"] as string | null ?? null;
+  const since = ctx.sinceWatermark
+    ?? ((ctx.oldSummary as Record<string, unknown> | null)?.["last_relationship_at"] as string | null)
+    ?? null;
   try {
     const rows = await ctx.env.DB.prepare(
       `SELECT id, source_entity_id, target_entity_id, kind, created_at

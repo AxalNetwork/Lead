@@ -4,7 +4,12 @@ import type { EvaluatorFn } from "../types";
 // investor_investments (i.e. a new portfolio company). Defensive: the
 // table may not exist in every deployment.
 export const evalNewPortfolioAddition: EvaluatorFn = async (ctx) => {
-  const since = (ctx.oldSummary as Record<string, unknown> | null)?.["last_investment_at"] as string | null ?? null;
+  // Watermark from prior tick is the source-of-truth cutoff so we don't
+  // re-fire the same row after the dedupe window expires. Fall back to
+  // a summary field if present, else null (first-ever evaluation).
+  const since = ctx.sinceWatermark
+    ?? ((ctx.oldSummary as Record<string, unknown> | null)?.["last_investment_at"] as string | null)
+    ?? null;
   try {
     const rows = await ctx.env.DB.prepare(
       `SELECT id, company_entity_id, company_name, announced_at
