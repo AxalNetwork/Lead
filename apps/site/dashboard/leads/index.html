@@ -1,0 +1,54 @@
+---
+layout: default
+title: Leads
+permalink: /dashboard/leads/
+---
+
+<h1 class="ads-page-title">Leads</h1>
+<p class="ads-page-sub">Triage inbound + scraped leads. Select rows to bulk-assign roles, tag, enrich, merge, export, or delete.</p>
+
+<div class="ads-card">
+  <form id="ads-leads-filters" class="ads-filter-grid ads-filter-grid--6" autocomplete="off">
+    <label class="ads-field"><span>Status</span>
+      <select name="status">
+        <option value="">all</option>
+        <option value="new">new</option>
+        <option value="verified">verified</option>
+        <option value="flagged">flagged</option>
+        <option value="archived">archived</option>
+      </select>
+    </label>
+    <label class="ads-field"><span>Sector</span><input name="sector" placeholder="ai, fintech…"></label>
+    <label class="ads-field"><span>Geography</span><input name="geography" placeholder="us, fr, sf…"></label>
+    <label class="ads-field"><span>DNC</span>
+      <select name="dnc"><option value="">any</option><option value="0">off</option><option value="1">on</option></select>
+    </label>
+    <div style="grid-column:1/-1;display:flex;gap:8px">
+      <button class="ads-btn" type="submit">Apply</button>
+      <button class="ads-btn ads-btn--ghost" type="reset">Reset</button>
+    </div>
+  </form>
+</div>
+
+<div class="ads-card" style="margin-top:12px">
+ <div class="ads-table-wrap">
+  <table class="ads-table" style="width:100%;border-collapse:collapse">
+    <thead><tr>
+      <th style="text-align:left;padding:8px;width:32px"><input type="checkbox" id="ads-bulk-header-check" aria-label="Select all on page"></th>
+      <th style="text-align:left;padding:8px">Name</th>
+      <th style="text-align:left;padding:8px">Org</th>
+      <th style="text-align:left;padding:8px">Email</th>
+      <th style="text-align:left;padding:8px">Status</th>
+      <th style="text-align:left;padding:8px">Country</th>
+      <th style="text-align:right;padding:8px">Updated</th>
+    </tr></thead>
+    <tbody id="ads-leads-tbody"><tr><td class="ads-muted" colspan="7">Loading…</td></tr></tbody>
+  </table>
+ </div>
+ <div style="margin-top:12px;text-align:center">
+   <button class="ads-btn ads-btn--ghost" id="ads-leads-more" hidden>Load more</button>
+ </div>
+</div>
+
+<script src="/assets/js/bulk-bar.js?v={{ site.time | date: '%s' }}"></script>
+<script src="/assets/js/leads.js?v={{ site.time | date: '%s' }}"></script>

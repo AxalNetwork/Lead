@@ -24,10 +24,7 @@
 import { Hono } from "hono";
 import type { Env } from "../types";
 import type { EntityRole } from "../entities/model";
-import { addTag } from "../entities/tags";
-import { addRole } from "../entities/roles";
 import { mergeWithCanonical } from "../entities/merge";
-import type { Taxonomy } from "../entities/model";
 
 const HARD_CAP = 5000;
 const CONFIRM_THRESHOLD = 100;
@@ -328,24 +325,25 @@ bulk.post("/assign-role", async (c) => {
       mutated += 1;
     } else {
       if (before) continue; // already present — no-op, no audit row.
-      // Audit before the role write so that a partial failure still
-      // leaves an undo-able audit row. addRole is idempotent but
-      // swallows DB errors internally, so we verify the post-write
-      // state before counting `affected` — never report success for
-      // a row that didn't actually persist.
-      await auditStmt(c.env, opId, "assign_role", entityId,
-        { exists: false, role }, { exists: true, role, source: "bulk" }, email).run();
-      await addRole(c.env, entityId, role, { source: "bulk" });
-      const after = await c.env.DB.prepare(
-        `SELECT 1 FROM entity_roles WHERE entity_id = ? AND role = ?`,
-      ).bind(entityId, role).first<{ 1: number }>();
-      if (!after) {
-        await c.env.DB.prepare(
-          `UPDATE bulk_operation_audit SET undo_conflict = 1 WHERE operation_id = ? AND entity_id = ? AND action = 'assign_role'`,
-        ).bind(opId, entityId).run();
-        continue;
-      }
-      mutated += 1;
+      // Single-transaction audit + role insert via D1.batch().
+      // We mirror the addRole() SQL inline so the audit row and the
+      // mutation share one SQLite transaction; if the INSERT aborts,
+      // the audit row rolls back with it. addRole() semantics
+      // (ON CONFLICT upgrades is_primary / confidence) are preserved.
+      const batch = await c.env.DB.batch([
+        auditStmt(c.env, opId, "assign_role", entityId,
+          { exists: false, role }, { exists: true, role, source: "bulk" }, email),
+        c.env.DB.prepare(
+          `INSERT INTO entity_roles (entity_id, role, is_primary, source, confidence)
+           VALUES (?, ?, 0, 'bulk', 1)
+           ON CONFLICT(entity_id, role) DO UPDATE SET
+             is_primary = MAX(is_primary, excluded.is_primary),
+             confidence = MAX(confidence, excluded.confidence)`,
+        ).bind(entityId, role),
+      ]);
+      // D1.batch surfaces a per-statement success flag — only count
+      // affected when the INSERT actually applied.
+      if (batch[1] && batch[1].success) mutated += 1;
     }
   }
   return c.json({ ok: true, operation_id: opId, affected: mutated, dropped, role, removed: remove }, 200);
@@ -379,22 +377,20 @@ bulk.post("/add-tag", async (c) => {
       `SELECT id FROM entity_tags WHERE entity_id = ? AND taxonomy = ? AND slug = ?`,
     ).bind(entityId, taxonomy, slug).first<{ id: number }>();
     if (existed) continue;
-    // Audit before mutation (addTag is idempotent on conflict).
-    // addTag swallows DB errors internally, so we re-read to verify
-    // the row actually persisted before counting `affected`.
-    await writeAudit(c.env, opId, "add_tag", entityId,
-      { exists: false, taxonomy, slug }, { exists: true, taxonomy, slug }, email);
-    await addTag(c.env, { entity_id: entityId, taxonomy: taxonomy as Taxonomy, slug, source: "bulk" });
-    const after = await c.env.DB.prepare(
-      `SELECT 1 FROM entity_tags WHERE entity_id = ? AND taxonomy = ? AND slug = ?`,
-    ).bind(entityId, taxonomy, slug).first<{ 1: number }>();
-    if (!after) {
-      await c.env.DB.prepare(
-        `UPDATE bulk_operation_audit SET undo_conflict = 1 WHERE operation_id = ? AND entity_id = ? AND action = 'add_tag'`,
-      ).bind(opId, entityId).run();
-      continue;
-    }
-    mutated += 1;
+    // Single-transaction audit + tag insert via D1.batch(). Mirrors
+    // addTag()'s SQL inline so the audit row and the mutation share
+    // one SQLite transaction.
+    const batch = await c.env.DB.batch([
+      auditStmt(c.env, opId, "add_tag", entityId,
+        { exists: false, taxonomy, slug }, { exists: true, taxonomy, slug }, email),
+      c.env.DB.prepare(
+        `INSERT INTO entity_tags (entity_id, taxonomy, slug, weight, source)
+         VALUES (?, ?, ?, 1, 'bulk')
+         ON CONFLICT(entity_id, taxonomy, slug)
+         DO UPDATE SET weight = MAX(weight, excluded.weight)`,
+      ).bind(entityId, taxonomy, slug),
+    ]);
+    if (batch[1] && batch[1].success) mutated += 1;
   }
   return c.json({ ok: true, operation_id: opId, affected: mutated, dropped, taxonomy, slug }, 200);
 });
@@ -492,9 +488,35 @@ bulk.post("/merge", async (c) => {
   const results: Array<{ secondary: string; ok: boolean; error?: string }> = [];
   for (const sid of visibleMerge.filter((x) => x !== canonicalResolved)) {
     try {
+      // Snapshot the secondary's row provenance BEFORE the merge so
+      // undo can move the exact rows back. We capture row ids only —
+      // their post-merge entity_id is canonical, so the inverse is
+      // `UPDATE … SET entity_id = secondary WHERE id IN (…)`.
+      const [factIds, channelIds, tagIds, edgeSrcIds, edgeDstIds, legacyIds, secRoles, secEntity] = await Promise.all([
+        c.env.DB.prepare(`SELECT id FROM facts    WHERE entity_id = ?`).bind(sid).all<{ id: string }>(),
+        c.env.DB.prepare(`SELECT id FROM channels WHERE entity_id = ?`).bind(sid).all<{ id: string }>(),
+        c.env.DB.prepare(`SELECT id FROM entity_tags WHERE entity_id = ?`).bind(sid).all<{ id: number }>(),
+        c.env.DB.prepare(`SELECT id FROM rel_edges WHERE src_entity_id = ?`).bind(sid).all<{ id: string }>(),
+        c.env.DB.prepare(`SELECT id FROM rel_edges WHERE dst_entity_id = ?`).bind(sid).all<{ id: string }>(),
+        c.env.DB.prepare(`SELECT id FROM entity_legacy_map WHERE entity_id = ?`).bind(sid).all<{ id: number }>(),
+        c.env.DB.prepare(`SELECT role, is_primary, source, confidence FROM entity_roles WHERE entity_id = ?`).bind(sid).all<{ role: string; is_primary: number; source: string | null; confidence: number }>(),
+        c.env.DB.prepare(`SELECT status, merged_into_entity_id FROM u_entities WHERE id = ?`).bind(sid).first<{ status: string; merged_into_entity_id: string | null }>(),
+      ]);
+      const snapshot = {
+        status: secEntity?.status ?? "active",
+        merged_into: secEntity?.merged_into_entity_id ?? null,
+        fact_ids: (factIds.results ?? []).map((r) => r.id),
+        channel_ids: (channelIds.results ?? []).map((r) => r.id),
+        tag_ids: (tagIds.results ?? []).map((r) => r.id),
+        edge_src_ids: (edgeSrcIds.results ?? []).map((r) => r.id),
+        edge_dst_ids: (edgeDstIds.results ?? []).map((r) => r.id),
+        legacy_map_ids: (legacyIds.results ?? []).map((r) => r.id),
+        roles: secRoles.results ?? [],
+      };
       const r = await mergeWithCanonical(c.env, canonicalResolved, sid);
       await writeAudit(c.env, opId, "merge", sid,
-        { status: "active" }, { status: "merged", merged_into: canonicalResolved, result: r }, email);
+        { status: "active", canonical_id: canonicalResolved, snapshot },
+        { status: "merged", merged_into: canonicalResolved, result: r }, email);
       results.push({ secondary: sid, ok: true });
     } catch (e) {
       const msg = (e as Error).message;
@@ -722,9 +744,72 @@ async function undoOne(
     return false;
   }
   if (action === "merge") {
-    // Merge is intentionally not auto-reversible; flag as conflict so
-    // the operator unmerges manually with the existing /entities/:id/unmerge.
-    return true;
+    // Best-effort replay using the pre-merge snapshot captured by the
+    // /merge endpoint. Inverse: move the exact rows whose ids we
+    // snapshotted back to the secondary, restore the secondary's
+    // role rows, and flip u_entities back to active. Note: roles
+    // that ON-CONFLICT-upgraded canonical's confidence/is_primary
+    // are NOT reverted on the canonical side (we can't safely
+    // distinguish a pre-merge canonical role from the upgrade).
+    const snap = before.snapshot as {
+      status?: string; fact_ids?: string[]; channel_ids?: string[];
+      tag_ids?: number[]; edge_src_ids?: string[]; edge_dst_ids?: string[];
+      legacy_map_ids?: number[]; roles?: Array<{ role: string; is_primary: number; source: string | null; confidence: number }>;
+    } | undefined;
+    const canonical = String((before.canonical_id ?? after.merged_into ?? "") || "");
+    if (!snap || !canonical) return true;
+    // Conflict check: secondary must still be in the post-merge state
+    // we left it in. If it was already unmerged or re-merged
+    // elsewhere, leave it alone and surface a conflict.
+    const cur = await env.DB.prepare(`SELECT status, merged_into_entity_id FROM u_entities WHERE id = ?`)
+      .bind(entityId).first<{ status: string; merged_into_entity_id: string | null }>();
+    if (!cur) return true;
+    if (cur.status !== "merged" || cur.merged_into_entity_id !== canonical) return true;
+    const stmts: D1PreparedStatement[] = [];
+    if (snap.fact_ids?.length) {
+      const ph = snap.fact_ids.map(() => "?").join(",");
+      stmts.push(env.DB.prepare(`UPDATE facts SET entity_id = ? WHERE id IN (${ph}) AND entity_id = ?`)
+        .bind(entityId, ...snap.fact_ids, canonical));
+    }
+    if (snap.channel_ids?.length) {
+      const ph = snap.channel_ids.map(() => "?").join(",");
+      stmts.push(env.DB.prepare(`UPDATE channels SET entity_id = ? WHERE id IN (${ph}) AND entity_id = ?`)
+        .bind(entityId, ...snap.channel_ids, canonical));
+    }
+    if (snap.tag_ids?.length) {
+      const ph = snap.tag_ids.map(() => "?").join(",");
+      stmts.push(env.DB.prepare(`UPDATE entity_tags SET entity_id = ? WHERE id IN (${ph}) AND entity_id = ?`)
+        .bind(entityId, ...snap.tag_ids, canonical));
+    }
+    if (snap.edge_src_ids?.length) {
+      const ph = snap.edge_src_ids.map(() => "?").join(",");
+      stmts.push(env.DB.prepare(`UPDATE rel_edges SET src_entity_id = ? WHERE id IN (${ph}) AND src_entity_id = ?`)
+        .bind(entityId, ...snap.edge_src_ids, canonical));
+    }
+    if (snap.edge_dst_ids?.length) {
+      const ph = snap.edge_dst_ids.map(() => "?").join(",");
+      stmts.push(env.DB.prepare(`UPDATE rel_edges SET dst_entity_id = ? WHERE id IN (${ph}) AND dst_entity_id = ?`)
+        .bind(entityId, ...snap.edge_dst_ids, canonical));
+    }
+    if (snap.legacy_map_ids?.length) {
+      const ph = snap.legacy_map_ids.map(() => "?").join(",");
+      stmts.push(env.DB.prepare(`UPDATE entity_legacy_map SET entity_id = ? WHERE id IN (${ph}) AND entity_id = ?`)
+        .bind(entityId, ...snap.legacy_map_ids, canonical));
+    }
+    for (const r of snap.roles ?? []) {
+      stmts.push(env.DB.prepare(
+        `INSERT INTO entity_roles (entity_id, role, is_primary, source, confidence)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(entity_id, role) DO UPDATE SET
+           is_primary = MAX(is_primary, excluded.is_primary),
+           confidence = MAX(confidence, excluded.confidence)`,
+      ).bind(entityId, r.role, r.is_primary, r.source, r.confidence));
+    }
+    stmts.push(env.DB.prepare(
+      `UPDATE u_entities SET status = ?, merged_into_entity_id = NULL, updated_at = datetime('now') WHERE id = ?`,
+    ).bind(snap.status ?? "active", entityId));
+    if (stmts.length) await env.DB.batch(stmts);
+    return false;
   }
   if (action === "enrich" || action === "export") {
     // No inverse — these are non-destructive side-effects.
