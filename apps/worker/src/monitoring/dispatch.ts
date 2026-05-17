@@ -148,8 +148,13 @@ export async function dispatchEvent(env: Env, rule: AlertRuleRow, evt: Evaluated
   const window = rule.dedupe_window_seconds ?? 3600;
   const cutoff = new Date(Date.now() - window * 1000).toISOString();
   const dup = await env.DB.prepare(
+    // Suppress only against events that ACTUALLY landed somewhere
+    // (delivered to a channel OR rolled into a sent digest). `pending`
+    // (retrying webhook) and `failed`/`suppressed_duplicate` rows must
+    // NOT block a fresh attempt — otherwise a flaky webhook destination
+    // would block every subsequent event within the dedupe window.
     `SELECT id FROM alert_events WHERE dedupe_hash = ? AND occurred_at > ?
-       AND delivery_status NOT IN ('failed') LIMIT 1`,
+       AND delivery_status IN ('delivered', 'digested') LIMIT 1`,
   ).bind(hash, cutoff).first<{ id: string }>();
 
   const eventId = crypto.randomUUID();
