@@ -34,6 +34,11 @@
     "src/monitoring/smart.ts",
     "src/monitoring/channels/in_app.ts",
     "src/monitoring/channels/email.ts",
-    "src/monitoring/channels/slack.ts"
+    "src/monitoring/channels/slack.ts",
+    "src/osint/platforms.ts",
+    "src/osint/types.ts",
+    "src/osint/hashing.ts",
+    "src/osint/guardrails.ts",
+    "src/osint/pivots/writing_style.ts"
   ]
 }

@@ -1,0 +1,26 @@
+---
+layout: default
+title: OSINT — Candidates review queue
+permalink: /dashboard/osint-candidates/
+---
+
+<h1 class="ads-page-title">OSINT — Candidates review queue</h1>
+<p class="ads-page-sub">
+  Identity-handle candidates surfaced by the OSINT pivots that did not meet the
+  auto-link threshold (confidence ≥ 0.85 with corroboration), failed a guardrail,
+  or conflict with an already-linked entity. Accept to promote into
+  <code>identity_handles</code>; reject to discard without demotion.
+  Filters: <code>?status=pending|accepted|rejected</code>,
+  <code>?entity_id=…</code>.
+</p>
+
+<div class="ads-card" id="ads-osint-candidates" style="margin-bottom:18px">
+  <div class="ads-loading">Loading…</div>
+</div>
+
+<script src="/assets/js/osint.js"></script>
+<script>
+(function () {
+  if (window.ADSOsint) window.ADSOsint.renderCandidates("ads-osint-candidates");
+})();
+</script>

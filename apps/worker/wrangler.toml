@@ -288,6 +288,25 @@ binding = "WF_DIGEST"
 name = "monitor-digest"
 class_name = "DigestWorkflow"
 
+# Task #3 (this task): per-entity OSINT resolve workflow. Runs the
+# 10-pivot framework with a 60s wall-clock budget + EntityLock.
+[[workflows]]
+binding = "WF_OSINT_RESOLVE_ENTITY"
+name = "osint-resolve-entity"
+class_name = "OSINTResolveEntityWorkflow"
+
+# Task #3: nightly OSINT batch — picks stalest entities + resolves them.
+[[workflows]]
+binding = "WF_OSINT_BATCH"
+name = "osint-batch"
+class_name = "OSINTBatchWorkflow"
+
+# Task #3: nightly 90-day re-verification sweep — demotes dead handles.
+[[workflows]]
+binding = "WF_OSINT_REVERIFY"
+name = "osint-reverify"
+class_name = "OSINTReverifyWorkflow"
+
 [[queues.producers]]
 binding = "LEAD_QUEUE"
 queue = "aidatasignal-lead-jobs"

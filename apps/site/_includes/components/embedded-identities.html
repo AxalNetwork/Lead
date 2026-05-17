@@ -1,0 +1,23 @@
+{%- comment -%}
+  Identities tab — drops onto any entity detail page. The host page must:
+    1. expose the entity id as `window.ADS_ENTITY_ID` (already done by
+       lead.html / dd-entity.html via the URL `?id=` parameter).
+    2. include /assets/js/osint.js once.
+  Renders into #ads-osint-identities.
+{%- endcomment -%}
+<div class="ads-card" id="ads-osint-identities" style="margin-bottom:18px">
+  <div class="ads-loading">Loading identities…</div>
+</div>
+<script src="/assets/js/osint.js"></script>
+<script>
+(function () {
+  function entityIdFromUrl() {
+    try {
+      var p = new URLSearchParams(location.search);
+      return p.get("id") || p.get("entity") || window.ADS_ENTITY_ID || "";
+    } catch (e) { return ""; }
+  }
+  var eid = entityIdFromUrl();
+  if (eid && window.ADSOsint) window.ADSOsint.renderIdentities("ads-osint-identities", eid);
+})();
+</script>

@@ -1,0 +1,24 @@
+{
+  "_comment": "Common parody / fan / brand-impersonator / generic handles. Never auto-link.",
+  "global": [
+    "admin", "administrator", "info", "contact", "support", "help", "team",
+    "office", "official", "root", "user", "test", "demo", "guest", "noreply",
+    "anonymous", "anon", "me", "myself", "you", "null", "undefined",
+    "founder", "ceo", "cto", "press", "media", "marketing", "sales",
+    "hello", "hi", "hey", "world", "example"
+  ],
+  "patterns": [
+    "_fan$",
+    "_fans$",
+    "_parody$",
+    "fake_",
+    "^the_real_",
+    "_official$",
+    "_news$",
+    "_bot$"
+  ],
+  "by_platform": {
+    "twitter": ["elonmusk_fan", "tim_apple", "jeff_bezos_fan", "satoshi_official"],
+    "github":  ["admin", "system", "ghost", "actions-user"]
+  }
+}

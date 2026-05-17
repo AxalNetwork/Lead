@@ -1,0 +1,212 @@
+// Task #3 — OSINT identities client. Renders identities + coverage + handles
+// "Run resolve now" + per-platform manual probe. Lives on the entity detail
+// page (Identities tab) AND backs the candidates review page.
+
+(function () {
+  const API = (window.ADS_API_BASE || "https://api.aidatasignal.com").replace(/\/$/, "");
+  function el(tag, attrs, children) {
+    const e = document.createElement(tag);
+    if (attrs) for (const k of Object.keys(attrs)) {
+      if (k === "class") e.className = attrs[k];
+      else if (k === "html") e.innerHTML = attrs[k];
+      else if (k.startsWith("on") && typeof attrs[k] === "function") e.addEventListener(k.slice(2), attrs[k]);
+      else if (attrs[k] !== null && attrs[k] !== undefined) e.setAttribute(k, attrs[k]);
+    }
+    for (const c of (children || [])) {
+      if (c == null) continue;
+      e.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+    }
+    return e;
+  }
+  function escape(s) { return String(s == null ? "" : s).replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" })[c]); }
+  function fmtConf(c) { const n = Number(c || 0); return (n * 100).toFixed(0) + "%"; }
+  function ago(s) {
+    if (!s) return "—";
+    const d = new Date(s);
+    if (isNaN(+d)) return s;
+    const m = Math.floor((Date.now() - +d) / 60000);
+    if (m < 60) return m + "m";
+    if (m < 1440) return Math.floor(m / 60) + "h";
+    return Math.floor(m / 1440) + "d";
+  }
+  async function jget(path) {
+    const r = await fetch(API + path, { credentials: "include" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+  async function jpost(path, body) {
+    const r = await fetch(API + path, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : "{}" });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+
+  async function renderIdentities(rootId, entityId) {
+    const root = document.getElementById(rootId);
+    if (!root || !entityId) return;
+    root.innerHTML = '<div class="ads-loading">Loading identities…</div>';
+    try {
+      const [info, cov] = await Promise.all([
+        jget(`/api/osint/entity/${encodeURIComponent(entityId)}`),
+        jget(`/api/osint/entity/${encodeURIComponent(entityId)}/coverage`),
+      ]);
+      root.innerHTML = "";
+
+      // Header + run button
+      const head = el("div", { class: "ads-active__head" }, [
+        el("h3", null, ["Cross-platform identities"]),
+        el("span", { class: "ads-muted" }, [
+          `${info.handles.length} active · ${info.pending_candidates} pending · coverage ${cov.covered}/${cov.total_platforms}`,
+        ]),
+      ]);
+      root.appendChild(head);
+
+      const runBtn = el("button", { class: "ads-btn" }, ["Run OSINT resolve now"]);
+      const msg = el("div", { class: "ads-form-msg", style: "margin:6px 0 12px 0" });
+      runBtn.onclick = async () => {
+        runBtn.disabled = true; runBtn.textContent = "Dispatching…"; msg.textContent = "";
+        try {
+          const r = await jpost(`/api/osint/entity/${encodeURIComponent(entityId)}/resolve`, {});
+          msg.textContent = r.mode === "workflow"
+            ? `Workflow ${r.workflow_id} dispatched — results will appear within ~60s.`
+            : `Inline resolve completed: auto-linked=${r.summary.autoLinked}, queued=${r.summary.candidatesAdded}, conflicts=${r.summary.conflictsSurfaced}.`;
+          setTimeout(() => renderIdentities(rootId, entityId), 2000);
+        } catch (e) { msg.textContent = "Error: " + e.message; }
+        finally { runBtn.disabled = false; runBtn.textContent = "Run OSINT resolve now"; }
+      };
+      root.appendChild(el("div", { style: "display:flex;gap:8px;align-items:center;margin-bottom:10px" }, [runBtn, msg]));
+
+      // Handles table
+      const tbl = el("table", { class: "ads-table", style: "width:100%" }, [
+        el("thead", null, [el("tr", null, [
+          el("th", null, ["Platform"]), el("th", null, ["Handle"]),
+          el("th", null, ["Method"]), el("th", null, ["Confidence"]),
+          el("th", null, ["Verified"]), el("th", null, ["Link"]),
+        ])]),
+      ]);
+      const tb = el("tbody");
+      if (!info.handles.length) {
+        tb.appendChild(el("tr", null, [el("td", { colspan: "6", class: "ads-muted" }, ["No identities resolved yet."])]));
+      }
+      for (const h of info.handles) {
+        const row = el("tr", { style: h.is_active ? "" : "opacity:.55" }, [
+          el("td", null, [h.platform]),
+          el("td", null, [h.handle]),
+          el("td", null, [h.link_method + (h.evidence && h.evidence.corroborations ? ` (×${h.evidence.corroborations})` : "")]),
+          el("td", null, [fmtConf(h.link_confidence)]),
+          el("td", { class: "ads-muted" }, [ago(h.last_verified_at) + (h.demoted_reason ? ` · demoted: ${h.demoted_reason}` : "")]),
+          el("td", null, [h.url ? el("a", { href: h.url, target: "_blank", rel: "noopener" }, ["open"]) : "—"]),
+        ]);
+        tb.appendChild(row);
+      }
+      tbl.appendChild(tb);
+      root.appendChild(tbl);
+
+      // Pivots log
+      if (info.pivots_log && info.pivots_log.length) {
+        const det = el("details", { style: "margin-top:14px" }, [
+          el("summary", { class: "ads-muted" }, [`Last run — ${ago(info.last_osint_run_at)} ago`]),
+          el("pre", { style: "font-size:11px;background:#fafafa;padding:8px;border-radius:6px;overflow:auto" },
+            [JSON.stringify(info.pivots_log, null, 2)]),
+        ]);
+        root.appendChild(det);
+      }
+
+      // Coverage matrix
+      const covWrap = el("div", { style: "margin-top:18px" }, [el("h4", null, ["Platform coverage"])]);
+      const grid = el("div", { style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:6px" });
+      for (const m of cov.matrix) {
+        grid.appendChild(el("div", {
+          title: `${m.label} · ${m.category}`,
+          style: `border:1px solid #e5e5e5;padding:6px 8px;border-radius:6px;font-size:12px;background:${m.active ? "#e8f5e9" : "#fafafa"};color:${m.active ? "#1b5e20" : "#999"}`,
+        }, [`${m.label}${m.active ? " ✓ " + fmtConf(m.confidence) : ""}`]));
+      }
+      covWrap.appendChild(grid);
+      root.appendChild(covWrap);
+
+      // Manual probe
+      const probeForm = el("div", { style: "margin-top:18px;padding:10px;border:1px dashed #ccc;border-radius:6px" }, [
+        el("strong", null, ["Manual probe"]), el("br"),
+        el("span", { class: "ads-muted" }, ["Hits enqueue as pending candidates (confidence 0.5)."]),
+      ]);
+      const platSel = el("select", { id: "ads-osint-probe-plat", style: "margin:6px 6px 0 0;padding:4px 6px" });
+      for (const m of cov.matrix) platSel.appendChild(el("option", { value: m.platform }, [m.label]));
+      const handleInp = el("input", { type: "text", id: "ads-osint-probe-handle", placeholder: "handle", style: "padding:4px 6px;margin:6px 6px 0 0" });
+      const probeBtn = el("button", { class: "ads-btn" }, ["Probe"]);
+      const probeMsg = el("div", { class: "ads-form-msg", style: "margin-top:6px" });
+      probeBtn.onclick = async () => {
+        probeMsg.textContent = "";
+        try {
+          const r = await jpost(`/api/osint/entity/${encodeURIComponent(entityId)}/probe`, { platform: platSel.value, handle: handleInp.value.trim() });
+          probeMsg.textContent = r.exists ? `Found (HTTP ${r.http_status}) — queued as pending candidate.` : `Not found (HTTP ${r.http_status}).`;
+        } catch (e) { probeMsg.textContent = "Error: " + e.message; }
+      };
+      probeForm.appendChild(platSel); probeForm.appendChild(handleInp); probeForm.appendChild(probeBtn); probeForm.appendChild(probeMsg);
+      root.appendChild(probeForm);
+    } catch (e) {
+      root.innerHTML = `<div class="ads-error">Failed to load identities: ${escape(e.message)}</div>`;
+    }
+  }
+
+  async function renderCandidates(rootId) {
+    const root = document.getElementById(rootId);
+    if (!root) return;
+    const params = new URLSearchParams(location.search);
+    const status = params.get("status") || "pending";
+    const entityFilter = params.get("entity_id") || "";
+    root.innerHTML = '<div class="ads-loading">Loading candidates…</div>';
+    try {
+      const q = new URLSearchParams({ status, limit: "200" });
+      if (entityFilter) q.set("entity_id", entityFilter);
+      const data = await jget(`/api/osint/candidates?${q.toString()}`);
+      root.innerHTML = "";
+      root.appendChild(el("div", { class: "ads-active__head" }, [
+        el("h3", null, [`Candidates — ${status}`]),
+        el("span", { class: "ads-muted" }, [`${data.items.length} item(s)`]),
+      ]));
+      if (!data.items.length) {
+        root.appendChild(el("div", { class: "ads-muted" }, ["Nothing to review."]));
+        return;
+      }
+      const tbl = el("table", { class: "ads-table", style: "width:100%" }, [
+        el("thead", null, [el("tr", null, [
+          el("th", null, ["Entity"]), el("th", null, ["Platform"]), el("th", null, ["Handle"]),
+          el("th", null, ["Method"]), el("th", null, ["Confidence"]), el("th", null, ["Reason"]),
+          el("th", null, ["Actions"]),
+        ])]),
+      ]);
+      const tb = el("tbody");
+      for (const it of data.items) {
+        const reason = (it.evidence && (it.evidence.queue_reason || JSON.stringify(it.evidence).slice(0, 80))) || "—";
+        const accept = el("button", { class: "ads-btn" }, ["Accept"]);
+        const reject = el("button", { class: "ads-btn", style: "margin-left:6px" }, ["Reject"]);
+        const row = el("tr", null, [
+          el("td", null, [el("a", { href: `/dashboard/lead.html?id=${encodeURIComponent(it.entity_id)}` }, [it.entity_id.slice(0, 8) + "…"])]),
+          el("td", null, [it.platform]),
+          el("td", null, [it.url ? el("a", { href: it.url, target: "_blank", rel: "noopener" }, [it.handle]) : it.handle]),
+          el("td", null, [it.link_method]),
+          el("td", null, [fmtConf(it.link_confidence)]),
+          el("td", { class: "ads-muted", style: "max-width:280px" }, [reason]),
+          el("td", null, [accept, reject]),
+        ]);
+        accept.onclick = async () => {
+          accept.disabled = true; reject.disabled = true;
+          try { await jpost(`/api/osint/candidates/${encodeURIComponent(it.id)}/accept`, {}); row.style.opacity = ".4"; row.lastChild.textContent = "accepted"; }
+          catch (e) { alert("Accept failed: " + e.message); accept.disabled = false; reject.disabled = false; }
+        };
+        reject.onclick = async () => {
+          const reason = prompt("Reject reason (optional)") || null;
+          accept.disabled = true; reject.disabled = true;
+          try { await jpost(`/api/osint/candidates/${encodeURIComponent(it.id)}/reject`, { reason }); row.style.opacity = ".4"; row.lastChild.textContent = "rejected"; }
+          catch (e) { alert("Reject failed: " + e.message); accept.disabled = false; reject.disabled = false; }
+        };
+        tb.appendChild(row);
+      }
+      tbl.appendChild(tb);
+      root.appendChild(tbl);
+    } catch (e) {
+      root.innerHTML = `<div class="ads-error">Failed to load: ${escape(e.message)}</div>`;
+    }
+  }
+
+  window.ADSOsint = { renderIdentities, renderCandidates };
+})();

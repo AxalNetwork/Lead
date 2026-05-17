@@ -154,6 +154,10 @@ export interface Env {
   WF_MONITOR_ENTITY?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   WF_MONITOR_BATCH?:  { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   WF_DIGEST?:         { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+  // Task #3 (this task): cross-platform identity resolution workflows.
+  WF_OSINT_RESOLVE_ENTITY?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+  WF_OSINT_BATCH?:          { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+  WF_OSINT_REVERIFY?:       { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
 }
 
 export type JobKind =

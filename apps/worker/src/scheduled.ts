@@ -253,6 +253,43 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       } catch (e) {
         console.error("nightly classify-batch failed", (e as Error).message);
       }
+      // Task #3 (this task): nightly OSINT batch + 90-day reverify sweep.
+      // Free-plan cron slot cap (5/5 booked) means we piggyback the 0 4
+      // slot. Both jobs are bounded so they fit inside a single tick.
+      try {
+        if (env.WF_OSINT_BATCH) {
+          await env.WF_OSINT_BATCH.create({ params: { limit: 25, staleDays: 30 } });
+          console.log("osint-batch workflow dispatched");
+        } else {
+          const { resolveEntity } = await import("./osint/resolve");
+          const r = await env.DB.prepare(
+            `SELECT e.id FROM u_entities e
+               LEFT JOIN osint_entity_state s ON s.entity_id = e.id
+              WHERE e.status='active' AND e.display_name IS NOT NULL
+                AND (s.last_osint_run_at IS NULL OR datetime(s.last_osint_run_at) < datetime('now','-30 days'))
+              ORDER BY (s.last_osint_run_at IS NULL) DESC, s.last_osint_run_at ASC
+              LIMIT 10`,
+          ).all<{ id: string }>();
+          for (const row of r.results ?? []) {
+            try { await resolveEntity(env, row.id, { totalBudgetMs: 30_000 }); }
+            catch (e) { console.warn("inline osint resolve failed", row.id, (e as Error).message); }
+          }
+        }
+      } catch (e) {
+        console.error("nightly osint-batch failed", (e as Error).message);
+      }
+      try {
+        if (env.WF_OSINT_REVERIFY) {
+          await env.WF_OSINT_REVERIFY.create({ params: { limit: 200 } });
+          console.log("osint-reverify workflow dispatched");
+        } else {
+          const { reverifyDueHandles } = await import("./osint/reverify");
+          const r = await reverifyDueHandles(env, { limit: 100, maxAgeDays: 90 });
+          console.log("osint-reverify inline", JSON.stringify(r));
+        }
+      } catch (e) {
+        console.error("nightly osint-reverify failed", (e as Error).message);
+      }
     })());
     return;
   }

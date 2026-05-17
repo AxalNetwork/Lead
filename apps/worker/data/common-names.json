@@ -1,0 +1,24 @@
+{
+  "_comment": "Tiny seed list of common given/family-name tokens. When a candidate display_name decomposes entirely into tokens from this list, auto-link requires \u2265 3 corroborating methods. This is intentionally compact \u2014 expanding to the full census list is tracked as a follow-up.",
+  "given": [
+    "james","mary","john","patricia","robert","jennifer","michael","linda",
+    "william","elizabeth","david","barbara","richard","susan","joseph","jessica",
+    "thomas","sarah","charles","karen","christopher","nancy","daniel","lisa",
+    "matthew","margaret","anthony","betty","mark","sandra","donald","ashley",
+    "steven","kimberly","paul","emily","andrew","donna","joshua","michelle",
+    "kenneth","carol","kevin","amanda","brian","melissa","george","deborah",
+    "edward","stephanie","alex","alexander","ahmed","mohamed","wei","li",
+    "maria","jose","carlos","juan","luis","ana","sofia","emma","olivia",
+    "noah","liam","ethan","mia","ava","amelia","harper","evelyn"
+  ],
+  "family": [
+    "smith","johnson","williams","brown","jones","garcia","miller","davis",
+    "rodriguez","martinez","hernandez","lopez","gonzalez","wilson","anderson",
+    "thomas","taylor","moore","jackson","martin","lee","perez","thompson",
+    "white","harris","sanchez","clark","ramirez","lewis","robinson","walker",
+    "young","allen","king","wright","scott","torres","nguyen","hill",
+    "flores","green","adams","nelson","baker","hall","rivera","campbell",
+    "mitchell","carter","roberts","gomez","chen","wang","zhang","liu",
+    "kumar","patel","singh","khan","ali","ahmed"
+  ]
+}
