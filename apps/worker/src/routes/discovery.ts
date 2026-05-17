@@ -124,15 +124,22 @@ discoveryRoute.post("/urls/:id/promote", async (c) => {
   // jumps ahead of heuristic candidates.
   const row = await c.env.DB.prepare(`SELECT id, host, depth FROM discovered_urls WHERE id = ?`).bind(id).first<{ id: string; host: string; depth: number }>();
   if (!row) return c.json({ error: "not_found" }, 404);
+  // Inherit the run_id from a prior frontier row if available, or
+  // accept one explicitly via body. Keeps run-level metrics accurate
+  // when an operator promotes a URL surfaced by a specific run.
+  const body = (await c.req.json().catch(() => ({}))) as { run_id?: string };
+  const prior = await c.env.DB.prepare(`SELECT run_id FROM crawl_frontier WHERE url_id = ?`).bind(id).first<{ run_id: string | null }>();
+  const runId = body.run_id ?? prior?.run_id ?? null;
   await c.env.DB.prepare(`UPDATE discovered_urls SET status = 'promoted' WHERE id = ?`).bind(id).run();
   await c.env.DB.prepare(
-    `INSERT INTO crawl_frontier (url_id, priority, scheduled_at)
-       VALUES (?, ?, CURRENT_TIMESTAMP)
+    `INSERT INTO crawl_frontier (url_id, priority, scheduled_at, run_id)
+       VALUES (?, ?, CURRENT_TIMESTAMP, ?)
      ON CONFLICT(url_id) DO UPDATE SET priority = MAX(crawl_frontier.priority, excluded.priority),
                                        next_attempt_at = NULL,
-                                       last_error = NULL`,
-  ).bind(id, 1.0).run();
-  return c.json({ ok: true, enqueued: true });
+                                       last_error = NULL,
+                                       run_id = COALESCE(crawl_frontier.run_id, excluded.run_id)`,
+  ).bind(id, 1.0, runId).run();
+  return c.json({ ok: true, enqueued: true, run_id: runId });
 });
 
 discoveryRoute.post("/urls/:id/reject", async (c) => {
