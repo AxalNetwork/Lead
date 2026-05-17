@@ -16,7 +16,8 @@
 // write without a source_url.
 
 import type { Env } from "../types";
-import { insertFact } from "./facts";
+import { sha256 } from "./normalize";
+import { enqueueSummaryRebuild } from "./summaryQueue";
 import {
   EMITTED_PREDICATES,
   PREDICATE_MAP,
@@ -77,12 +78,21 @@ async function withProfileLock<T>(
 // ---- Internal: mirror a structured row into `facts` ---------------------
 //
 // Centralized projection so every helper produces consistent fact rows.
-// `source_url` is passed as both `source` (so insertFact's hash includes
-// it -> dedupe key becomes (entity, predicate, value, source_url)) AND
-// `evidence_url` (so the UI / timeline can deep-link to it).
 //
-// Asserts the predicate exists in the registry — catches typos at runtime
-// and is a defense-in-depth backup to the compile-time/test enforcement
+// Dedupe contract (task spec): natural key is (entity_id, predicate,
+// source_url) — independent of value. Re-observing the same predicate
+// from the same source_url MUST upsert the existing fact (new value,
+// refreshed observed_at) rather than create a second row. The hash we
+// compute here covers ONLY those three fields, and UNIQUE(hash) on
+// `facts` (migration 201) turns a collision into our UPDATE path.
+//
+// We bypass `insertFact` for the mirror path because its hash includes
+// the value (which is correct for raw scraper writes but wrong here —
+// it would let value drift create duplicate (entity, predicate, source)
+// rows). The summary-rebuild enqueue is still triggered.
+//
+// Asserts the predicate exists in the registry — catches typos at
+// runtime and is defense-in-depth backup to the smoke-test enforcement
 // of EMITTED_PREDICATES ⊆ registry.
 async function mirrorFact(
   env: Env,
@@ -100,18 +110,47 @@ async function mirrorFact(
   if (!PREDICATE_MAP[args.predicate]) {
     throw new Error(`profile.mirrorFact: predicate "${args.predicate}" is not in PREDICATE_REGISTRY`);
   }
-  await insertFact(env, {
-    entity_id: args.entityId,
-    predicate: args.predicate,
-    value_text: args.valueText ?? null,
-    value_number: args.valueNumber ?? null,
-    value_json: args.valueJson ?? null,
-    source_kind: "enrichment",
-    source: args.sourceUrl,
-    evidence_url: args.sourceUrl,
-    confidence: args.confidence ?? 1.0,
-    observed_at: args.observedAt,
-  });
+  const hash = await sha256(`${args.entityId}|${args.predicate}|${args.sourceUrl}`);
+  const valueText = args.valueText ?? null;
+  const valueNumber = args.valueNumber ?? null;
+  const valueJsonStr = args.valueJson != null ? JSON.stringify(args.valueJson) : null;
+  const confidence = args.confidence ?? 1.0;
+  const now = args.observedAt ?? new Date().toISOString();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO facts (
+         id, entity_id, predicate, value_text, value_number, value_json,
+         value_entity_id, source_kind, source, evidence_url, confidence,
+         observed_at, valid_from, valid_to, is_current, hash
+       ) VALUES (?, ?, ?, ?, ?, ?, NULL, 'enrichment', ?, ?, ?, ?, NULL, NULL, 1, ?)`,
+    ).bind(
+      crypto.randomUUID(),
+      args.entityId,
+      args.predicate,
+      valueText,
+      valueNumber,
+      valueJsonStr,
+      args.sourceUrl,
+      args.sourceUrl,
+      confidence,
+      now,
+      hash,
+    ).run();
+  } catch (e) {
+    const msg = (e as Error).message || "";
+    if (/UNIQUE/i.test(msg)) {
+      await env.DB.prepare(
+        `UPDATE facts
+            SET value_text = ?, value_number = ?, value_json = ?,
+                confidence = MAX(confidence, ?),
+                observed_at = ?, is_current = 1
+          WHERE hash = ?`,
+      ).bind(valueText, valueNumber, valueJsonStr, confidence, now, hash).run();
+    } else {
+      throw e;
+    }
+  }
+  try { await enqueueSummaryRebuild(env, args.entityId); } catch { /* best-effort */ }
 }
 
 function requireSourceUrl(helper: string, url: string | null | undefined): string {
