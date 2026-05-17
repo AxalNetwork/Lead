@@ -331,18 +331,25 @@ personasRoute.post("/:id/run-matching", async (c) => {
   // entity". Operators pass a number to bound a manual run.
   const maxEntities = body?.max_entities == null ? null
     : Math.min(Math.max(1, Number(body.max_entities)), 1_000_000);
+  const { recordMatchJob } = await import("../services/personaMatching");
   if (c.env.WF_PERSONA_ENTITY_MATCH) {
     try {
       const wf = await c.env.WF_PERSONA_ENTITY_MATCH.create({ params: { personaId: row.id, batchSize, maxEntities } });
       return c.json({ ok: true, dispatched: "workflow", job_id: wf.id, workflow_id: wf.id, persona_id: row.id });
     } catch (e) {
-      console.warn("run-matching WF dispatch failed; falling back inline", (e as Error).message);
+      console.error("SLO_VIOLATION run_matching_wf_dispatch_failed", row.id, (e as Error).message);
+      await recordMatchJob(c.env, "dispatch", "failed", { personaId: row.id, route: "run-matching", error: (e as Error).message, slo_violation: true });
     }
   }
-  // Inline fallback — bounded so a request handler never melts the worker.
-  // job_id is synthesized so callers always have a correlation id.
+  // Inline fallback gated by PERSONA_MATCH_INLINE_FALLBACK (default OFF
+  // in production) — same hot-path policy as dispatchPersonaEntityMatch.
+  if (!inlineFallbackEnabled(c.env)) {
+    await recordMatchJob(c.env, "dispatch", "halted", { personaId: row.id, route: "run-matching", reason: "inline_disabled_in_production", slo_violation: true });
+    return c.json({ ok: false, dispatched: "none", persona_id: row.id, reason: "inline_disabled_in_production", retry: "workflow_plane_required" }, 503);
+  }
   const jobId = `inline-${row.id}-${Date.now()}`;
   const r = await scoreBatchPersonaMatching(c.env, row.id, { batchSize, maxEntities: Math.min(maxEntities ?? 500, 500) });
+  await recordMatchJob(c.env, "dispatch", r.halted ? "halted" : "ok", { personaId: row.id, route: "run-matching", fallback: "inline", slo_violation: r.halted, ...r });
   return c.json({ ok: true, dispatched: "inline", job_id: jobId, persona_id: row.id, ...r });
 });
 
