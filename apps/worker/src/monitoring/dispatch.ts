@@ -357,6 +357,16 @@ function escapeHtml(s: string): string {
 /**
  * Pending-event retry sweeper. Called from MonitorBatchWorkflow each tick.
  * Picks pending events whose next_attempt_at has come due and retries.
+ *
+ * OPERATIONAL NOTE: this sweeper runs on the shared hourly cron slot
+ * (see scheduled.ts — Cloudflare free plan caps cron slots at 5 and
+ * the existing `0 * * * *` slot is reused; we cannot register a
+ * dedicated `*/1 * * * *` slot). The per-attempt exponential backoff
+ * computed at failure time (1m, 2m, 4m, …) is therefore the LOWER
+ * bound on retry latency — the actual retry executes on the next
+ * hourly cron tick after next_attempt_at falls due. Operators should
+ * communicate "webhook retries land within ~1h of becoming due" to
+ * downstream consumers; the 6h horizon still applies end-to-end.
  */
 export async function retryPendingDeliveries(env: Env, limit = 50): Promise<{ retried: number; delivered: number; failed: number }> {
   const out = { retried: 0, delivered: 0, failed: 0 };
