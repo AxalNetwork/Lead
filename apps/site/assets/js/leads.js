@@ -16,6 +16,7 @@
   }
 
   var state = { items: [], limit: 200, lastQs: "" };
+  var bar = null;
 
   function buildQs(extra) {
     var form = document.getElementById("ads-leads-filters");
@@ -34,7 +35,7 @@
       return;
     }
     tbody.innerHTML = items.map(function (l) {
-      return '<tr>'
+      return '<tr data-id="' + esc(l.id) + '">'
         + '<td style="padding:8px;vertical-align:middle"><input type="checkbox" class="ads-bulk-check" data-id="' + esc(l.id) + '"></td>'
         + '<td style="padding:8px"><a href="/dashboard/people/?id=' + esc(l.id) + '">' + esc(l.name || "(no name)") + '</a></td>'
         + '<td style="padding:8px">' + esc(l.org || "—") + '</td>'
@@ -52,10 +53,7 @@
     api("/api/leads?" + qs).then(function (r) {
       state.items = r.items || [];
       render(state.items);
-      if (window.adsBulkBar) {
-        window.adsBulkBar.onFilterChange();
-        window.adsBulkBar.rebind();
-      }
+      if (bar) { bar.onFilterChange(); bar.rebind(); }
     }).catch(function (e) {
       document.getElementById("ads-leads-tbody").innerHTML =
         '<tr><td class="ads-muted" colspan="7">Load failed: ' + esc(e.message) + '</td></tr>';
@@ -67,18 +65,17 @@
     form.addEventListener("submit", function (e) { e.preventDefault(); load(); });
     form.addEventListener("reset", function () { setTimeout(load, 0); });
 
-    if (window.adsBulkBar) {
-      window.adsBulkBar.init({
+    if (window.adsBulkBar && window.adsBulkBar.init) {
+      bar = window.adsBulkBar.init({
         pageId: "leads",
-        getVisibleIds: function () { return state.items.map(function (l) { return l.id; }); },
-        getAllMatchingIds: function () {
-          // /api/leads server-caps at 200 with no offset; loop with
-          // status filter only would re-fetch the same page. Use the
-          // currently loaded items as the "all matching" set since
-          // there is no pagination cursor on this endpoint today.
+        getRows: function () { return document.querySelectorAll("#ads-leads-tbody tr[data-id]"); },
+        // /api/leads server-caps at 200 and has no offset/cursor today,
+        // so "select all matching" returns the currently loaded set —
+        // header-checkbox double-click thus selects all visible rows.
+        fetchAllMatchingIds: function () {
           return Promise.resolve(state.items.map(function (l) { return l.id; }));
         },
-        filterSignature: function () { return state.lastQs; },
+        getFilterSignature: function () { return state.lastQs; },
       });
     }
     load();

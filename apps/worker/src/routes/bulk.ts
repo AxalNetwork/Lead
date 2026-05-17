@@ -25,6 +25,9 @@ import { Hono } from "hono";
 import type { Env } from "../types";
 import type { EntityRole } from "../entities/model";
 import { mergeWithCanonical } from "../entities/merge";
+import { addRole } from "../entities/roles";
+import { addTag } from "../entities/tags";
+import type { Taxonomy } from "../entities/model";
 
 const HARD_CAP = 5000;
 const CONFIRM_THRESHOLD = 100;
@@ -325,25 +328,28 @@ bulk.post("/assign-role", async (c) => {
       mutated += 1;
     } else {
       if (before) continue; // already present — no-op, no audit row.
-      // Single-transaction audit + role insert via D1.batch().
-      // We mirror the addRole() SQL inline so the audit row and the
-      // mutation share one SQLite transaction; if the INSERT aborts,
-      // the audit row rolls back with it. addRole() semantics
-      // (ON CONFLICT upgrades is_primary / confidence) are preserved.
-      const batch = await c.env.DB.batch([
-        auditStmt(c.env, opId, "assign_role", entityId,
-          { exists: false, role }, { exists: true, role, source: "bulk" }, email),
-        c.env.DB.prepare(
-          `INSERT INTO entity_roles (entity_id, role, is_primary, source, confidence)
-           VALUES (?, ?, 0, 'bulk', 1)
-           ON CONFLICT(entity_id, role) DO UPDATE SET
-             is_primary = MAX(is_primary, excluded.is_primary),
-             confidence = MAX(confidence, excluded.confidence)`,
-        ).bind(entityId, role),
-      ]);
-      // D1.batch surfaces a per-statement success flag — only count
-      // affected when the INSERT actually applied.
-      if (batch[1] && batch[1].success) mutated += 1;
+      // Audit BEFORE mutation, then route the write through the
+      // canonical addRole() helper so role-assignment semantics
+      // (ON CONFLICT / is_primary / confidence) stay centralized.
+      // addRole swallows DB errors internally, so we verify the
+      // post-write state and roll the audit row back to a conflict
+      // marker if the row didn't persist — preserves "one write
+      // path per concern" without losing recoverability.
+      const auditRes = await auditStmt(c.env, opId, "assign_role", entityId,
+        { exists: false, role }, { exists: true, role, source: "bulk" }, email).run();
+      await addRole(c.env, entityId, role, { source: "bulk" });
+      const after = await c.env.DB.prepare(
+        `SELECT 1 FROM entity_roles WHERE entity_id = ? AND role = ?`,
+      ).bind(entityId, role).first<{ 1: number }>();
+      if (!after) {
+        const auditId = (auditRes.meta as { last_row_id?: number } | undefined)?.last_row_id;
+        if (auditId) {
+          await c.env.DB.prepare(`UPDATE bulk_operation_audit SET undo_conflict = 1, after_json = ? WHERE id = ?`)
+            .bind(JSON.stringify({ error: "write_failed" }), auditId).run();
+        }
+        continue;
+      }
+      mutated += 1;
     }
   }
   return c.json({ ok: true, operation_id: opId, affected: mutated, dropped, role, removed: remove }, 200);
@@ -377,20 +383,25 @@ bulk.post("/add-tag", async (c) => {
       `SELECT id FROM entity_tags WHERE entity_id = ? AND taxonomy = ? AND slug = ?`,
     ).bind(entityId, taxonomy, slug).first<{ id: number }>();
     if (existed) continue;
-    // Single-transaction audit + tag insert via D1.batch(). Mirrors
-    // addTag()'s SQL inline so the audit row and the mutation share
-    // one SQLite transaction.
-    const batch = await c.env.DB.batch([
-      auditStmt(c.env, opId, "add_tag", entityId,
-        { exists: false, taxonomy, slug }, { exists: true, taxonomy, slug }, email),
-      c.env.DB.prepare(
-        `INSERT INTO entity_tags (entity_id, taxonomy, slug, weight, source)
-         VALUES (?, ?, ?, 1, 'bulk')
-         ON CONFLICT(entity_id, taxonomy, slug)
-         DO UPDATE SET weight = MAX(weight, excluded.weight)`,
-      ).bind(entityId, taxonomy, slug),
-    ]);
-    if (batch[1] && batch[1].success) mutated += 1;
+    // Audit BEFORE mutation, then route the write through addTag()
+    // (canonical tag service). addTag swallows DB errors internally;
+    // we verify post-write and flag the audit row as conflict on
+    // failure so undo never re-applies a row that didn't persist.
+    const auditRes = await auditStmt(c.env, opId, "add_tag", entityId,
+      { exists: false, taxonomy, slug }, { exists: true, taxonomy, slug }, email).run();
+    await addTag(c.env, { entity_id: entityId, taxonomy: taxonomy as Taxonomy, slug, source: "bulk" });
+    const after = await c.env.DB.prepare(
+      `SELECT 1 FROM entity_tags WHERE entity_id = ? AND taxonomy = ? AND slug = ?`,
+    ).bind(entityId, taxonomy, slug).first<{ 1: number }>();
+    if (!after) {
+      const auditId = (auditRes.meta as { last_row_id?: number } | undefined)?.last_row_id;
+      if (auditId) {
+        await c.env.DB.prepare(`UPDATE bulk_operation_audit SET undo_conflict = 1, after_json = ? WHERE id = ?`)
+          .bind(JSON.stringify({ error: "write_failed" }), auditId).run();
+      }
+      continue;
+    }
+    mutated += 1;
   }
   return c.json({ ok: true, operation_id: opId, affected: mutated, dropped, taxonomy, slug }, 200);
 });
@@ -513,10 +524,19 @@ bulk.post("/merge", async (c) => {
         legacy_map_ids: (legacyIds.results ?? []).map((r) => r.id),
         roles: secRoles.results ?? [],
       };
-      const r = await mergeWithCanonical(c.env, canonicalResolved, sid);
-      await writeAudit(c.env, opId, "merge", sid,
+      // Audit BEFORE mutation: write the snapshot row first so a
+      // crash mid-merge still leaves an undo-able audit row pointing
+      // at the captured pre-merge state. after_json is patched in
+      // post-mutation with the actual merge result.
+      const auditRes = await auditStmt(c.env, opId, "merge", sid,
         { status: "active", canonical_id: canonicalResolved, snapshot },
-        { status: "merged", merged_into: canonicalResolved, result: r }, email);
+        { status: "merging", merged_into: canonicalResolved }, email).run();
+      const auditId = (auditRes.meta as { last_row_id?: number } | undefined)?.last_row_id;
+      const r = await mergeWithCanonical(c.env, canonicalResolved, sid);
+      if (auditId) {
+        await c.env.DB.prepare(`UPDATE bulk_operation_audit SET after_json = ? WHERE id = ?`)
+          .bind(JSON.stringify({ status: "merged", merged_into: canonicalResolved, result: r }), auditId).run();
+      }
       results.push({ secondary: sid, ok: true });
     } catch (e) {
       const msg = (e as Error).message;
