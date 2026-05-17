@@ -102,6 +102,40 @@ throws hard in `ENVIRONMENT=production` if it detects the 331 stub
 serving as canonical `u_entities`, so a misconfigured prod deploy
 fails the cron tick instead of silently returning empty matches.
 
+### Operational prerequisites (rollout runbook)
+
+Before applying migration 331 to an environment that has manually
+pinned legacy `persona_matches` rows, the operator MUST populate
+`persona_match_manual_overrides` with the (persona_id, entity_id)
+pairs to be preserved. The schema is created in migration 331
+itself, so the safe rollout sequence is:
+
+1. Deploy migration 331 to a staging copy of the prod DB.
+2. Run an audit query to identify legacy manual rows (or import them
+   from the operator's pin log).
+3. `INSERT` those pairs into `persona_match_manual_overrides`.
+4. Re-run the backfill SELECT manually (the migration's INSERT OR
+   IGNORE is idempotent), OR drop and re-apply 331.
+5. Apply to production.
+
+The backfill cannot auto-derive manual provenance because legacy
+`persona_matches` has no `source` column. If the override table is
+left empty, all legacy rows are stamped `source='auto'` and will be
+re-scored by the next nightly refresh — manual pins are LOST. The
+deploy pipeline should block on this check whenever the source DB
+contains rows that operators flagged as manual.
+
+### Inline-scoring feature flag
+
+`PERSONA_MATCH_INLINE_FALLBACK` (`"1"` | `"0"` | unset) gates the
+request-time inline scoring fallback used when the workflow plane is
+unreachable. Default: ON in dev/staging, OFF in
+`ENVIRONMENT=production`. This aligns the hot path with the
+"all scoring in workflows/queues/cron" architectural rule. When the
+flag is OFF and workflow dispatch fails, the dispatch records a
+`status='halted'` row with `slo_violation: true` and
+`reason: 'inline_disabled_in_production'` so ops can page on it.
+
 ### Deferred follow-up
 
 A route-level integration test for `GET /api/personas/:id/candidates`

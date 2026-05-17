@@ -196,7 +196,11 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
           console.log("persona-match-refresh inline", JSON.stringify(r));
         }
       } catch (e) {
-        console.error("nightly persona-match-refresh failed", (e as Error).message);
+        const msg = (e as Error).message;
+        console.error("nightly persona-match-refresh failed", msg);
+        // Re-throw migration-order failures so the cron tick actually
+        // fails (the inner guard intentionally throws in production).
+        if (msg.includes("migration_order_stub_active")) throw e;
       }
 
       // 5. Project match refresh

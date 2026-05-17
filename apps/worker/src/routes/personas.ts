@@ -43,6 +43,20 @@ import {
 // scoring pass so a newly-created persona always has *some* candidate
 // rows on its first read, even if the workflow plane is unreachable.
 // The nightly cron converges any auto rows older than 30 days.
+// Inline scoring fallback is gated behind PERSONA_MATCH_INLINE_FALLBACK
+// (default "1" everywhere except ENVIRONMENT=production, where it
+// defaults off). This aligns the hot path with the
+// no-scoring-in-request-handlers policy while still letting dev/staging
+// get same-tick candidates without a workflow plane. Operators flip
+// the flag to "1" in prod to opt into the bounded inline pass.
+function inlineFallbackEnabled(env: Env): boolean {
+  const flag = (env as { PERSONA_MATCH_INLINE_FALLBACK?: string }).PERSONA_MATCH_INLINE_FALLBACK;
+  const envName = (env as { ENVIRONMENT?: string }).ENVIRONMENT ?? "dev";
+  if (flag === "1") return true;
+  if (flag === "0") return false;
+  return envName !== "production";
+}
+
 async function dispatchPersonaEntityMatch(env: Env, personaId: string): Promise<void> {
   const { recordMatchJob } = await import("../services/personaMatching");
   if (env.WF_PERSONA_ENTITY_MATCH) {
@@ -62,6 +76,12 @@ async function dispatchPersonaEntityMatch(env: Env, personaId: string): Promise<
   }
   // Bounded inline fallback so a request handler never melts the worker;
   // the dispatch-failed job row above flags the SLO miss for ops.
+  // Skipped in production unless PERSONA_MATCH_INLINE_FALLBACK=1 to
+  // honor the "no scoring in request hot path" architectural rule.
+  if (!inlineFallbackEnabled(env)) {
+    await recordMatchJob(env, "dispatch", "halted", { personaId, fallback: "inline", reason: "inline_disabled_in_production", slo_violation: true });
+    return;
+  }
   try {
     const r = await scoreBatchPersonaMatching(env, personaId, { batchSize: 50, maxEntities: 200 });
     const partial = r.scored + r.errors >= 200; // hit the cap
