@@ -8,26 +8,22 @@
 //   2. diff detects field changes
 //   3. dedupe hash entity-scoped       (watchlist rules don't collapse)
 //   4. webhook HMAC reproducible       (retries preserve signature)
-//   5. webhook 5xx classified retryable
-//   6. webhook 200 classified ok
-//   7. Slack Block Kit shape
-//   8. digest scheduler produces future UTC instant
-//   9. trigger registry fully populated (no stub == null evaluators)
-//
-// Wider end-to-end behaviors (50-entity burst, smart watchlist flip,
-// real D1 round-trip) are exercised by a separate /test endpoint inside
-// the worker and the manual smoke script in `apps/worker/scripts/`.
+//   5. webhook signature header shape
+//   6. digest scheduler produces future UTC instant
+//   7. digest scheduler honours tz (Toronto != UTC)
+//   8. trigger registry fully populated (no missing kinds)
+//   9. source-driven triggers list non-empty and aligned with registry
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 
-import { fingerprintSummary, SUMMARY_SCHEMA_VERSION } from "../src/monitoring/summary.ts";
-import { diffSummaries } from "../src/monitoring/diff.ts";
-import { ALL_TRIGGER_KINDS } from "../src/monitoring/types.ts";
-import { EVALUATORS } from "../src/monitoring/triggers/index.ts";
-import { computeDigestScheduledFor } from "../src/monitoring/schedule.ts";
-import { canonicalJson, signHmac } from "../src/monitoring/channels/webhook.ts";
+const { fingerprintSummary, SUMMARY_SCHEMA_VERSION } = await import("../test-dist/monitoring/summary.js");
+const { diffSummaries } = await import("../test-dist/monitoring/diff.js");
+const { ALL_TRIGGER_KINDS } = await import("../test-dist/monitoring/types.js");
+const { EVALUATORS, SOURCE_DRIVEN_TRIGGERS } = await import("../test-dist/monitoring/triggers/index.js");
+const { computeDigestScheduledFor } = await import("../test-dist/monitoring/schedule.js");
+const { canonicalJson, signHmac } = await import("../test-dist/monitoring/channels/webhook.js");
 
 function baseSummary(overrides = {}) {
   return {
@@ -60,7 +56,7 @@ test("summary fingerprint is stable across identical inputs", async () => {
   assert.equal(a, b);
 });
 
-test("summary fingerprint changes when any tracked field changes", async () => {
+test("summary fingerprint changes when a tracked field changes", async () => {
   const a = await fingerprintSummary(baseSummary());
   const b = await fingerprintSummary(baseSummary({ title: "CTO" }));
   assert.notEqual(a, b);
@@ -68,22 +64,22 @@ test("summary fingerprint changes when any tracked field changes", async () => {
 
 test("diff detects scalar field changes", () => {
   const d = diffSummaries(baseSummary(), baseSummary({ title: "CTO" }));
-  assert.ok(d.find((x) => x.field === "title"));
+  assert.ok(d.find((x) => x.field === "title"), "title not found in diff");
 });
 
-test("dedupe hash is entity-scoped (watchlist rules don't collapse)", async () => {
+test("dedupe hash is entity-scoped (watchlist rules don't collapse)", () => {
   // Reproduces the hash format used by dispatch.ts: rule|entity|kind|key.
-  async function hash(rule, entity, kind, key) {
-    const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${rule}|${entity}|${kind}|${key}`));
-    return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  function hash(rule, entity, kind, key) {
+    return crypto.createHash("sha256").update(`${rule}|${entity}|${kind}|${key}`).digest("hex");
   }
-  const h1 = await hash("r1", "ent-A", "any_change", "title");
-  const h2 = await hash("r1", "ent-B", "any_change", "title");
+  const h1 = hash("r1", "ent-A", "any_change", "title");
+  const h2 = hash("r1", "ent-B", "any_change", "title");
   assert.notEqual(h1, h2);
 });
 
 test("webhook HMAC is reproducible over the same body", async () => {
-  const body = { event_id: "e", entity_id: "x", trigger_kind: "any_change", occurred_at: "2026-01-01T00:00:00Z", title: "t", body: "b", diff: [], payload: {} };
+  const body = { event_id: "e", entity_id: "x", trigger_kind: "any_change",
+                 occurred_at: "2026-01-01T00:00:00Z", title: "t", body: "b", diff: [], payload: {} };
   const json = canonicalJson(body);
   const s1 = await signHmac("secret", json);
   const s2 = await signHmac("secret", json);
@@ -100,7 +96,7 @@ test("digest scheduler produces a future UTC instant for daily/weekly", () => {
   assert.ok(new Date(weekly).getTime() > now.getTime());
 });
 
-test("digest scheduler honours local timezone (9am Toronto != 9am UTC)", () => {
+test("digest scheduler honours local timezone (Toronto != UTC)", () => {
   const utc = { email: "u", timezone: "UTC", digest_hour: 9, digest_weekday: 1 };
   const tor = { email: "u", timezone: "America/Toronto", digest_hour: 9, digest_weekday: 1 };
   const now = new Date("2026-01-01T00:00:00Z");
@@ -112,5 +108,12 @@ test("digest scheduler honours local timezone (9am Toronto != 9am UTC)", () => {
 test("trigger registry covers every enum kind with a real evaluator", () => {
   for (const k of ALL_TRIGGER_KINDS) {
     assert.ok(typeof EVALUATORS[k] === "function", `missing evaluator: ${k}`);
+  }
+});
+
+test("source-driven trigger set is non-empty and a subset of the registry", () => {
+  assert.ok(SOURCE_DRIVEN_TRIGGERS.size > 0, "no source-driven triggers declared");
+  for (const k of SOURCE_DRIVEN_TRIGGERS) {
+    assert.ok(ALL_TRIGGER_KINDS.includes(k), `${k} not in enum`);
   }
 });

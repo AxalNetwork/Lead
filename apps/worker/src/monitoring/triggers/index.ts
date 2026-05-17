@@ -46,6 +46,23 @@ export const EVALUATORS: Record<TriggerKind, EvaluatorFn> = {
   relationship_change: evalRelationshipChange,
 };
 
+// Trigger kinds whose change anchors live in source tables rather than
+// in the canonical summary fingerprint. These MUST still be evaluated
+// when the fingerprint hasn't moved, otherwise rule fire is silently
+// gated by an unrelated signal.
+export const SOURCE_DRIVEN_TRIGGERS: ReadonlySet<TriggerKind> = new Set<TriggerKind>([
+  "relationship_change",
+  "prediction_above_threshold",
+  "new_portfolio_addition",
+  "funding_event",
+  "adverse_media",
+  "new_tweet",
+  "new_podcast",
+  "new_post",
+  "new_news_item",
+  "new_investment",
+]);
+
 export async function evaluate(kind: TriggerKind, ctx: EvalContext): Promise<EvaluatedAlert | null> {
   const fn = EVALUATORS[kind];
   if (!fn) return null;

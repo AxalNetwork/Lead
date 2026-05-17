@@ -14,10 +14,21 @@ interface WebhookPayload {
   body: Record<string, unknown>;
 }
 
-export async function deliverWebhook(_env: Env, p: WebhookPayload): Promise<{
+export async function deliverWebhook(env: Env, p: WebhookPayload): Promise<{
   ok: boolean; status?: number; retryable: boolean; error?: string;
 }> {
   if (!/^https?:\/\//.test(p.url)) return { ok: false, retryable: false, error: "bad_url" };
+  // Per-host rate limit (same RL_HOST binding the crawler uses). A noisy
+  // webhook destination must not starve other tenants; if the limiter
+  // rejects us we mark the attempt retryable so the dispatcher reschedules.
+  let host = "";
+  try { host = new URL(p.url).hostname; } catch { return { ok: false, retryable: false, error: "bad_url" }; }
+  if (env.RL_HOST) {
+    try {
+      const r = await env.RL_HOST.limit({ key: `webhook:${host}` });
+      if (!r.success) return { ok: false, status: 429, retryable: true, error: "rate_limited" };
+    } catch { /* limiter unavailable — proceed */ }
+  }
   const raw = canonicalJson(p.body);
   const sig = await signHmac(p.secret, raw);
   const ctl = new AbortController();

@@ -20,6 +20,13 @@
     "src/types.ts",
     "src/agent/registry.ts",
     "src/agent/diff.ts",
-    "src/agent/tools-validation.ts"
+    "src/agent/tools-validation.ts",
+    "src/monitoring/summary.ts",
+    "src/monitoring/diff.ts",
+    "src/monitoring/schedule.ts",
+    "src/monitoring/types.ts",
+    "src/monitoring/triggers/index.ts",
+    "src/monitoring/triggers/*.ts",
+    "src/monitoring/channels/webhook.ts"
   ]
 }

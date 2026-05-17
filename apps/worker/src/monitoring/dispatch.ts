@@ -16,7 +16,7 @@
 import type { Env } from "../types";
 import { buildCanonicalSummary, fingerprintSummary, loadLatestSnapshot, persistSnapshot, sha256Hex, SUMMARY_SCHEMA_VERSION } from "./summary";
 import { diffSummaries } from "./diff";
-import { evaluate } from "./triggers/index";
+import { evaluate, SOURCE_DRIVEN_TRIGGERS } from "./triggers/index";
 import type { AlertRuleRow, EvalContext, EvaluatedAlert, TriggerKind } from "./types";
 import { deliverInApp } from "./channels/inApp";
 import { deliverEmail } from "./channels/email";
@@ -54,19 +54,23 @@ export async function monitorEntity(env: Env, entityId: string): Promise<Monitor
        ON CONFLICT(entity_id) DO UPDATE SET last_evaluated_at=excluded.last_evaluated_at, last_hash=excluded.last_hash`,
   ).bind(entityId, new Date().toISOString(), newHash).run();
 
-  // Fingerprint-first: no diff ⇒ no evaluation.
-  if (last && last.hash === newHash) return result;
-  result.changed = true;
+  const fingerprintChanged = !last || last.hash !== newHash;
+  const schemaBumped = !!last && last.schema_version !== newSummary.schema_version;
 
   // Schema bump → persist a fresh baseline, skip evaluation this tick.
-  if (last && last.schema_version !== newSummary.schema_version) {
+  if (schemaBumped) {
     await persistSnapshot(env, entityId, newSummary, newHash);
     result.schemaBaselined = true;
+    result.changed = true;
     return result;
   }
 
-  await persistSnapshot(env, entityId, newSummary, newHash);
-  const diff = diffSummaries(last?.summary ?? null, newSummary);
+  if (fingerprintChanged) {
+    await persistSnapshot(env, entityId, newSummary, newHash);
+    result.changed = true;
+  }
+
+  const diff = fingerprintChanged ? diffSummaries(last?.summary ?? null, newSummary) : [];
   // Baseline (no prior snapshot) → store but emit nothing (spec).
   if (!last) return result;
 
@@ -81,7 +85,16 @@ export async function monitorEntity(env: Env, entityId: string): Promise<Monitor
         AND (r.entity_id = ?
              OR r.watchlist_id IN (SELECT watchlist_id FROM watchlist_members WHERE entity_id = ?))`,
   ).bind(entityId, entityId).all<AlertRuleRow>();
-  const rules = ruleRows.results ?? [];
+  const allRules = ruleRows.results ?? [];
+
+  // When the canonical summary fingerprint hasn't moved, skip
+  // summary-driven evaluators (their inputs literally didn't change) but
+  // still run source-driven ones — relationships, predictions, posts,
+  // funding, news, investments live in their own tables and may have
+  // moved independently.
+  const rules = fingerprintChanged
+    ? allRules
+    : allRules.filter((r) => SOURCE_DRIVEN_TRIGGERS.has(r.trigger_kind as TriggerKind));
 
   for (const rule of rules) {
     result.evaluated++;
