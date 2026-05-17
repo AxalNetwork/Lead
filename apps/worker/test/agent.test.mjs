@@ -132,3 +132,83 @@ test("validateToolArgs: rejects non-object args (defense vs scalar)", () => {
   const r = validateToolArgs(schema, "not an object");
   assert.equal(r.ok, false);
 });
+
+// ---- saved-research refresh diff smoke -------------------------------------
+//
+// Simulates the workflow's diffAnswers call: before/after citation sets +
+// score snapshots, asserts the diff banner the dashboard renders is
+// populated correctly (added entity, dropped entity, new news item, and
+// a score delta on a still-cited entity).
+test("refresh diff smoke: realistic before/after produces full diff banner", () => {
+  const before = {
+    citations: [
+      { marker: "E:acme",   payload: { kind: "E", ref_id: "acme",  title: "Acme Robotics" } },
+      { marker: "E:beta",   payload: { kind: "E", ref_id: "beta",  title: "Beta Capital" } },
+      { marker: "N:old123", payload: { kind: "N", ref_id: "old123", title: "Acme raises seed", url: "https://ex.com/old" } },
+    ],
+    scores: { acme: { fit_max_score: 0.55, intent_score: 0.30 }, beta: { fit_max_score: 0.40, intent_score: 0.10 } },
+  };
+  const after = {
+    citations: [
+      { marker: "E:acme",   payload: { kind: "E", ref_id: "acme",  title: "Acme Robotics" } },
+      { marker: "E:delta",  payload: { kind: "E", ref_id: "delta", title: "Delta Ventures" } },
+      { marker: "N:fresh1", payload: { kind: "N", ref_id: "fresh1", title: "Acme closes Series A", url: "https://ex.com/new" } },
+      { marker: "F:fact42", payload: { kind: "F", ref_id: "fact42", title: "Acme HQ relocated to Berlin" } },
+    ],
+    scores: { acme: { fit_max_score: 0.78, intent_score: 0.30 }, delta: { fit_max_score: 0.50, intent_score: 0.20 } },
+  };
+  const d = diffAnswers(before, after);
+  assert.equal(d.added_entities.length, 1);
+  assert.equal(d.added_entities[0].id, "delta");
+  assert.equal(d.removed_entities.length, 1);
+  assert.equal(d.removed_entities[0].id, "beta");
+  assert.equal(d.new_news.length, 1);
+  assert.equal(d.new_news[0].url, "https://ex.com/new");
+  assert.equal(d.new_facts.length, 1);
+  // Score delta on the still-cited 'acme' entity should surface.
+  const acmeDelta = d.score_deltas.find((s) => s.entity_id === "acme" && s.field === "fit_max_score");
+  assert.ok(acmeDelta, "expected a fit_max_score delta on still-cited entity");
+  assert.equal(acmeDelta.before, 0.55);
+  assert.equal(acmeDelta.after, 0.78);
+  // total_changes feeds the dashboard banner — must reflect every bucket.
+  assert.equal(d.total_changes, d.added_entities.length + d.removed_entities.length + d.new_news.length + d.new_facts.length + d.score_deltas.length);
+});
+
+// ---- [W] web-fallback labeling smoke ---------------------------------------
+//
+// Simulates the contract the webSearch handler relies on: each Brave hit
+// is registered against the shared registry and surfaced with a stable
+// [W:idx] marker. Distinct rounds in the same loop must NOT collide on
+// idx 0 (the regression the first code-review round caught).
+test("[W] fallback labeling: multi-round Brave hits get distinct [W:n] markers", () => {
+  const reg = new CitationRegistry();
+  // First webSearch round returns 2 hits.
+  const round1 = [
+    { title: "Climate hardware funding Q1", url: "https://ex.com/q1" },
+    { title: "Climate hardware funding Q2", url: "https://ex.com/q2" },
+  ].map((hit) => ({ marker: reg.registerWeb(hit), ...hit }));
+  // Second webSearch round returns 3 hits.
+  const round2 = [
+    { title: "Series A climate hardware", url: "https://ex.com/a" },
+    { title: "Series B climate hardware", url: "https://ex.com/b" },
+    { title: "Series C climate hardware", url: "https://ex.com/c" },
+  ].map((hit) => ({ marker: reg.registerWeb(hit), ...hit }));
+
+  const allMarkers = [...round1, ...round2].map((h) => h.marker);
+  // 5 unique markers, all of the form W:<int>.
+  assert.equal(new Set(allMarkers).size, 5);
+  for (const m of allMarkers) assert.match(m, /^W:\d+$/);
+  // Each registered payload must be retrievable by marker.
+  for (const h of [...round1, ...round2]) {
+    const p = reg.get(h.marker);
+    assert.ok(p, `marker ${h.marker} should resolve`);
+    assert.equal(p.url, h.url);
+    assert.equal(p.kind, "W");
+  }
+  // The agent loop renders a list of [W:n] pills under the "I don't have
+  // this in the database yet" banner. Assert the marker substitution
+  // pattern the dashboard regex expects matches every emitted marker.
+  const md = allMarkers.map((m) => `- web result [${m}]`).join("\n");
+  const extracted = CitationRegistry.extractMarkers(md);
+  assert.deepEqual(extracted, allMarkers);
+});

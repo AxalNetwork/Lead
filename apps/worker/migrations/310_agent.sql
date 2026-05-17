@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS saved_research (
   citations_json      TEXT,
   pinned_entity_ids_json TEXT,
   diff_json           TEXT,
+  -- scores_json: JSON snapshot { entity_id: { fit_max_score, intent_score } }
+  -- captured at refresh time so the next refresh can compute score_deltas.
+  scores_json         TEXT,
   session_id          TEXT REFERENCES agent_sessions(id) ON DELETE SET NULL,
   created_at          TEXT NOT NULL DEFAULT (datetime('now')),
   last_refreshed_at   TEXT

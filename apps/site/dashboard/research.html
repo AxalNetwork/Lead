@@ -98,6 +98,23 @@ permalink: /dashboard/research/
 .ads-research__pager { display: flex; gap: 4px; justify-content: space-between; margin-top: 4px; font-size: 10px; color: #888; }
 .ads-research__pager button { background: #fff; border: 1px solid #d3d7df; border-radius: 3px; padding: 1px 6px; font-size: 10px; cursor: pointer; }
 .ads-research__pager button[disabled] { opacity: 0.4; cursor: default; }
+.ads-research__entity-chips { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.ads-research__chip-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px 6px; background: #f5f7fb; border-radius: 4px; font-size: 11px; }
+.ads-research__chip-entity { font-weight: 600; margin-right: 4px; }
+.ads-research__chip { background: #fff; border: 1px solid #d3d7df; border-radius: 3px; padding: 1px 6px; font-size: 10px; cursor: pointer; }
+.ads-research__chip:hover { border-color: #3a7afe; background: #eff4ff; }
+.ads-research__chip[disabled] { opacity: 0.5; cursor: default; }
+.ads-research__msg-steps { margin-top: 8px; font-size: 11px; border-top: 1px dashed #d3d7df; padding-top: 6px; }
+.ads-research__msg-steps summary { cursor: pointer; color: #555; }
+.ads-research__msg-steps-list { list-style: none; padding: 6px 0 0 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.ads-research__msg-steps-list li { padding: 4px 6px; background: #fafbfc; border-left: 2px solid #c5cdd9; border-radius: 0 3px 3px 0; }
+.ads-research__msg-steps-list li.kind-result { border-left-color: #3a7afe; }
+.ads-research__msg-steps-list li.kind-cached { border-left-color: #a5b1c4; }
+.ads-research__msg-steps-list li.kind-error  { border-left-color: #c84030; }
+.ads-research__msg-sources { margin-top: 8px; font-size: 11px; border-top: 1px dashed #d3d7df; padding-top: 6px; }
+.ads-research__msg-sources-head { font-weight: 600; color: #555; margin-bottom: 4px; }
+.ads-research__msg-sources-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 2px; }
+.ads-research__msg-sources-list li { padding: 2px 4px; }
 .ads-research__cites li.highlighted { background: #fff7d6; border-left: 3px solid #f0d878; padding-left: 5px; }
 .ads-research__messages .pill { display: inline-block; background: #1a3a6b; color: #fff; padding: 1px 6px; border-radius: 8px; font-size: 10px; margin: 0 1px; cursor: pointer; font-weight: 600; }
 .ads-research__messages .pill.uncited { background: #c84030; }
@@ -274,6 +291,10 @@ permalink: /dashboard/research/
   };
 
   // ---------- render messages ---------------------------------------------
+  // Each assistant message gets its OWN collapsible "Agent steps" panel,
+  // its OWN "Sources" footer, and a row of entity action chips (one chip
+  // group per cited entity): Open profile / Add to watchlist / Generate
+  // cold email / Find intro path / Compare to….
   const appendMessage = (role, content, citations, opts = {}) => {
     const ol = $("ads-research-messages");
     const li = document.createElement("li");
@@ -295,17 +316,107 @@ permalink: /dashboard/research/
         + `<button type="button" data-action="save">⭐ Save</button>`
         + (opts.savedId ? `<button type="button" data-action="refresh" data-id="${opts.savedId}">↻ Refresh now</button>` : "")
         + `</div>`;
+      // Per-message entity action chips. Populated by setMessageCitations
+      // once citations are known (either replayed from history or filled
+      // during streaming as citation_registered events arrive).
+      html += `<div class="ads-research__entity-chips" data-entity-chips></div>`;
+      // Per-message collapsible Agent steps panel — kept tight by default,
+      // expandable when the user wants to audit how the answer was built.
+      html += `<details class="ads-research__msg-steps" data-msg-steps>`
+        + `<summary>Agent steps <span data-step-count>0</span></summary>`
+        + `<ol class="ads-research__msg-steps-list" data-msg-steps-list></ol>`
+        + `</details>`;
+      // Per-message Sources footer — the exact list of [E:id]/[F:id]/...
+      // rows this answer cited, decoupled from the right-rail running view.
+      html += `<div class="ads-research__msg-sources" data-msg-sources>`
+        + `<div class="ads-research__msg-sources-head">Sources <span data-source-count>0</span></div>`
+        + `<ul class="ads-research__msg-sources-list" data-msg-sources-list></ul>`
+        + `</div>`;
       html += `<div class="ads-research__follow-ups" data-follow-ups></div>`;
     }
     li.innerHTML = html;
     if (role === "assistant") {
       li.querySelector('[data-action="save"]')?.addEventListener("click", () => saveAnswer(li, content, citations));
       li.querySelector('[data-action="refresh"]')?.addEventListener("click", (e) => refreshSaved(e.target.dataset.id));
+      if (Array.isArray(citations) && citations.length) setMessageCitations(li, citations);
     }
     ol.appendChild(li);
     ol.scrollTop = ol.scrollHeight;
     wirePillClicks(li);
     return li;
+  };
+
+  // Append a tool step to a specific assistant message's collapsible panel.
+  // Used during streaming so each message owns its agent-steps audit log.
+  const appendMessageStep = (li, kind, text) => {
+    const ol = li?.querySelector("[data-msg-steps-list]");
+    if (!ol) return;
+    const item = document.createElement("li");
+    item.className = "kind-" + kind;
+    item.innerHTML = text;
+    ol.appendChild(item);
+    const count = li.querySelector("[data-step-count]");
+    if (count) count.textContent = `(${ol.children.length})`;
+  };
+
+  // Replace/refresh the per-message Sources list + entity action chips.
+  const setMessageCitations = (li, citations) => {
+    const list = li.querySelector("[data-msg-sources-list]");
+    const head = li.querySelector("[data-source-count]");
+    const chipWrap = li.querySelector("[data-entity-chips]");
+    if (!list || !chipWrap) return;
+    if (head) head.textContent = `(${citations.length})`;
+    list.innerHTML = citations.map((c, i) => {
+      const p = c.payload || {};
+      const url = p.url ? `<a href="${escapeHtml(p.url)}" target="_blank" rel="noopener">↗</a>` : "";
+      return `<li><strong>[${i + 1}]</strong> <span class="ads-muted" style="font-size:9px">${escapeHtml(c.marker)}</span> ${escapeHtml(p.title || c.marker)} ${url}</li>`;
+    }).join("");
+    // Entity action chips — one group per unique [E:id] citation.
+    const entityCites = citations.filter((c) => c.payload && c.payload.kind === "E");
+    const seen = new Set();
+    const chipBlocks = [];
+    for (const c of entityCites) {
+      if (seen.has(c.payload.ref_id)) continue;
+      seen.add(c.payload.ref_id);
+      const id = escapeHtml(c.payload.ref_id);
+      const name = escapeHtml(c.payload.title || c.payload.ref_id);
+      chipBlocks.push(
+        `<div class="ads-research__chip-row">`
+        + `<span class="ads-research__chip-entity">${name}</span>`
+        + `<button type="button" class="ads-research__chip" data-chip="open" data-id="${id}">Open profile</button>`
+        + `<button type="button" class="ads-research__chip" data-chip="watch" data-id="${id}">Add to watchlist</button>`
+        + `<button type="button" class="ads-research__chip" data-chip="email" data-id="${id}" data-name="${name}">Generate cold email</button>`
+        + `<button type="button" class="ads-research__chip" data-chip="intro" data-id="${id}" data-name="${name}">Find intro path</button>`
+        + `<button type="button" class="ads-research__chip" data-chip="compare" data-id="${id}" data-name="${name}">Compare to…</button>`
+        + `</div>`,
+      );
+    }
+    chipWrap.innerHTML = chipBlocks.join("");
+    chipWrap.querySelectorAll("[data-chip]").forEach((btn) => btn.addEventListener("click", (e) => handleChip(e.currentTarget)));
+  };
+
+  // Wire the entity action chips. Profile + watchlist hit existing
+  // dashboard routes; the other three queue a follow-up question into the
+  // compose box so the user can confirm before firing.
+  const handleChip = (btn) => {
+    const action = btn.dataset.chip;
+    const id = btn.dataset.id;
+    const name = btn.dataset.name || "this entity";
+    if (action === "open") {
+      window.open(`/dashboard/entity/?id=${encodeURIComponent(id)}`, "_blank");
+      return;
+    }
+    if (action === "watch") {
+      apiFetch(`/entities/${encodeURIComponent(id)}/watchlist`, { method: "POST" })
+        .then(() => { btn.textContent = "✓ On watchlist"; btn.disabled = true; })
+        .catch((err) => alert("Watchlist failed: " + err.message));
+      return;
+    }
+    const inp = $("ads-research-input");
+    if (action === "email")   inp.value = `Generate a cold-outreach email to ${name} based on what we know about them.`;
+    if (action === "intro")   inp.value = `Find the shortest intro path from me to ${name}.`;
+    if (action === "compare") inp.value = `Compare ${name} to a similar entity. Suggest one and contrast their fit, intent, and recent activity.`;
+    inp.focus();
   };
 
   const saveAnswer = async (li, answer, citations) => {
@@ -417,9 +528,13 @@ permalink: /dashboard/research/
       state.toolCalls++;
       $("ads-research-step-count").textContent = `${state.toolCalls} / 8`;
       const cached = data.cached ? " (cached)" : "";
-      appendStep(data.cached ? "cached" : "call", `→ <strong>${escapeHtml(data.name)}</strong>${cached}<br><code style="font-size:10px">${escapeHtml(JSON.stringify(data.arguments || {}).slice(0, 140))}</code>`);
+      const html = `→ <strong>${escapeHtml(data.name)}</strong>${cached}<br><code style="font-size:10px">${escapeHtml(JSON.stringify(data.arguments || {}).slice(0, 140))}</code>`;
+      appendStep(data.cached ? "cached" : "call", html);
+      appendMessageStep(placeholder, data.cached ? "cached" : "call", html);
     } else if (event === "tool_result") {
-      appendStep("result", `← <strong>${escapeHtml(data.name)}</strong> · ${data.row_count} rows · ${data.took_ms}ms${data.note ? '<br><em>' + escapeHtml(data.note) + '</em>' : ''}`);
+      const html = `← <strong>${escapeHtml(data.name)}</strong> · ${data.row_count} rows · ${data.took_ms}ms${data.note ? '<br><em>' + escapeHtml(data.note) + '</em>' : ''}`;
+      appendStep("result", html);
+      appendMessageStep(placeholder, "result", html);
     } else if (event === "citation_registered") {
       appendCitation(data.marker, data.payload);
     } else if (event === "final" || event === "partial") {
@@ -427,6 +542,7 @@ permalink: /dashboard/research/
       if (event === "partial") {
         placeholder.querySelector(".ads-research__answer").insertAdjacentHTML("afterbegin", `<div class="diff-banner">⏱ ${escapeHtml(data.reason === 'deadline' ? '30-second deadline reached.' : '8-tool-call cap reached.')}</div>`);
       }
+      if (Array.isArray(data.citations)) setMessageCitations(placeholder, data.citations);
     } else if (event === "follow_ups") {
       const wrap = placeholder.querySelector("[data-follow-ups]");
       if (wrap) {

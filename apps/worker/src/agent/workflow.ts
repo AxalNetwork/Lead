@@ -39,21 +39,21 @@ export class RefreshSavedResearchWorkflow {
         const r = await env.DB.prepare(
           `SELECT id, owner_email, question, answer_markdown, citations_json
              FROM saved_research WHERE id = ?`,
-        ).bind(targetId).all<{ id: string; owner_email: string; question: string; answer_markdown: string; citations_json: string | null }>();
+        ).bind(targetId).all<{ id: string; owner_email: string; question: string; answer_markdown: string; citations_json: string | null; scores_json: string | null }>();
         return r.results ?? [];
       }
       const r = await env.DB.prepare(
-        `SELECT id, owner_email, question, answer_markdown, citations_json
+        `SELECT id, owner_email, question, answer_markdown, citations_json, scores_json
            FROM saved_research
           ORDER BY COALESCE(last_refreshed_at, '1970-01-01') ASC
           LIMIT ?`,
-      ).bind(NIGHTLY_LIMIT).all<{ id: string; owner_email: string; question: string; answer_markdown: string; citations_json: string | null }>();
+      ).bind(NIGHTLY_LIMIT).all<{ id: string; owner_email: string; question: string; answer_markdown: string; citations_json: string | null; scores_json: string | null }>();
       return r.results ?? [];
     });
 
     let refreshed = 0;
     let skipped = 0;
-    for (const row of due) {
+    for (const row of due as Array<{ id: string; owner_email: string; question: string; answer_markdown: string; citations_json: string | null; scores_json: string | null }>) {
       try {
         const events: LoopEvent[] = [];
         await runAgentLoop(env, row.question, {
@@ -67,7 +67,42 @@ export class RefreshSavedResearchWorkflow {
           try { return JSON.parse(row.citations_json ?? "[]") as CitationMarker[]; }
           catch { return []; }
         })();
-        const diff = diffAnswers({ citations: beforeCitations }, { citations: final.citations });
+
+        // Snapshot fit_max_score + intent_score for every entity that
+        // appears in BOTH the before and after citation sets, so the
+        // diff surfaces score_deltas. Without this snapshot, score
+        // changes since the last refresh would never appear in the
+        // dashboard's diff banner.
+        const collectEntityIds = (cs: CitationMarker[]): string[] =>
+          cs.filter((c) => c?.payload?.kind === "E").map((c) => c.payload.ref_id);
+        const allEntityIds = Array.from(new Set([
+          ...collectEntityIds(beforeCitations),
+          ...collectEntityIds(final.citations),
+        ]));
+        const beforeScores = JSON.parse(row.scores_json ?? "{}") as Record<string, Record<string, number>>;
+        let afterScores: Record<string, Record<string, number>> = {};
+        if (allEntityIds.length) {
+          try {
+            const placeholders = allEntityIds.map(() => "?").join(",");
+            const r = await env.DB.prepare(
+              `SELECT entity_id, fit_max_score, intent_score
+                 FROM entity_summary
+                WHERE entity_id IN (${placeholders})`,
+            ).bind(...allEntityIds).all<{ entity_id: string; fit_max_score: number | null; intent_score: number | null }>();
+            for (const er of r.results ?? []) {
+              afterScores[er.entity_id] = {
+                fit_max_score: er.fit_max_score ?? 0,
+                intent_score: er.intent_score ?? 0,
+              };
+            }
+          } catch (e) {
+            console.warn("score snapshot failed", row.id, (e as Error).message);
+          }
+        }
+        const diff = diffAnswers(
+          { citations: beforeCitations, scores: beforeScores },
+          { citations: final.citations, scores: afterScores },
+        );
         // Tenant-scoped write — defense in depth. The row was loaded with
         // its owner_email; re-asserting it on the UPDATE means a future
         // multi-tenant workflow trigger can't accidentally overwrite a
@@ -77,9 +112,10 @@ export class RefreshSavedResearchWorkflow {
               SET answer_markdown   = ?,
                   citations_json    = ?,
                   diff_json         = ?,
+                  scores_json       = ?,
                   last_refreshed_at = datetime('now')
             WHERE id = ? AND owner_email = ?`,
-        ).bind(final.answer_markdown, JSON.stringify(final.citations), JSON.stringify(diff), row.id, row.owner_email).run();
+        ).bind(final.answer_markdown, JSON.stringify(final.citations), JSON.stringify(diff), JSON.stringify(afterScores), row.id, row.owner_email).run();
         refreshed++;
       } catch (e) {
         console.warn("refresh-saved-research failed", row.id, (e as Error).message);

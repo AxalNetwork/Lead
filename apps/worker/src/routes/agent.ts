@@ -225,6 +225,10 @@ agent.post("/ask", async (c) => {
 
     await stream.writeSSE({ event: "session", data: JSON.stringify({ session_id: sessionId }) });
     await stream.writeSSE({ event: "budget", data: JSON.stringify(budget) });
+    // Discrete persistence rows for the route-emitted opener events.
+    // The loop's per-event persistence handles tool_call/tool_result/etc.
+    // session + budget + done land here so a faithful replay of the
+    // emitted SSE stream is possible from agent_messages.
 
     // Fire-and-forget persistence helper — never blocks the stream and
     // never throws. We deliberately keep these inserts narrow (no body
@@ -276,6 +280,8 @@ agent.post("/ask", async (c) => {
               assistantAnswer = ev.answer_markdown;
               partialReason = ev.reason;
             }
+            // Discrete row so a replay of the events stream is faithful.
+            await persistEvent("system", { content: `partial:${ev.reason}` });
           } else if (ev.type === "tool_call") {
             toolEvents.push(ev as unknown as Record<string, unknown>);
             await persistEvent("tool", {
@@ -299,10 +305,14 @@ agent.post("/ask", async (c) => {
             await persistEvent("system", { content: `error: ${ev.message}` });
           } else if (ev.type === "follow_ups") {
             await persistEvent("system", { content: `follow_ups`, tool_result_json: { questions: ev.questions } });
+          } else if (ev.type === "assistant_token") {
+            // Persist token chunks (~5 words each) as discrete rows so
+            // event-stream replay is exact. Aggregated answer is also
+            // written in the final summary row after the loop.
+            await persistEvent("system", { content: "assistant_token", tool_result_json: { text: ev.text } });
           }
-          // assistant_token + partial + final do not get per-event rows —
-          // the buffered assistant summary row written after the loop
-          // captures the full text + citations + tokens for replay.
+          // `final`, `session`, `budget`, `done` are emitted by the route
+          // itself (not the loop) and persisted at their emission sites.
         },
       });
     } catch (e) {
@@ -329,6 +339,13 @@ agent.post("/ask", async (c) => {
       console.warn("agent message persist failed", (e as Error).message);
     }
 
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO agent_messages (id, session_id, owner_email, role, content, tool_result_json) VALUES (?, ?, ?, 'system', ?, ?)`,
+      ).bind(crypto.randomUUID(), sessionId, email, "done", JSON.stringify({ assistant_message_id: assistantMsgId, session_open: { session_id: sessionId }, budget_snapshot: budget })).run();
+    } catch (e) {
+      console.warn("done persist failed", (e as Error).message);
+    }
     try { await stream.writeSSE({ event: "done", data: JSON.stringify({ session_id: sessionId, assistant_message_id: assistantMsgId }) }); } catch {}
   });
 });
