@@ -47,6 +47,13 @@
     "src/osint/negativeCache.ts",
     "src/osint/pivots/index.ts",
     "src/osint/pivots/*.ts",
-    "src/scraper/fetcher.ts"
+    "src/scraper/fetcher.ts",
+    "src/entities/profile-predicates.ts",
+    "src/entities/profile-shapes.ts",
+    "src/entities/profile.ts",
+    "src/entities/facts.ts",
+    "src/entities/normalize.ts",
+    "src/entities/summaryQueue.ts",
+    "src/entities/model.ts"
   ]
 }

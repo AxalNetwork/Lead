@@ -61,9 +61,13 @@ CREATE TABLE IF NOT EXISTS career_history (
   source_url               TEXT NOT NULL,
   confidence               REAL NOT NULL DEFAULT 1.0,
   observed_at              TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at               TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE(entity_id, organization_entity_id, organization_name, started_at)
+  updated_at               TEXT NOT NULL DEFAULT (datetime('now'))
 );
+-- Expression index over COALESCE(...) — SQLite treats NULL as distinct in
+-- UNIQUE, so we coerce nullable key components to '' for idempotent upsert.
+-- Helpers issue ON CONFLICT against the exact same expression list.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_career_natural
+  ON career_history(entity_id, COALESCE(organization_entity_id,''), organization_name, COALESCE(started_at,''));
 CREATE INDEX IF NOT EXISTS idx_career_entity         ON career_history(entity_id);
 CREATE INDEX IF NOT EXISTS idx_career_entity_current ON career_history(entity_id, is_current);
 CREATE INDEX IF NOT EXISTS idx_career_org            ON career_history(organization_entity_id) WHERE organization_entity_id IS NOT NULL;
@@ -84,9 +88,10 @@ CREATE TABLE IF NOT EXISTS board_seats (
   source_url               TEXT NOT NULL,
   confidence               REAL NOT NULL DEFAULT 1.0,
   observed_at              TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at               TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE(entity_id, organization_name, started_at)
+  updated_at               TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_board_natural
+  ON board_seats(entity_id, organization_name, COALESCE(started_at,''));
 CREATE INDEX IF NOT EXISTS idx_board_entity      ON board_seats(entity_id);
 CREATE INDEX IF NOT EXISTS idx_board_entity_end  ON board_seats(entity_id, ended_at DESC);
 
@@ -105,9 +110,10 @@ CREATE TABLE IF NOT EXISTS education_history (
   source_url      TEXT NOT NULL,
   confidence      REAL NOT NULL DEFAULT 1.0,
   observed_at     TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE(entity_id, institution, degree, ended_year)
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_edu_natural
+  ON education_history(entity_id, institution, COALESCE(degree,''), COALESCE(ended_year,0));
 CREATE INDEX IF NOT EXISTS idx_edu_entity       ON education_history(entity_id);
 CREATE INDEX IF NOT EXISTS idx_edu_entity_year  ON education_history(entity_id, ended_year DESC);
 
@@ -177,8 +183,9 @@ CREATE INDEX IF NOT EXISTS idx_interest_entity_cat     ON person_interests(entit
 -- 8. lifestyle_signals. Open vocabulary: signal_key drawn from
 --    person.lifestyle.* predicate registry slugs.
 -- value_json shape: { detail?: string, frequency?: 'daily'|'weekly'|'monthly'|'occasional' }
--- Natural key (entity_id, signal_key, observed_at) — same signal repeated
--- on different days creates separate rows so we can track cadence.
+-- Natural key (entity_id, signal_key) — last-write-wins on the structured
+-- row. Cadence history is preserved in `facts` (one row per observation
+-- date via insertFact's content-addressable hash).
 -- ===========================================================================
 CREATE TABLE IF NOT EXISTS lifestyle_signals (
   id              TEXT PRIMARY KEY,
@@ -190,7 +197,7 @@ CREATE TABLE IF NOT EXISTS lifestyle_signals (
   confidence      REAL NOT NULL DEFAULT 1.0,
   observed_at     TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE(entity_id, signal_key, observed_at)
+  UNIQUE(entity_id, signal_key)
 );
 CREATE INDEX IF NOT EXISTS idx_lifestyle_entity         ON lifestyle_signals(entity_id);
 CREATE INDEX IF NOT EXISTS idx_lifestyle_entity_obs     ON lifestyle_signals(entity_id, observed_at DESC);
@@ -210,9 +217,10 @@ CREATE TABLE IF NOT EXISTS travel_patterns (
   source_url      TEXT NOT NULL,
   confidence      REAL NOT NULL DEFAULT 1.0,
   observed_at     TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE(entity_id, pattern_kind, place, starts_at)
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_travel_natural
+  ON travel_patterns(entity_id, pattern_kind, place, COALESCE(starts_at,''));
 CREATE INDEX IF NOT EXISTS idx_travel_entity        ON travel_patterns(entity_id);
 CREATE INDEX IF NOT EXISTS idx_travel_entity_kind   ON travel_patterns(entity_id, pattern_kind);
 
