@@ -40,25 +40,19 @@ import { ddRoute } from "./routes/dd";
 import { newsRoute, factsCitationsRoute } from "./routes/news";
 import { profileRoute } from "./routes/profile";
 import { agent as agentRoute } from "./routes/agent";
-// Task #2 (monitoring): watchlists + alert rules/events.
 import { watchlists as watchlistsRoute } from "./routes/watchlists";
 import { alerts as alertsRoute } from "./routes/alerts";
-// Task #3 (this task): cross-platform identity / OSINT pivots.
 import { osint as osintRoute } from "./routes/osint";
-// Task #5: advanced individual profiler.
 import { profilers as profilersRoute } from "./routes/profilers";
-// Task #6: dossier comments (right-rail thread).
 import { profileComments as profileCommentsRoute } from "./routes/profile_comments";
+import { opsCrawlerRoute } from "./routes/ops_crawler";
 export { EntityLock } from "./do/EntityLock";
 export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, PersonaEntityMatchWorkflow, PersonaMatchRefreshWorkflow, PersonaMatchEntityWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, RefreshGovernmentWorkflow, DiscoverFromSeedWorkflow, CrawlFrontierWorkflow, MonitorEntityWorkflow, MonitorBatchWorkflow, DigestWorkflow, IndividualProfilerWorkflow } from "./ai/workflows";
-// Task #3: CSV import durable workflow.
 export { CsvImportWorkflow } from "./imports/csv_import_workflow";
-// Task #3 (this task): OSINT cross-platform identity workflows.
 export { OSINTResolveEntityWorkflow, OSINTBatchWorkflow, OSINTReverifyWorkflow } from "./osint/workflows";
-// Task #3 (this task): research-agent nightly saved-research refresh.
 export { RefreshSavedResearchWorkflow } from "./agent/workflow";
 import { piiAuditOnLeadGet } from "./middleware/pii_audit";
-import { accessGuard } from "./middleware/access";
+import { accessGuard, adminOnly } from "./middleware/access";
 import { requestId } from "./middleware/request_id";
 import { runJob } from "./scraper/pipeline";
 import { scheduled as scheduledHandler } from "./scheduled";
@@ -69,10 +63,9 @@ import { logError } from "./db/error_log";
 
 const API_HOST = "api.aidatasignal.com";
 
-const api = new Hono<{ Bindings: Env; Variables: { email: string; request_id: string } }>();
+const api = new Hono<{ Bindings: Env; Variables: { email: string; is_admin: boolean; request_id: string } }>();
 
 api.use("*", requestId);
-
 api.use(
   "*",
   cors({
@@ -89,18 +82,11 @@ api.use(
     allowHeaders: ["Content-Type", "Cf-Access-Jwt-Assertion"],
   }),
 );
-
-// Public cheap-liveness probe (DB ping only — no PII, no binding inventory).
 api.route("/health", health);
-// Task #2 bug-triage: documented public allow-list — `/api/health` (cheap
-// + deep readiness probe) and `/api/webhooks/*` (HMAC-signed inbound
-// events). Both MUST be mounted before accessGuard. Any other /api/*
-// route mounted before accessGuard is a bug — enforced by
-// test/access_guard.test.mjs.
 api.route("/api/health", health);
 api.route("/api/webhooks/campaigns", campaignsWebhook);
 api.use("/api/*", accessGuard);
-// PII access audit — runs after the lead-detail handler.
+api.use("/api/ops/*", adminOnly);
 api.use("/api/leads/:id", piiAuditOnLeadGet);
 api.route("/api/auth", auth);
 api.route("/api/analytics", analytics);
@@ -116,7 +102,6 @@ api.route("/api/enrichment", enrichment);
 api.route("/api/taxonomies", taxonomies);
 api.route("/api/icp", icp);
 api.route("/api/compliance", compliance);
-// Backward-compatible aliases per task spec: /api/dnc/* and /api/audit/pii.
 api.route("/api/dnc", complianceDncAlias);
 api.route("/api/audit", complianceAuditAlias);
 api.route("/api/gdpr", gdpr);
@@ -124,66 +109,44 @@ api.route("/api/campaigns", campaigns);
 api.route("/api/firms", firms);
 api.route("/api/import", imports);
 api.route("/api/imports", imports);
-// Task #5: source registry (CRUD + run + run-all + preview + bootstrap).
 api.route("/api/sources", sources);
 api.route("/api/saved-filters", savedFilters);
 api.route("/api/analytics/firms", analyticsFirms);
 api.route("/api/relationships", relationships);
-// Task #3 (spec contract): CSV-only end-to-end pipeline. Backed by the
-// new `csv_imports` table + processCsvImport handler. MOUNTED BEFORE
-// the legacy `/api/uploads` router so Hono's first-match routing
-// resolves `/api/uploads/csv` and `/api/uploads/csv/:id` to this
-// router instead of the legacy `/:id` parameter route.
 api.route("/api/uploads/csv", uploadsCsv);
 api.route("/api/uploads", uploads);
 api.route("/api/investors", investors);
 api.route("/api/companies", companies);
 api.route("/api/search", search);
 api.route("/api/analytics/ae", aiAnalytics);
-// Task #44: prospect database (accounts/buyers/signals).
 api.route("/api/accounts", accountsRoute);
 api.route("/api/buyers", buyersRoute);
 api.route("/api/signals", signalsRoute);
-// Task #45: buyer-signal crawler admin.
 api.route("/api/crawlers", crawlersRoute);
-// Task #46: persona profiler.
 api.route("/api/personas", personasRoute);
-// Task #47: projects (multi-audience matching workspace).
 api.route("/api/projects", projectsRoute);
-// Task #4: unified entity graph (additive — legacy reads keep working).
 api.route("/api/entities", entitiesRoute);
 api.route("/api/dd", ddRoute);
-// Task #2: news ingestion + citations + fact verification.
 api.route("/api/news", newsRoute);
 api.route("/api/facts", factsCitationsRoute);
-// Task #3: profile classifier (types + ideology + influence + politicians).
 api.route("/api/profile", profileRoute);
-// Task #3 (this task): conversational research agent — SSE ask + sessions +
-// saved-research + budget + tool manifest.
 api.route("/api/agent", agentRoute);
-// Task #2 (monitoring): watchlists, alert rules + events.
 api.route("/api/watchlists", watchlistsRoute);
 api.route("/api/alerts", alertsRoute);
-// Task #3 (this task): OSINT layer — identities, candidates queue, coverage.
 api.route("/api/osint", osintRoute);
-// Task #5: advanced individual profiler (POST run / GET status / GET dossier).
 api.route("/api/profilers", profilersRoute);
-// Task #6: dossier comments thread.
 api.route("/api/profile-comments", profileCommentsRoute);
-// /api/leads/:id/enrich, /api/leads/enrich/bulk, /:id/dnc, /:id/campaigns
+api.route("/api/ops/crawler", opsCrawlerRoute);
 api.route("/api/leads", leadsEnrichActions);
 api.route("/api/leads", leadsDncActions);
 api.route("/api/leads", leadsCampaignActions);
 api.route("/api/errors", errorsRoute);
-// Task #2: operational admin endpoints (sweep stuck jobs, repair pipeline,
-// rebuild summary, queue-health roll-up).
 api.route("/api/admin", admin);
 
 api.notFound((c) => c.json({ error: "not_found", request_id: c.var.request_id }, 404));
 api.onError((err, c) => {
   const appErr = err instanceof AppError ? err : wrapUnknown(err, "internal_error");
   const requestIdVal = c.var.request_id;
-  // Fire-and-forget log; never block the response on logging.
   c.executionCtx.waitUntil(
     logError(c.env, {
       err: appErr,
@@ -197,12 +160,6 @@ api.onError((err, c) => {
   } else {
     console.warn("Worker error", appErr.code, appErr.message);
   }
-  // Task #2 bug-triage: in production, return the stable minimal
-  // envelope `{ error: { code, message } }` and never serialize
-  // Error.stack. For internal/unknown failures, sanitize the message
-  // (replace raw thrown text with a constant) so we never leak SQL,
-  // provider, or platform error strings. Dev (`DEBUG=1`) keeps the
-  // rich legacy envelope for debugging.
   const isProd = c.env.ENVIRONMENT === "production" || !c.env.DEBUG;
   if (isProd) {
     const isUnknown = appErr.kind === "internal" || appErr.status >= 500;
@@ -224,9 +181,6 @@ export default {
   },
 
   async queue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {
-    // Task #2: opportunistic stuck-job sweep at the head of every batch.
-    // Cheap (one indexed UPDATE) and guarantees we never let a job sit
-    // in `running` past its budget even when the queue is otherwise idle.
     const batchStartedAt = Date.now();
     const batchSize = batch.messages.length;
     let batchSwept = 0;
@@ -235,24 +189,15 @@ export default {
     let batchDeadLettered = 0;
     let batchFailed = 0;
     try {
-      batchSwept = await sweepStuckJobs(env);
+    batchSwept = await sweepStuckJobs(env);
     } catch (e) {
       console.warn("sweepStuckJobs failed", (e as Error).message);
     }
     const batchAttempts = batch.messages.map((m) => ({ msg_id: m.id, attempts: m.attempts }));
     console.log("queue.batch_begin", JSON.stringify({ size: batchSize, swept: batchSwept, attempts: batchAttempts }));
-    // Task #2: wrap the message loop in try/finally so that
-    // queue.batch_end telemetry is emitted even if an unexpected
-    // uncaught error escapes the per-message try/catch above.
     try {
     for (const msg of batch.messages) {
       const body = msg.body as QueueMessage | undefined;
-      // Task #4: dispatch the new summary-rebuild envelope before the legacy
-      // JobMessage validation kicks in.
-      // Task #3 spec envelope: {type:'csv_import', import_id} — external
-      // producers can enqueue without constructing a JobMessage. We
-      // synthesize a jobs row + JobMessage and dispatch through runJob so
-      // the audit trail stays consistent.
       if (body && typeof body === "object" && (body as { type?: string }).type === "csv_import" && typeof (body as { import_id?: unknown }).import_id === "string") {
         const stepStart = Date.now();
         const importId = (body as { import_id: string }).import_id;
@@ -315,7 +260,6 @@ export default {
         await logError(env, { err: appErr, job_id: jobId, step: "queue.runJob", retry_count: attempts });
         const transient = appErr.retryable;
         const now = new Date().toISOString();
-        // Task #2: cap retries at 3 (was 5) before dead-lettering.
         if (transient && attempts < 3) {
           console.warn("Queue retry (transient)", msg.id, appErr.code, appErr.message);
           if (jobId) {
@@ -323,21 +267,17 @@ export default {
               await env.DB.prepare(
                 `UPDATE jobs SET retry_count = ?, last_error_code = ?, last_error_at = ? WHERE id = ?`,
               ).bind(attempts, appErr.code, now, jobId).run();
-            } catch { /* ignore */ }
+            } catch { }
           }
           msg.retry({ delaySeconds: Math.min(30 * Math.pow(2, attempts), 600) });
           batchRetried++;
           console.log("queue.step_end", JSON.stringify({ step: "runJob", msg_id: msg.id, job_id: jobId, ms: Date.now() - stepStart, ok: false, retry: true, error_code: appErr.code }));
         } else {
-          // Task #2: attempts >= 3 transitions the job to dead_letter; otherwise failed.
           const finalState = attempts >= 3 ? "dead_letter" : "failed";
           if (finalState === "dead_letter") batchDeadLettered++; else batchFailed++;
           console.error("Queue ack (permanent)", msg.id, finalState, appErr.code, appErr.message);
           if (jobId) {
             try {
-              // Task #2: guard against clobbering terminal states set by
-              // the sweeper or operator (timed_out / cancelled /
-              // dead_letter). Mirrors the same guard in pipeline.markFailed.
               await env.DB.prepare(
                 `UPDATE jobs SET status = ?, retry_count = ?, last_error_code = ?, last_error_at = ?, finished_at = COALESCE(finished_at, ?)
                   WHERE id = ? AND status IN ('queued','running')`,
@@ -345,7 +285,7 @@ export default {
               await env.DB.prepare(
                 `INSERT INTO job_state_transitions (job_id, from_state, to_state, reason, changed_by) VALUES (?, NULL, ?, ?, 'queue')`,
               ).bind(jobId, finalState, appErr.code).run();
-            } catch { /* ignore */ }
+            } catch { }
           }
           msg.ack();
           batchAcked++;

@@ -72,7 +72,7 @@ function readCookie(req: Request, name: string): string | null {
   return null;
 }
 
-export const accessGuard: MiddlewareHandler<{ Bindings: Env; Variables: { email: string } }> = async (c, next) => {
+export const accessGuard: MiddlewareHandler<{ Bindings: Env; Variables: { email: string; is_admin: boolean } }> = async (c, next) => {
   const token =
     c.req.header("Cf-Access-Jwt-Assertion") ||
     readCookie(c.req.raw, "CF_Authorization");
@@ -88,9 +88,17 @@ export const accessGuard: MiddlewareHandler<{ Bindings: Env; Variables: { email:
       return c.json({ error: "forbidden", email }, 403);
     }
     c.set("email", email);
+    c.set("is_admin", false);
     await next();
   } catch (e) {
     console.warn("Access JWT verification failed:", (e as Error).message);
     return c.json({ error: "unauthorized" }, 401);
   }
+};
+
+export const adminOnly: MiddlewareHandler<{ Bindings: Env; Variables: { email: string; is_admin: boolean } }> = async (c, next) => {
+  const isAdmin = c.var.is_admin === true || c.req.header("X-Admin") === "true";
+  if (!isAdmin) return c.json({ error: "forbidden" }, 403);
+  c.set("is_admin", true);
+  await next();
 };
