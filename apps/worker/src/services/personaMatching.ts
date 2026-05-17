@@ -129,8 +129,69 @@ export async function loadPersonEntity(env: Env, entityId: string): Promise<Pers
 
 // ---------------------------------------------------------------------------
 // Title similarity (only DB/Env-touching scorer).
+//
+// Embeddings are cached in persona_title_embeddings + entity_title_embeddings
+// keyed by content_hash so the hot path becomes a D1 lookup instead of an
+// AI.embed call. AI.embed only fires on cache miss (new persona, new entity,
+// or title text change). This mirrors the Vectorize precompute/reuse
+// pattern from Task #7 personas while staying on D1.
 // ---------------------------------------------------------------------------
-async function titleSimilarity(env: Env, personaText: string, entityTitle: string | null): Promise<ScoreComponentResult> {
+async function sha256Hex(input: string): Promise<string> {
+  const buf = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest("SHA-256", buf);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function ensureTitleCacheTables(env: Env): Promise<void> {
+  try {
+    await env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS persona_title_embeddings (persona_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, vector_json TEXT NOT NULL, model TEXT NOT NULL DEFAULT 'bge-base-en-v1.5', updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    ).run();
+    await env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS entity_title_embeddings (entity_id TEXT PRIMARY KEY, content_hash TEXT NOT NULL, vector_json TEXT NOT NULL, model TEXT NOT NULL DEFAULT 'bge-base-en-v1.5', updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    ).run();
+  } catch { /* best-effort */ }
+}
+
+async function getOrEmbedTitle(
+  env: Env,
+  scope: "persona" | "entity",
+  id: string,
+  text: string,
+): Promise<number[] | null> {
+  const hash = await sha256Hex(text);
+  const table = scope === "persona" ? "persona_title_embeddings" : "entity_title_embeddings";
+  const idCol = scope === "persona" ? "persona_id" : "entity_id";
+  try {
+    const row = await env.DB.prepare(
+      `SELECT vector_json FROM ${table} WHERE ${idCol} = ? AND content_hash = ?`,
+    ).bind(id, hash).first<{ vector_json: string }>();
+    if (row?.vector_json) {
+      try {
+        const v = JSON.parse(row.vector_json);
+        if (Array.isArray(v) && v.length) return v as number[];
+      } catch { /* fall through to re-embed */ }
+    }
+  } catch {
+    // Table missing — create it once and continue with embedding path.
+    await ensureTitleCacheTables(env);
+  }
+  if (!env.AI) return null;
+  const vec = await aiEmbed(env, text);
+  if (vec && vec.length) {
+    try {
+      await env.DB.prepare(
+        `INSERT INTO ${table} (${idCol}, content_hash, vector_json, updated_at) VALUES (?, ?, ?, datetime('now'))
+         ON CONFLICT(${idCol}) DO UPDATE SET content_hash=excluded.content_hash, vector_json=excluded.vector_json, updated_at=excluded.updated_at`,
+      ).bind(id, hash, JSON.stringify(vec)).run();
+    } catch (e) {
+      console.warn("title embedding cache write failed", scope, id, (e as Error).message);
+    }
+  }
+  return vec;
+}
+
+async function titleSimilarity(env: Env, personaId: string, personaText: string, entityId: string, entityTitle: string | null): Promise<ScoreComponentResult> {
   if (!entityTitle || !personaText) {
     return { value: 0, weight: DEFAULT_WEIGHTS.title_sim, reason: "missing title" };
   }
@@ -139,7 +200,10 @@ async function titleSimilarity(env: Env, personaText: string, entityTitle: strin
     return { value: ov.value, weight: DEFAULT_WEIGHTS.title_sim, reason: `title token overlap (no embed): ${ov.reason}` };
   }
   try {
-    const [pv, ev] = await Promise.all([aiEmbed(env, personaText), aiEmbed(env, entityTitle)]);
+    const [pv, ev] = await Promise.all([
+      getOrEmbedTitle(env, "persona", personaId, personaText),
+      getOrEmbedTitle(env, "entity", entityId, entityTitle),
+    ]);
     if (!pv || !ev) {
       return { value: 0, weight: DEFAULT_WEIGHTS.title_sim, reason: "embedding unavailable" };
     }
@@ -156,7 +220,7 @@ async function titleSimilarity(env: Env, personaText: string, entityTitle: strin
 export async function scoreEntityForPersona(env: Env, persona: PersonaRow, entity: PersonEntity): Promise<MatchResult> {
   const targets = extractTargets(persona);
   const [title_sim, seniority, fnc, industry, company_size, stage, geo] = await Promise.all([
-    titleSimilarity(env, targets.title_text || targets.titles.join(", "), entity.title),
+    titleSimilarity(env, persona.id, targets.title_text || targets.titles.join(", "), entity.id, entity.title),
     Promise.resolve(scoreSeniority(entity.seniority, targets.seniority)),
     Promise.resolve(scoreFunction(entity.department, targets.functions)),
     Promise.resolve(scoreIndustry(entity.employer_sectors, targets.industries)),

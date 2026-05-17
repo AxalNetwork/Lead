@@ -42,6 +42,15 @@ Weights (sum = 1.00):
 (thesis, free text) are explicitly excluded so the component is
 reproducible and explainable.
 
+**Embedding cache (precompute/reuse pattern).** Both persona and
+entity title embeddings are cached in D1 (`persona_title_embeddings`,
+`entity_title_embeddings`) keyed by content SHA-256. The hot path is
+a D1 lookup; `AI.embed` only fires on cache miss (new row, or title
+text changed). This matches the Vectorize precompute/reuse pattern
+from Task #7 personas — bulk scoring no longer pays per-entity
+embedding cost beyond first-touch. Caches are invalidated
+automatically when content_hash differs.
+
 ## Backwards-compatibility view
 
 Consumers still reading the legacy `persona_matches` column shape
@@ -119,11 +128,14 @@ itself, so the safe rollout sequence is:
 5. Apply to production.
 
 The backfill cannot auto-derive manual provenance because legacy
-`persona_matches` has no `source` column. If the override table is
-left empty, all legacy rows are stamped `source='auto'` and will be
-re-scored by the next nightly refresh — manual pins are LOST. The
-deploy pipeline should block on this check whenever the source DB
-contains rows that operators flagged as manual.
+`persona_matches` has no `source` column. **Migration 331 hard-fails
+with a division-by-zero error if `persona_matches` has any rows and
+`persona_match_manual_overrides` is empty** — operators must
+explicitly opt out by inserting at least one row (a no-op sentinel is
+fine if there genuinely are no manual pins) or pre-populate the
+override table with the manual pairs to preserve. Greenfield deploys
+(empty `persona_matches`) pass through cleanly with no operator
+action required.
 
 ### Inline-scoring feature flag
 

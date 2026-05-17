@@ -102,6 +102,42 @@ CREATE TABLE IF NOT EXISTS persona_match_manual_overrides (
   PRIMARY KEY (persona_id, entity_id)
 );
 
+-- Hard-fail guard: if the legacy persona_matches table has ANY rows
+-- but persona_match_manual_overrides is empty, abort the migration
+-- with a division-by-zero so manual pins are not silently downgraded
+-- to source='auto'. Operator must populate the overrides table first
+-- (see PERSONA_MATCHING.md runbook). Greenfield deploys (legacy
+-- empty) pass through cleanly.
+SELECT CASE
+  WHEN EXISTS (SELECT 1 FROM persona_matches LIMIT 1)
+   AND NOT EXISTS (SELECT 1 FROM persona_match_manual_overrides LIMIT 1)
+  THEN 1/0  -- ABORT: populate persona_match_manual_overrides before applying migration 331
+  ELSE 0
+END;
+
+-- Persona/entity title-embedding caches. The matcher reads from these
+-- BEFORE calling AI.embed, so per-entity scoring becomes a D1 lookup
+-- on the hot path. content_hash invalidates the cache when the
+-- underlying title text changes. This mirrors the Vectorize
+-- precompute/reuse pattern used by Task #7 personas without
+-- requiring a new Vectorize index.
+CREATE TABLE IF NOT EXISTS persona_title_embeddings (
+  persona_id    TEXT PRIMARY KEY,
+  content_hash  TEXT NOT NULL,
+  vector_json   TEXT NOT NULL,        -- JSON array of 768 floats
+  model         TEXT NOT NULL DEFAULT 'bge-base-en-v1.5',
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS entity_title_embeddings (
+  entity_id     TEXT PRIMARY KEY,
+  content_hash  TEXT NOT NULL,
+  vector_json   TEXT NOT NULL,
+  model         TEXT NOT NULL DEFAULT 'bge-base-en-v1.5',
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_pte_hash ON persona_title_embeddings(content_hash);
+CREATE INDEX IF NOT EXISTS idx_ete_hash ON entity_title_embeddings(content_hash);
+
 -- One-time backfill: copy any existing persona_matches rows (Task #46
 -- accounts/buyers matcher) whose entity_id resolves to a u_entity into
 -- the new entity matches table. source defaults to 'auto' with a
