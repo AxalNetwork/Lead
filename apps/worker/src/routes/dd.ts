@@ -20,6 +20,26 @@ import { refreshAllWatchlists, batchScanDueEntities } from "../dd/watchlistRefre
 export const ddRoute = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
 // ---- Scan ----
+//
+// IMPORTANT: `/scan/batch` MUST be registered before `/scan/:entityId`.
+// Hono matches in registration order, and the parametric route happily
+// captures the literal segment "batch" → Number("batch") is NaN → the
+// param handler returned 400 bad_id, masking the real batch endpoint.
+
+ddRoute.post("/scan/batch", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { limit?: number; staleDays?: number };
+  const limit = Math.min(Number(body.limit ?? 50), 500);
+  if (c.env.WF_DD_SCAN_BATCH) {
+    try {
+      const wf = await c.env.WF_DD_SCAN_BATCH.create({ params: { limit, staleDays: body.staleDays ?? 7 } });
+      return c.json({ ok: true, workflow_id: wf.id, dispatched: true });
+    } catch (e) {
+      return c.json({ ok: false, error: (e as Error).message }, 500);
+    }
+  }
+  const out = await batchScanDueEntities(c.env, { limit, staleDays: body.staleDays });
+  return c.json({ ok: true, dispatched: false, ...out });
+});
 
 ddRoute.post("/scan/:entityId", async (c) => {
   const id = Number(c.req.param("entityId"));
@@ -56,21 +76,6 @@ ddRoute.post("/scan/:entityId/dispatch", async (c) => {
   const ent = await loadEntityForScan(c.env, id);
   if (!ent) return c.json({ error: "not_found" }, 404);
   const out = await scanEntity(c.env, ent, { trigger: "manual", triggered_by: c.get("email") });
-  return c.json({ ok: true, dispatched: false, ...out });
-});
-
-ddRoute.post("/scan/batch", async (c) => {
-  const body = (await c.req.json().catch(() => ({}))) as { limit?: number; staleDays?: number };
-  const limit = Math.min(Number(body.limit ?? 50), 500);
-  if (c.env.WF_DD_SCAN_BATCH) {
-    try {
-      const wf = await c.env.WF_DD_SCAN_BATCH.create({ params: { limit, staleDays: body.staleDays ?? 7 } });
-      return c.json({ ok: true, workflow_id: wf.id, dispatched: true });
-    } catch (e) {
-      return c.json({ ok: false, error: (e as Error).message }, 500);
-    }
-  }
-  const out = await batchScanDueEntities(c.env, { limit, staleDays: body.staleDays });
   return c.json({ ok: true, dispatched: false, ...out });
 });
 
