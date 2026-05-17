@@ -27,6 +27,7 @@ import { savedFilters } from "./routes/saved_filters";
 import { analyticsFirms } from "./routes/analytics_firms";
 import { relationships } from "./routes/relationships";
 import { uploads } from "./routes/uploads";
+import { uploadsCsv } from "./routes/uploads_csv";
 import { investors } from "./routes/investors";
 import { companies } from "./routes/companies";
 import { search } from "./routes/search";
@@ -127,11 +128,11 @@ api.route("/api/saved-filters", savedFilters);
 api.route("/api/analytics/firms", analyticsFirms);
 api.route("/api/relationships", relationships);
 api.route("/api/uploads", uploads);
-// Task #3 (spec compliance): CSV-scoped alias. The dashboard's modern
-// callers can address `/api/uploads/csv*` while the legacy `/api/uploads*`
-// surface continues to serve every operator client. Both mounts share the
-// same Hono router — there is no behavioral fork.
-api.route("/api/uploads/csv", uploads);
+// Task #3 (spec contract): CSV-only end-to-end pipeline. Backed by the
+// new `csv_imports` table + processCsvImport handler. Separate from the
+// legacy `/api/uploads/*` (file_imports) surface; both routes pass
+// through accessGuard since they're mounted under /api/*.
+api.route("/api/uploads/csv", uploadsCsv);
 api.route("/api/investors", investors);
 api.route("/api/companies", companies);
 api.route("/api/search", search);

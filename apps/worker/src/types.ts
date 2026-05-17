@@ -186,7 +186,13 @@ export type JobKind =
   | "firmlist"
   | "firm_team_crawl"
   | "parse_file"
-  | "import_file";
+  | "import_file"
+  // Task #3 (spec contract): CSV-only end-to-end pipeline. Backed by
+  // `csv_imports` table + processCsvImport handler. Kept separate from
+  // `parse_file`/`import_file` (the multi-format file_imports pipeline)
+  // so the spec contract `{type:'csv_import', import_id}` works
+  // unchanged for external producers.
+  | "csv_import";
 
 export interface JobMessage {
   jobId: string;
