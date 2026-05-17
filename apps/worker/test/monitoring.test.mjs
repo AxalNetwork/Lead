@@ -156,6 +156,23 @@ test("webhook retry lifecycle 500→500→200 keeps signature stable and classif
   }
 });
 
+// Regression: dedupe suppression must hold even when the prior emission
+// is mid-retry (pending) or terminally failed. A flaky webhook target
+// must NOT cause repeated event rows for the same underlying change.
+// Asserts the dispatch.ts dedupe SELECT no longer filters by
+// delivery_status (which would let pending/failed rows fall through).
+test("dedupe suppression is independent of delivery_status (pending/failed don't re-emit)", async () => {
+  const fs = await import("node:fs/promises");
+  const src = await fs.readFile(new URL("../src/monitoring/dispatch.ts", import.meta.url), "utf8");
+  const m = src.match(/SELECT\s+id\s+FROM\s+alert_events\s+WHERE\s+dedupe_hash[^`;]+/i);
+  assert.ok(m, "could not locate dedupe SELECT in dispatch.ts");
+  const query = m[0];
+  assert.ok(!/delivery_status/i.test(query),
+    "dedupe SELECT must not filter by delivery_status; pending/failed rows must still suppress re-emission");
+  assert.ok(/occurred_at\s*>\s*\?/i.test(query),
+    "dedupe SELECT must still scope to the dedupe window");
+});
+
 // Integration-style: a 4xx (non-429/408) response is a permanent failure;
 // the dispatcher must NOT schedule a retry in that case.
 test("webhook 4xx (non-429/408) is classified as non-retryable", async () => {
