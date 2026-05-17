@@ -28,6 +28,27 @@ import { embedPersona, deletePersonaVector, topMatchesForPersona } from "../pers
 import { aiEmbed } from "../ai/extract";
 import { rescorePersonaFull, dispatchPersonaRescore } from "../personas/rescore";
 import { ensurePersonasSeeded } from "../personas/seed";
+// Task #8: real persona matching against the unified u_entities graph.
+import {
+  scoreEntity as scoreEntityForPersonaMatching,
+  scoreBatch as scoreBatchPersonaMatching,
+  listCandidates as listPersonaEntityCandidates,
+  upsertMatch as upsertPersonaEntityMatch,
+  loadPersonEntity, scoreEntityForPersona,
+} from "../services/personaMatching";
+
+// Task #8: best-effort fire-and-forget dispatch of the entity matcher
+// after a persona is created / cloned / edited. Inline fallback is
+// skipped here so we don't block the response — the nightly cron will
+// converge personas whose initial dispatch failed.
+async function dispatchPersonaEntityMatch(env: Env, personaId: string): Promise<void> {
+  if (!env.WF_PERSONA_ENTITY_MATCH) return;
+  try {
+    await env.WF_PERSONA_ENTITY_MATCH.create({ params: { personaId, batchSize: 100, maxEntities: 20000 } });
+  } catch (e) {
+    console.warn("dispatchPersonaEntityMatch failed", personaId, (e as Error).message);
+  }
+}
 
 export const personasRoute = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
@@ -123,6 +144,7 @@ personasRoute.post("/", async (c) => {
       const { vector, text } = await embedPersona(c.env, { ...spec, name: row.name, thesis: row.thesis });
       if (vector) await setPersonaEmbeddingMeta(c.env, row.id, vector.length, text);
       await dispatchPersonaRescore(c.env, row.id);
+      await dispatchPersonaEntityMatch(c.env, row.id);
     } catch (e) { console.warn("post-create persona setup failed", (e as Error).message); }
   })());
   return c.json(row, 201);
@@ -149,6 +171,7 @@ personasRoute.patch("/:id", async (c) => {
       const { vector, text } = await embedPersona(c.env, { ...spec, name: row.name, thesis: row.thesis });
       if (vector) await setPersonaEmbeddingMeta(c.env, row.id, vector.length, text);
       await dispatchPersonaRescore(c.env, row.id);
+      await dispatchPersonaEntityMatch(c.env, row.id);
     } catch (e) { console.warn("post-patch persona setup failed", (e as Error).message); }
   })());
   return c.json(row);
@@ -185,6 +208,7 @@ personasRoute.post("/:id/clone", async (c) => {
       const { vector, text } = await embedPersona(c.env, { ...spec, name: clone.name, thesis: clone.thesis });
       if (vector) await setPersonaEmbeddingMeta(c.env, clone.id, vector.length, text);
       await dispatchPersonaRescore(c.env, clone.id);
+      await dispatchPersonaEntityMatch(c.env, clone.id);
     } catch (e) { console.warn("clone setup failed", (e as Error).message); }
   })());
   return c.json(clone, 201);
@@ -241,6 +265,74 @@ personasRoute.get("/:id/matches", async (c) => {
   const items = await listMatches(c.env, row.id, { kind: row.kind, limit, offset, minScore });
   const total = await countMatches(c.env, row.id, minScore);
   return c.json({ items, total, nextOffset: items.length === limit ? offset + limit : null });
+});
+
+// -------------------------------------------------------------------------
+// Task #8: real persona matching against unified u_entities (person
+// graph). Separate read endpoint from /matches (which scores accounts/
+// buyers from Task #46) — these two coexist by design.
+// -------------------------------------------------------------------------
+
+// POST /:id/run-matching → dispatches the entity-matching workflow.
+// Body: { batch_size?, max_entities?, force? } (all optional).
+// Returns { ok, workflow_id?, scored?, errors? } — inline fallback when
+// WF_PERSONA_ENTITY_MATCH is not bound.
+personasRoute.post("/:id/run-matching", async (c) => {
+  const row = await getPersona(c.env, c.req.param("id"));
+  if (!row) return c.json({ error: "not_found" }, 404);
+  const body = (await c.req.json().catch(() => null)) as { batch_size?: number; max_entities?: number } | null;
+  const batchSize = Math.min(Math.max(1, Number(body?.batch_size) || 100), 500);
+  const maxEntities = Math.min(Math.max(1, Number(body?.max_entities) || 20000), 100000);
+  if (c.env.WF_PERSONA_ENTITY_MATCH) {
+    try {
+      const wf = await c.env.WF_PERSONA_ENTITY_MATCH.create({ params: { personaId: row.id, batchSize, maxEntities } });
+      return c.json({ ok: true, dispatched: "workflow", workflow_id: wf.id, persona_id: row.id });
+    } catch (e) {
+      console.warn("run-matching WF dispatch failed; falling back inline", (e as Error).message);
+    }
+  }
+  // Inline fallback — bounded so a request handler never melts the worker.
+  const r = await scoreBatchPersonaMatching(c.env, row.id, { batchSize, maxEntities: Math.min(maxEntities, 500) });
+  return c.json({ ok: true, dispatched: "inline", persona_id: row.id, ...r });
+});
+
+// GET /:id/candidates?min_score=0.7&limit=50&offset=0
+personasRoute.get("/:id/candidates", async (c) => {
+  const row = await getPersona(c.env, c.req.param("id"));
+  if (!row) return c.json({ error: "not_found" }, 404);
+  const minScore = Math.max(0, Math.min(1, Number(c.req.query("min_score")) || 0));
+  const limit = Math.min(Math.max(1, Number(c.req.query("limit")) || 50), 500);
+  const offset = Math.max(0, Number(c.req.query("offset")) || 0);
+  const items = await listPersonaEntityCandidates(c.env, row.id, { minScore, limit, offset });
+  return c.json({ persona_id: row.id, items, nextOffset: items.length === limit ? offset + limit : null });
+});
+
+// POST /:id/candidates → manual upsert. Body: { entity_id, score? }.
+// score omitted ⇒ compute via the matcher and persist as 'manual'.
+personasRoute.post("/:id/candidates", async (c) => {
+  const row = await getPersona(c.env, c.req.param("id"));
+  if (!row) return c.json({ error: "not_found" }, 404);
+  const body = (await c.req.json().catch(() => null)) as { entity_id?: string; score?: number } | null;
+  if (!body?.entity_id) return c.json({ error: "bad_request", message: "entity_id required" }, 400);
+  const entity = await loadPersonEntity(c.env, body.entity_id);
+  if (!entity) return c.json({ error: "entity_not_found" }, 404);
+  const result = await scoreEntityForPersona(c.env, row, entity);
+  if (typeof body.score === "number" && Number.isFinite(body.score)) {
+    result.score = Math.max(0, Math.min(1, body.score));
+  }
+  await upsertPersonaEntityMatch(c.env, row.id, body.entity_id, result, { source: "manual" });
+  return c.json({ ok: true, persona_id: row.id, entity_id: body.entity_id, score: result.score, source: "manual" });
+});
+
+// POST /:id/score-entity-graph → single-entity sync score (for debugging).
+personasRoute.post("/:id/score-entity-graph", async (c) => {
+  const row = await getPersona(c.env, c.req.param("id"));
+  if (!row) return c.json({ error: "not_found" }, 404);
+  const body = (await c.req.json().catch(() => null)) as { entity_id?: string } | null;
+  if (!body?.entity_id) return c.json({ error: "bad_request", message: "entity_id required" }, 400);
+  const result = await scoreEntityForPersonaMatching(c.env, row.id, body.entity_id);
+  if (!result) return c.json({ error: "entity_not_found_or_not_person" }, 404);
+  return c.json({ persona_id: row.id, entity_id: body.entity_id, ...result });
 });
 
 // Debounced live-preview. Does NOT persist anything. Embeds the

@@ -134,6 +134,41 @@ export class RescorePersonaWorkflow {
   }
 }
 
+// Task #8: persona ↔ entity matcher. Batch-scores a persona against
+// every active person entity in u_entities. Heavy lifting lives in
+// services/personaMatching.ts so the inline fallback (no WF binding in
+// dev) hits the same code path.
+export class PersonaEntityMatchWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ personaId: string; batchSize?: number; maxEntities?: number }>, step: WorkflowStep): Promise<{ ok: true; personaId: string; scored: number; errors: number; pages: number }> {
+    const { personaId, batchSize, maxEntities } = event.payload;
+    const { scoreBatch } = await import("../services/personaMatching");
+    const r = await step.do("score_batch", { retries: { limit: 2, backoff: "exponential" } }, async () => {
+      return await scoreBatch(this.env, personaId, { batchSize, maxEntities });
+    });
+    return { ok: true, personaId, ...r };
+  }
+}
+
+// Task #8: nightly refresh of stale persona_entity_matches rows
+// (>30 days). Bounded by `limit` so a single tick fits its budget.
+export class PersonaMatchRefreshWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ limit?: number; staleDays?: number }>, step: WorkflowStep): Promise<{ ok: true; refreshed: number; errors: number }> {
+    const limit = event.payload?.limit ?? 500;
+    const staleDays = event.payload?.staleDays ?? 30;
+    const { refreshStaleMatches } = await import("../services/personaMatching");
+    const r = await step.do("refresh", { retries: { limit: 1, backoff: "exponential" } }, async () => {
+      return await refreshStaleMatches(this.env, { limit, staleDays });
+    });
+    return { ok: true, ...r };
+  }
+}
+
 // Task #47: durable per-project match recompute. Triggered on create /
 // patch / nightly cron / manual /recompute. Heavy lifting lives in
 // projects/match.ts so the inline fallback (no WF binding in dev) hits

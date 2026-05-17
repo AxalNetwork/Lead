@@ -147,6 +147,22 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         console.error("staleness sweep failed", (e as Error).message);
       }
 
+      // Task #8: nightly persona-entity match refresh — re-scores
+      // persona_entity_matches rows older than 30 days. Bounded by
+      // limit so a single tick fits in the cron window.
+      try {
+        if (env.WF_PERSONA_MATCH_REFRESH) {
+          await env.WF_PERSONA_MATCH_REFRESH.create({ params: { limit: 500, staleDays: 30 } });
+          console.log("persona-match-refresh workflow dispatched");
+        } else {
+          const { refreshStaleMatches } = await import("./services/personaMatching");
+          const r = await refreshStaleMatches(env, { limit: 200, staleDays: 30 });
+          console.log("persona-match-refresh inline", JSON.stringify(r));
+        }
+      } catch (e) {
+        console.error("nightly persona-match-refresh failed", (e as Error).message);
+      }
+
       // 5. Project match refresh
       try {
         const r = await env.DB.prepare(`SELECT id FROM projects WHERE deleted_at IS NULL AND status = 'active' ORDER BY last_modified DESC LIMIT 200`).all<{ id: string }>();

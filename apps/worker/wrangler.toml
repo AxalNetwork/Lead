@@ -314,6 +314,20 @@ binding = "WF_OSINT_REVERIFY"
 name = "osint-reverify"
 class_name = "OSINTReverifyWorkflow"
 
+# Task #8: persona ↔ entity matcher. Batch-scores a persona against
+# every active person entity in u_entities. Triggered from
+# POST /api/personas/:id/run-matching and the nightly cron.
+[[workflows]]
+binding = "WF_PERSONA_ENTITY_MATCH"
+name = "persona-entity-match"
+class_name = "PersonaEntityMatchWorkflow"
+
+# Task #8: nightly refresh of stale persona_entity_matches rows (>30d).
+[[workflows]]
+binding = "WF_PERSONA_MATCH_REFRESH"
+name = "persona-match-refresh"
+class_name = "PersonaMatchRefreshWorkflow"
+
 [[queues.producers]]
 binding = "LEAD_QUEUE"
 queue = "aidatasignal-lead-jobs"

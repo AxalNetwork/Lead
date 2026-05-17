@@ -49,7 +49,7 @@ import { profilers as profilersRoute } from "./routes/profilers";
 // Task #6: dossier comments (right-rail thread).
 import { profileComments as profileCommentsRoute } from "./routes/profile_comments";
 export { EntityLock } from "./do/EntityLock";
-export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, RefreshGovernmentWorkflow, DiscoverFromSeedWorkflow, CrawlFrontierWorkflow, MonitorEntityWorkflow, MonitorBatchWorkflow, DigestWorkflow, IndividualProfilerWorkflow } from "./ai/workflows";
+export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, PersonaEntityMatchWorkflow, PersonaMatchRefreshWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, RefreshGovernmentWorkflow, DiscoverFromSeedWorkflow, CrawlFrontierWorkflow, MonitorEntityWorkflow, MonitorBatchWorkflow, DigestWorkflow, IndividualProfilerWorkflow } from "./ai/workflows";
 // Task #3 (this task): OSINT cross-platform identity workflows.
 export { OSINTResolveEntityWorkflow, OSINTBatchWorkflow, OSINTReverifyWorkflow } from "./osint/workflows";
 // Task #3 (this task): research-agent nightly saved-research refresh.
