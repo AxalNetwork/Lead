@@ -399,8 +399,11 @@ async function detectSchema(env: Env, headers: string[], sample: string[][]): Pr
   // fail in a real environment, the handler must mark the import
   // status='needs_manual_mapping' with detected_columns_json='{}'.
   if (!env.AI) {
+    // Dev/test path: heuristic mapper + strict validation. No silent
+    // repair — if heuristic doesn't yield a valid firm.name column,
+    // return null so caller marks status='needs_manual_mapping'.
     const h = heuristicDetect(headers);
-    return validateAndRepairNameMapping(h, headers, sample);
+    return isNameMappingValid(h, headers, sample) ? h : null;
   }
   const prompt = buildDetectPrompt(headers, sample);
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -408,24 +411,19 @@ async function detectSchema(env: Env, headers: string[], sample: string[][]): Pr
       const model = attempt === 0 ? PRIMARY_MODEL : FALLBACK_MODEL;
       const res = (await env.AI.run(model, {
         messages: [
-          { role: "system", content: "You map spreadsheet headers to entity predicates. Reply with strict JSON matching the schema. Never invent predicates — use null for unknown headers and put a brief reason in notes. The `firm.name` column MUST hold proper-noun brand names, never Type/Kind labels like 'VC', 'Nonprofit', 'Angel'." },
+          { role: "system", content: "You map spreadsheet headers to entity predicates. Reply with strict JSON matching the schema. Never invent predicates — use null for unknown headers and put a brief reason in notes. The `firm.name` column MUST hold proper-noun brand names, never Type/Kind labels like 'VC', 'Nonprofit', 'Angel', country codes, or short uppercase categorical tokens." },
           { role: "user", content: prompt },
         ],
         response_format: { type: "json_schema", json_schema: DETECT_SCHEMA },
       })) as { response?: string; entity_type?: string; column_map?: unknown };
       const parsed = parseDetectResponse(res);
       if (!parsed) continue;
-      // Task #5: AI sometimes maps the Type/Kind column to firm.name
-      // (especially on headerless CSVs that have synthetic col_0..col_N
-      // headers — there's no header text for the model to disambiguate
-      // from). Validate the proposed firm.name column against the
-      // type-string regex; on attempt 0, fall through to attempt 1
-      // (different model) when invalid; on attempt 1, apply the
-      // deterministic fallback (longest avg non-URL string column).
+      // Task #5: validate the proposed firm.name column against the
+      // proper-noun + type-string gates. On attempt 0, fall through
+      // to attempt 1 (different model) when invalid. On attempt 1,
+      // return null per strict contract — caller marks
+      // status='needs_manual_mapping' (NO silent column repair).
       if (isNameMappingValid(parsed, headers, sample)) return parsed;
-      if (attempt === 0) continue;
-      const repaired = repairNameMapping(parsed, headers, sample);
-      if (repaired) return repaired;
     } catch (e) {
       console.warn("detectSchema attempt failed", attempt, (e as Error).message);
     }
@@ -433,10 +431,26 @@ async function detectSchema(env: Env, headers: string[], sample: string[][]): Pr
   return null;
 }
 
-// ---- Task #5: firm.name mapping validation & repair ----------------------
-// The proposed firm.name column is valid iff: (a) at least one sample
-// value is non-empty, AND (b) NO sample value matches the type-string
-// regex (TYPE_STRING_REGEX, src/services/csv/headerDetector.ts).
+// ---- Task #5: firm.name mapping validation -------------------------------
+// The proposed firm.name column is valid iff every non-empty sample
+// value clears BOTH gates:
+//
+//   1. Type-string gate — NOT in TYPE_STRING_REGEX (single source of
+//      truth in src/services/csv/headerDetector.ts).
+//   2. Proper-noun-like gate — at least one alphabetic character,
+//      length ≥ 2, NOT a short all-caps categorical token (≤4 chars
+//      all uppercase, e.g. "USA", "VC", "EU"), NOT a pure number,
+//      NOT a URL/email/money cell. Headers/cells with embedded
+//      mixed-case letters (e.g. "Acme Ventures", "500 Startups")
+//      always pass; bare categorical tokens never do.
+//
+// At least one sample row must be non-empty — empty-column mappings
+// are rejected.
+//
+// On invalid mapping the caller does NOT silently substitute another
+// column. Per spec contract, after the 2nd AI attempt fails this gate
+// the import is moved to status='needs_manual_mapping' so an operator
+// re-uploads with a corrected header / column choice.
 function isNameMappingValid(
   detected: DetectedColumns,
   headers: string[],
@@ -450,70 +464,30 @@ function isNameMappingValid(
     if (!v) continue;
     nonEmpty++;
     if (looksLikeTypeString(v)) return false;
+    if (!looksLikeProperNoun(v)) return false;
   }
   return nonEmpty > 0;
 }
 
-// Deterministic fallback: pick the column whose sample cells have the
-// highest average length AMONG columns that (1) never contain a URL/
-// money/ISO2/type-string cell and (2) have at least one non-empty
-// sample. Returns a patched DetectedColumns with that column re-bound
-// to firm.name (and the previously-mapped firm.name column rebound to
-// null), or null if no column qualifies.
-function repairNameMapping(
-  detected: DetectedColumns,
-  headers: string[],
-  sample: string[][],
-): DetectedColumns | null {
-  let bestIdx = -1;
-  let bestAvg = 0;
-  for (let i = 0; i < headers.length; i++) {
-    let total = 0, count = 0, disqualified = false;
-    for (const row of sample) {
-      const v = (row[i] ?? "").trim();
-      if (!v) continue;
-      if (/^https?:\/\//i.test(v) || /\.(com|org|io|co|net|ai|app|dev)\b/i.test(v)) { disqualified = true; break; }
-      if (/[$€£¥]/.test(v) || /\b\d+(?:[.,]\d+)?\s*[kmbKMB]\b/.test(v)) { disqualified = true; break; }
-      if (/^[A-Z]{2}$/.test(v)) { disqualified = true; break; }
-      if (/^\d+$/.test(v)) { disqualified = true; break; }
-      if (looksLikeTypeString(v)) { disqualified = true; break; }
-      total += v.length;
-      count++;
-    }
-    if (disqualified || count === 0) continue;
-    const avg = total / count;
-    if (avg > bestAvg) { bestAvg = avg; bestIdx = i; }
-  }
-  if (bestIdx < 0) return null;
-  const patched: DetectedColumns = {
-    entity_type: detected.entity_type,
-    column_map: { ...detected.column_map },
-  };
-  for (const h of headers) {
-    const m = patched.column_map[h];
-    if (m?.predicate === "firm.name") {
-      patched.column_map[h] = { ...m, predicate: null, notes: "rejected by name-mapping validator (type-string)" };
-    }
-  }
-  const chosen = headers[bestIdx];
-  patched.column_map[chosen] = {
-    predicate: "firm.name",
-    value_type: "text",
-    confidence: 0.5,
-    notes: "fallback: longest avg non-URL/non-type column",
-  };
-  return patched;
-}
-
-// Convenience wrapper for the env.AI === undefined path: heuristic
-// mapper followed by the same validate/repair pipeline.
-function validateAndRepairNameMapping(
-  detected: DetectedColumns,
-  headers: string[],
-  sample: string[][],
-): DetectedColumns | null {
-  if (isNameMappingValid(detected, headers, sample)) return detected;
-  return repairNameMapping(detected, headers, sample);
+// Proper-noun-like = plausibly a brand/entity name. Rejects short
+// uppercase categoricals (USA, VC, EU), pure digits, URLs, emails,
+// money strings, and single chars.
+function looksLikeProperNoun(value: string): boolean {
+  const v = value.trim();
+  if (v.length < 2) return false;
+  if (!/[A-Za-z]/.test(v)) return false;             // must contain a letter
+  if (/^https?:\/\//i.test(v)) return false;
+  if (/\.(com|org|io|co|net|ai|app|dev|gov|edu)\b/i.test(v)) return false;
+  if (/@/.test(v)) return false;
+  if (/[$€£¥]/.test(v)) return false;
+  if (/^\d+$/.test(v)) return false;
+  if (/^\$?\d/.test(v)) return false;
+  if (/\b\d+(?:[.,]\d+)?\s*[kmbKMB]\b/.test(v)) return false;
+  // Short all-uppercase token with no spaces → categorical (USA, VC,
+  // ANGEL). Allow "IBM" / "AMD" style brands by requiring >4 chars
+  // for the all-caps reject.
+  if (v.length <= 4 && /^[A-Z]+$/.test(v)) return false;
+  return true;
 }
 
 function buildDetectPrompt(headers: string[], sample: string[][]): string {
