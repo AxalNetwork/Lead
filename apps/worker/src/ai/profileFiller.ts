@@ -19,7 +19,6 @@ import { trackAi } from "../analytics/events";
 import { fetchPage } from "../scraper/fetcher";
 import { insertFact, insertFactsBatch } from "../entities/facts";
 import { addTag } from "../entities/tags";
-import { syncFirmToEntity } from "../entities/dualwrite";
 
 export const PROFILE_FILLER_VERSION = "ai_profile_filler:v1";
 const SUBPATHS = [
@@ -333,14 +332,36 @@ async function findOrCreatePortfolioEntity(env: Env, name: string, website: stri
   ).bind(trimmed.toLowerCase()).first<{ id: string }>().catch(() => null);
   if (hitByName?.id) return hitByName.id;
 
-  // Create new org entity via dual-write firm sync (firm-like minimal input).
-  return await syncFirmToEntity(env, {
-    id: 0,
-    name: trimmed,
-    domain,
-    website: website ?? null,
-    source_domain: domain,
-  } as unknown as Parameters<typeof syncFirmToEntity>[1], source);
+  // Create a new org entity via the canonical helpers — passing
+  // `id: 0` into syncFirmToEntity would have all portfolio companies
+  // collide on the same legacy_map row (firms/0 → first-created
+  // entity). Use createEntity directly so each AI-discovered
+  // portfolio company gets its own u_entities row, then route writes
+  // through addRole / upsertChannel / insertFact (canonical path).
+  try {
+    const { createEntity, addRole } = await import("../entities/roles");
+    const ent = await createEntity(env, {
+      kind: "org",
+      display_name: trimmed,
+      primary_url: website ?? null,
+      primary_domain: domain,
+    });
+    await addRole(env, ent.id, "company", { source }).catch(() => undefined);
+    await insertFact(env, {
+      entity_id: ent.id, predicate: "name", value_text: trimmed,
+      source_kind: "ai", source, confidence: 0.7,
+    });
+    if (website) {
+      try {
+        const { upsertChannel } = await import("../entities/channels");
+        await upsertChannel(env, { entity_id: ent.id, kind: "website", canonical: website, source, is_primary: true });
+      } catch { /* best-effort */ }
+    }
+    return ent.id;
+  } catch (e) {
+    console.warn("findOrCreatePortfolioEntity canonical create failed", (e as Error).message);
+    return null;
+  }
 }
 
 async function findOrCreatePersonEntity(env: Env, name: string, linkedin: string | null, source: string): Promise<string | null> {

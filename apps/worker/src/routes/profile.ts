@@ -153,10 +153,17 @@ profileRoute.post("/:id/fill", async (c) => {
   const email = c.var.email;
 
   // Owner isolation (spec "Owner isolation"): manual triggers require a
-  // resolved Access JWT email. Anonymous callers can't burn AI spend on
-  // arbitrary entity IDs.
+  // resolved Access JWT email AND that email must be on the operator
+  // allowlist. The site is single-operator today (see ADMIN_EMAILS in
+  // routes/relationships.ts and the allowlist in replit.md); facts are
+  // global but the trigger itself is operator-scoped so authenticated-
+  // but-non-admin Access users can't burn AI spend on arbitrary IDs.
+  const ADMIN_EMAILS = new Set(["guillaumelauzier@gmail.com"]);
   if (!email) {
     return c.json({ ok: false, error: "unauthenticated" }, 401);
+  }
+  if (!ADMIN_EMAILS.has(email.toLowerCase())) {
+    return c.json({ ok: false, error: "forbidden" }, 403);
   }
   // Confirm the entity exists + is active before incurring any AI cost
   // or rate-limit state. (Profile facts are global per spec, but the
