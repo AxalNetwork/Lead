@@ -196,6 +196,7 @@ permalink: /dashboard/discovery/
     } finally { this.disabled = false; this.textContent = "Crawl frontier"; }
   });
   async function renderGraph(rootId) {
+    window.__ads_disc_graph_root = rootId;
     var host = document.getElementById("ads-disc-graph");
     host.innerHTML = '<div class="ads-loading" style="padding:20px">Building graph…</div>';
     try {
@@ -245,5 +246,12 @@ permalink: /dashboard/discovery/
   document.getElementById("ads-disc-filter").addEventListener("click", loadUrls);
   loadMethods(); loadStats(); loadUrls();
   setInterval(loadStats, 5000);
+  // Auto-refresh the URL table every 10s so the operator sees the
+  // graph grow without manually re-running the filter. Re-renders the
+  // currently-selected graph root if one is open.
+  setInterval(function () {
+    loadUrls();
+    if (window.__ads_disc_graph_root) renderGraph(window.__ads_disc_graph_root);
+  }, 10000);
 })();
 </script>
