@@ -276,8 +276,21 @@
     }
     var website = ent.primary_url || ent.primary_domain;
     if (website) {
-      var href = website.indexOf("://") >= 0 ? website : "https://" + website;
-      parts.push('<a href="' + esc(href) + '" target="_blank" rel="noopener">' + esc(website) + '</a>');
+      // Protocol allowlist: never let a stored `javascript:` /
+      // `data:` URL slip into an operator-clickable href. We coerce
+      // bare domains to https:// and drop anything else.
+      var raw = String(website);
+      var href = null;
+      if (/^https?:\/\//i.test(raw)) {
+        href = raw;
+      } else if (raw.indexOf("://") < 0 && /^[a-z0-9.-]+\.[a-z]{2,}/i.test(raw)) {
+        href = "https://" + raw;
+      }
+      if (href) {
+        parts.push('<a href="' + esc(href) + '" target="_blank" rel="noopener">' + esc(website) + '</a>');
+      } else {
+        parts.push(esc(website));
+      }
     }
     return parts.join(" · ");
   }
