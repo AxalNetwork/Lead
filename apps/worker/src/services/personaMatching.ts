@@ -181,10 +181,64 @@ export async function scoreEntity(env: Env, personaId: string, entityId: string)
   if (!persona) return null;
   const entity = await loadPersonEntity(env, entityId);
   if (!entity) return null;
-  await assertBudget(env, "ai").catch(() => undefined);
+  // Task #2 budget gate: refuse if AI cap reached (title_sim uses AI.embed).
+  const b = await assertBudget(env, "ai");
+  if (!b.ok) {
+    await recordMatchJob(env, "score_entity", "halted", { personaId, entityId, reason: b.reason });
+    return null;
+  }
   const result = await scoreEntityForPersona(env, persona, entity);
   await upsertMatch(env, personaId, entityId, result);
   return result;
+}
+
+// Task #8: durable job/error log so SLO violations are visible. Created
+// on demand by triggering migrations; CREATE TABLE IF NOT EXISTS guards
+// against pre-migration calls.
+async function ensureJobsTable(env: Env): Promise<void> {
+  try {
+    await env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS persona_match_jobs (
+         id TEXT PRIMARY KEY,
+         kind TEXT NOT NULL,
+         status TEXT NOT NULL,
+         persona_id TEXT,
+         entity_id TEXT,
+         details_json TEXT,
+         created_at TEXT NOT NULL DEFAULT (datetime('now'))
+       )`,
+    ).run();
+  } catch { /* best-effort */ }
+}
+
+export async function recordMatchJob(
+  env: Env,
+  kind: "dispatch" | "score_entity" | "score_batch" | "score_across_personas" | "refresh_stale" | "trigger",
+  status: "ok" | "halted" | "failed" | "cancelled",
+  details: Record<string, unknown>,
+): Promise<void> {
+  await ensureJobsTable(env);
+  try {
+    await env.DB.prepare(
+      `INSERT INTO persona_match_jobs (id, kind, status, persona_id, entity_id, details_json)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      crypto.randomUUID(), kind, status,
+      (details.personaId as string | undefined) ?? null,
+      (details.entityId as string | undefined) ?? null,
+      JSON.stringify(details),
+    ).run();
+  } catch (e) {
+    console.warn("recordMatchJob failed", kind, status, (e as Error).message);
+  }
+}
+
+async function isCancelled(env: Env, jobId: string | null): Promise<boolean> {
+  if (!jobId) return false;
+  try {
+    const r = await env.DB.prepare("SELECT status FROM jobs WHERE id = ?").bind(jobId).first<{ status: string }>();
+    return r?.status === "cancelled" || r?.status === "timed_out";
+  } catch { return false; }
 }
 
 export interface UpsertOpts { source?: "auto" | "manual" }
@@ -225,14 +279,26 @@ export async function upsertMatch(env: Env, personaId: string, entityId: string,
   ).bind(personaId, entityId, result.score, evidence, MODEL_VERSION).run();
 }
 
-export async function scoreEntityAcrossPersonas(env: Env, entityId: string): Promise<{ scored: number; errors: number }> {
+export async function scoreEntityAcrossPersonas(env: Env, entityId: string, opts: { jobId?: string | null } = {}): Promise<{ scored: number; errors: number; halted: boolean }> {
   const entity = await loadPersonEntity(env, entityId);
-  if (!entity) return { scored: 0, errors: 0 };
+  if (!entity) return { scored: 0, errors: 0, halted: false };
   const r = await env.DB.prepare(
     `SELECT * FROM personas WHERE deleted_at IS NULL AND status = 'active'`,
   ).all<PersonaRow>();
-  let scored = 0; let errors = 0;
+  let scored = 0; let errors = 0; let halted = false;
   for (const p of r.results ?? []) {
+    // Task #2: budget + cancellation enforcement per item.
+    const b = await assertBudget(env, "ai");
+    if (!b.ok) {
+      halted = true;
+      await recordMatchJob(env, "score_across_personas", "halted", { entityId, scored, errors, reason: b.reason });
+      break;
+    }
+    if (await isCancelled(env, opts.jobId ?? null)) {
+      halted = true;
+      await recordMatchJob(env, "score_across_personas", "cancelled", { entityId, scored, errors });
+      break;
+    }
     try {
       const res = await scoreEntityForPersona(env, p, entity);
       await upsertMatch(env, p.id, entityId, res);
@@ -242,16 +308,33 @@ export async function scoreEntityAcrossPersonas(env: Env, entityId: string): Pro
       console.warn("scoreEntityAcrossPersonas item failed", p.id, entityId, (e as Error).message);
     }
   }
-  return { scored, errors };
+  return { scored, errors, halted };
 }
 
-export async function scoreBatch(env: Env, personaId: string, opts: { batchSize?: number; maxEntities?: number } = {}): Promise<{ scored: number; errors: number; pages: number }> {
+export async function scoreBatch(env: Env, personaId: string, opts: { batchSize?: number; maxEntities?: number | null; jobId?: string | null } = {}): Promise<{ scored: number; errors: number; pages: number; halted: boolean }> {
   const persona = await getPersona(env, personaId);
-  if (!persona) return { scored: 0, errors: 0, pages: 0 };
+  if (!persona) return { scored: 0, errors: 0, pages: 0, halted: false };
   const batchSize = Math.min(Math.max(1, opts.batchSize ?? 100), 500);
-  const maxEntities = Math.max(0, opts.maxEntities ?? 20000);
-  let offset = 0; let scored = 0; let errors = 0; let pages = 0;
-  while (scored + errors < maxEntities) {
+  // maxEntities = null (default) means "process every active person
+  // entity" — the task requires create/edit dispatch covers all
+  // entities, not a hardcoded cap. Operators can pass a number when
+  // they want to bound a manual run.
+  const maxEntities = opts.maxEntities ?? null;
+  let offset = 0; let scored = 0; let errors = 0; let pages = 0; let halted = false;
+  for (;;) {
+    if (maxEntities != null && scored + errors >= maxEntities) break;
+    // Task #2: budget + cancellation check per page (cheap, bounded).
+    const b = await assertBudget(env, "ai");
+    if (!b.ok) {
+      halted = true;
+      await recordMatchJob(env, "score_batch", "halted", { personaId, scored, errors, pages, reason: b.reason });
+      break;
+    }
+    if (await isCancelled(env, opts.jobId ?? null)) {
+      halted = true;
+      await recordMatchJob(env, "score_batch", "cancelled", { personaId, scored, errors, pages });
+      break;
+    }
     const r = await env.DB.prepare(
       `SELECT id FROM u_entities WHERE kind = 'person' AND status = 'active' ORDER BY id LIMIT ? OFFSET ?`,
     ).bind(batchSize, offset).all<{ id: string }>();
@@ -273,10 +356,13 @@ export async function scoreBatch(env: Env, personaId: string, opts: { batchSize?
     if (ids.length < batchSize) break;
     offset += batchSize;
   }
-  return { scored, errors, pages };
+  if (errors > 0 && !halted) {
+    await recordMatchJob(env, "score_batch", "ok", { personaId, scored, errors, pages });
+  }
+  return { scored, errors, pages, halted };
 }
 
-export async function refreshStaleMatches(env: Env, opts: { staleDays?: number; limit?: number } = {}): Promise<{ refreshed: number; errors: number }> {
+export async function refreshStaleMatches(env: Env, opts: { staleDays?: number; limit?: number; jobId?: string | null } = {}): Promise<{ refreshed: number; errors: number; halted: boolean }> {
   const staleDays = Math.max(1, opts.staleDays ?? 30);
   const limit = Math.min(Math.max(1, opts.limit ?? 500), 5000);
   const r = await env.DB.prepare(
@@ -284,8 +370,20 @@ export async function refreshStaleMatches(env: Env, opts: { staleDays?: number; 
       WHERE source = 'auto' AND datetime(last_scored_at) < datetime('now', ?)
       ORDER BY last_scored_at ASC LIMIT ?`,
   ).bind(`-${staleDays} days`, limit).all<{ persona_id: string; entity_id: string }>();
-  let refreshed = 0; let errors = 0;
+  let refreshed = 0; let errors = 0; let halted = false;
   for (const row of r.results ?? []) {
+    // Task #2: per-item budget + cancellation gate.
+    const b = await assertBudget(env, "ai");
+    if (!b.ok) {
+      halted = true;
+      await recordMatchJob(env, "refresh_stale", "halted", { refreshed, errors, reason: b.reason });
+      break;
+    }
+    if (await isCancelled(env, opts.jobId ?? null)) {
+      halted = true;
+      await recordMatchJob(env, "refresh_stale", "cancelled", { refreshed, errors });
+      break;
+    }
     try {
       const res = await scoreEntity(env, row.persona_id, row.entity_id);
       if (res) refreshed += 1;
@@ -294,7 +392,7 @@ export async function refreshStaleMatches(env: Env, opts: { staleDays?: number; 
       console.warn("refreshStaleMatches item failed", row.persona_id, row.entity_id, (e as Error).message);
     }
   }
-  return { refreshed, errors };
+  return { refreshed, errors, halted };
 }
 
 // ---------------------------------------------------------------------------

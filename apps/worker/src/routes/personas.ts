@@ -44,18 +44,27 @@ import {
 // rows on its first read, even if the workflow plane is unreachable.
 // The nightly cron converges any auto rows older than 30 days.
 async function dispatchPersonaEntityMatch(env: Env, personaId: string): Promise<void> {
+  const { recordMatchJob } = await import("../services/personaMatching");
   if (env.WF_PERSONA_ENTITY_MATCH) {
     try {
-      await env.WF_PERSONA_ENTITY_MATCH.create({ params: { personaId, batchSize: 100, maxEntities: 20000 } });
+      // No maxEntities cap — the workflow runs to completion across
+      // every active person entity (chunked pagination internally).
+      const wf = await env.WF_PERSONA_ENTITY_MATCH.create({ params: { personaId, batchSize: 100 } });
+      await recordMatchJob(env, "dispatch", "ok", { personaId, workflow_id: wf.id });
       return;
     } catch (e) {
       console.warn("dispatchPersonaEntityMatch WF failed, falling back inline", personaId, (e as Error).message);
+      await recordMatchJob(env, "dispatch", "failed", { personaId, error: (e as Error).message, fallback: "inline" });
     }
   }
+  // Bounded inline fallback so a request handler never melts the worker;
+  // the dispatch-failed job row above flags the SLO miss for ops.
   try {
-    await scoreBatchPersonaMatching(env, personaId, { batchSize: 50, maxEntities: 200 });
+    const r = await scoreBatchPersonaMatching(env, personaId, { batchSize: 50, maxEntities: 200 });
+    await recordMatchJob(env, "dispatch", r.halted ? "halted" : "ok", { personaId, fallback: "inline", ...r });
   } catch (e) {
     console.warn("dispatchPersonaEntityMatch inline fallback failed", personaId, (e as Error).message);
+    await recordMatchJob(env, "dispatch", "failed", { personaId, fallback: "inline", error: (e as Error).message });
   }
 }
 
@@ -289,9 +298,12 @@ personasRoute.get("/:id/matches", async (c) => {
 personasRoute.post("/:id/run-matching", async (c) => {
   const row = await getPersona(c.env, c.req.param("id"));
   if (!row) return c.json({ error: "not_found" }, 404);
-  const body = (await c.req.json().catch(() => null)) as { batch_size?: number; max_entities?: number } | null;
+  const body = (await c.req.json().catch(() => null)) as { batch_size?: number; max_entities?: number | null } | null;
   const batchSize = Math.min(Math.max(1, Number(body?.batch_size) || 100), 500);
-  const maxEntities = Math.min(Math.max(1, Number(body?.max_entities) || 20000), 100000);
+  // max_entities is optional — default null = "every active person
+  // entity". Operators pass a number to bound a manual run.
+  const maxEntities = body?.max_entities == null ? null
+    : Math.min(Math.max(1, Number(body.max_entities)), 1_000_000);
   if (c.env.WF_PERSONA_ENTITY_MATCH) {
     try {
       const wf = await c.env.WF_PERSONA_ENTITY_MATCH.create({ params: { personaId: row.id, batchSize, maxEntities } });
@@ -303,7 +315,7 @@ personasRoute.post("/:id/run-matching", async (c) => {
   // Inline fallback — bounded so a request handler never melts the worker.
   // job_id is synthesized so callers always have a correlation id.
   const jobId = `inline-${row.id}-${Date.now()}`;
-  const r = await scoreBatchPersonaMatching(c.env, row.id, { batchSize, maxEntities: Math.min(maxEntities, 500) });
+  const r = await scoreBatchPersonaMatching(c.env, row.id, { batchSize, maxEntities: Math.min(maxEntities ?? 500, 500) });
   return c.json({ ok: true, dispatched: "inline", job_id: jobId, persona_id: row.id, ...r });
 });
 

@@ -34,6 +34,23 @@ CREATE INDEX IF NOT EXISTS idx_pem_stale
 CREATE INDEX IF NOT EXISTS idx_pem_source
   ON persona_entity_matches(persona_id, source);
 
+-- Durable job/error log for dispatch + scoring failures. Surfaces
+-- SLO violations to operators ("re-match within minutes" is only
+-- meaningful if failures are visible). Trimmed periodically by the
+-- existing log-retention housekeeping job.
+CREATE TABLE IF NOT EXISTS persona_match_jobs (
+  id          TEXT PRIMARY KEY,
+  kind        TEXT NOT NULL,       -- dispatch|score_entity|score_batch|score_across_personas|refresh_stale|trigger
+  status      TEXT NOT NULL,       -- ok|halted|failed|cancelled
+  persona_id  TEXT,
+  entity_id   TEXT,
+  details_json TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_pmj_created  ON persona_match_jobs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pmj_persona  ON persona_match_jobs(persona_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pmj_failures ON persona_match_jobs(status, created_at DESC) WHERE status != 'ok';
+
 -- Safety stubs: in case migrations 170 (persona_matches) and 280
 -- (entity_legacy_map) haven't been applied in this DB yet, create
 -- empty placeholder tables so the backfill SELECT below resolves to
