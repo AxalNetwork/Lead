@@ -225,11 +225,114 @@
     } catch (e) { host.innerHTML = '<div class="ads-muted">Evidence unavailable: ' + esc(e.message) + '</div>'; }
   }
 
+  // ---- Header rendering (Task #4) -------------------------------------
+  //
+  // Pulls display name + subtitle from the tolerant envelope and decides
+  // whether to surface the 🪄 auto-correct button. The bad-name predicate
+  // is the same module used by the worker — see profile-bad-names.js.
+  function findFact(facts, predicate) {
+    if (!Array.isArray(facts)) return null;
+    for (var i = 0; i < facts.length; i++) {
+      if (facts[i] && facts[i].predicate === predicate) return facts[i];
+    }
+    return null;
+  }
+  function factValue(f) {
+    if (!f) return null;
+    if (f.value_text != null && f.value_text !== "") return f.value_text;
+    if (f.value_number != null) return f.value_number;
+    return null;
+  }
+  function pickDisplayName(data) {
+    var ent = (data && data.entity) || {};
+    // Server-suggested fallback first — both sides agree on the predicate.
+    if (ent.display_name_is_bad && ent.display_name_fallback) return ent.display_name_fallback;
+    var BadName = (window.ADS && window.ADS.BadName) || null;
+    if (BadName && BadName.isBadEntityName(ent.display_name)) {
+      var derived = BadName.displayFromDomain(ent.primary_url || ent.primary_domain);
+      if (derived) return derived;
+    }
+    return ent.display_name || ent.primary_domain || ent.id || "Profile";
+  }
+  function buildSubtitle(data) {
+    var ent = (data && data.entity) || {};
+    var facts = (data && data.facts) || [];
+    var parts = [];
+    if (ent.kind) parts.push(esc(ent.kind));
+    var founded = factValue(findFact(facts, "founded_year"));
+    if (founded) parts.push("founded " + esc(String(founded)));
+    var city = factValue(findFact(facts, "headquarters_city"));
+    var country = factValue(findFact(facts, "headquarters_country"))
+                || factValue(findFact(facts, "headquarters_country_iso2"));
+    if (city || country) {
+      parts.push("HQ " + esc([city, country].filter(Boolean).join(", ")));
+    }
+    var aum = factValue(findFact(facts, "fund_size_usd"))
+           || factValue(findFact(facts, "aum_usd"));
+    if (aum != null) {
+      var n = Number(aum);
+      var aumStr = isFinite(n) ? formatUsd(n) : String(aum);
+      parts.push("AUM " + esc(aumStr));
+    }
+    var website = ent.primary_url || ent.primary_domain;
+    if (website) {
+      var href = website.indexOf("://") >= 0 ? website : "https://" + website;
+      parts.push('<a href="' + esc(href) + '" target="_blank" rel="noopener">' + esc(website) + '</a>');
+    }
+    return parts.join(" · ");
+  }
+  function formatUsd(n) {
+    if (n >= 1e9) return "$" + (n / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
+    if (n >= 1e6) return "$" + (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+    if (n >= 1e3) return "$" + (n / 1e3).toFixed(1).replace(/\.0$/, "") + "K";
+    return "$" + n;
+  }
+  function renderStandaloneHeader(state, data) {
+    var titleEl = document.getElementById("ads-profile-title");
+    var subEl = document.getElementById("ads-profile-subtitle");
+    var fillBtn = document.getElementById("ads-profile-fillname");
+    if (titleEl) titleEl.textContent = pickDisplayName(data);
+    if (subEl) {
+      var sub = buildSubtitle(data);
+      subEl.innerHTML = sub || '<span class="ads-muted">No metadata yet.</span>';
+    }
+    if (fillBtn) {
+      var ent = (data && data.entity) || {};
+      var showFill = !!ent.display_name_is_bad
+        || (window.ADS && window.ADS.BadName && window.ADS.BadName.isBadEntityName(ent.display_name));
+      fillBtn.style.display = showFill ? "" : "none";
+      if (showFill && !fillBtn._wired) {
+        fillBtn._wired = true;
+        fillBtn.addEventListener("click", async function () {
+          fillBtn.disabled = true;
+          var prev = fillBtn.textContent;
+          fillBtn.textContent = "Filling…";
+          try {
+            await api("/api/profile/" + encodeURIComponent(state.entityId) + "/fill", { method: "POST" });
+            // Bust the 60s envelope cache so the refreshed name appears immediately.
+            try { await api("/api/profile/" + encodeURIComponent(state.entityId) + "?bust=1"); } catch (_) { /* ignore */ }
+            await load(state);
+          } catch (e) {
+            fillBtn.textContent = "Failed: " + e.message;
+            setTimeout(function () { fillBtn.textContent = prev; fillBtn.disabled = false; }, 3000);
+            return;
+          }
+          fillBtn.textContent = prev;
+          fillBtn.disabled = false;
+        });
+      }
+    }
+    if (Array.isArray(data && data.missing_subsystems) && data.missing_subsystems.length) {
+      console.info("profile: missing subsystems —", data.missing_subsystems.join(", "));
+    }
+  }
+
   async function load(state) {
     var pane = state.host;
     var bodyEl = pane.querySelector("[data-profile-body]") || pane;
     try {
       var data = await api("/api/profile/" + encodeURIComponent(state.entityId));
+      if (state.standalone) renderStandaloneHeader(state, data);
       renderProfile(bodyEl, data, state);
       if (state.standalone) {
         var ev = pane.querySelector("#ads-profile-evidence");
@@ -286,7 +389,7 @@
       if (host) host.innerHTML = '<div class="ads-muted">No entity selected. Pass <code>?entity=</code> or <code>?table=&ref=</code>.</div>';
       return;
     }
-    if (titleEl) titleEl.textContent = "Profile — entity " + entityId;
+    if (titleEl) titleEl.textContent = "Loading…";
     await mount({ rootId: "ads-profile-root", entityId: entityId, standalone: true });
   }
 

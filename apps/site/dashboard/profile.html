@@ -4,9 +4,13 @@ title: Profile
 permalink: /dashboard/profile/
 ---
 
-<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-  <h1 class="ads-page-title" id="ads-profile-title" style="margin:0">Profile</h1>
-  <button type="button" id="ads-profile-watch" data-ads-watch="" hidden></button>
+<div id="ads-profile-header" style="margin-bottom:14px">
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <h1 class="ads-page-title" id="ads-profile-title" style="margin:0">Profile</h1>
+    <button type="button" id="ads-profile-fillname" class="ads-btn" style="font-size:11px;padding:2px 8px;display:none" title="Re-run the AI profile filler to extract the canonical brand name">🪄 Auto-correct name</button>
+    <button type="button" id="ads-profile-watch" data-ads-watch="" hidden></button>
+  </div>
+  <p class="ads-page-sub" id="ads-profile-subtitle" style="margin:4px 0 0">Pass <code>?entity=&lt;id&gt;</code> or <code>?table=firms&amp;ref=&lt;id&gt;</code> in the URL to scope this view.</p>
 </div>
 <script>
 (function () {
@@ -18,7 +22,6 @@ permalink: /dashboard/profile/
   b.hidden = false;
 })();
 </script>
-<p class="ads-page-sub">Pass <code>?entity=&lt;id&gt;</code> or <code>?table=firms&amp;ref=&lt;id&gt;</code> in the URL to scope this view.</p>
 
 <div class="ads-card" style="margin-bottom:18px;border-left:3px solid #2c6eb5;background:#f0f6ff">
   <p style="margin:0;font-size:12px;color:#1a3a6b">
@@ -32,6 +35,7 @@ permalink: /dashboard/profile/
 
 <div id="ads-profile-root"><div class="ads-loading">Loading profile…</div></div>
 
+<script src="/assets/js/profile-bad-names.js?v={{ site.time | date: '%s' }}"></script>
 <script src="/assets/js/profile-tab.js?v={{ site.time | date: '%s' }}"></script>
 <script>
   document.addEventListener("DOMContentLoaded", () => {
