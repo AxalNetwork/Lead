@@ -27,13 +27,24 @@ async function fetchText(env: Env, url: string, _timeoutMs = 15_000): Promise<st
   // breaker, multi-tier fallback). Previously this used raw `fetch` which
   // bypassed all of that and risked compliance drift between discovery
   // and the main scrape pipeline.
+  //
+  // NOTE: sitemap.xml / robots.txt / rss feeds / wayback CDX responses
+  // are often legitimately small or text-only, and `fetchPage`'s HTML
+  // quality gates (`too_small`, `low_visible_text`) would flag them as
+  // blocked even though the body is exactly what discovery needs. We
+  // accept such payloads when the HTTP status itself was successful —
+  // the body shape will be validated by the per-method parser anyway.
   try {
     const r = await fetchPage(env, url).catch(() => null);
-    if (!r || !r.ok || !r.html) return null;
-    return r.html;
+    if (!r || !r.html) return null;
+    if (r.ok) return r.html;
+    const httpOk = r.status >= 200 && r.status < 300;
+    const thin = r.blockReason === "too_small" || r.blockReason === "low_visible_text";
+    if (httpOk && thin) return r.html;
+    return null;
   } catch { return null; }
 }
-// Keep UA exported-ish so future direct fetches (if any) reuse it.
+// Keep UA referenced so future direct fetches (if any) reuse it.
 void UA;
 
 // ----------------------------------------------------------------------------
