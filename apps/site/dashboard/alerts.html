@@ -29,6 +29,10 @@ permalink: /dashboard/alerts.html
       <input type="text" name="entity_id" placeholder="entity id">
     </label>
     <label class="ads-field ads-field--inline">
+      <span>Watchlist</span>
+      <select name="watchlist_id" id="ads-alerts-wl"><option value="">all</option></select>
+    </label>
+    <label class="ads-field ads-field--inline">
       <span>From</span>
       <input type="date" name="from">
     </label>
@@ -73,6 +77,7 @@ permalink: /dashboard/alerts.html
   var csvBtn = document.getElementById("ads-alerts-csv");
   var allCb = document.getElementById("ads-alerts-all");
   var kindSel = document.getElementById("ads-alerts-kind");
+  var wlSel = document.getElementById("ads-alerts-wl");
 
   function api(p) { return (API || "") + p; }
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -84,6 +89,16 @@ permalink: /dashboard/alerts.html
     });
     return p.toString();
   }
+
+  fetch(api("/api/watchlists"), { credentials: "include" })
+    .then(function (r) { return r.ok ? r.json() : { items: [] }; })
+    .then(function (j) {
+      (j.items || j.watchlists || []).forEach(function (w) {
+        var o = document.createElement("option"); o.value = w.id;
+        o.textContent = w.name + " (" + (w.member_count || 0) + ")";
+        wlSel.appendChild(o);
+      });
+    });
 
   fetch(api("/api/alerts/trigger-kinds"), { credentials: "include" })
     .then(function (r) { return r.ok ? r.json() : { kinds: [] }; })
@@ -108,9 +123,12 @@ permalink: /dashboard/alerts.html
       return;
     }
     body.innerHTML = items.map(function (it) {
-      var entHref = it.entity_id ? '/dashboard/profile.html?entity=' + encodeURIComponent(it.entity_id) : '#';
-      var ack = it.acked_at ? '<span class="ads-pill ads-pill--ok">acked</span>'
+      var entHref = it.entity_id ? '/dashboard/profile/?entity=' + encodeURIComponent(it.entity_id) : '#';
+      var ackBtn = it.acked_at ? '<span class="ads-pill ads-pill--ok">acked</span>'
         : '<button type="button" class="ads-link" data-ack="' + esc(it.id) + '">Ack</button>';
+      var viewRule = it.watchlist_id
+        ? ' · <a href="/dashboard/watchlists.html?wl=' + encodeURIComponent(it.watchlist_id) + '" data-rule="' + esc(it.rule_id || '') + '">View rule</a>'
+        : (it.rule_id ? ' · <span class="ads-muted">rule ' + esc(it.rule_id) + '</span>' : '');
       return '<tr>'
         + '<td><input type="checkbox" data-id="' + esc(it.id) + '"></td>'
         + '<td>' + esc(it.occurred_at) + '</td>'
@@ -119,7 +137,7 @@ permalink: /dashboard/alerts.html
         + '<td><a href="' + entHref + '">' + esc(it.entity_id || '') + '</a></td>'
         + '<td>' + esc(it.channel) + '</td>'
         + '<td>' + esc(it.delivery_status) + '</td>'
-        + '<td>' + ack + '</td>'
+        + '<td>' + ackBtn + viewRule + '</td>'
         + '</tr>';
     }).join("");
   }

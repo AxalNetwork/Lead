@@ -33,7 +33,7 @@
     list.innerHTML = items.map(function (it) {
       var unread = !it.read_at;
       var entityHref = it.entity_id
-        ? "/dashboard/profile.html?entity=" + encodeURIComponent(it.entity_id)
+        ? "/dashboard/profile/?entity=" + encodeURIComponent(it.entity_id)
         : "/dashboard/alerts.html";
       return '<li class="ads-notify-item' + (unread ? " is-unread" : "") + '">'
         + '<a href="' + entityHref + '" data-event-id="' + it.id + '">'

@@ -202,7 +202,7 @@ export async function deliverEvent(env: Env, eventId: string, rule: AlertRuleRow
       const r = await deliverEmail(env, {
         to, subject: evt.title.slice(0, 200), title: evt.title,
         bodyHtml: `<p>${escapeHtml(evt.body).replace(/\n/g, "<br>")}</p>`,
-        entityLink: `https://aidatasignal.com/dashboard/profile.html?entity=${encodeURIComponent(dctx.entityId)}`,
+        entityLink: `https://aidatasignal.com/dashboard/profile/?entity=${encodeURIComponent(dctx.entityId)}`,
       });
       ok = r.ok; lastErr = r.error;
       log.push({ ts: now(), channel: "email", status: ok ? "ok" : "error", error: r.error });
@@ -213,7 +213,7 @@ export async function deliverEvent(env: Env, eventId: string, rule: AlertRuleRow
       const entityName = String(evt.title.split(":")[0] ?? dctx.entityId);
       const r = await deliverSlack(env, {
         webhookUrl: url, title: evt.title, entityName,
-        entityUrl: `https://aidatasignal.com/dashboard/profile.html?entity=${encodeURIComponent(dctx.entityId)}`,
+        entityUrl: `https://aidatasignal.com/dashboard/profile/?entity=${encodeURIComponent(dctx.entityId)}`,
         diff: evt.diff, body: evt.body,
       });
       ok = r.ok; lastErr = r.error;

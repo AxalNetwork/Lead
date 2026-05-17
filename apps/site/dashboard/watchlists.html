@@ -160,7 +160,8 @@ permalink: /dashboard/watchlists.html
     }
   });
 
-  function openDetail(id) {
+  function openDetail(id, opts) {
+    var preserveResult = !!(opts && opts.preserveResult);
     fetch(api("/api/watchlists/" + encodeURIComponent(id)), { credentials: "include" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (w) {
@@ -169,7 +170,7 @@ permalink: /dashboard/watchlists.html
         document.getElementById("ads-wl-detail-mcount").textContent = w.member_count || 0;
         var ml = document.getElementById("ads-wl-detail-members");
         ml.innerHTML = (w.members || []).map(function (m) {
-          return '<li><a href="/dashboard/profile.html?entity=' + encodeURIComponent(m.entity_id) + '">'
+          return '<li><a href="/dashboard/profile/?entity=' + encodeURIComponent(m.entity_id) + '">'
             + esc(m.display_name || m.entity_id) + '</a> <span style="color:#6b7280">' + esc(m.entity_kind || '') + '</span></li>';
         }).join("") || '<li style="color:#6b7280">No members yet.</li>';
         var rl = document.getElementById("ads-wl-detail-rules");
@@ -179,10 +180,20 @@ permalink: /dashboard/watchlists.html
             + ' <button type="button" class="ads-link" data-rule-delete="' + esc(r.id) + '">delete</button></li>';
         }).join("") || '<li style="color:#6b7280">No rules attached.</li>';
         ruleForm.elements.watchlist_id.value = id;
-        ruleResult.textContent = "";
+        // Preserve any post-save secret-reveal banner — the webhook secret
+        // is only returned once on create and the operator must copy it
+        // before navigating away.
+        if (!preserveResult) ruleResult.textContent = "";
         if (typeof detail.showModal === "function") detail.showModal(); else detail.setAttribute("open", "");
       });
   }
+
+  // Deep-link: /dashboard/watchlists.html?wl=<id> auto-opens the detail.
+  try {
+    var qp = new URLSearchParams(window.location.search);
+    var wlParam = qp.get("wl");
+    if (wlParam) setTimeout(function () { openDetail(wlParam); }, 250);
+  } catch (e) { /* no-op */ }
 
   document.getElementById("ads-wl-detail-close").addEventListener("click", function () {
     if (typeof detail.close === "function") detail.close(); else detail.removeAttribute("open");
@@ -205,11 +216,14 @@ permalink: /dashboard/watchlists.html
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     }).then(function (r) { return r.json(); }).then(function (j) {
       if (j.webhook_secret) {
-        ruleResult.innerHTML = 'Saved. <strong>Webhook secret (shown once):</strong> <code>' + esc(j.webhook_secret) + '</code>';
+        ruleResult.innerHTML = 'Saved. <strong>Webhook secret (shown once — copy it now):</strong> <code>'
+          + esc(j.webhook_secret) + '</code>';
+        // Keep the secret reveal banner visible across the openDetail refresh.
+        openDetail(body.watchlist_id, { preserveResult: true });
       } else {
         ruleResult.textContent = "Saved.";
+        openDetail(body.watchlist_id);
       }
-      openDetail(body.watchlist_id);
     });
   });
 
