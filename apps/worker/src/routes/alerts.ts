@@ -21,16 +21,33 @@ alerts.get("/rules", async (c) => {
   // Redact webhook_secret from list responses — secret is shown ONCE
   // in the POST /rules response and never re-surfaced in plaintext.
   // Operators rotate by PATCHing channel_config.webhook_secret.
-  const items = (r.results ?? []).map((row: any) => {
-    if (row && typeof row.channel_config_json === "string") {
-      try {
-        const cfg = JSON.parse(row.channel_config_json);
-        if (cfg && typeof cfg === "object" && "webhook_secret" in cfg) {
-          cfg.webhook_secret = "***redacted***";
-          row.channel_config_json = JSON.stringify(cfg);
-        }
-      } catch { /* ignore malformed cfg */ }
-    }
+  interface RuleRow {
+    id: string;
+    name: string | null;
+    watchlist_id: string | null;
+    entity_id: string | null;
+    trigger_kind: string;
+    trigger_config_json: string | null;
+    channel: string;
+    channel_config_json: string | null;
+    digest_frequency: string | null;
+    dedupe_window_seconds: number | null;
+    is_active: number;
+    last_fired_at: string | null;
+    fire_count: number;
+    created_at: string;
+    updated_at: string;
+  }
+  const rows = (r.results ?? []) as unknown as RuleRow[];
+  const items: RuleRow[] = rows.map((row) => {
+    if (typeof row.channel_config_json !== "string") return row;
+    try {
+      const cfg = JSON.parse(row.channel_config_json) as Record<string, unknown>;
+      if (cfg && typeof cfg === "object" && "webhook_secret" in cfg) {
+        const redacted = { ...cfg, webhook_secret: "***redacted***" };
+        return { ...row, channel_config_json: JSON.stringify(redacted) };
+      }
+    } catch { /* ignore malformed cfg */ }
     return row;
   });
   return c.json({ items });
