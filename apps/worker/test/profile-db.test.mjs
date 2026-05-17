@@ -30,6 +30,7 @@ const repoRoot = join(__dirname, "..");
 const ROOT = "../test-dist";
 
 const { EntityService } = await import(`${ROOT}/entities/profile.js`);
+const { PREDICATE_REGISTRY, EMITTED_PREDICATES } = await import(`${ROOT}/entities/profile-predicates.js`);
 
 // ---- env shim: adapts node:sqlite to the worker's env.DB.prepare(...) API.
 //
@@ -182,6 +183,35 @@ const expectations = [
 function countRows(env, sql, ...args) {
   return env._db.prepare(sql).get(...args).c;
 }
+
+test("predicate_registry SQL table seeds the SAME keys as the TS PREDICATE_REGISTRY (no drift)", async () => {
+  const env = makeEnv();
+  const sqlRows = env._db.prepare(`SELECT predicate, label, icon, category FROM predicate_registry`).all();
+  const sqlKeys = new Set(sqlRows.map(r => r.predicate));
+  const tsKeys = new Set(PREDICATE_REGISTRY.map(r => r.predicate));
+  // Parity in both directions catches additions on either side.
+  const onlyInSql = [...sqlKeys].filter(k => !tsKeys.has(k));
+  const onlyInTs = [...tsKeys].filter(k => !sqlKeys.has(k));
+  assert.deepEqual(onlyInSql, [], `predicates seeded in SQL but missing from TS registry: ${onlyInSql.join(", ")}`);
+  assert.deepEqual(onlyInTs, [], `predicates in TS registry but not seeded in SQL: ${onlyInTs.join(", ")}`);
+  // Every SQL-seeded row must carry the required descriptive fields.
+  for (const row of sqlRows) {
+    assert.ok(row.label && row.label.length > 0, `predicate ${row.predicate} missing label in SQL seed`);
+    assert.ok(row.icon && row.icon.length > 0, `predicate ${row.predicate} missing icon in SQL seed`);
+    assert.ok(row.category && row.category.length > 0, `predicate ${row.predicate} missing category in SQL seed`);
+  }
+});
+
+test("every EMITTED predicate resolves against the SQL predicate_registry table (not just TS map)", async () => {
+  const env = makeEnv();
+  for (const predicate of EMITTED_PREDICATES) {
+    const row = env._db.prepare(
+      `SELECT label, icon, category FROM predicate_registry WHERE predicate = ?`,
+    ).get(predicate);
+    assert.ok(row, `emitted predicate "${predicate}" is not present in predicate_registry (migration 328)`);
+    assert.ok(row.label && row.icon && row.category, `emitted predicate "${predicate}" has empty label/icon/category in SQL seed`);
+  }
+});
 
 test("DB-backed smoke: every helper writes exactly one structured row + one facts row", async () => {
   const env = makeEnv();
