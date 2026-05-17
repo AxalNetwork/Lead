@@ -41,8 +41,11 @@
   function renderRows(items) {
     var tbody = document.getElementById("ads-accounts-tbody");
     if (!items.length && state.offset === 0) {
-      tbody.innerHTML = '<tr><td class="ads-muted" colspan="8">No accounts. Create one via POST /api/accounts or use bulk import.</td></tr>';
+      tbody.innerHTML = '<tr><td class="ads-muted" colspan="9">No accounts. Create one via POST /api/accounts or use bulk import.</td></tr>';
       return;
+    }
+    function checkCell(a) {
+      return '<td style="padding:8px;vertical-align:middle"><input type="checkbox" class="ads-bulk-check" data-id="' + esc(a.id) + '"></td>';
     }
     function logoCell(a) {
       // Prefer Cloudflare Images logo_id, fall back to Google's favicon
@@ -59,7 +62,8 @@
     }
     var html = items.map(function (a) {
       var top = (a.intent_breakdown && a.intent_breakdown.by_kind) || [];
-      return "<tr>" +
+      return '<tr data-id="' + esc(a.id) + '">' +
+        checkCell(a) +
         '<td style="padding:8px;vertical-align:middle">' + logoCell(a) + "</td>" +
         '<td style="padding:8px"><a href="/dashboard/accounts/detail/?id=' + esc(a.id) + '">' + esc(a.name) + "</a>" +
           (a.domain ? '<div class="ads-muted" style="font-size:11px">' + esc(a.domain) + "</div>" : "") + "</td>" +
@@ -126,6 +130,43 @@
     });
     loadSignalKinds();
     load(false);
+
+    if (window.adsBulkBar && window.adsBulkBar.init) {
+      var bar = window.adsBulkBar.init({
+        pageId: "accounts",
+        getRowHost: function () { return document.getElementById("ads-accounts-tbody"); },
+        getRows: function () { return document.querySelectorAll("#ads-accounts-tbody tr[data-id]"); },
+        getFilterSignature: function () {
+          // Filter signature = serialized form values + sort. Selection
+          // is invalidated whenever this string changes.
+          var fd = new FormData(form);
+          var pairs = [];
+          fd.forEach(function (v, k) { pairs.push(k + "=" + String(v)); });
+          pairs.sort();
+          return pairs.join("&");
+        },
+        fetchAllMatchingIds: function () {
+          // /api/accounts caps `limit` at 200 — paginate up to the 5000
+          // bulk cap.
+          var all = []; var off = 0;
+          function nextPage() {
+            var fd = new FormData(form);
+            var qs = new URLSearchParams();
+            fd.forEach(function (v, k) { if (v !== "" && v != null) qs.set(k, v); });
+            qs.set("limit", "200"); qs.set("offset", String(off));
+            return api("/api/accounts?" + qs.toString()).then(function (d) {
+              var items = d.items || [];
+              for (var i = 0; i < items.length && all.length < 5000; i++) all.push(items[i].id);
+              if (d.nextOffset != null && all.length < 5000) { off = d.nextOffset; return nextPage(); }
+              return all;
+            });
+          }
+          return nextPage();
+        },
+      });
+      form.addEventListener("submit", function () { setTimeout(function () { bar.onFilterChange(); }, 50); });
+      form.addEventListener("reset", function () { setTimeout(function () { bar.onFilterChange(); }, 50); });
+    }
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init); else init();
 })();

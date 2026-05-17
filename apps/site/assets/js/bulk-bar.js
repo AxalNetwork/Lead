@@ -101,9 +101,46 @@
 
   function init(cfg) {
     cfg = cfg || {};
+    // Filter-signature-keyed selection persistence: a selection set is
+    // scoped to the (pageId, filter signature) tuple and survives
+    // re-renders, "Load more", and full reloads via sessionStorage. As
+    // soon as the filter signature changes, the selection is dropped so
+    // operators don't accidentally apply a bulk action to a different
+    // result set than the one currently on screen.
+    var SIG_KEY = "adsBulkBar:" + (cfg.pageId || "default");
+    function readPersisted() {
+      try {
+        var raw = sessionStorage.getItem(SIG_KEY);
+        if (!raw) return null;
+        var p = JSON.parse(raw);
+        if (!p || typeof p !== "object") return null;
+        return p; // { sig, ids: [], allMatching: bool }
+      } catch (e) { return null; }
+    }
+    function persist() {
+      try {
+        sessionStorage.setItem(SIG_KEY, JSON.stringify({
+          sig: currentSignature,
+          ids: Array.from(selection.keys()),
+          allMatching: allMatchingMode,
+        }));
+      } catch (e) { /* quota: ignore */ }
+    }
+
     var selection = new Map();      // id -> true
     var allMatchingMode = false;    // true after 2nd header click
+    var currentSignature = cfg.getFilterSignature ? cfg.getFilterSignature() : "";
     var headerCheck = document.getElementById("ads-bulk-header-check");
+
+    // Rehydrate selection on init iff the persisted signature matches
+    // the current filter signature. Drop otherwise.
+    var persisted = readPersisted();
+    if (persisted && persisted.sig === currentSignature && Array.isArray(persisted.ids)) {
+      persisted.ids.forEach(function (id) { selection.set(String(id), true); });
+      allMatchingMode = persisted.allMatching === true;
+    } else if (persisted) {
+      try { sessionStorage.removeItem(SIG_KEY); } catch (e) {}
+    }
 
     function rowChecks() {
       var rows = cfg.getRows ? cfg.getRows() : document.querySelectorAll(".ads-bulk-check");
@@ -352,8 +389,30 @@
       }).catch(function (e) { toast("Export failed: " + esc(e.message)); });
     }
 
-    // Expose a `rebind` so pages can force resync after their own redraws.
-    return { rebind: function () { bindRowChecks(); syncCheckboxes(); refreshBar(); } };
+    // Persist on every selection mutation. We wrap the three call sites
+    // (row check, page select, all-matching) so re-renders pick the same
+    // ids back up.
+    var _refreshBar = refreshBar;
+    refreshBar = function () { persist(); _refreshBar(); };
+
+    // Expose a `rebind` so pages can force resync after their own redraws
+    // (e.g. after Apply Filters). Pages should also call `onFilterChange`
+    // so the new filter signature is recorded and stale selection is
+    // dropped if it no longer matches the visible result set.
+    return {
+      rebind: function () { bindRowChecks(); syncCheckboxes(); refreshBar(); },
+      onFilterChange: function () {
+        var sig = cfg.getFilterSignature ? cfg.getFilterSignature() : "";
+        if (sig !== currentSignature) {
+          currentSignature = sig;
+          selection.clear();
+          allMatchingMode = false;
+          try { sessionStorage.removeItem(SIG_KEY); } catch (e) {}
+          syncCheckboxes();
+          refreshBar();
+        }
+      },
+    };
   }
 
   window.adsBulkBar = { init: init };

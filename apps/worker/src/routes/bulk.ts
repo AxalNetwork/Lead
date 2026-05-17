@@ -25,7 +25,9 @@ import { Hono } from "hono";
 import type { Env } from "../types";
 import type { EntityRole } from "../entities/model";
 import { addTag } from "../entities/tags";
+import { addRole } from "../entities/roles";
 import { mergeWithCanonical } from "../entities/merge";
+import type { Taxonomy } from "../entities/model";
 
 const HARD_CAP = 5000;
 const CONFIRM_THRESHOLD = 100;
@@ -204,11 +206,14 @@ async function claimIdempotency(env: Env, email: string, key: string | null, can
   return { operation_id: r.operation_id, reused: r.operation_id !== candidateOpId };
 }
 
-async function writeAudit(
+// Returns the prepared INSERT for the audit row without running it, so it
+// can participate in a D1.batch() alongside the per-entity mutation
+// statement and give us per-entity transactionality.
+function auditStmt(
   env: Env, opId: string, action: BulkAction, entityId: string,
   before: unknown, after: unknown, email: string,
-): Promise<void> {
-  await env.DB.prepare(
+): D1PreparedStatement {
+  return env.DB.prepare(
     `INSERT INTO bulk_operation_audit (operation_id, action, entity_id, before_json, after_json, performed_by_email)
      VALUES (?, ?, ?, ?, ?, ?)`,
   ).bind(
@@ -216,7 +221,14 @@ async function writeAudit(
     before == null ? null : JSON.stringify(before),
     after == null ? null : JSON.stringify(after),
     email,
-  ).run();
+  );
+}
+
+async function writeAudit(
+  env: Env, opId: string, action: BulkAction, entityId: string,
+  before: unknown, after: unknown, email: string,
+): Promise<void> {
+  await auditStmt(env, opId, action, entityId, before, after, email).run();
 }
 
 // --------------------------- assign-role ---------------------------
@@ -248,23 +260,24 @@ bulk.post("/assign-role", async (c) => {
     ).bind(entityId, role).first<{ id: number; role: string; is_primary: number; source: string | null }>();
     if (remove) {
       if (!before) continue;
-      await c.env.DB.prepare(`DELETE FROM entity_roles WHERE entity_id = ? AND role = ?`)
-        .bind(entityId, role).run();
-      await writeAudit(c.env, opId, "assign_role", entityId,
-        { exists: true, role, source: before.source }, { exists: false, role }, email);
+      // Per-entity atomicity: audit + mutation as a single D1.batch().
+      await c.env.DB.batch([
+        c.env.DB.prepare(`DELETE FROM entity_roles WHERE entity_id = ? AND role = ?`).bind(entityId, role),
+        auditStmt(c.env, opId, "assign_role", entityId,
+          { exists: true, role, source: before.source }, { exists: false, role }, email),
+      ]);
       mutated += 1;
     } else {
-      if (before) {
-        // Already present — no-op, no audit row.
-        continue;
-      }
-      await c.env.DB.prepare(
-        `INSERT INTO entity_roles (entity_id, role, is_primary, source, confidence)
-         VALUES (?, ?, 0, 'bulk', 1.0)
-         ON CONFLICT(entity_id, role) DO NOTHING`,
-      ).bind(entityId, role).run();
-      await writeAudit(c.env, opId, "assign_role", entityId,
-        { exists: false, role }, { exists: true, role, source: "bulk" }, email);
+      if (before) continue; // already present — no-op, no audit row.
+      // Use canonical addRole helper so role-assignment rules (ON CONFLICT,
+      // is_primary/confidence semantics) stay in one place, then write the
+      // audit row. addRole is itself idempotent, so the worst-case retry
+      // is a no-op DB write.
+      await addRole(c.env, entityId, role, { source: "bulk" });
+      await c.env.DB.batch([
+        auditStmt(c.env, opId, "assign_role", entityId,
+          { exists: false, role }, { exists: true, role, source: "bulk" }, email),
+      ]);
       mutated += 1;
     }
   }
@@ -299,7 +312,7 @@ bulk.post("/add-tag", async (c) => {
       `SELECT id FROM entity_tags WHERE entity_id = ? AND taxonomy = ? AND slug = ?`,
     ).bind(entityId, taxonomy, slug).first<{ id: number }>();
     if (existed) continue;
-    await addTag(c.env, { entity_id: entityId, taxonomy: taxonomy as never, slug, source: "bulk" });
+    await addTag(c.env, { entity_id: entityId, taxonomy: taxonomy as Taxonomy, slug, source: "bulk" });
     await writeAudit(c.env, opId, "add_tag", entityId,
       { exists: false, taxonomy, slug }, { exists: true, taxonomy, slug }, email);
     mutated += 1;
@@ -326,9 +339,30 @@ bulk.post("/enrich", async (c) => {
   }
 
   const { visible, dropped } = await resolveAndFilter(c.env, ids);
+
+  // 7-day cap: skip any entity that was already part of a successful
+  // `enrich` bulk dispatch in the last 7 days (per audit). The cap is
+  // worker-side so it survives retries and idempotency-key collisions.
+  let skippedRateLimited: string[] = [];
+  let enrichTargets: string[] = visible;
+  if (visible.length) {
+    const ph = visible.map(() => "?").join(",");
+    const recent = await c.env.DB.prepare(
+      `SELECT DISTINCT entity_id
+         FROM bulk_operation_audit
+        WHERE action = 'enrich'
+          AND entity_id IN (${ph})
+          AND performed_at > datetime('now','-7 days')
+          AND undone_at IS NULL`,
+    ).bind(...visible).all<{ entity_id: string }>();
+    const blocked = new Set((recent.results ?? []).map((r) => r.entity_id));
+    skippedRateLimited = visible.filter((x) => blocked.has(x));
+    enrichTargets = visible.filter((x) => !blocked.has(x));
+  }
+
   let enqueued = 0;
   const filler = c.env.WF_PROFILE_FILLER as { create: (o: { params: Record<string, unknown> }) => Promise<{ id: string }> } | undefined;
-  for (const entityId of visible) {
+  for (const entityId of enrichTargets) {
     let workflowId: string | null = null;
     if (filler && typeof filler.create === "function") {
       try {
@@ -343,7 +377,9 @@ bulk.post("/enrich", async (c) => {
       { dispatched: false }, { dispatched: workflowId !== null, workflow_id: workflowId }, email);
   }
   return c.json({
-    ok: true, operation_id: opId, dispatched: enqueued, requested: visible.length, dropped,
+    ok: true, operation_id: opId, dispatched: enqueued,
+    requested: visible.length, dropped,
+    skipped_rate_limited: skippedRateLimited,
     note: filler ? null : "filler workflow not bound; audit-only run",
   }, 202);
 });
@@ -414,10 +450,12 @@ bulk.post("/delete", async (c) => {
     const before = await c.env.DB.prepare(`SELECT status FROM u_entities WHERE id = ?`)
       .bind(entityId).first<{ status: string }>();
     if (!before || before.status === "soft_deleted") continue;
-    await c.env.DB.prepare(`UPDATE u_entities SET status = 'soft_deleted', updated_at = datetime('now') WHERE id = ?`)
-      .bind(entityId).run();
-    await writeAudit(c.env, opId, "delete", entityId,
-      { status: before.status }, { status: "soft_deleted" }, email);
+    // Per-entity atomicity: status flip + audit in one D1.batch().
+    await c.env.DB.batch([
+      c.env.DB.prepare(`UPDATE u_entities SET status = 'soft_deleted', updated_at = datetime('now') WHERE id = ?`).bind(entityId),
+      auditStmt(c.env, opId, "delete", entityId,
+        { status: before.status }, { status: "soft_deleted" }, email),
+    ]);
     mutated += 1;
   }
   return c.json({ ok: true, operation_id: opId, affected: mutated, dropped }, 200);
@@ -470,9 +508,18 @@ bulk.post("/export", async (c) => {
             controller.enqueue(enc.encode(line));
           }
         }
-        // Audit one summary row (not one per entity — export is read-only).
-        await writeAudit(env, opId, "export", "_summary",
-          { count: visible.length }, { count: visible.length, headers }, email);
+        // Per-entity audit row (export is read-only but we still record
+        // one row per entity so the audit table is uniform across all
+        // bulk actions and undo/operation queries are consistent).
+        // Batched 100 at a time to keep D1 happy.
+        const SUM_CHUNK = 100;
+        for (let i = 0; i < visible.length; i += SUM_CHUNK) {
+          const slice = visible.slice(i, i + SUM_CHUNK);
+          await env.DB.batch(slice.map((eid) =>
+            auditStmt(env, opId, "export", eid,
+              { exported: false }, { exported: true, headers }, email),
+          ));
+        }
       } catch (e) {
         controller.enqueue(enc.encode(`# export_error: ${(e as Error).message}\n`));
       } finally {
