@@ -53,18 +53,25 @@ async function dispatchPersonaEntityMatch(env: Env, personaId: string): Promise<
       await recordMatchJob(env, "dispatch", "ok", { personaId, workflow_id: wf.id });
       return;
     } catch (e) {
-      console.warn("dispatchPersonaEntityMatch WF failed, falling back inline", personaId, (e as Error).message);
-      await recordMatchJob(env, "dispatch", "failed", { personaId, error: (e as Error).message, fallback: "inline" });
+      // SLO_VIOLATION: workflow dispatch failed — the fallback below
+      // only re-scores up to 200 entities, so any larger graph is
+      // left partial until the nightly refresh converges it.
+      console.error("SLO_VIOLATION persona_match_dispatch_wf_failed", personaId, (e as Error).message);
+      await recordMatchJob(env, "dispatch", "failed", { personaId, error: (e as Error).message, fallback: "inline", slo_violation: true });
     }
   }
   // Bounded inline fallback so a request handler never melts the worker;
   // the dispatch-failed job row above flags the SLO miss for ops.
   try {
     const r = await scoreBatchPersonaMatching(env, personaId, { batchSize: 50, maxEntities: 200 });
-    await recordMatchJob(env, "dispatch", r.halted ? "halted" : "ok", { personaId, fallback: "inline", ...r });
+    const partial = r.scored + r.errors >= 200; // hit the cap
+    if (partial) {
+      console.error("SLO_VIOLATION persona_match_inline_fallback_partial", personaId, JSON.stringify(r));
+    }
+    await recordMatchJob(env, "dispatch", r.halted ? "halted" : "ok", { personaId, fallback: "inline", slo_violation: partial || r.halted, ...r });
   } catch (e) {
-    console.warn("dispatchPersonaEntityMatch inline fallback failed", personaId, (e as Error).message);
-    await recordMatchJob(env, "dispatch", "failed", { personaId, fallback: "inline", error: (e as Error).message });
+    console.error("SLO_VIOLATION persona_match_inline_fallback_failed", personaId, (e as Error).message);
+    await recordMatchJob(env, "dispatch", "failed", { personaId, fallback: "inline", error: (e as Error).message, slo_violation: true });
   }
 }
 

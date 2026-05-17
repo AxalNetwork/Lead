@@ -51,12 +51,21 @@ CREATE INDEX IF NOT EXISTS idx_pmj_created  ON persona_match_jobs(created_at DES
 CREATE INDEX IF NOT EXISTS idx_pmj_persona  ON persona_match_jobs(persona_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_pmj_failures ON persona_match_jobs(status, created_at DESC) WHERE status != 'ok';
 
--- Safety stubs: in case migrations 170 (persona_matches) and 280
--- (entity_legacy_map) haven't been applied in this DB yet, create
--- empty placeholder tables so the backfill SELECT below resolves to
--- zero rows instead of raising "no such table". The real migrations
--- create these with proper schemas and indexes; CREATE TABLE IF NOT
--- EXISTS is a no-op when they're already present.
+-- Safety stubs: in unusual out-of-order migration runs the backfill
+-- below references three tables that come from older migrations
+-- (170_personas.sql → persona_matches; 280_entities_legacy_map.sql →
+-- entity_legacy_map; 200_entities.sql → u_entities). The
+-- expected migration order in production is 170 → 200 → 280 → 331,
+-- so these stubs are normally no-ops. They exist purely so a
+-- partially-migrated dev DB can still apply 331 without raising
+-- "no such table". The real migrations use richer schemas + their
+-- own indexes; CREATE TABLE IF NOT EXISTS is a no-op when the
+-- canonical table is already present.
+--
+-- Operators: if you see these stub tables being created in your
+-- migration log, your DB is out of canonical order — apply 170, 200,
+-- and 280 before 331 to get the full schema. The backfill is
+-- additive and safe to re-run after the canonical tables land.
 CREATE TABLE IF NOT EXISTS persona_matches (
   persona_id TEXT NOT NULL,
   entity_kind TEXT NOT NULL,
