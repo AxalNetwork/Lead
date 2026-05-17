@@ -40,19 +40,30 @@ SELECT e.id, 'investor_firm', 1, 'backfill:known_investor_domain', 1
  )
    AND NOT EXISTS (SELECT 1 FROM entity_roles r WHERE r.entity_id = e.id AND r.role = 'investor_firm');
 
--- (2) Leads (persons) whose org or source_domain matches the known investor list → investor.
+-- (2) Leads (persons) whose org / source_domain / email-domain / employer firm
+-- domain matches the known investor list → investor. We match multiple ways
+-- because `leads.org` typically carries the human firm name (e.g. "Incubate
+-- Fund") rather than a domain; we therefore also pivot through the firms
+-- table to recover the firm's domain.
 INSERT OR IGNORE INTO entity_roles (entity_id, role, is_primary, source, confidence)
 SELECT e.id, 'investor', 1, 'backfill:known_investor_domain', 1
   FROM u_entities e
   JOIN entity_legacy_map m ON m.entity_id = e.id AND m.legacy_table = 'leads'
+  JOIN leads l ON l.id = m.legacy_id
  WHERE e.kind = 'person'
-   AND EXISTS (
-     SELECT 1 FROM leads l
-      WHERE l.id = m.legacy_id
-        AND (
-          LOWER(COALESCE(l.org, '')) IN (SELECT LOWER(domain) FROM known_investor_domains)
-          OR LOWER(COALESCE(l.source_domain, '')) IN (SELECT LOWER(domain) FROM known_investor_domains)
-        )
+   AND (
+     -- direct match on org/source_domain (legacy)
+     LOWER(COALESCE(l.org, '')) IN (SELECT LOWER(domain) FROM known_investor_domains)
+     OR LOWER(COALESCE(l.source_domain, '')) IN (SELECT LOWER(domain) FROM known_investor_domains)
+     -- email host matches a known investor domain
+     OR (l.email IS NOT NULL
+          AND LOWER(SUBSTR(l.email, INSTR(l.email, '@') + 1)) IN (SELECT LOWER(domain) FROM known_investor_domains))
+     -- person works at a firm whose primary domain is in the known list
+     OR EXISTS (
+       SELECT 1 FROM firms f
+        WHERE LOWER(f.name) = LOWER(COALESCE(l.org, ''))
+          AND LOWER(COALESCE(f.domain, '')) IN (SELECT LOWER(domain) FROM known_investor_domains)
+     )
    )
    AND NOT EXISTS (SELECT 1 FROM entity_roles r WHERE r.entity_id = e.id AND r.role = 'investor');
 

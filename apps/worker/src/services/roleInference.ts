@@ -13,7 +13,32 @@ export interface RoleInferenceContext {
   importLabel?: string | null;
 }
 
-const VC_DOMAINS = new Set(["firstround.com", "a16z.com", "sequoiacap.com", "accel.com", "kpcb.com", "benchmark.com", "greylock.com", "benchmark.com", "andreesenhorowitz.com", "andreessenhorowitz.com", "union.vc", "foundersfund.com", "crv.com", "usv.com", "sequoiacap.com", "indexventures.com", "sparkcapital.com", "generalcatalyst.com"]);
+// Static fallback list used when known_investor_domains is empty or
+// unavailable. Kept in sync with migration 333's seed list so the
+// behavior is identical pre- and post-backfill.
+const VC_DOMAINS_STATIC = new Set([
+  "a16z.com", "andreessenhorowitz.com", "andreesenhorowitz.com",
+  "sequoiacap.com", "accel.com", "kpcb.com", "benchmark.com",
+  "greylock.com", "firstround.com", "foundersfund.com", "crv.com",
+  "usv.com", "union.vc", "indexventures.com", "sparkcapital.com",
+  "generalcatalyst.com", "incubatefund.com",
+]);
+
+let DOMAIN_CACHE: { at: number; set: Set<string> } | null = null;
+const DOMAIN_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function loadKnownInvestorDomains(env: Env): Promise<Set<string>> {
+  if (DOMAIN_CACHE && Date.now() - DOMAIN_CACHE.at < DOMAIN_CACHE_TTL_MS) return DOMAIN_CACHE.set;
+  const set = new Set<string>(VC_DOMAINS_STATIC);
+  try {
+    const r = await env.DB.prepare("SELECT domain FROM known_investor_domains").all<{ domain: string }>();
+    for (const row of r.results ?? []) {
+      if (row.domain) set.add(row.domain.toLowerCase());
+    }
+  } catch { /* table missing pre-migration — fall back to static */ }
+  DOMAIN_CACHE = { at: Date.now(), set };
+  return set;
+}
 
 function normalize(s: string | null | undefined): string {
   return String(s ?? "").trim().toLowerCase();
@@ -47,9 +72,12 @@ export async function inferAndAssignRoles(env: Env, entityId: string, ctx: RoleI
     if (ctx.kind === "org") roles.push({ role: "investor_firm", confidence: 0.95 });
   }
 
-  if (domain && VC_DOMAINS.has(domain)) {
-    if (ctx.kind === "org") roles.push({ role: "investor_firm", confidence: 0.95 });
-    if (ctx.kind === "person") roles.push({ role: "investor", confidence: 0.9 });
+  if (domain) {
+    const known = await loadKnownInvestorDomains(env);
+    if (known.has(domain)) {
+      if (ctx.kind === "org") roles.push({ role: "investor_firm", confidence: 0.95 });
+      if (ctx.kind === "person") roles.push({ role: "investor", confidence: 0.9 });
+    }
   }
 
   if (hasAny(text, ["portfolio companies", "we invest in", "our fund", "aum", "check size"])) {
@@ -92,10 +120,29 @@ export async function inferAndAssignRoles(env: Env, entityId: string, ctx: RoleI
   for (const role of roles) {
     if (seen.has(role.role)) continue;
     seen.add(role.role);
-    await addRole(env, entityId, role.role, {
-      confidence: role.confidence,
-      source: `role_inference:v1:${sourceKind}`,
-      is_primary: role.role === "lead" || role.role === "investor_firm" || role.role === "investor",
-    });
+    // Provenance-safe write: never overwrite a role row whose source
+    // came from a non-inference path (manual, importer-explicit, etc).
+    // We INSERT OR IGNORE first (cheap), then bump confidence ONLY when
+    // the existing row was also written by role_inference.
+    const src = `role_inference:v1:${sourceKind}`;
+    try {
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO entity_roles (entity_id, role, is_primary, source, confidence)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).bind(
+        entityId, role.role,
+        role.role === "lead" || role.role === "investor_firm" || role.role === "investor" ? 1 : 0,
+        src, role.confidence,
+      ).run();
+      await env.DB.prepare(
+        `UPDATE entity_roles
+            SET confidence = MAX(confidence, ?),
+                source     = ?
+          WHERE entity_id = ? AND role = ?
+            AND source LIKE 'role_inference:%'`,
+      ).bind(role.confidence, src, entityId, role.role).run();
+    } catch (e) {
+      console.warn("inferAndAssignRoles addRole failed", role.role, (e as Error).message);
+    }
   }
 }
