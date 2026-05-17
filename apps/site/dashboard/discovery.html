@@ -64,6 +64,12 @@ permalink: /dashboard/discovery/
       <button id="ads-disc-filter" class="ads-btn" type="button">Filter</button>
     </div>
   </div>
+  <div id="ads-disc-bulk" style="margin-top:8px;display:none;gap:6px;align-items:center;font-size:11px">
+    <span id="ads-disc-bulk-count" style="color:#444"></span>
+    <button id="ads-disc-bulk-promote" class="ads-btn" type="button" style="font-size:11px;padding:3px 8px">Promote selected</button>
+    <button id="ads-disc-bulk-reject"  class="ads-btn" type="button" style="font-size:11px;padding:3px 8px;background:#a33">Reject selected</button>
+    <button id="ads-disc-bulk-clear"   class="ads-btn" type="button" style="font-size:11px;padding:3px 8px;background:#666">Clear</button>
+  </div>
   <div id="ads-disc-table" style="margin-top:10px"><div class="ads-loading">Loading…</div></div>
 </div>
 
@@ -136,9 +142,11 @@ permalink: /dashboard/discovery/
       var data = await r.json();
       var items = data.items || [];
       if (!items.length) { host.innerHTML = '<div class="ads-muted" style="font-size:13px">No URLs match.</div>'; return; }
-      host.innerHTML = '<table class="ads-table" style="width:100%;font-size:12px"><thead><tr><th>URL</th><th>Method</th><th>Depth</th><th>Yield</th><th>Kind</th><th>Status</th><th></th></tr></thead><tbody>' +
+      host.innerHTML = '<table class="ads-table" style="width:100%;font-size:12px"><thead><tr><th style="width:24px"><input type="checkbox" id="ads-disc-allchk"></th><th>URL</th><th>Method</th><th>Depth</th><th>Yield</th><th>Kind</th><th>Status</th><th></th></tr></thead><tbody>' +
         items.map(function (u) {
+          var checked = window.__ads_disc_sel && window.__ads_disc_sel[u.id] ? " checked" : "";
           return '<tr>' +
+            '<td><input type="checkbox" class="ads-disc-rowchk" data-id="' + esc(u.id) + '"' + checked + '></td>' +
             '<td><a href="' + esc(u.url) + '" target="_blank" rel="noopener">' + esc(u.url) + '</a><div style="font-size:10px;color:#888">' + esc(u.host) + (u.link_text ? ' · "' + esc(u.link_text) + '"' : '') + '</div></td>' +
             '<td><code style="font-size:10px;background:#eef;padding:1px 4px;border-radius:3px">' + esc(u.discovery_method) + '</code></td>' +
             '<td>' + esc(u.depth) + '</td>' +
@@ -152,7 +160,7 @@ permalink: /dashboard/discovery/
       host.querySelectorAll("tbody tr").forEach(function (tr, idx) {
         tr.style.cursor = "pointer";
         tr.addEventListener("click", function (ev) {
-          if (ev.target && ev.target.closest("button,a")) return;
+          if (ev.target && ev.target.closest("button,a,input")) return;
           renderGraph(items[idx].id);
         });
       });
@@ -164,8 +172,59 @@ permalink: /dashboard/discovery/
           loadUrls(); loadStats();
         });
       });
+      // Wire bulk selection checkboxes.
+      window.__ads_disc_sel = window.__ads_disc_sel || {};
+      host.querySelectorAll(".ads-disc-rowchk").forEach(function (cb) {
+        cb.addEventListener("change", function () {
+          var id = cb.getAttribute("data-id");
+          if (cb.checked) window.__ads_disc_sel[id] = true; else delete window.__ads_disc_sel[id];
+          refreshBulkBar();
+        });
+      });
+      var allchk = document.getElementById("ads-disc-allchk");
+      if (allchk) allchk.addEventListener("change", function () {
+        host.querySelectorAll(".ads-disc-rowchk").forEach(function (cb) {
+          cb.checked = allchk.checked;
+          var id = cb.getAttribute("data-id");
+          if (allchk.checked) window.__ads_disc_sel[id] = true; else delete window.__ads_disc_sel[id];
+        });
+        refreshBulkBar();
+      });
+      refreshBulkBar();
     } catch (e) { host.innerHTML = '<div class="ads-muted">Failed: ' + esc(e.message) + '</div>'; }
   }
+  function selectedIds() {
+    return Object.keys(window.__ads_disc_sel || {});
+  }
+  function refreshBulkBar() {
+    var ids = selectedIds();
+    var bar = document.getElementById("ads-disc-bulk");
+    var lbl = document.getElementById("ads-disc-bulk-count");
+    if (!bar) return;
+    if (ids.length) {
+      bar.style.display = "flex";
+      lbl.textContent = ids.length + " selected";
+    } else {
+      bar.style.display = "none";
+    }
+  }
+  async function bulkAction(action) {
+    var ids = selectedIds();
+    if (!ids.length) return;
+    if (!confirm(action.charAt(0).toUpperCase() + action.slice(1) + " " + ids.length + " URL(s)?")) return;
+    var payload = { ids: ids, action: action };
+    if (action === "reject") payload.reason = "manual_bulk";
+    try {
+      var r = await fetch(API + "/api/discovery/urls/bulk", { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+      var data = await r.json();
+      if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
+      window.__ads_disc_sel = {};
+      loadUrls(); loadStats();
+    } catch (e) { alert("Bulk " + action + " failed: " + e.message); }
+  }
+  document.getElementById("ads-disc-bulk-promote").addEventListener("click", function () { bulkAction("promote"); });
+  document.getElementById("ads-disc-bulk-reject").addEventListener("click",  function () { bulkAction("reject"); });
+  document.getElementById("ads-disc-bulk-clear").addEventListener("click",   function () { window.__ads_disc_sel = {}; loadUrls(); });
   document.getElementById("ads-disc-go").addEventListener("click", async function () {
     var url = document.getElementById("ads-disc-url").value.trim();
     if (!url) return;

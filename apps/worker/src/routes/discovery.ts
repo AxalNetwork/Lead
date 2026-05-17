@@ -196,3 +196,56 @@ discoveryRoute.post("/urls/:id/reject", async (c) => {
   await c.env.DB.prepare(`DELETE FROM crawl_frontier WHERE url_id = ?`).bind(id).run();
   return c.json({ ok: true });
 });
+
+/**
+ * Bulk promote/reject. Closes the spec's "bulk Promote/Reject" dashboard
+ * requirement so an operator can act on filtered URL sets in one call
+ * instead of clicking row-by-row. Caps at 500 ids per request to keep
+ * D1 statements tractable.
+ */
+discoveryRoute.post("/urls/bulk", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as {
+    ids?: string[]; action?: "promote" | "reject"; reason?: string; run_id?: string;
+  };
+  const ids = (body.ids ?? []).filter((x) => typeof x === "string" && x.length > 0).slice(0, 500);
+  if (!ids.length) return c.json({ error: "ids_required" }, 400);
+  if (body.action !== "promote" && body.action !== "reject") {
+    return c.json({ error: "invalid_action", allowed: ["promote", "reject"] }, 400);
+  }
+  if (body.run_id && !(await runExists(c.env, body.run_id))) {
+    return c.json({ error: "unknown_run_id" }, 400);
+  }
+  const placeholders = ids.map(() => "?").join(",");
+
+  if (body.action === "reject") {
+    const reason = body.reason?.slice(0, 200) ?? "manual_bulk";
+    await c.env.DB.prepare(
+      `UPDATE discovered_urls SET status = 'rejected', rejected_reason = ? WHERE id IN (${placeholders})`,
+    ).bind(reason, ...ids).run();
+    await c.env.DB.prepare(`DELETE FROM crawl_frontier WHERE url_id IN (${placeholders})`).bind(...ids).run();
+    return c.json({ ok: true, action: "reject", count: ids.length });
+  }
+
+  // Promote: mark + enqueue each row at priority=1.0. We loop because
+  // each insert needs the per-row run_id inheritance logic from the
+  // single-row promote path.
+  const runIdOverride = body.run_id ?? null;
+  let enqueued = 0;
+  for (const id of ids) {
+    const row = await c.env.DB.prepare(`SELECT id FROM discovered_urls WHERE id = ?`).bind(id).first<{ id: string }>();
+    if (!row) continue;
+    const prior = await c.env.DB.prepare(`SELECT run_id FROM crawl_frontier WHERE url_id = ?`).bind(id).first<{ run_id: string | null }>();
+    const runId = runIdOverride ?? prior?.run_id ?? null;
+    await c.env.DB.prepare(`UPDATE discovered_urls SET status = 'promoted' WHERE id = ?`).bind(id).run();
+    await c.env.DB.prepare(
+      `INSERT INTO crawl_frontier (url_id, priority, scheduled_at, run_id)
+         VALUES (?, ?, CURRENT_TIMESTAMP, ?)
+       ON CONFLICT(url_id) DO UPDATE SET priority = MAX(crawl_frontier.priority, excluded.priority),
+                                         next_attempt_at = NULL,
+                                         last_error = NULL,
+                                         run_id = COALESCE(crawl_frontier.run_id, excluded.run_id)`,
+    ).bind(id, 1.0, runId).run();
+    enqueued++;
+  }
+  return c.json({ ok: true, action: "promote", count: enqueued });
+});
