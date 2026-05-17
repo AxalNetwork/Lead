@@ -132,7 +132,15 @@ export async function runDiscoverFromSeed(env: Env, opts: SeedOpts): Promise<See
       // Run-wide per-host cap check (we increment *after* the upsert
       // succeeds, so duplicates / rejects don't consume the quota).
       await ensureHostBase(c.host);
-      if (hostBase[c.host] + (hostDelta[c.host] ?? 0) >= maxPerHost) { rejected++; continue; }
+      if (hostBase[c.host] + (hostDelta[c.host] ?? 0) >= maxPerHost) {
+        // Lightweight freshness touch: if we already know this URL,
+        // bump `last_seen` even though we won't re-process it. Keeps
+        // freshness metrics honest when a host is at its run cap.
+        await env.DB.prepare(
+          `UPDATE discovered_urls SET last_seen = CURRENT_TIMESTAMP WHERE url_canonical = ?`,
+        ).bind(c.canonical).run();
+        rejected++; continue;
+      }
 
       const verdict = await predictYield(env, { url: c.url, method: name, depth: depth + 1, link_text: raw.link_text });
       const row = await upsertDiscoveredUrl(env, {
