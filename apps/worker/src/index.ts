@@ -87,15 +87,16 @@ api.use(
   }),
 );
 
-// Public liveness only — `/health` returns the cheap DB ping (no binding
-// inventory). The deep readiness probe (`/api/health/deep`) is mounted
-// after `accessGuard` below so its operational telemetry is not exposed.
+// Public cheap-liveness probe (DB ping only — no PII, no binding inventory).
 api.route("/health", health);
-// Public webhook (HMAC-signed) — must be mounted *before* accessGuard so
-// marketing tools can post events without a Cloudflare Access cookie.
-api.route("/api/campaigns", campaignsWebhook);
-api.use("/api/*", accessGuard);
+// Task #2 bug-triage: documented public allow-list — `/api/health` (cheap
+// + deep readiness probe) and `/api/webhooks/*` (HMAC-signed inbound
+// events). Both MUST be mounted before accessGuard. Any other /api/*
+// route mounted before accessGuard is a bug — enforced by
+// test/access_guard.test.mjs.
 api.route("/api/health", health);
+api.route("/api/webhooks/campaigns", campaignsWebhook);
+api.use("/api/*", accessGuard);
 // PII access audit — runs after the lead-detail handler.
 api.use("/api/leads/:id", piiAuditOnLeadGet);
 api.route("/api/auth", auth);

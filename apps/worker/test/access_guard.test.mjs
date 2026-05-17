@@ -19,9 +19,15 @@ const src = readFileSync(indexPath, "utf8");
 // Documented public allow-list. Any /api/* route mounted before
 // accessGuard must be in this set. Update both this list and the
 // docs/bug-triage-2026-05.md checklist together if it changes.
+// Per task #2 spec: only `/api/health` and `/api/webhooks/*` are public.
+// We list the exact mount paths used in src/index.ts here; the guard test
+// matches against this exact-string set, and the prefix `/api/webhooks/`
+// is asserted separately below.
 const PUBLIC_ALLOW_LIST = new Set([
-  "/api/campaigns", // HMAC-signed marketing webhook (campaignsWebhook subapp)
+  "/api/health",
+  "/api/webhooks/campaigns",
 ]);
+const PUBLIC_PREFIX_ALLOW_LIST = ["/api/webhooks/"];
 
 test("accessGuard gates every /api/* route except the documented allow-list", () => {
   const guardMatch = src.match(/api\.use\(\s*"\/api\/\*"\s*,\s*accessGuard\s*\)/);
@@ -35,7 +41,9 @@ test("accessGuard gates every /api/* route except the documented allow-list", ()
     if (m.index < guardIdx) beforeGuard.push(m[1]);
   }
 
-  const offenders = beforeGuard.filter((p) => !PUBLIC_ALLOW_LIST.has(p));
+  const offenders = beforeGuard.filter(
+    (p) => !PUBLIC_ALLOW_LIST.has(p) && !PUBLIC_PREFIX_ALLOW_LIST.some((pref) => p.startsWith(pref)),
+  );
   assert.deepEqual(
     offenders,
     [],
@@ -52,10 +60,10 @@ test("accessGuard gates every /api/* route except the documented allow-list", ()
   }
 });
 
-test("/health (non-/api) is public; /api/health is gated", () => {
-  // The cheap liveness probe lives on /health (public). The deep
-  // readiness probe is /api/health, which must be mounted after the
-  // accessGuard line.
+test("/health and /api/health are both public per spec", () => {
+  // Per task #2 spec, `/api/health` is on the public allow-list (its
+  // cheap-liveness twin `/health` is also public). Both must be
+  // mounted before the accessGuard line.
   const healthIdx = src.search(/api\.route\(\s*"\/health"/);
   const guardIdx = src.search(/api\.use\(\s*"\/api\/\*"\s*,\s*accessGuard\s*\)/);
   const apiHealthIdx = src.search(/api\.route\(\s*"\/api\/health"/);
@@ -63,7 +71,7 @@ test("/health (non-/api) is public; /api/health is gated", () => {
   assert.ok(guardIdx > -1, "accessGuard mount missing");
   assert.ok(apiHealthIdx > -1, "/api/health mount missing");
   assert.ok(healthIdx < guardIdx, "/health must be mounted before accessGuard");
-  assert.ok(apiHealthIdx > guardIdx, "/api/health must be mounted after accessGuard");
+  assert.ok(apiHealthIdx < guardIdx, "/api/health must be mounted before accessGuard (public allow-list per task #2)");
 });
 
 test("onError returns a sanitized envelope in production (no Error.stack, no raw internal message)", () => {
