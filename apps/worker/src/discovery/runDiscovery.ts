@@ -119,15 +119,20 @@ export async function runDiscoverFromSeed(env: Env, opts: SeedOpts): Promise<See
     if (s.status !== "fulfilled") continue;
     const { name, links } = s.value;
     method_counts[name] = (method_counts[name] ?? 0) + links.length;
+    // Dedupe within this method's batch so duplicate links don't
+    // consume per-host quota or double-count.
+    const seenCanon = new Set<string>();
     for (const raw of links) {
       const c = canonicalizeUrl(raw.url);
       if (!c) continue;
-      // Run-wide per-host cap (persistent across recursion + workflow batches).
-      await ensureHostBase(c.host);
-      hostDelta[c.host] = (hostDelta[c.host] ?? 0) + 1;
-      if (hostBase[c.host] + hostDelta[c.host] > maxPerHost) { rejected++; continue; }
       // Don't re-insert the seed itself.
       if (c.canonical === seedCanon.canonical) continue;
+      if (seenCanon.has(c.canonical)) continue;
+      seenCanon.add(c.canonical);
+      // Run-wide per-host cap check (we increment *after* the upsert
+      // succeeds, so duplicates / rejects don't consume the quota).
+      await ensureHostBase(c.host);
+      if (hostBase[c.host] + (hostDelta[c.host] ?? 0) >= maxPerHost) { rejected++; continue; }
 
       const verdict = await predictYield(env, { url: c.url, method: name, depth: depth + 1, link_text: raw.link_text });
       const row = await upsertDiscoveredUrl(env, {
@@ -142,7 +147,12 @@ export async function runDiscoverFromSeed(env: Env, opts: SeedOpts): Promise<See
         jobId: opts.jobId ?? null,
       });
       if (!row) continue;
-      if (row.created) discovered++;
+      if (row.created) {
+        discovered++;
+        // Only count the host quota on a brand-new accepted URL. Dupes
+        // and rejects are free.
+        if (!row.rejected) hostDelta[c.host] = (hostDelta[c.host] ?? 0) + 1;
+      }
       if (parentUrlId) await insertLinkEdge(env, parentUrlId, row.id, name, verdict.yield_score);
       if (!row.rejected && verdict.yield_score >= yieldThreshold && (depth + 1) <= depthMax) {
         const prio = computePriority({

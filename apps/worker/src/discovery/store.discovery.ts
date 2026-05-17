@@ -150,7 +150,26 @@ export async function popFrontier(env: Env, limit: number): Promise<Array<{ url_
     picked.push(row);
     if (picked.length >= limit) break;
   }
-  return picked;
+  // Atomically claim each picked row by pushing its next_attempt_at into
+  // the near future. A concurrent crawl run won't see them as eligible
+  // until 10 minutes pass, so duplicate work is avoided even without a
+  // real transaction (D1 lacks SELECT … FOR UPDATE). Rows we successfully
+  // claim are returned; rows already claimed by someone else (the UPDATE
+  // matched 0 rows because next_attempt_at moved) are filtered out.
+  const claimed: typeof picked = [];
+  for (const row of picked) {
+    const upd = await env.DB.prepare(
+      `UPDATE crawl_frontier
+          SET next_attempt_at = datetime('now', '+10 minutes')
+        WHERE url_id = ?
+          AND (next_attempt_at IS NULL OR datetime(next_attempt_at) <= datetime('now'))`,
+    ).bind(row.url_id).run();
+    // D1's RunResult exposes meta.changes; only treat the row as claimed
+    // when we actually moved the lock forward.
+    const meta = (upd as { meta?: { changes?: number } }).meta;
+    if (meta?.changes && meta.changes > 0) claimed.push(row);
+  }
+  return claimed;
 }
 
 export async function removeFromFrontier(env: Env, urlId: string): Promise<void> {
