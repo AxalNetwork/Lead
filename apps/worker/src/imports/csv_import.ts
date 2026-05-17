@@ -41,7 +41,7 @@ interface DetectedColumns {
   column_map: Record<string, { predicate: string | null; value_type: string; confidence: number; notes?: string }>;
 }
 
-export async function processCsvImport(env: Env, importId: string): Promise<void> {
+export async function processCsvImport(env: Env, importId: string, opts: { insideWorkflow?: boolean } = {}): Promise<void> {
   const row = await env.DB
     .prepare("SELECT id, user_email, r2_key, status, processed_rows, detected_columns_json, error_log_json FROM csv_imports WHERE id = ?")
     .bind(importId)
@@ -214,13 +214,16 @@ export async function processCsvImport(env: Env, importId: string): Promise<void
       ).bind(now, now, now, importId).run();
     } else {
       // >5,000 rows: hand off to CsvImportWorkflow (durable
-      // checkpoint+resume on processed_rows). If the workflow binding
-      // isn't configured (dev/test) we fall back to a queue re-enqueue
-      // so the import still completes — same checkpoint pointer, just
-      // not durable. Both paths resume from csv_imports.processed_rows
-      // and reuse the cached detected_columns_json so the AI call runs
-      // exactly once per import.
-      if (env.WF_CSV_IMPORT?.create) {
+      // checkpoint+resume on processed_rows). CRITICAL: only spawn the
+      // workflow on the INITIAL invocation (insideWorkflow=false). When
+      // CsvImportWorkflow.run calls processCsvImport for each chunk it
+      // passes insideWorkflow=true, so chunk completions just return
+      // and let the workflow's own loop drive the next step.do —
+      // otherwise every chunk would spawn a fresh duplicate workflow.
+      if (opts.insideWorkflow) {
+        // no-op: the calling workflow's step loop will invoke
+        // processCsvImport again for the next chunk.
+      } else if (env.WF_CSV_IMPORT?.create) {
         try {
           await env.WF_CSV_IMPORT.create({ params: { importId } });
         } catch (e) {

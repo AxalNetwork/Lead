@@ -27,7 +27,7 @@ export class CsvImportWorkflow {
     // separate step with up to 3 retries (exponential backoff).
     for (let i = 0; i < 200; i++) {
       const done = await step.do(`chunk-${i}`, { retries: { limit: 3, backoff: "exponential" } }, async () => {
-        await processCsvImport(this.env, importId);
+        await processCsvImport(this.env, importId, { insideWorkflow: true });
         const row = await this.env.DB.prepare("SELECT status FROM csv_imports WHERE id = ?")
           .bind(importId).first<{ status: string }>();
         return row?.status !== "processing";

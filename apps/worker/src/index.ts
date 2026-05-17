@@ -129,12 +129,13 @@ api.route("/api/sources", sources);
 api.route("/api/saved-filters", savedFilters);
 api.route("/api/analytics/firms", analyticsFirms);
 api.route("/api/relationships", relationships);
-api.route("/api/uploads", uploads);
 // Task #3 (spec contract): CSV-only end-to-end pipeline. Backed by the
-// new `csv_imports` table + processCsvImport handler. Separate from the
-// legacy `/api/uploads/*` (file_imports) surface; both routes pass
-// through accessGuard since they're mounted under /api/*.
+// new `csv_imports` table + processCsvImport handler. MOUNTED BEFORE
+// the legacy `/api/uploads` router so Hono's first-match routing
+// resolves `/api/uploads/csv` and `/api/uploads/csv/:id` to this
+// router instead of the legacy `/:id` parameter route.
 api.route("/api/uploads/csv", uploadsCsv);
+api.route("/api/uploads", uploads);
 api.route("/api/investors", investors);
 api.route("/api/companies", companies);
 api.route("/api/search", search);

@@ -14,7 +14,7 @@
 //   POST   /api/uploads/csv/:id/retry  re-enqueue when failed/cancelled
 
 import { Hono } from "hono";
-import type { Env, JobMessage } from "../types";
+import type { Env, CsvImportEnvelopeMessage } from "../types";
 
 export const uploadsCsv = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
@@ -65,7 +65,10 @@ uploadsCsv.post("/", async (c) => {
      VALUES (?, ?, ?, 'queued', 'csv_import', ?, ?, ?, ?)`,
   ).bind(jobId, `csv_import:${filename}`, "csv_import", importId, JSON.stringify({ importId }), now, now).run();
   try {
-    const msg: JobMessage = { jobId, kind: "csv_import" as never, target: importId, config: { importId } };
+    // Task #3 spec envelope: {type:'csv_import', import_id}. The queue
+    // dispatcher in index.ts recognizes this shape and synthesizes the
+    // JobMessage internally so the audit trail stays consistent.
+    const msg: CsvImportEnvelopeMessage = { type: "csv_import", import_id: importId };
     await c.env.LEAD_QUEUE.send(msg);
   } catch (e) {
     await c.env.DB.prepare(
@@ -130,7 +133,7 @@ uploadsCsv.post("/:id/retry", async (c) => {
      VALUES (?, ?, ?, 'queued', 'csv_import', ?, ?, ?, ?)`,
   ).bind(jobId, `csv_import:retry:${row.filename}`, "csv_import", id, JSON.stringify({ importId: id, retry: true }), now, now).run();
   try {
-    const msg: JobMessage = { jobId, kind: "csv_import" as never, target: id, config: { importId: id, retry: true } };
+    const msg: CsvImportEnvelopeMessage = { type: "csv_import", import_id: id };
     await c.env.LEAD_QUEUE.send(msg);
   } catch (e) {
     await c.env.DB.prepare(
