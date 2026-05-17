@@ -36,16 +36,32 @@ Weights (sum = 1.00):
 - stage           0.10
 - geo             0.10
 
-`title_sim` deviation from spec: the embed input is a **composed**
-`title_text` (titles + seniority + function + thesis), not the raw
-`target_title_match` field. This was a deliberate quality choice —
-embedding only the bare title produced poor cosine separation in the
-acceptance harness because most B2B titles share substrings. The
-composed text gives the embedder enough semantic context to rank
-correctly, and the other six components still dominate when title text
-is sparse. Operators who need strict bare-title matching can patch
-`scoreEntityForPersona` in `personaMatching.ts` to embed only
-`persona.target_title_match`.
+`title_sim` input: per the Task #8 spec, the embed text is composed
+**only** from structured target fields — `buyer_titles_json`,
+`buyer_seniority_json`, `buyer_departments_json`. Long-form notes
+(thesis, free text) are explicitly excluded so the component is
+reproducible and explainable.
+
+## Backwards-compatibility view
+
+Consumers still reading the legacy `persona_matches` column shape
+(`persona_id, entity_kind, entity_id, fit_score, components_json,
+computed_at`) can read `persona_matches_v2`, a view over
+`persona_entity_matches` that back-scales `score` to 0..100 and
+infers `entity_kind` from `u_entities.kind`. New code should read
+`persona_entity_matches` directly for full component breakdown +
+rationale + source.
+
+## Manual-row preservation across migration
+
+Operators upgrading from the pre-Task-#8 flow with manually-pinned
+matches should populate `persona_match_manual_overrides`
+(persona_id, entity_id) **before** running migration 331. Matched
+rows are stamped `source='manual'` with `model_version='manual-legacy'`
+during backfill, so the manual preservation contract holds across
+the migration boundary. Greenfield deploys leave the table empty.
+Post-Task-#8, manual matches are written to `persona_entity_matches`
+directly by the routes layer with `source='manual'`.
 
 ## Triggers
 

@@ -359,11 +359,14 @@ export function extractTargets(row: PersonaRowLite): PersonaTargets {
   const functions = arrFromJson(row.buyer_departments_json);
   const industries = arrFromJson(row.industries_json);
   const geos = arrFromJson(row.geos_json);
+  // Task #8 spec: title_sim must use ONLY structured persona target
+  // fields — no long-form notes (thesis, free text). Embedding here is
+  // restricted to titles + seniority + function so the component score
+  // stays explainable and reproducible.
   const title_text = [
     titles.join(", "),
     seniority.length ? `Seniority: ${seniority.join(", ")}` : "",
     functions.length ? `Function: ${functions.join(", ")}` : "",
-    row.thesis ? `Thesis: ${row.thesis}` : "",
   ].filter(Boolean).join(". ");
   return {
     title_text,

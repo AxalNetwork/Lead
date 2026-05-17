@@ -170,7 +170,11 @@ test("extractTargets: parses persona row JSON columns correctly", () => {
   assert.equal(t.geo_center_lat, 40.7128);
   assert.equal(t.geo_radius_km, 50);
   assert.ok(t.title_text.includes("founder"));
-  assert.ok(t.title_text.includes("Vertical SaaS"));
+  // Task #8 spec: thesis (long-form notes) must NOT contribute to
+  // title_sim — embed text is restricted to structured target fields.
+  assert.ok(!t.title_text.includes("Vertical SaaS"));
+  assert.ok(t.title_text.includes("Seniority"));
+  assert.ok(t.title_text.includes("Function"));
 });
 
 test("end-to-end ranking: Series-A SaaS founder beats VP Sales beats Senior Engineer at Bank", () => {
