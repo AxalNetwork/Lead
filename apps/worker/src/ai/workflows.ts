@@ -275,6 +275,50 @@ export class RefreshGovernmentWorkflow {
   }
 }
 
+// Task #2: durable seed-discovery workflow.
+export class DiscoverFromSeedWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ url: string; depthMax?: number; maxPerHost?: number; methods?: string[]; yieldThreshold?: number; runId?: string }>, step: WorkflowStep): Promise<{ ok: true; runId: string; discovered: number; queued: number }> {
+    const { runDiscoverFromSeed } = await import("../discovery/runDiscovery");
+    const r = await step.do("seed", { retries: { limit: 2, backoff: "exponential" } }, async () =>
+      runDiscoverFromSeed(this.env, {
+        url: event.payload.url,
+        depthMax: event.payload.depthMax,
+        maxPerHost: event.payload.maxPerHost,
+        methods: event.payload.methods,
+        yieldThreshold: event.payload.yieldThreshold,
+        runId: event.payload.runId,
+      }),
+    );
+    return { ok: true, runId: r.runId, discovered: r.discovered, queued: r.queued };
+  }
+}
+
+// Task #2: durable frontier crawler. Pops + fetches a batch, then
+// recurses by sleeping briefly and re-popping until empty or capped.
+export class CrawlFrontierWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ runId?: string; limit?: number; maxBatches?: number }>, step: WorkflowStep): Promise<{ ok: true; batches: number; fetched: number }> {
+    const { runCrawlFrontier } = await import("../discovery/runDiscovery");
+    const maxBatches = Math.min(event.payload.maxBatches ?? 10, 50);
+    let batches = 0, fetched = 0;
+    for (let i = 0; i < maxBatches; i++) {
+      const r = await step.do(`batch_${i}`, { retries: { limit: 1 } }, async () =>
+        runCrawlFrontier(this.env, { runId: event.payload.runId, limit: event.payload.limit ?? 25 }),
+      );
+      batches++;
+      fetched += r.fetched;
+      if (r.scanned === 0) break;
+      await step.sleep(`pace_${i}`, "5s");
+    }
+    return { ok: true, batches, fetched };
+  }
+}
+
 export class IngestPageWorkflow {
   env: Env;
   ctx: ExecutionContext;

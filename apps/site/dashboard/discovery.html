@@ -1,0 +1,228 @@
+---
+layout: default
+title: Link Discovery
+permalink: /dashboard/discovery/
+---
+
+<h1 class="ads-page-title">Link Discovery</h1>
+<p class="ads-page-sub">Seed a URL and we mine outbound links, sitemaps, feeds, JSON-LD, Wayback history, sister pages, and citations — then predict which are worth crawling.</p>
+
+<div class="ads-card" style="margin-bottom:14px">
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+    <label style="font-size:12px;flex:1;min-width:280px">Seed URL
+      <input id="ads-disc-url" type="url" placeholder="https://sequoiacap.com" style="display:block;width:100%;padding:6px;margin-top:4px;font-size:13px">
+    </label>
+    <label style="font-size:12px">Depth
+      <input id="ads-disc-depth" type="number" value="3" min="1" max="5" style="width:60px;padding:4px;margin-top:4px">
+    </label>
+    <label style="font-size:12px">Max / host
+      <input id="ads-disc-host" type="number" value="200" min="20" max="2000" style="width:80px;padding:4px;margin-top:4px">
+    </label>
+    <button id="ads-disc-go" class="ads-btn" type="button">Seed</button>
+    <button id="ads-disc-crawl" class="ads-btn" type="button" style="background:#1a3a6b">Crawl frontier</button>
+  </div>
+  <div id="ads-disc-methods" style="margin-top:10px;font-size:11px;color:#666"></div>
+</div>
+
+<div class="ads-card" style="margin-bottom:14px">
+  <div class="ads-active__head"><h3>Live stats</h3><span class="ads-muted" id="ads-disc-updated" style="font-size:11px"></span></div>
+  <div id="ads-disc-tiles" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-top:8px">
+    <div class="ads-loading">Loading…</div>
+  </div>
+  <div id="ads-disc-bymethod" style="margin-top:14px"></div>
+</div>
+
+<div class="ads-card" style="margin-bottom:14px">
+  <div class="ads-active__head"><h3>Link graph</h3><span class="ads-muted" style="font-size:11px">Click any row below to render its 2-hop neighborhood.</span></div>
+  <div id="ads-disc-graph" style="margin-top:8px;min-height:240px;background:#fafbfc;border-radius:8px">
+    <div class="ads-muted" style="padding:24px;text-align:center;font-size:12px">Select a URL to render its 2-hop link neighborhood.</div>
+  </div>
+</div>
+
+<div class="ads-card">
+  <div class="ads-active__head">
+    <h3>Discovered URLs</h3>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;font-size:11px">
+      <label>Status
+        <select id="ads-disc-status" style="margin-left:4px">
+          <option value="">All</option>
+          <option value="new">new</option>
+          <option value="queued">queued</option>
+          <option value="crawled">crawled</option>
+          <option value="rejected">rejected</option>
+          <option value="promoted">promoted</option>
+        </select>
+      </label>
+      <label>Method
+        <select id="ads-disc-method" style="margin-left:4px"><option value="">All</option></select>
+      </label>
+      <label>Min yield <input id="ads-disc-yield" type="number" step="0.05" min="0" max="1" value="0" style="width:60px"></label>
+      <label>Host <input id="ads-disc-hostf" type="text" placeholder="sequoiacap.com" style="width:170px"></label>
+      <button id="ads-disc-filter" class="ads-btn" type="button">Filter</button>
+    </div>
+  </div>
+  <div id="ads-disc-table" style="margin-top:10px"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<script>
+(function () {
+  var API = (window.ADS_API_BASE || "https://api.aidatasignal.com").replace(/\/+$/, "");
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function tile(label, value, hint) {
+    return '<div style="background:#f6f7f9;border-radius:8px;padding:10px"><div style="font-size:10px;color:#666;text-transform:uppercase;letter-spacing:.05em">' + esc(label) + '</div><div style="font-size:22px;font-weight:600">' + esc(value) + '</div>' + (hint ? '<div style="font-size:10px;color:#888">' + esc(hint) + '</div>' : '') + '</div>';
+  }
+  function yieldBar(v) {
+    var pct = Math.round((v || 0) * 100);
+    var color = v > 0.6 ? "#2c8a3e" : v > 0.35 ? "#2c6eb5" : "#999";
+    return '<div style="display:inline-flex;align-items:center;gap:4px"><div style="width:40px;height:5px;background:#eee;border-radius:3px"><div style="width:' + pct + '%;height:100%;background:' + color + ';border-radius:3px"></div></div><span style="font-size:10px">' + pct + '%</span></div>';
+  }
+  async function loadMethods() {
+    try {
+      var r = await fetch(API + "/api/discovery/methods", { credentials: "include" });
+      var data = await r.json();
+      var host = document.getElementById("ads-disc-methods");
+      var select = document.getElementById("ads-disc-method");
+      host.innerHTML = "Methods: " + (data.methods || []).map(function (m) { return '<code style="background:#eef;padding:1px 5px;margin-right:3px;border-radius:3px">' + esc(m) + '</code>'; }).join("");
+      (data.methods || []).forEach(function (m) {
+        var opt = document.createElement("option"); opt.value = m; opt.textContent = m; select.appendChild(opt);
+      });
+    } catch (e) { /* ignore */ }
+  }
+  async function loadStats() {
+    try {
+      var r = await fetch(API + "/api/discovery/stats", { credentials: "include" });
+      var data = await r.json();
+      var statusMap = {}; (data.by_status || []).forEach(function (s) { statusMap[s.status] = s.n; });
+      document.getElementById("ads-disc-tiles").innerHTML =
+        tile("Discovered total", data.total) +
+        tile("In frontier",      data.frontier) +
+        tile("Queued",           statusMap.queued || 0) +
+        tile("Crawled",          statusMap.crawled || 0) +
+        tile("Rejected",         statusMap.rejected || 0) +
+        tile("Promoted",         statusMap.promoted || 0);
+      var bm = (data.by_method || []).sort(function (a, b) { return b.n - a.n; });
+      document.getElementById("ads-disc-bymethod").innerHTML =
+        '<div style="font-size:11px;color:#666;margin-bottom:4px">By method</div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
+        bm.map(function (m) { return '<span style="background:#eef;border-radius:4px;padding:2px 8px;font-size:11px">' + esc(m.discovery_method) + ' <strong>' + m.n + '</strong></span>'; }).join("") +
+        '</div>';
+      document.getElementById("ads-disc-updated").textContent = "Updated " + new Date().toLocaleTimeString();
+    } catch (e) { /* ignore */ }
+  }
+  async function loadUrls() {
+    var p = new URLSearchParams();
+    var s = document.getElementById("ads-disc-status").value;       if (s) p.set("status", s);
+    var m = document.getElementById("ads-disc-method").value;       if (m) p.set("method", m);
+    var y = document.getElementById("ads-disc-yield").value;        if (y) p.set("min_yield", y);
+    var h = document.getElementById("ads-disc-hostf").value.trim(); if (h) p.set("host", h);
+    p.set("limit", "200");
+    var host = document.getElementById("ads-disc-table");
+    host.innerHTML = '<div class="ads-loading">Loading…</div>';
+    try {
+      var r = await fetch(API + "/api/discovery/urls?" + p.toString(), { credentials: "include" });
+      var data = await r.json();
+      var items = data.items || [];
+      if (!items.length) { host.innerHTML = '<div class="ads-muted" style="font-size:13px">No URLs match.</div>'; return; }
+      host.innerHTML = '<table class="ads-table" style="width:100%;font-size:12px"><thead><tr><th>URL</th><th>Method</th><th>Depth</th><th>Yield</th><th>Kind</th><th>Status</th><th></th></tr></thead><tbody>' +
+        items.map(function (u) {
+          return '<tr>' +
+            '<td><a href="' + esc(u.url) + '" target="_blank" rel="noopener">' + esc(u.url) + '</a><div style="font-size:10px;color:#888">' + esc(u.host) + (u.link_text ? ' · "' + esc(u.link_text) + '"' : '') + '</div></td>' +
+            '<td><code style="font-size:10px;background:#eef;padding:1px 4px;border-radius:3px">' + esc(u.discovery_method) + '</code></td>' +
+            '<td>' + esc(u.depth) + '</td>' +
+            '<td>' + yieldBar(u.expected_yield_score) + '</td>' +
+            '<td><span class="ads-muted">' + esc(u.likely_kind || "—") + '</span></td>' +
+            '<td><span style="background:' + (u.status === "rejected" ? "#a33" : u.status === "crawled" ? "#2c8a3e" : u.status === "queued" ? "#2c6eb5" : "#7a5a00") + ';color:#fff;font-size:10px;padding:1px 6px;border-radius:8px">' + esc(u.status) + '</span></td>' +
+            '<td><button class="ads-btn" data-act="promote" data-id="' + esc(u.id) + '" style="font-size:10px;padding:2px 6px">Promote</button> ' +
+                '<button class="ads-btn" data-act="reject" data-id="' + esc(u.id) + '" style="font-size:10px;padding:2px 6px;background:#a33">Reject</button></td>' +
+          '</tr>';
+        }).join("") + '</tbody></table>';
+      host.querySelectorAll("tbody tr").forEach(function (tr, idx) {
+        tr.style.cursor = "pointer";
+        tr.addEventListener("click", function (ev) {
+          if (ev.target && ev.target.closest("button,a")) return;
+          renderGraph(items[idx].id);
+        });
+      });
+      host.querySelectorAll("button[data-act]").forEach(function (btn) {
+        btn.addEventListener("click", async function () {
+          var id = btn.getAttribute("data-id");
+          var act = btn.getAttribute("data-act");
+          await fetch(API + "/api/discovery/urls/" + encodeURIComponent(id) + "/" + act, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: "{}" });
+          loadUrls(); loadStats();
+        });
+      });
+    } catch (e) { host.innerHTML = '<div class="ads-muted">Failed: ' + esc(e.message) + '</div>'; }
+  }
+  document.getElementById("ads-disc-go").addEventListener("click", async function () {
+    var url = document.getElementById("ads-disc-url").value.trim();
+    if (!url) return;
+    var depth = Number(document.getElementById("ads-disc-depth").value) || 3;
+    var max_per_host = Number(document.getElementById("ads-disc-host").value) || 200;
+    this.disabled = true; this.textContent = "Running…";
+    try {
+      var r = await fetch(API + "/api/discovery/seed", { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: url, depth: depth, max_per_host: max_per_host }) });
+      var data = await r.json();
+      if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
+      loadStats(); loadUrls();
+    } catch (e) { alert("Seed failed: " + e.message); }
+    finally { this.disabled = false; this.textContent = "Seed"; }
+  });
+  document.getElementById("ads-disc-crawl").addEventListener("click", async function () {
+    this.disabled = true; this.textContent = "Crawling…";
+    try {
+      await fetch(API + "/api/discovery/crawl", { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ limit: 25 }) });
+      loadStats(); loadUrls();
+    } finally { this.disabled = false; this.textContent = "Crawl frontier"; }
+  });
+  async function renderGraph(rootId) {
+    var host = document.getElementById("ads-disc-graph");
+    host.innerHTML = '<div class="ads-loading" style="padding:20px">Building graph…</div>';
+    try {
+      var r = await fetch(API + "/api/discovery/graph/" + encodeURIComponent(rootId) + "?depth=2", { credentials: "include" });
+      var data = await r.json();
+      var nodes = data.nodes || [], edges = data.edges || [];
+      if (!nodes.length) { host.innerHTML = '<div class="ads-muted" style="padding:20px;font-size:12px">No graph data for this URL.</div>'; return; }
+      // Cheap radial layout: root at center, neighbors on rings by hop count.
+      var W = 720, H = 360, cx = W / 2, cy = H / 2;
+      var adj = {}; edges.forEach(function (e) { (adj[e.src] = adj[e.src] || []).push(e.dst); });
+      var depth = {}; depth[rootId] = 0;
+      var queue = [rootId];
+      while (queue.length) {
+        var cur = queue.shift();
+        (adj[cur] || []).forEach(function (n) { if (depth[n] == null) { depth[n] = depth[cur] + 1; queue.push(n); } });
+      }
+      var rings = {}; nodes.forEach(function (n) { var d = depth[n.id] != null ? depth[n.id] : 2; (rings[d] = rings[d] || []).push(n); });
+      var pos = {};
+      Object.keys(rings).forEach(function (d) {
+        var r = d == 0 ? 0 : 70 + (d - 1) * 90;
+        var arr = rings[d];
+        arr.forEach(function (n, i) {
+          var ang = (2 * Math.PI * i) / arr.length;
+          pos[n.id] = { x: cx + r * Math.cos(ang), y: cy + r * Math.sin(ang), node: n };
+        });
+      });
+      var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" height="360" style="display:block">';
+      edges.forEach(function (e) {
+        var a = pos[e.src], b = pos[e.dst]; if (!a || !b) return;
+        svg += '<line x1="' + a.x + '" y1="' + a.y + '" x2="' + b.x + '" y2="' + b.y + '" stroke="#bbb" stroke-width="' + Math.max(0.6, e.weight) + '" opacity="0.55"/>';
+      });
+      Object.keys(pos).forEach(function (id) {
+        var p = pos[id], n = p.node;
+        var color = id === rootId ? "#a33" : (n.yield > 0.6 ? "#2c8a3e" : n.yield > 0.35 ? "#2c6eb5" : "#888");
+        var radius = id === rootId ? 8 : 5;
+        svg += '<g><title>' + esc(n.url) + " (" + esc(n.method) + ", yield=" + esc(n.yield) + ')</title>';
+        svg += '<circle cx="' + p.x + '" cy="' + p.y + '" r="' + radius + '" fill="' + color + '" stroke="#fff" stroke-width="1"/>';
+        if (id === rootId || depth[id] === 1) {
+          svg += '<text x="' + (p.x + 8) + '" y="' + (p.y + 3) + '" font-size="9" fill="#333">' + esc(n.host || "") + '</text>';
+        }
+        svg += '</g>';
+      });
+      svg += '</svg>';
+      host.innerHTML = svg + '<div style="font-size:10px;color:#666;padding:0 8px 8px">Root: <code>' + esc(nodes.find(function (n) { return n.id === rootId; }) ? nodes.find(function (n) { return n.id === rootId; }).url : "") + '</code> · ' + nodes.length + ' nodes · ' + edges.length + ' edges</div>';
+    } catch (e) { host.innerHTML = '<div class="ads-muted" style="padding:20px">Graph failed: ' + esc(e.message) + '</div>'; }
+  }
+  document.getElementById("ads-disc-filter").addEventListener("click", loadUrls);
+  loadMethods(); loadStats(); loadUrls();
+  setInterval(loadStats, 5000);
+})();
+</script>

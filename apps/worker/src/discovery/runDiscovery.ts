@@ -1,0 +1,215 @@
+// Task #2: link discovery orchestrator.
+//
+// `runDiscoverFromSeed(env, opts)` is the entry point for both the
+// `DiscoverFromSeedWorkflow` and the synchronous `POST /api/discovery/seed`
+// route. It fans out across the enabled methods, canonicalizes + predicts
+// yield for every raw link, upserts into `discovered_urls`, edges into
+// `link_graph`, and queues high-yield candidates into `crawl_frontier`.
+//
+// `runCrawlFrontier(env, opts)` pops up to N URLs and fetches each,
+// then re-invokes runDiscoverFromSeed on the fetched HTML so discovery
+// fans out recursively. Bounded by depth + per-host caps.
+
+import type { Env } from "../types";
+import { fetchPage } from "../scraper/fetcher";
+import { canonicalizeUrl } from "./canonical";
+import {
+  ALL_METHOD_NAMES, methodOutbound, methodSitemap, methodRssAtom, methodOpengraph,
+  methodJsonLdSameAs, methodWayback, methodSisterPages, methodCitations,
+} from "./methods";
+import { predictYield } from "./predictYield";
+import {
+  upsertDiscoveredUrl, insertLinkEdge, enqueueFrontier, popFrontier,
+  markCrawled, markFrontierError,
+} from "./store.discovery";
+import { computePriority, assertHostPolite } from "./scheduler";
+
+export interface SeedOpts {
+  url: string;
+  depth?: number;             // current depth (default 0)
+  depthMax?: number;          // ceiling (default 3)
+  maxPerHost?: number;        // run-wide host cap (default 200)
+  methods?: string[];         // subset of ALL_METHOD_NAMES; default = all implemented
+  runId?: string;             // discovery_runs row id; created if missing
+  yieldThreshold?: number;    // min score to queue (default 0.35)
+  jobId?: string | null;      // legacy linkage
+  parentUrlId?: string | null;
+  html?: string;              // pre-fetched body, avoids a second GET
+}
+
+export interface SeedResult {
+  runId: string;
+  discovered: number;
+  queued: number;
+  rejected: number;
+  method_counts: Record<string, number>;
+}
+
+const IMPLEMENTED = new Set(["outbound", "sitemap", "rss_atom", "opengraph_meta", "jsonld_sameas", "archive_wayback", "sister_pages", "citations"]);
+
+export async function runDiscoverFromSeed(env: Env, opts: SeedOpts): Promise<SeedResult> {
+  const seedCanon = canonicalizeUrl(opts.url);
+  if (!seedCanon) throw new Error("invalid_seed_url");
+  const depth = opts.depth ?? 0;
+  const depthMax = opts.depthMax ?? 3;
+  const maxPerHost = opts.maxPerHost ?? 200;
+  const yieldThreshold = opts.yieldThreshold ?? 0.35;
+  const enabled = (opts.methods?.filter((m) => IMPLEMENTED.has(m)) ?? [...IMPLEMENTED]) as string[];
+
+  // Create or look up the run row.
+  const runId = opts.runId ?? crypto.randomUUID();
+  if (!opts.runId) {
+    await env.DB.prepare(
+      `INSERT INTO discovery_runs (id, seed_url, seed_host, depth_max, max_per_host, methods_json)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind(runId, seedCanon.url, seedCanon.host, depthMax, maxPerHost, JSON.stringify(enabled)).run();
+  }
+
+  // Insert the seed itself so edges have a parent.
+  let parentUrlId = opts.parentUrlId ?? null;
+  if (!parentUrlId) {
+    const seedRow = await upsertDiscoveredUrl(env, {
+      url: seedCanon.url,
+      discoveryMethod: "seed",
+      depth,
+      expectedYieldScore: 1.0,
+      status: "crawled",
+      jobId: opts.jobId ?? null,
+    });
+    parentUrlId = seedRow?.id ?? null;
+  }
+
+  // Fetch the seed HTML once so HTML-dependent methods share it.
+  let html: string | undefined = opts.html;
+  if (!html && (enabled.includes("outbound") || enabled.includes("opengraph_meta") || enabled.includes("jsonld_sameas") || enabled.includes("rss_atom") || enabled.includes("sister_pages"))) {
+    try {
+      const f = await fetchPage(env, seedCanon.url);
+      if (f.ok && f.html) html = f.html;
+    } catch (e) {
+      console.warn("seed fetch failed", (e as Error).message);
+    }
+  }
+
+  // Fan out across the enabled methods in parallel.
+  const methodFns: Record<string, () => Promise<{ url: string; link_text?: string | null; likely_kind?: string | null; method: string }[]>> = {
+    outbound:       () => methodOutbound(env, seedCanon.url, html),
+    sitemap:        () => methodSitemap(env, seedCanon.url),
+    rss_atom:       () => methodRssAtom(env, seedCanon.url, html),
+    opengraph_meta: () => methodOpengraph(env, seedCanon.url, html),
+    jsonld_sameas:  () => methodJsonLdSameAs(env, seedCanon.url, html),
+    archive_wayback:() => methodWayback(env, seedCanon.url),
+    sister_pages:   () => methodSisterPages(env, seedCanon.url, html),
+    citations:      () => methodCitations(env, seedCanon.url),
+  };
+  const settled = await Promise.allSettled(enabled.map(async (name) => ({ name, links: await methodFns[name]() })));
+
+  // Per-host counter for diversity bias.
+  const hostCount: Record<string, number> = {};
+  const method_counts: Record<string, number> = {};
+  let discovered = 0, queued = 0, rejected = 0;
+
+  for (const s of settled) {
+    if (s.status !== "fulfilled") continue;
+    const { name, links } = s.value;
+    method_counts[name] = (method_counts[name] ?? 0) + links.length;
+    for (const raw of links) {
+      const c = canonicalizeUrl(raw.url);
+      if (!c) continue;
+      // Per-host cap.
+      hostCount[c.host] = (hostCount[c.host] ?? 0) + 1;
+      if (hostCount[c.host] > maxPerHost) { rejected++; continue; }
+      // Don't re-insert the seed itself.
+      if (c.canonical === seedCanon.canonical) continue;
+
+      const verdict = await predictYield(env, { url: c.url, method: name, depth: depth + 1, link_text: raw.link_text });
+      const row = await upsertDiscoveredUrl(env, {
+        url: c.url,
+        discoveredFromUrl: seedCanon.url,
+        discoveredFromId: parentUrlId,
+        discoveryMethod: name,
+        depth: depth + 1,
+        linkText: raw.link_text ?? null,
+        likelyKind: raw.likely_kind ?? verdict.predicted_kind,
+        expectedYieldScore: verdict.yield_score,
+        jobId: opts.jobId ?? null,
+      });
+      if (!row) continue;
+      if (row.created) discovered++;
+      if (parentUrlId) await insertLinkEdge(env, parentUrlId, row.id, name, verdict.yield_score);
+      if (!row.rejected && verdict.yield_score >= yieldThreshold && (depth + 1) <= depthMax) {
+        const prio = computePriority({
+          yield_score: verdict.yield_score,
+          depth: depth + 1,
+          host: c.host,
+          host_fetch_count_in_run: hostCount[c.host],
+          max_per_host: maxPerHost,
+        });
+        await enqueueFrontier(env, row.id, prio);
+        queued++;
+      } else if (row.rejected) {
+        rejected++;
+      }
+    }
+  }
+
+  // Update the run row aggregates.
+  await env.DB.prepare(
+    `UPDATE discovery_runs SET
+       discovered = discovered + ?,
+       queued = queued + ?,
+       status = 'running'
+     WHERE id = ?`,
+  ).bind(discovered, queued, runId).run();
+
+  return { runId, discovered, queued, rejected, method_counts };
+}
+
+export interface FrontierOpts {
+  runId?: string;
+  limit?: number;
+  depthMax?: number;
+  maxPerHost?: number;
+  yieldThreshold?: number;
+}
+
+export async function runCrawlFrontier(env: Env, opts: FrontierOpts = {}): Promise<{ scanned: number; fetched: number; recursed: number; errors: number }> {
+  const limit = opts.limit ?? 25;
+  const items = await popFrontier(env, limit);
+  let fetched = 0, recursed = 0, errors = 0;
+
+  for (const it of items) {
+    if (!(await assertHostPolite(env, it.host))) {
+      // Skip — leave on the frontier with a future re-attempt window.
+      await markFrontierError(env, it.url_id, "host_rate_limited");
+      continue;
+    }
+    try {
+      const f = await fetchPage(env, it.url);
+      if (!f.ok || !f.html) {
+        errors++;
+        await markFrontierError(env, it.url_id, `fetch_${f.status ?? "fail"}`);
+        continue;
+      }
+      fetched++;
+      // Recurse: discover from this page. Bumps depth.
+      const r = await runDiscoverFromSeed(env, {
+        url: it.url,
+        depth: it.depth,
+        depthMax: opts.depthMax ?? 3,
+        maxPerHost: opts.maxPerHost ?? 200,
+        yieldThreshold: opts.yieldThreshold ?? 0.4,
+        runId: opts.runId,
+        parentUrlId: it.url_id,
+        html: f.html,
+      });
+      recursed += r.discovered;
+      await markCrawled(env, it.url_id, []);
+    } catch (e) {
+      errors++;
+      await markFrontierError(env, it.url_id, (e as Error).message.slice(0, 200));
+    }
+  }
+  return { scanned: items.length, fetched, recursed, errors };
+}
+
+export { ALL_METHOD_NAMES };

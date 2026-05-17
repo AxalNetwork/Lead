@@ -245,6 +245,17 @@ binding = "WF_REFRESH_GOVERNMENT"
 name = "refresh-government"
 class_name = "RefreshGovernmentWorkflow"
 
+# Task #2: link discovery — seed fan-out + frontier crawler.
+[[workflows]]
+binding = "WF_DISCOVER_FROM_SEED"
+name = "discover-from-seed"
+class_name = "DiscoverFromSeedWorkflow"
+
+[[workflows]]
+binding = "WF_CRAWL_FRONTIER"
+name = "crawl-frontier"
+class_name = "CrawlFrontierWorkflow"
+
 [[queues.producers]]
 binding = "LEAD_QUEUE"
 queue = "aidatasignal-lead-jobs"
