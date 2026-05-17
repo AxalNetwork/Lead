@@ -104,16 +104,22 @@ CREATE TABLE IF NOT EXISTS persona_match_manual_overrides (
 
 -- Hard-fail guard: if the legacy persona_matches table has ANY rows
 -- but persona_match_manual_overrides is empty, abort the migration
--- with a division-by-zero so manual pins are not silently downgraded
--- to source='auto'. Operator must populate the overrides table first
--- (see PERSONA_MATCHING.md runbook). Greenfield deploys (legacy
--- empty) pass through cleanly.
+-- via a CHECK constraint violation so manual pins are not silently
+-- downgraded to source='auto'. SQLite's `1/0` evaluates to NULL (not
+-- an error) so it can't be used as an abort primitive; a CHECK on a
+-- temp table is the portable D1/SQLite-aborting pattern. Greenfield
+-- deploys (legacy empty) insert ok=1 and pass through cleanly.
+CREATE TEMP TABLE _migration_331_guard (
+  ok INTEGER NOT NULL CHECK (ok = 1)  -- CHECK fires: manual_overrides_missing
+);
+INSERT INTO _migration_331_guard (ok)
 SELECT CASE
   WHEN EXISTS (SELECT 1 FROM persona_matches LIMIT 1)
    AND NOT EXISTS (SELECT 1 FROM persona_match_manual_overrides LIMIT 1)
-  THEN 1/0  -- ABORT: populate persona_match_manual_overrides before applying migration 331
-  ELSE 0
+  THEN 0  -- triggers CHECK violation → migration aborts
+  ELSE 1
 END;
+DROP TABLE _migration_331_guard;
 
 -- Persona/entity title-embedding caches. The matcher reads from these
 -- BEFORE calling AI.embed, so per-entity scoring becomes a D1 lookup

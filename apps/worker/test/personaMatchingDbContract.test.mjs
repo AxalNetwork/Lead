@@ -89,6 +89,66 @@ test("persona_entity_matches: auto re-score bumps score + last_scored_at", () =>
   assert.notEqual(row.last_scored_at, "2020-01-01T00:00:00Z");
 });
 
+test("migration 331 hard-fails when legacy persona_matches has rows but overrides empty", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec(`
+    CREATE TABLE personas (id TEXT PRIMARY KEY, name TEXT, status TEXT, deleted_at TEXT);
+    CREATE TABLE u_entities (id TEXT PRIMARY KEY, kind TEXT, status TEXT, display_name TEXT, quality_score REAL);
+    CREATE TABLE persona_matches (
+      persona_id TEXT NOT NULL, entity_kind TEXT, entity_id TEXT NOT NULL,
+      fit_score REAL, hard_filter_pass INTEGER, components_json TEXT,
+      explanation TEXT, explanation_at TEXT, persona_modified_at TEXT,
+      entity_modified_at TEXT, computed_at TEXT,
+      PRIMARY KEY (persona_id, entity_kind, entity_id)
+    );
+    INSERT INTO personas(id,name,status) VALUES('p-legacy','x','active');
+    INSERT INTO u_entities(id,kind,status,display_name,quality_score) VALUES('e-legacy','person','active','x',1);
+    INSERT INTO persona_matches(persona_id, entity_kind, entity_id, fit_score)
+      VALUES('p-legacy','person','e-legacy',0.99);
+  `);
+  const sql = readFileSync(migPath, "utf8");
+  assert.throws(() => db.exec(sql), /CHECK constraint failed|constraint failed/i,
+    "migration must abort when legacy rows exist and overrides are empty");
+});
+
+test("migration 331 passes when legacy rows exist AND overrides pre-populated", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec(`
+    CREATE TABLE personas (id TEXT PRIMARY KEY, name TEXT, status TEXT, deleted_at TEXT);
+    CREATE TABLE u_entities (id TEXT PRIMARY KEY, kind TEXT, status TEXT, display_name TEXT, quality_score REAL);
+    CREATE TABLE persona_matches (
+      persona_id TEXT NOT NULL, entity_kind TEXT, entity_id TEXT NOT NULL,
+      fit_score REAL, hard_filter_pass INTEGER, components_json TEXT,
+      explanation TEXT, explanation_at TEXT, persona_modified_at TEXT,
+      entity_modified_at TEXT, computed_at TEXT,
+      PRIMARY KEY (persona_id, entity_kind, entity_id)
+    );
+    CREATE TABLE persona_match_manual_overrides (
+      persona_id TEXT NOT NULL, entity_id TEXT NOT NULL,
+      PRIMARY KEY (persona_id, entity_id)
+    );
+    CREATE TABLE entity_legacy_map (
+      legacy_table TEXT NOT NULL, legacy_id TEXT NOT NULL, entity_id TEXT NOT NULL,
+      PRIMARY KEY (legacy_table, legacy_id)
+    );
+    INSERT INTO personas(id,name,status) VALUES('p-legacy','x','active');
+    INSERT INTO u_entities(id,kind,status,display_name,quality_score) VALUES('e-legacy','person','active','x',1);
+    -- pm.entity_kind='account' maps to elm.legacy_table='accounts'.
+    INSERT INTO persona_matches(persona_id, entity_kind, entity_id, fit_score)
+      VALUES('p-legacy','account','legacy-acct-1',0.99);
+    INSERT INTO entity_legacy_map(legacy_table, legacy_id, entity_id)
+      VALUES('accounts','legacy-acct-1','e-legacy');
+    INSERT INTO persona_match_manual_overrides(persona_id, entity_id)
+      VALUES('p-legacy','e-legacy');
+  `);
+  const sql = readFileSync(migPath, "utf8");
+  assert.doesNotThrow(() => db.exec(sql));
+  const row = db.prepare(
+    `SELECT source FROM persona_entity_matches WHERE persona_id='p-legacy' AND entity_id='e-legacy'`,
+  ).get();
+  assert.equal(row?.source, "manual", "pre-populated override must stamp source='manual'");
+});
+
 test("persona_match_jobs accepts all status enums and records slo_violation flag", () => {
   const db = bootDb();
   for (const status of ["ok", "halted", "failed", "cancelled"]) {
