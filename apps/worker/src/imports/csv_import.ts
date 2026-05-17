@@ -252,9 +252,14 @@ export async function processCsvImport(env: Env, importId: string, opts: { insid
     try { await reader.cancel(); } catch { /* swallow */ }
 
     if (needsManualMapping) {
+      // Preserve the proposed (fallback or partial) mapping in
+      // detected_columns_json so the operator sees what the system
+      // inferred and can confirm/edit it. Empty object only when
+      // detection truly produced nothing.
+      const proposedJson = detected ? JSON.stringify(detected) : "{}";
       await env.DB.prepare(
-        "UPDATE csv_imports SET status = 'needs_manual_mapping', detected_columns_json = '{}', updated_at = ? WHERE id = ?",
-      ).bind(new Date().toISOString(), importId).run();
+        "UPDATE csv_imports SET status = 'needs_manual_mapping', detected_columns_json = ?, updated_at = ? WHERE id = ?",
+      ).bind(proposedJson, new Date().toISOString(), importId).run();
       return;
     }
     if (detected && pendingRows.length) await flushBatch();
@@ -438,17 +443,17 @@ async function detectSchema(env: Env, headers: string[], sample: string[][]): Pr
       console.warn("detectSchema attempt failed", attempt, (e as Error).message);
     }
   }
-  // Both AI attempts failed validation. Deterministic fallback per
-  // task spec: pick the longest avg non-URL/non-type column as
-  // firm.name. The caller is still expected to surface this for
-  // operator review (the returned column_map carries a `fallback:`
-  // notes marker that the handler uses to set
-  // status='needs_manual_mapping' so the operator confirms before
-  // bulk inserts proceed) — i.e. NOT silently accepted as final.
-  if (lastParsed) {
-    const repaired = repairNameMapping(lastParsed, headers, sample);
-    if (repaired) return repaired;
-  }
+  // Both AI attempts failed validation (or failed to parse). Run the
+  // deterministic fallback per task spec: pick the longest avg
+  // non-URL/non-type column as firm.name. When AI returned nothing
+  // parseable at all, seed the repair with the heuristicDetect
+  // mapping so other predicates (website, country, etc.) still get
+  // their best-effort assignment. Caller marks
+  // status='needs_manual_mapping' on any column carrying the
+  // `fallback:` notes marker — not silently accepted as final.
+  const seed = lastParsed ?? heuristicDetect(headers);
+  const repaired = repairNameMapping(seed, headers, sample);
+  if (repaired) return repaired;
   return null;
 }
 
