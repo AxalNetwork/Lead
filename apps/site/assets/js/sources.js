@@ -168,7 +168,7 @@
 
   async function reload() {
     try {
-      const j = await jget("/api/sources/");
+      const j = await jget("/api/sources");
       allItems = j.items || [];
       refreshFacets();
       renderStats(j.stats);
@@ -314,7 +314,7 @@
       };
       $("ads-src-add-err").textContent = "";
       try {
-        await jsend("POST", "/api/sources/", body);
+        await jsend("POST", "/api/sources", body);
         $("ads-src-add-modal").hidden = true;
         await reload();
       } catch (e) { $("ads-src-add-err").textContent = "Save failed: " + e.message; }
