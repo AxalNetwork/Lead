@@ -151,6 +151,28 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       // persona_entity_matches rows older than 30 days. Bounded by
       // limit so a single tick fits in the cron window.
       try {
+        // Migration-order guard: if 331's safety stubs are the only
+        // copies of persona_matches / entity_legacy_map / u_entities
+        // in this DB, the canonical migrations (170/200/280) never
+        // ran here. Fail loudly so ops sees it instead of silently
+        // matching against empty stubs in production.
+        try {
+          const stubCheck = await env.DB.prepare(
+            `SELECT name FROM sqlite_master WHERE type='table' AND name='u_entities'`,
+          ).first<{ name: string }>();
+          if (stubCheck) {
+            const colInfo = await env.DB.prepare(`PRAGMA table_info(u_entities)`).all<{ name: string }>();
+            const cols = (colInfo.results ?? []).map((c) => c.name);
+            // Canonical u_entities (mig 200) has display_name + quality_score;
+            // the stub only carries id/kind/status. Missing cols => stub is canonical.
+            if (!cols.includes("display_name") || !cols.includes("quality_score")) {
+              console.error("SLO_VIOLATION migration_order_stub_active u_entities — apply migration 200 before relying on 331");
+            }
+          }
+        } catch (e) {
+          console.warn("migration-order guard failed", (e as Error).message);
+        }
+
         if (env.WF_PERSONA_MATCH_REFRESH) {
           await env.WF_PERSONA_MATCH_REFRESH.create({ params: { limit: 500, staleDays: 30 } });
           console.log("persona-match-refresh workflow dispatched");
