@@ -135,6 +135,46 @@ function checkConfirmation(action: BulkAction, ids: string[], body: BulkBody): C
 // translated via entity_legacy_map. Returned `resolution` maps each
 // original input id to its u_entities.id (when found). Visible = those
 // resolved ids whose u_entities row exists and isn't soft_deleted.
+// Owner-isolation: drop any resolved entity that the caller doesn't own
+// via the legacy owner_email columns (leads.owner_email,
+// accounts.owner_email). u_entities itself has no owner column, so an
+// entity that has no legacy lead/account row passes through (it was
+// produced by the platform, not by a per-user import). Today there is a
+// single allowlisted operator, so this is a forward-compatibility net;
+// once multi-operator lands the helper is the single chokepoint that
+// has to be tightened.
+async function filterByOwner(env: Env, email: string, entityIds: string[]): Promise<Set<string>> {
+  if (!entityIds.length) return new Set();
+  const ph = entityIds.map(() => "?").join(",");
+  const rows = await env.DB.prepare(
+    `SELECT m.entity_id, COALESCE(l.owner_email, a.owner_email) AS owner_email
+       FROM entity_legacy_map m
+       LEFT JOIN leads l    ON m.legacy_table = 'leads'    AND l.id = m.legacy_id
+       LEFT JOIN accounts a ON m.legacy_table = 'accounts' AND a.id = m.legacy_id
+      WHERE m.entity_id IN (${ph})`,
+  ).bind(...entityIds).all<{ entity_id: string; owner_email: string | null }>();
+  // Group by entity_id; entity is dropped only if *every* legacy row
+  // has a non-null owner that doesn't match the caller. If at least
+  // one legacy mapping is owned-by-caller OR has no owner at all, the
+  // entity is visible.
+  const ownerByEntity = new Map<string, { hasUnowned: boolean; ownedByCaller: boolean; hasAnyForeign: boolean }>();
+  for (const r of (rows.results ?? [])) {
+    const cur = ownerByEntity.get(r.entity_id) ?? { hasUnowned: false, ownedByCaller: false, hasAnyForeign: false };
+    if (r.owner_email == null) cur.hasUnowned = true;
+    else if (r.owner_email === email) cur.ownedByCaller = true;
+    else cur.hasAnyForeign = true;
+    ownerByEntity.set(r.entity_id, cur);
+  }
+  const visible = new Set<string>();
+  for (const id of entityIds) {
+    const o = ownerByEntity.get(id);
+    if (!o) { visible.add(id); continue; }              // no legacy mapping → modern row, visible
+    if (o.ownedByCaller || o.hasUnowned) visible.add(id);
+    // else: entity is owned exclusively by another operator → drop
+  }
+  return visible;
+}
+
 async function resolveAndFilter(env: Env, ids: string[]): Promise<{
   visible: string[];           // u_entities.id list (deduplicated, ordered by first appearance)
   dropped: string[];           // original input ids that couldn't be resolved or are soft-deleted
@@ -166,7 +206,7 @@ async function resolveAndFilter(env: Env, ids: string[]): Promise<{
 
   const inputToEntity = new Map<string, string>();
   const visibleSet = new Set<string>();
-  const visible: string[] = [];
+  const candidates: string[] = [];
   const dropped: string[] = [];
   for (const id of ids) {
     let resolved: string | undefined;
@@ -176,10 +216,28 @@ async function resolveAndFilter(env: Env, ids: string[]): Promise<{
     inputToEntity.set(id, resolved);
     if (!visibleSet.has(resolved)) {
       visibleSet.add(resolved);
-      visible.push(resolved);
+      candidates.push(resolved);
     }
   }
-  return { visible, dropped, inputToEntity };
+  return { visible: candidates, dropped, inputToEntity };
+}
+
+// Resolve + apply owner-isolation. All bulk endpoints go through this
+// so foreign-owned rows are silently dropped (and reported under
+// `dropped`) per the spec.
+async function resolveScoped(env: Env, email: string, ids: string[]): Promise<{
+  visible: string[]; dropped: string[]; inputToEntity: Map<string, string>;
+}> {
+  const r = await resolveAndFilter(env, ids);
+  if (!r.visible.length) return r;
+  const owned = await filterByOwner(env, email, r.visible);
+  const visible = r.visible.filter((x) => owned.has(x));
+  if (visible.length === r.visible.length) return r;
+  const droppedExtra: string[] = [];
+  for (const [input, ent] of r.inputToEntity.entries()) {
+    if (!owned.has(ent) && !r.dropped.includes(input)) droppedExtra.push(input);
+  }
+  return { visible, dropped: r.dropped.concat(droppedExtra), inputToEntity: r.inputToEntity };
 }
 
 interface IdempotencyClaim { operation_id: string; reused: boolean; action_mismatch?: BulkAction; }
@@ -252,7 +310,7 @@ bulk.post("/assign-role", async (c) => {
     return c.json({ ok: true, operation_id: claim.operation_id, reused: true }, 200);
   }
 
-  const { visible, dropped } = await resolveAndFilter(c.env, ids);
+  const { visible, dropped } = await resolveScoped(c.env, email, ids);
   let mutated = 0;
   for (const entityId of visible) {
     const before = await c.env.DB.prepare(
@@ -260,24 +318,21 @@ bulk.post("/assign-role", async (c) => {
     ).bind(entityId, role).first<{ id: number; role: string; is_primary: number; source: string | null }>();
     if (remove) {
       if (!before) continue;
-      // Per-entity atomicity: audit + mutation as a single D1.batch().
+      // Per-entity atomicity, audit-BEFORE-mutation. If the batch
+      // half-applies, the audit row is the surviving record.
       await c.env.DB.batch([
-        c.env.DB.prepare(`DELETE FROM entity_roles WHERE entity_id = ? AND role = ?`).bind(entityId, role),
         auditStmt(c.env, opId, "assign_role", entityId,
           { exists: true, role, source: before.source }, { exists: false, role }, email),
+        c.env.DB.prepare(`DELETE FROM entity_roles WHERE entity_id = ? AND role = ?`).bind(entityId, role),
       ]);
       mutated += 1;
     } else {
       if (before) continue; // already present — no-op, no audit row.
-      // Use canonical addRole helper so role-assignment rules (ON CONFLICT,
-      // is_primary/confidence semantics) stay in one place, then write the
-      // audit row. addRole is itself idempotent, so the worst-case retry
-      // is a no-op DB write.
+      // Audit before the role write so that a partial failure still
+      // leaves an undo-able audit row. addRole is idempotent.
+      await auditStmt(c.env, opId, "assign_role", entityId,
+        { exists: false, role }, { exists: true, role, source: "bulk" }, email).run();
       await addRole(c.env, entityId, role, { source: "bulk" });
-      await c.env.DB.batch([
-        auditStmt(c.env, opId, "assign_role", entityId,
-          { exists: false, role }, { exists: true, role, source: "bulk" }, email),
-      ]);
       mutated += 1;
     }
   }
@@ -305,16 +360,17 @@ bulk.post("/add-tag", async (c) => {
     return c.json({ ok: true, operation_id: claim.operation_id, reused: true }, 200);
   }
 
-  const { visible, dropped } = await resolveAndFilter(c.env, ids);
+  const { visible, dropped } = await resolveScoped(c.env, email, ids);
   let mutated = 0;
   for (const entityId of visible) {
     const existed = await c.env.DB.prepare(
       `SELECT id FROM entity_tags WHERE entity_id = ? AND taxonomy = ? AND slug = ?`,
     ).bind(entityId, taxonomy, slug).first<{ id: number }>();
     if (existed) continue;
-    await addTag(c.env, { entity_id: entityId, taxonomy: taxonomy as Taxonomy, slug, source: "bulk" });
+    // Audit before mutation (addTag is idempotent on conflict).
     await writeAudit(c.env, opId, "add_tag", entityId,
       { exists: false, taxonomy, slug }, { exists: true, taxonomy, slug }, email);
+    await addTag(c.env, { entity_id: entityId, taxonomy: taxonomy as Taxonomy, slug, source: "bulk" });
     mutated += 1;
   }
   return c.json({ ok: true, operation_id: opId, affected: mutated, dropped, taxonomy, slug }, 200);
@@ -338,7 +394,7 @@ bulk.post("/enrich", async (c) => {
     return c.json({ ok: true, operation_id: claim.operation_id, reused: true }, 200);
   }
 
-  const { visible, dropped } = await resolveAndFilter(c.env, ids);
+  const { visible, dropped } = await resolveScoped(c.env, email, ids);
 
   // 7-day cap: skip any entity that was already part of a successful
   // `enrich` bulk dispatch in the last 7 days (per audit). The cap is
@@ -405,7 +461,7 @@ bulk.post("/merge", async (c) => {
     return c.json({ ok: true, operation_id: claim.operation_id, reused: true }, 200);
   }
 
-  const { visible: visibleMerge, dropped, inputToEntity } = await resolveAndFilter(c.env, [canonicalId, ...mergeIds]);
+  const { visible: visibleMerge, dropped, inputToEntity } = await resolveScoped(c.env, email, [canonicalId, ...mergeIds]);
   const canonicalResolved = inputToEntity.get(canonicalId);
   if (!canonicalResolved || !visibleMerge.includes(canonicalResolved)) {
     return c.json({ error: "not_found", message: "canonical_id not visible" }, 404);
@@ -444,17 +500,17 @@ bulk.post("/delete", async (c) => {
     return c.json({ ok: true, operation_id: claim.operation_id, reused: true }, 200);
   }
 
-  const { visible, dropped } = await resolveAndFilter(c.env, ids);
+  const { visible, dropped } = await resolveScoped(c.env, email, ids);
   let mutated = 0;
   for (const entityId of visible) {
     const before = await c.env.DB.prepare(`SELECT status FROM u_entities WHERE id = ?`)
       .bind(entityId).first<{ status: string }>();
     if (!before || before.status === "soft_deleted") continue;
-    // Per-entity atomicity: status flip + audit in one D1.batch().
+    // Per-entity atomicity, audit BEFORE mutation in one D1.batch().
     await c.env.DB.batch([
-      c.env.DB.prepare(`UPDATE u_entities SET status = 'soft_deleted', updated_at = datetime('now') WHERE id = ?`).bind(entityId),
       auditStmt(c.env, opId, "delete", entityId,
         { status: before.status }, { status: "soft_deleted" }, email),
+      c.env.DB.prepare(`UPDATE u_entities SET status = 'soft_deleted', updated_at = datetime('now') WHERE id = ?`).bind(entityId),
     ]);
     mutated += 1;
   }
@@ -485,7 +541,7 @@ bulk.post("/export", async (c) => {
     if (claim.action_mismatch) return c.json({ error: "idempotency_action_mismatch", message: `key already used for action: ${claim.action_mismatch}` }, 409);
     return c.json({ ok: true, operation_id: claim.operation_id, reused: true, note: "export already generated for this key; re-download via the original response" }, 200);
   }
-  const { visible } = await resolveAndFilter(c.env, ids);
+  const { visible } = await resolveScoped(c.env, email, ids);
 
   const env = c.env;
   const headers = ["id", "kind", "display_name", "primary_domain", "primary_email_key", "primary_linkedin_key", "status", "quality_score", "updated_at"];

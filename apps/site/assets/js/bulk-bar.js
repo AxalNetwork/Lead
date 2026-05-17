@@ -238,7 +238,7 @@
       if (act === "add-tag") return openAddTag(ids);
       if (act === "enrich") return confirmAndRun("enrich", ids, "/api/bulk/enrich", { entity_ids: ids });
       if (act === "merge") return openMerge(ids);
-      if (act === "export") return runExport(ids);
+      if (act === "export") return confirmAndExport(ids);
       if (act === "delete") return confirmAndRun("delete", ids, "/api/bulk/delete", { entity_ids: ids });
     });
 
@@ -370,13 +370,27 @@
       });
     }
 
-    function runExport(ids) {
+    // Route export through the same >100 / >1000 / CONFIRM
+    // confirmation flow as every other bulk action.
+    function confirmAndExport(ids) {
+      var n = ids.length;
+      var run = function (extra) { runExport(ids, extra || {}); };
+      if (n > 1000) {
+        promptConfirmation("export", { requires_strict_confirmation: true, affected_count: n, sample: ids.slice(0, 5) }, run);
+      } else if (n > 100) {
+        promptConfirmation("export", { requires_confirmation: true, affected_count: n, sample: ids.slice(0, 5) }, run);
+      } else {
+        run();
+      }
+    }
+    function runExport(ids, extra) {
       var idem = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
+      var body = Object.assign({ entity_ids: ids }, extra || {});
       fetch(API + "/api/bulk/export", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json", "Idempotency-Key": idem },
-        body: JSON.stringify({ entity_ids: ids }),
+        body: JSON.stringify(body),
       }).then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.blob().then(function (b) { return { blob: b, opId: r.headers.get("X-Operation-Id") }; });
