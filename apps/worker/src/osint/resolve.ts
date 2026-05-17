@@ -112,23 +112,64 @@ export async function acquireEntityLock(env: Env, entityId: string): Promise<() 
   } catch { return async () => undefined; }
 }
 
-async function upsertActiveHandle(env: Env, entityId: string, h: { platform: string; handle: string; url?: string; link_method: string; final_confidence: number; evidence_json: Record<string, unknown>; corroborations: number }): Promise<void> {
+// True when the error message indicates the partial unique index on
+// (platform, handle) WHERE is_active=1 blocked the attach because the
+// same external handle is already active on a DIFFERENT entity.
+function isCrossEntityUniqueViolation(err: unknown): boolean {
+  const m = (err as Error)?.message ?? "";
+  return /UNIQUE constraint failed/i.test(m) && /idx_ih_active_global_ph|identity_handles\.platform/i.test(m);
+}
+
+export async function attachHandleOrQueueMerge(
+  env: Env,
+  entityId: string,
+  h: { platform: string; handle: string; url?: string; link_method: string; final_confidence: number; evidence_json: Record<string, unknown>; corroborations: number },
+): Promise<{ attached: boolean; queuedMergeReview: boolean }> {
   const id = crypto.randomUUID();
-  await env.DB.prepare(
-    `INSERT INTO identity_handles (id, entity_id, platform, handle, url, link_method, link_confidence, evidence_json, is_active, last_verified_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'))
-     ON CONFLICT(entity_id, platform, handle) DO UPDATE SET
-       url = COALESCE(excluded.url, identity_handles.url),
-       link_method = excluded.link_method,
-       link_confidence = max(identity_handles.link_confidence, excluded.link_confidence),
-       evidence_json = excluded.evidence_json,
-       is_active = 1,
-       last_verified_at = datetime('now'),
-       updated_at = datetime('now')`,
-  ).bind(
-    id, entityId, h.platform, h.handle.toLowerCase(), h.url ?? null, h.link_method,
-    h.final_confidence, JSON.stringify({ ...h.evidence_json, corroborations: h.corroborations }),
-  ).run();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO identity_handles (id, entity_id, platform, handle, url, link_method, link_confidence, evidence_json, is_active, last_verified_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'))
+       ON CONFLICT(entity_id, platform, handle) DO UPDATE SET
+         url = COALESCE(excluded.url, identity_handles.url),
+         link_method = excluded.link_method,
+         link_confidence = max(identity_handles.link_confidence, excluded.link_confidence),
+         evidence_json = excluded.evidence_json,
+         is_active = 1,
+         last_verified_at = datetime('now'),
+         updated_at = datetime('now')`,
+    ).bind(
+      id, entityId, h.platform, h.handle.toLowerCase(), h.url ?? null, h.link_method,
+      h.final_confidence, JSON.stringify({ ...h.evidence_json, corroborations: h.corroborations }),
+    ).run();
+    return { attached: true, queuedMergeReview: false };
+  } catch (e) {
+    if (!isCrossEntityUniqueViolation(e)) throw e;
+    // Surface the conflict as a merge-review candidate so an operator
+    // can decide whether the two entities should be merged, or one of
+    // the links is wrong.
+    const owner = await env.DB.prepare(
+      `SELECT entity_id FROM identity_handles
+         WHERE platform = ? AND handle = ? AND is_active = 1 LIMIT 1`,
+    ).bind(h.platform, h.handle.toLowerCase()).first<{ entity_id: string }>();
+    await env.DB.prepare(
+      `INSERT INTO handle_candidates (id, entity_id, platform, handle, url, link_method, link_confidence, evidence_json, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+       ON CONFLICT(platform, handle, entity_id) DO UPDATE SET
+         link_method = 'merge_review',
+         evidence_json = excluded.evidence_json,
+         updated_at = datetime('now')`,
+    ).bind(
+      crypto.randomUUID(), entityId, h.platform, h.handle.toLowerCase(), h.url ?? null,
+      "merge_review", h.final_confidence,
+      JSON.stringify({ ...h.evidence_json, queue_reason: "cross_entity_handle_conflict", conflicting_entity_id: owner?.entity_id ?? null, corroborations: h.corroborations }),
+    ).run();
+    return { attached: false, queuedMergeReview: true };
+  }
+}
+
+async function upsertActiveHandle(env: Env, entityId: string, h: { platform: string; handle: string; url?: string; link_method: string; final_confidence: number; evidence_json: Record<string, unknown>; corroborations: number }): Promise<void> {
+  await attachHandleOrQueueMerge(env, entityId, h);
 }
 
 async function insertCandidate(env: Env, entityId: string, h: { platform: string; handle: string; url?: string; link_method: string; final_confidence: number; evidence_json: Record<string, unknown>; corroborations: number }, reason: string): Promise<void> {

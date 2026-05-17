@@ -162,6 +162,69 @@ test("acceptance (c): common handle 'admin' produces zero auto-links", async () 
   assert.equal(d.eligible, false);
 });
 
+test("integration: global uniqueness — same (platform, handle) on a second entity queues merge_review and does NOT attach", async () => {
+  const { attachHandleOrQueueMerge } = await import(`${ROOT}/osint/resolve.js`);
+  // Simulate the partial unique index on (platform, handle) WHERE is_active=1
+  // by tracking active rows in-memory and throwing the exact SQLite error
+  // string our code matches on.
+  const active = new Map(); // key=platform|handle → entity_id
+  const candidates = [];
+  let lookupOwner = null;
+  const env = {
+    DB: {
+      prepare(sql) {
+        let binds = [];
+        return {
+          bind(...a) { binds = a; return this; },
+          async first() {
+            if (/SELECT entity_id FROM identity_handles/.test(sql)) {
+              return lookupOwner ? { entity_id: lookupOwner } : null;
+            }
+            return null;
+          },
+          async run() {
+            if (/^\s*INSERT INTO identity_handles/i.test(sql)) {
+              const [, entityId, platform, handle] = binds;
+              const key = `${platform}|${handle}`;
+              const owner = active.get(key);
+              if (owner && owner !== entityId) {
+                lookupOwner = owner;
+                throw new Error("D1_ERROR: UNIQUE constraint failed: idx_ih_active_global_ph");
+              }
+              active.set(key, entityId);
+              return { meta: { changes: 1 } };
+            }
+            if (/^\s*INSERT INTO handle_candidates/i.test(sql)) {
+              candidates.push({ sql, binds });
+              return { meta: { changes: 1 } };
+            }
+            return { meta: { changes: 0 } };
+          },
+        };
+      },
+    },
+  };
+  // First attach succeeds for entity_A
+  const a = await attachHandleOrQueueMerge(env, "entity_A", {
+    platform: "github", handle: "alice", link_method: "keybase",
+    final_confidence: 0.98, evidence_json: {}, corroborations: 1,
+  });
+  assert.equal(a.attached, true);
+  assert.equal(a.queuedMergeReview, false);
+  // Second attach for entity_B on same (github, alice) must NOT attach
+  const b = await attachHandleOrQueueMerge(env, "entity_B", {
+    platform: "github", handle: "alice", link_method: "username",
+    final_confidence: 0.91, evidence_json: {}, corroborations: 2,
+  });
+  assert.equal(b.attached, false);
+  assert.equal(b.queuedMergeReview, true);
+  assert.equal(active.get("github|alice"), "entity_A", "entity_A must remain sole owner");
+  assert.equal(candidates.length, 1, "exactly one merge_review candidate should be queued");
+  const ev = JSON.parse(candidates[0].binds[7]);
+  assert.equal(ev.queue_reason, "cross_entity_handle_conflict");
+  assert.equal(ev.conflicting_entity_id, "entity_A");
+});
+
 test("acceptance (d): 90-day reverify with HTTP 404 demotes the handle", async () => {
   const { reverifyDueHandles } = await import(`${ROOT}/osint/reverify.js`);
   // Stub D1 + simpleGet via the env. simpleGet is imported inside

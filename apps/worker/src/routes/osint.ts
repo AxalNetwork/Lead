@@ -11,7 +11,7 @@
 import { Hono } from "hono";
 import type { Env } from "../types";
 import { PLATFORMS, getPlatform } from "../osint/platforms";
-import { resolveEntity, acquireEntityLock } from "../osint/resolve";
+import { resolveEntity, acquireEntityLock, attachHandleOrQueueMerge } from "../osint/resolve";
 import { simpleGet, bodyLooksLikeMiss } from "../osint/pivots/_util";
 
 export const osint = new Hono<{ Bindings: Env; Variables: { email: string } }>();
@@ -163,19 +163,15 @@ osint.post("/candidates/:id/accept", async (c) => {
   // resolves vs accepts cannot race on the same (entity, platform, handle).
   const release = await acquireEntityLock(c.env, row.entity_id);
   try {
-    await c.env.DB.prepare(
-      `INSERT INTO identity_handles (id, entity_id, platform, handle, url, link_method, link_confidence, evidence_json, is_active, last_verified_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'))
-       ON CONFLICT(entity_id, platform, handle) DO UPDATE SET
-         url = COALESCE(excluded.url, identity_handles.url),
-         link_method = excluded.link_method,
-         link_confidence = max(identity_handles.link_confidence, excluded.link_confidence),
-         evidence_json = excluded.evidence_json,
-         is_active = 1, last_verified_at = datetime('now'), updated_at = datetime('now')`,
-    ).bind(
-      crypto.randomUUID(), row.entity_id, row.platform, row.handle, row.url,
-      row.link_method, Math.max(0.85, row.link_confidence), row.evidence_json,
-    ).run();
+    const ev = (row.evidence_json ? safeJson(row.evidence_json) : {}) as Record<string, unknown>;
+    const r = await attachHandleOrQueueMerge(c.env, row.entity_id, {
+      platform: row.platform, handle: row.handle, url: row.url ?? undefined,
+      link_method: row.link_method, final_confidence: Math.max(0.85, row.link_confidence),
+      evidence_json: ev, corroborations: Number((ev as { corroborations?: number }).corroborations ?? 1),
+    });
+    if (!r.attached) {
+      return c.json({ error: "cross_entity_conflict", merge_review_queued: true }, 409);
+    }
     await c.env.DB.prepare(
       `UPDATE handle_candidates SET status = 'accepted', reviewer_email = ?, reviewed_at = datetime('now') WHERE id = ?`,
     ).bind(email, id).run();
@@ -205,22 +201,20 @@ osint.post("/candidates/bulk_accept", async (c) => {
     }
     const release = await acquireEntityLock(c.env, row.entity_id);
     try {
-      await c.env.DB.prepare(
-        `INSERT INTO identity_handles (id, entity_id, platform, handle, url, link_method, link_confidence, evidence_json, is_active, last_verified_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'))
-         ON CONFLICT(entity_id, platform, handle) DO UPDATE SET
-           link_method = excluded.link_method,
-           link_confidence = max(identity_handles.link_confidence, excluded.link_confidence),
-           evidence_json = excluded.evidence_json,
-           is_active = 1, last_verified_at = datetime('now'), updated_at = datetime('now')`,
-      ).bind(
-        crypto.randomUUID(), row.entity_id, row.platform, row.handle, row.url,
-        row.link_method, row.link_confidence, row.evidence_json,
-      ).run();
-      await c.env.DB.prepare(
-        `UPDATE handle_candidates SET status = 'accepted', reviewer_email = ?, reviewer_notes = 'bulk_accept', reviewed_at = datetime('now') WHERE id = ?`,
-      ).bind(email, row.id).run();
-      results.push({ id: row.id, ok: true });
+      const ev = (row.evidence_json ? safeJson(row.evidence_json) : {}) as Record<string, unknown>;
+      const r = await attachHandleOrQueueMerge(c.env, row.entity_id, {
+        platform: row.platform, handle: row.handle, url: row.url ?? undefined,
+        link_method: row.link_method, final_confidence: row.link_confidence,
+        evidence_json: ev, corroborations: Number((ev as { corroborations?: number }).corroborations ?? 1),
+      });
+      if (!r.attached) {
+        results.push({ id: row.id, ok: false, reason: "cross_entity_conflict_queued_for_merge_review" });
+      } else {
+        await c.env.DB.prepare(
+          `UPDATE handle_candidates SET status = 'accepted', reviewer_email = ?, reviewer_notes = 'bulk_accept', reviewed_at = datetime('now') WHERE id = ?`,
+        ).bind(email, row.id).run();
+        results.push({ id: row.id, ok: true });
+      }
     } finally {
       await release();
     }

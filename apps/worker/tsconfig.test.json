@@ -42,6 +42,11 @@
     "src/osint/pivots/writing_style.ts",
     "src/osint/pivots/_util.ts",
     "src/osint/reverify.ts",
+    "src/osint/resolve.ts",
+    "src/osint/facts.ts",
+    "src/osint/negativeCache.ts",
+    "src/osint/pivots/index.ts",
+    "src/osint/pivots/*.ts",
     "src/scraper/fetcher.ts"
   ]
 }
