@@ -398,25 +398,122 @@ async function detectSchema(env: Env, headers: string[], sample: string[][]): Pr
   // never as a silent fallback after model failure. If both AI attempts
   // fail in a real environment, the handler must mark the import
   // status='needs_manual_mapping' with detected_columns_json='{}'.
-  if (!env.AI) return heuristicDetect(headers);
+  if (!env.AI) {
+    const h = heuristicDetect(headers);
+    return validateAndRepairNameMapping(h, headers, sample);
+  }
   const prompt = buildDetectPrompt(headers, sample);
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const model = attempt === 0 ? PRIMARY_MODEL : FALLBACK_MODEL;
       const res = (await env.AI.run(model, {
         messages: [
-          { role: "system", content: "You map spreadsheet headers to entity predicates. Reply with strict JSON matching the schema. Never invent predicates — use null for unknown headers and put a brief reason in notes." },
+          { role: "system", content: "You map spreadsheet headers to entity predicates. Reply with strict JSON matching the schema. Never invent predicates — use null for unknown headers and put a brief reason in notes. The `firm.name` column MUST hold proper-noun brand names, never Type/Kind labels like 'VC', 'Nonprofit', 'Angel'." },
           { role: "user", content: prompt },
         ],
         response_format: { type: "json_schema", json_schema: DETECT_SCHEMA },
       })) as { response?: string; entity_type?: string; column_map?: unknown };
       const parsed = parseDetectResponse(res);
-      if (parsed) return parsed;
+      if (!parsed) continue;
+      // Task #5: AI sometimes maps the Type/Kind column to firm.name
+      // (especially on headerless CSVs that have synthetic col_0..col_N
+      // headers — there's no header text for the model to disambiguate
+      // from). Validate the proposed firm.name column against the
+      // type-string regex; on attempt 0, fall through to attempt 1
+      // (different model) when invalid; on attempt 1, apply the
+      // deterministic fallback (longest avg non-URL string column).
+      if (isNameMappingValid(parsed, headers, sample)) return parsed;
+      if (attempt === 0) continue;
+      const repaired = repairNameMapping(parsed, headers, sample);
+      if (repaired) return repaired;
     } catch (e) {
       console.warn("detectSchema attempt failed", attempt, (e as Error).message);
     }
   }
   return null;
+}
+
+// ---- Task #5: firm.name mapping validation & repair ----------------------
+// The proposed firm.name column is valid iff: (a) at least one sample
+// value is non-empty, AND (b) NO sample value matches the type-string
+// regex (TYPE_STRING_REGEX, src/services/csv/headerDetector.ts).
+function isNameMappingValid(
+  detected: DetectedColumns,
+  headers: string[],
+  sample: string[][],
+): boolean {
+  const idx = headers.findIndex((h) => detected.column_map[h]?.predicate === "firm.name");
+  if (idx < 0) return false;
+  let nonEmpty = 0;
+  for (const row of sample) {
+    const v = (row[idx] ?? "").trim();
+    if (!v) continue;
+    nonEmpty++;
+    if (looksLikeTypeString(v)) return false;
+  }
+  return nonEmpty > 0;
+}
+
+// Deterministic fallback: pick the column whose sample cells have the
+// highest average length AMONG columns that (1) never contain a URL/
+// money/ISO2/type-string cell and (2) have at least one non-empty
+// sample. Returns a patched DetectedColumns with that column re-bound
+// to firm.name (and the previously-mapped firm.name column rebound to
+// null), or null if no column qualifies.
+function repairNameMapping(
+  detected: DetectedColumns,
+  headers: string[],
+  sample: string[][],
+): DetectedColumns | null {
+  let bestIdx = -1;
+  let bestAvg = 0;
+  for (let i = 0; i < headers.length; i++) {
+    let total = 0, count = 0, disqualified = false;
+    for (const row of sample) {
+      const v = (row[i] ?? "").trim();
+      if (!v) continue;
+      if (/^https?:\/\//i.test(v) || /\.(com|org|io|co|net|ai|app|dev)\b/i.test(v)) { disqualified = true; break; }
+      if (/[$€£¥]/.test(v) || /\b\d+(?:[.,]\d+)?\s*[kmbKMB]\b/.test(v)) { disqualified = true; break; }
+      if (/^[A-Z]{2}$/.test(v)) { disqualified = true; break; }
+      if (/^\d+$/.test(v)) { disqualified = true; break; }
+      if (looksLikeTypeString(v)) { disqualified = true; break; }
+      total += v.length;
+      count++;
+    }
+    if (disqualified || count === 0) continue;
+    const avg = total / count;
+    if (avg > bestAvg) { bestAvg = avg; bestIdx = i; }
+  }
+  if (bestIdx < 0) return null;
+  const patched: DetectedColumns = {
+    entity_type: detected.entity_type,
+    column_map: { ...detected.column_map },
+  };
+  for (const h of headers) {
+    const m = patched.column_map[h];
+    if (m?.predicate === "firm.name") {
+      patched.column_map[h] = { ...m, predicate: null, notes: "rejected by name-mapping validator (type-string)" };
+    }
+  }
+  const chosen = headers[bestIdx];
+  patched.column_map[chosen] = {
+    predicate: "firm.name",
+    value_type: "text",
+    confidence: 0.5,
+    notes: "fallback: longest avg non-URL/non-type column",
+  };
+  return patched;
+}
+
+// Convenience wrapper for the env.AI === undefined path: heuristic
+// mapper followed by the same validate/repair pipeline.
+function validateAndRepairNameMapping(
+  detected: DetectedColumns,
+  headers: string[],
+  sample: string[][],
+): DetectedColumns | null {
+  if (isNameMappingValid(detected, headers, sample)) return detected;
+  return repairNameMapping(detected, headers, sample);
 }
 
 function buildDetectPrompt(headers: string[], sample: string[][]): string {
