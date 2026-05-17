@@ -48,7 +48,100 @@ export async function runWellKnownPaths(_env: Env, facts: KnownEntityFacts, ctx:
       }
     }
 
-    // 2) Homepage rel=me / rel=author scan
+    // 2) /.well-known/keybase.txt — domain → keybase username binding
+    if (!pastDeadline(ctx.deadlineMs)) {
+      const kb = await simpleGet(`${origin}/.well-known/keybase.txt`, { timeoutMs: 3000, accept: "text/plain" });
+      if (kb.ok && kb.text) {
+        const m = kb.text.match(/keybase\.io\/([a-z0-9_]+)/i);
+        if (m) hits.push({
+          platform: "keybase", handle: m[1].toLowerCase(),
+          url: `https://keybase.io/${m[1]}`,
+          link_method: "well_known", base_confidence: 0.96,
+          evidence_json: { source: "keybase_txt", origin },
+        });
+      }
+    }
+
+    // 3) /.well-known/openid-configuration — issuer often points to a
+    // canonical identity provider that includes the operator's handle
+    if (!pastDeadline(ctx.deadlineMs)) {
+      const oid = await simpleGet(`${origin}/.well-known/openid-configuration`, { timeoutMs: 3000, accept: "application/json" });
+      if (oid.ok && oid.text) {
+        try {
+          const j = JSON.parse(oid.text) as { issuer?: string };
+          if (j.issuer) {
+            const parsed = parseProfileUrl(j.issuer);
+            if (parsed) hits.push({
+              platform: parsed.platform, handle: parsed.handle, url: j.issuer,
+              link_method: "well_known", base_confidence: 0.90,
+              evidence_json: { source: "openid_configuration", origin, issuer: j.issuer },
+            });
+          }
+        } catch { /* not JSON */ }
+      }
+    }
+
+    // 4) /.well-known/security.txt — Contact: links sometimes leak the
+    // operator's email or social profile (mailto: / https://...)
+    if (!pastDeadline(ctx.deadlineMs)) {
+      const sec = await simpleGet(`${origin}/.well-known/security.txt`, { timeoutMs: 2500, accept: "text/plain" });
+      if (sec.ok && sec.text) {
+        const re = /^Contact:\s*(.+)$/gim;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(sec.text)) !== null) {
+          const contact = m[1].trim();
+          if (contact.startsWith("http")) {
+            const parsed = parseProfileUrl(contact);
+            if (parsed) hits.push({
+              platform: parsed.platform, handle: parsed.handle, url: contact,
+              link_method: "well_known", base_confidence: 0.88,
+              evidence_json: { source: "security_txt_contact", origin },
+            });
+          }
+        }
+      }
+    }
+
+    // 5) /humans.txt — TEAM section sometimes exposes Twitter:/GitHub: lines
+    if (!pastDeadline(ctx.deadlineMs)) {
+      const hum = await simpleGet(`${origin}/humans.txt`, { timeoutMs: 2500, accept: "text/plain" });
+      if (hum.ok && hum.text) {
+        const re = /^(?:Twitter|GitHub|LinkedIn|Mastodon|Site):\s*(.+)$/gim;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(hum.text)) !== null) {
+          const v = m[1].trim();
+          const cand = v.startsWith("http") ? v : (v.startsWith("@") ? `https://twitter.com/${v.slice(1)}` : v);
+          const parsed = parseProfileUrl(cand);
+          if (parsed) hits.push({
+            platform: parsed.platform, handle: parsed.handle, url: cand,
+            link_method: "well_known", base_confidence: 0.85,
+            evidence_json: { source: "humans_txt", origin },
+          });
+        }
+      }
+    }
+
+    // 6) /about.json (Jekyll/static convention) — links: { twitter, github }
+    if (!pastDeadline(ctx.deadlineMs)) {
+      const ab = await simpleGet(`${origin}/about.json`, { timeoutMs: 2500, accept: "application/json" });
+      if (ab.ok && ab.text) {
+        try {
+          const j = JSON.parse(ab.text) as { links?: Record<string, string>; profiles?: Record<string, string> };
+          const map = { ...(j.links ?? {}), ...(j.profiles ?? {}) };
+          for (const v of Object.values(map)) {
+            if (typeof v !== "string") continue;
+            const parsed = parseProfileUrl(v);
+            if (parsed) hits.push({
+              platform: parsed.platform, handle: parsed.handle, url: v,
+              link_method: "well_known", base_confidence: 0.88,
+              evidence_json: { source: "about_json", origin },
+            });
+          }
+        } catch { /* not JSON */ }
+      }
+    }
+
+    // 7) Homepage rel=me / rel=author scan
     if (pastDeadline(ctx.deadlineMs)) return;
     const home = await simpleGet(origin, { timeoutMs: 4000 });
     if (home.ok && home.text) {

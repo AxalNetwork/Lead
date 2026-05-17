@@ -230,7 +230,7 @@ osint.post("/candidates/:id/needs_evidence", async (c) => {
   const body = await c.req.json().catch(() => ({})) as { note?: string };
   const r = await c.env.DB.prepare(
     `UPDATE handle_candidates
-        SET reviewer_email = ?, reviewer_notes = ?, reviewed_at = datetime('now')
+        SET status = 'needs_more', reviewer_email = ?, reviewer_notes = ?, reviewed_at = datetime('now')
         WHERE id = ? AND status = 'pending'`,
   ).bind(email, `needs_more_evidence:${body.note ?? ""}`, id).run();
   if (!r.meta || !r.meta.changes) return c.json({ error: "not_found" }, 404);

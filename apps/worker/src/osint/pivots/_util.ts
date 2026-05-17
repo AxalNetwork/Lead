@@ -16,10 +16,35 @@ export interface SimpleFetchResult {
 //
 // Honors a hard timeout via AbortController; bubbles network errors as
 // { ok: false }. Caller is responsible for negative-cache writes.
+// Per-host rate gate + per-process budget meter shared across ALL pivots.
+// Satisfies the Task 22 rate-limit + Task 2 budget constraints without
+// requiring every pivot to thread through a context object: any call to
+// simpleGet implicitly participates in the shared limiter.
+const HOST_LAST_HIT = new Map<string, number>();
+const HOST_MIN_GAP_MS = 800;
+let BUDGET_REQUESTS = 0;
+const BUDGET_REQUESTS_CAP = 600; // hard cap per worker instance per run
+
+async function gateHost(url: string): Promise<void> {
+  let host = "";
+  try { host = new URL(url).hostname.toLowerCase(); } catch { return; }
+  const last = HOST_LAST_HIT.get(host) ?? 0;
+  const wait = HOST_MIN_GAP_MS - (Date.now() - last);
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  HOST_LAST_HIT.set(host, Date.now());
+}
+
+export function resetOsintBudgetForTests(): void { BUDGET_REQUESTS = 0; HOST_LAST_HIT.clear(); }
+
 export async function simpleGet(
   url: string,
   opts: { timeoutMs?: number; accept?: string; ua?: string } = {},
 ): Promise<SimpleFetchResult> {
+  if (BUDGET_REQUESTS >= BUDGET_REQUESTS_CAP) {
+    return { ok: false, status: 0, text: "budget_exceeded", contentType: "" };
+  }
+  BUDGET_REQUESTS++;
+  await gateHost(url);
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 4000);
   try {
