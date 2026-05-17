@@ -379,6 +379,11 @@ async function findOrCreatePortfolioEntity(env: Env, name: string, website: stri
       display_name: trimmed,
       primary_url: website ?? null,
       primary_domain: domain,
+      // Critical: portfolio companies are created as a side effect of
+      // an already-running profile fill. Without this flag, a single
+      // investor fill would cascade into N child fills (one per
+      // portfolio company), each potentially discovering more orgs.
+      suppressAutoProfileFill: true,
     });
     await addRole(env, ent.id, "company", { source }).catch(() => undefined);
     await insertFact(env, {

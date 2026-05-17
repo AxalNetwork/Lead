@@ -12,6 +12,15 @@ export async function createEntity(
     primary_linkedin_key?: string | null;
     primary_twitter_handle?: string | null;
     primary_github_handle?: string | null;
+    /**
+     * Internal-only knob: when true, skip the auto-dispatch of
+     * WF_PROFILE_FILLER below. Callers that create org entities as a
+     * side effect of an already-running profile fill (e.g. portfolio
+     * companies discovered by the filler) MUST set this — otherwise a
+     * single investor fill cascades into one fill per portfolio
+     * company, blowing the daily neuron cap.
+     */
+    suppressAutoProfileFill?: boolean;
   },
 ): Promise<EntityRow> {
   const id = crypto.randomUUID();
@@ -51,7 +60,7 @@ export async function createEntity(
   // signal-poor "low confidence" case the spec calls out). Dispatched
   // via WF binding when available so the cost is async and respects
   // the daily neuron cap. No-op when the binding isn't configured.
-  if (init.kind === "org" && (init.primary_url || init.primary_domain)) {
+  if (init.kind === "org" && (init.primary_url || init.primary_domain) && !init.suppressAutoProfileFill) {
     const wf = (env as Env & { WF_PROFILE_FILLER?: { create: (o: { params: Record<string, unknown> }) => Promise<{ id: string }> } }).WF_PROFILE_FILLER;
     if (wf) {
       try {
