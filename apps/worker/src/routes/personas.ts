@@ -37,16 +37,25 @@ import {
   loadPersonEntity, scoreEntityForPersona,
 } from "../services/personaMatching";
 
-// Task #8: best-effort fire-and-forget dispatch of the entity matcher
-// after a persona is created / cloned / edited. Inline fallback is
-// skipped here so we don't block the response — the nightly cron will
-// converge personas whose initial dispatch failed.
+// Task #8: dispatch the entity matcher after a persona is created /
+// cloned / edited. Workflow dispatch is the happy path; on failure
+// (or when the binding is missing) we fall back to a bounded inline
+// scoring pass so a newly-created persona always has *some* candidate
+// rows on its first read, even if the workflow plane is unreachable.
+// The nightly cron converges any auto rows older than 30 days.
 async function dispatchPersonaEntityMatch(env: Env, personaId: string): Promise<void> {
-  if (!env.WF_PERSONA_ENTITY_MATCH) return;
+  if (env.WF_PERSONA_ENTITY_MATCH) {
+    try {
+      await env.WF_PERSONA_ENTITY_MATCH.create({ params: { personaId, batchSize: 100, maxEntities: 20000 } });
+      return;
+    } catch (e) {
+      console.warn("dispatchPersonaEntityMatch WF failed, falling back inline", personaId, (e as Error).message);
+    }
+  }
   try {
-    await env.WF_PERSONA_ENTITY_MATCH.create({ params: { personaId, batchSize: 100, maxEntities: 20000 } });
+    await scoreBatchPersonaMatching(env, personaId, { batchSize: 50, maxEntities: 200 });
   } catch (e) {
-    console.warn("dispatchPersonaEntityMatch failed", personaId, (e as Error).message);
+    console.warn("dispatchPersonaEntityMatch inline fallback failed", personaId, (e as Error).message);
   }
 }
 

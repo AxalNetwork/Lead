@@ -36,6 +36,16 @@ export async function createEntity(
   await env.DB.prepare(
     `INSERT INTO entity_history (id, entity_id, action, source, changed_at) VALUES (?, ?, 'create', 'system', ?)`,
   ).bind(crypto.randomUUID(), id, now).run();
+  // Task #8: enqueue persona ↔ entity matching for newly-created
+  // person entities so a freshly-created founder/operator appears in
+  // matching personas' candidate lists within minutes — even before
+  // any career/title facts are written. KV-debounced inside trigger.
+  if (init.kind === "person") {
+    try {
+      const { triggerEntityMatchRefresh } = await import("../services/personaMatchTrigger.js");
+      void triggerEntityMatchRefresh(env, id).catch(() => undefined);
+    } catch { /* best-effort */ }
+  }
   return (await env.DB.prepare(`SELECT * FROM u_entities WHERE id = ?`).bind(id).first<EntityRow>())!;
 }
 
