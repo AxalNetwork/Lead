@@ -16,8 +16,34 @@ import { computeWarmIntroPaths } from "../services/profilers/synthesize";
 
 export const profilers = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
-// Allowlisted operator emails (force_refresh is operator-only).
-const OPERATOR_EMAILS = new Set<string>(["guillaumelauzier@gmail.com"]);
+// Operator gate: this worker is single-tenant — exactly one Access
+// identity (env.ALLOWED_EMAIL, enforced by accessGuard) reaches these
+// routes. The "operator" role is therefore equivalent to the
+// authenticated caller matching env.ALLOWED_EMAIL. We compare here too
+// (instead of trusting the guard alone) so force_refresh is explicit
+// in code and audit-grep-able.
+function isOperator(c: { env: Env; var: { email: string } }): boolean {
+  const email = (c.var.email || "").toLowerCase();
+  const allowed = (c.env.ALLOWED_EMAIL || "").toLowerCase();
+  return Boolean(email) && email === allowed;
+}
+
+// Resolve the caller's viewer entity from their authenticated email,
+// not from a user-controlled query param. Returns null if the caller
+// has no entity row yet (treated as "no warm-intro paths available").
+async function resolveCallerViewerEntity(c: { env: Env; var: { email: string } }): Promise<string | null> {
+  const email = (c.var.email || "").toLowerCase();
+  if (!email) return null;
+  try {
+    const row = await c.env.DB.prepare(
+      `SELECT id FROM u_entities
+        WHERE kind = 'person' AND lower(primary_email_key) = ?
+          AND status NOT IN ('merged','soft_deleted')
+        LIMIT 1`,
+    ).bind(email).first<{ id: string }>();
+    return row?.id ?? null;
+  } catch { return null; }
+}
 
 profilers.post("/:entity_id/run", async (c) => {
   const entityId = c.req.param("entity_id");
@@ -25,10 +51,25 @@ profilers.post("/:entity_id/run", async (c) => {
 
   const url = new URL(c.req.url);
   const forceRefresh = url.searchParams.get("force_refresh") === "true";
-  const viewerEntityId = url.searchParams.get("viewer_entity_id") || null;
   const triggeredBy = c.var.email || "unknown";
 
-  if (forceRefresh && !OPERATOR_EMAILS.has(triggeredBy.toLowerCase())) {
+  // Viewer entity is derived server-side from the authenticated email
+  // — NEVER taken from the query string (that would be an IDOR surface
+  // letting any authenticated caller request intro-graph results from
+  // an arbitrary viewer's perspective). Callers MAY pass
+  // viewer_entity_id as a hint, but it MUST equal the server-resolved
+  // entity for the authenticated caller, otherwise we 403.
+  const callerViewerEntity = await resolveCallerViewerEntity(c);
+  const requestedViewer = url.searchParams.get("viewer_entity_id");
+  if (requestedViewer && requestedViewer !== callerViewerEntity) {
+    return c.json({
+      error: "viewer_mismatch",
+      message: "viewer_entity_id must match the authenticated caller's entity",
+    }, 403);
+  }
+  const viewerEntityId = callerViewerEntity;
+
+  if (forceRefresh && !isOperator(c)) {
     return c.json({ error: "operator_only", message: "force_refresh requires operator role" }, 403);
   }
 
@@ -159,7 +200,22 @@ profilers.get("/:entity_id/status", async (c) => {
 profilers.get("/:entity_id/dossier", async (c) => {
   const entityId = c.req.param("entity_id");
   const noCache = c.req.query("no_cache") === "true";
-  const viewerEntityId = c.req.query("viewer_entity_id") || null;
+
+  // Viewer entity is derived server-side from the authenticated email
+  // — never from a query param. Same justification as the POST handler:
+  // viewer-specific warm-intro paths are sensitive relationship-graph
+  // data and cannot be requested on someone else's behalf. We accept
+  // viewer_entity_id only as a consistency hint and 403 on mismatch.
+  const callerViewerEntity = await resolveCallerViewerEntity(c);
+  const requestedViewer = c.req.query("viewer_entity_id");
+  if (requestedViewer && requestedViewer !== callerViewerEntity) {
+    return c.json({
+      error: "viewer_mismatch",
+      message: "viewer_entity_id must match the authenticated caller's entity",
+    }, 403);
+  }
+  const viewerEntityId = callerViewerEntity;
+
   // Per-viewer cache: viewer-specific warm-intro paths must NOT bleed
   // across callers, so the cache key includes the viewer when present.
   const bundle = await readDossier(c.env, entityId, { noCache, viewerEntityId });
