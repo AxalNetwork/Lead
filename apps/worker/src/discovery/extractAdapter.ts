@@ -13,15 +13,19 @@ import { insertLead } from "../scraper/pipeline";
 
 export async function extractFromHtml(env: Env, url: string, html: string): Promise<string[]> {
   const { name, parser } = selectParser(url);
-  // The "profile" parser requires the async URL-dispatcher path; we skip
-  // it here to avoid re-fetching pages discovery just fetched. Other
-  // parsers are synchronous and operate on HTML directly.
-  if (name === "profile") return [];
+  // Every registered parser exposes the same `(html, url) => ParsedLead[]`
+  // sync entry, including the "profile" parser which internally routes
+  // Crunchbase-person HTML vs personal-site HTML. We reuse the in-hand
+  // HTML rather than calling `dispatchProfile` so discovery does not
+  // re-fetch pages that the frontier crawler just fetched.
   let parsed: ReturnType<typeof parser>;
   try {
     parsed = parser(html, url);
   } catch {
     return [];
+  }
+  if (parsed.length === 0) {
+    console.log("extractAdapter_zero", JSON.stringify({ url, parser: name }));
   }
   const ids: string[] = [];
   const jobId = `discovery:${crypto.randomUUID()}`;
