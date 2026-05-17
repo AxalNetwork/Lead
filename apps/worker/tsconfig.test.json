@@ -39,6 +39,9 @@
     "src/osint/types.ts",
     "src/osint/hashing.ts",
     "src/osint/guardrails.ts",
-    "src/osint/pivots/writing_style.ts"
+    "src/osint/pivots/writing_style.ts",
+    "src/osint/pivots/_util.ts",
+    "src/osint/reverify.ts",
+    "src/scraper/fetcher.ts"
   ]
 }

@@ -218,42 +218,103 @@
         root.appendChild(el("div", { class: "ads-muted" }, ["Nothing to review."]));
         return;
       }
+      // Bulk-accept bar (only operates on rows with confidence > 0.90).
+      const eligibleBulk = data.items.filter((x) => Number(x.link_confidence) > 0.90 && x.status === "pending");
+      const selected = new Set();
+      const bulkBar = el("div", { style: "display:flex;gap:10px;align-items:center;margin:8px 0 12px 0;padding:8px;background:#f5f7fa;border-radius:6px" });
+      const bulkBtn = el("button", { class: "ads-btn", disabled: "true" }, ["Bulk-accept selected (0)"]);
+      bulkBar.appendChild(bulkBtn);
+      bulkBar.appendChild(el("span", { class: "ads-muted", style: "font-size:12px" },
+        [`${eligibleBulk.length} candidate(s) above 0.90 eligible for bulk-accept.`]));
+      root.appendChild(bulkBar);
+      function refreshBulk() {
+        bulkBtn.textContent = `Bulk-accept selected (${selected.size})`;
+        bulkBtn.disabled = selected.size === 0;
+      }
+      bulkBtn.onclick = async () => {
+        if (!selected.size) return;
+        if (!confirm(`Bulk-accept ${selected.size} candidate(s)? They will be promoted to identity_handles.`)) return;
+        bulkBtn.disabled = true; bulkBtn.textContent = "Working…";
+        try {
+          const r = await jpost(`/api/osint/candidates/bulk_accept`, { ids: [...selected] });
+          const okCount = (r.results || []).filter((x) => x.ok).length;
+          alert(`Bulk accept complete: ${okCount}/${r.results.length} promoted.`);
+          renderCandidates(rootId);
+        } catch (e) { alert("Bulk accept failed: " + e.message); refreshBulk(); }
+      };
+
+      // Two-column layout: candidates list (left) + evidence panel (right).
+      const split = el("div", { style: "display:grid;grid-template-columns:1fr 380px;gap:14px" });
+      const leftCol = el("div");
+      const rightCol = el("div", { style: "position:sticky;top:8px;height:fit-content;border:1px solid #e5e5e5;border-radius:8px;padding:12px;background:#fafafa" }, [
+        el("div", { class: "ads-muted", style: "font-size:11px;text-transform:uppercase;letter-spacing:.04em" }, ["Evidence panel"]),
+        el("div", { id: "ads-osint-evidence-panel", style: "margin-top:6px;font-size:13px" }, [
+          el("span", { class: "ads-muted" }, ["Click a row to inspect evidence."]),
+        ]),
+      ]);
+      split.appendChild(leftCol); split.appendChild(rightCol);
+      root.appendChild(split);
+
       const tbl = el("table", { class: "ads-table", style: "width:100%" }, [
         el("thead", null, [el("tr", null, [
+          el("th", null, [""]),
           el("th", null, ["Entity"]), el("th", null, ["Platform"]), el("th", null, ["Handle"]),
-          el("th", null, ["Method"]), el("th", null, ["Confidence"]), el("th", null, ["Reason"]),
+          el("th", null, ["Method"]), el("th", null, ["Confidence"]),
           el("th", null, ["Actions"]),
         ])]),
       ]);
       const tb = el("tbody");
+      function showEvidence(it) {
+        const panel = document.getElementById("ads-osint-evidence-panel");
+        if (!panel) return;
+        panel.innerHTML = "";
+        panel.appendChild(el("div", { style: "font-weight:600;margin-bottom:4px" }, [`${it.platform} · ${it.handle}`]));
+        panel.appendChild(el("div", { class: "ads-muted", style: "margin-bottom:6px" },
+          [`Confidence ${fmtConf(it.link_confidence)} · method ${it.link_method}`]));
+        if (it.url) panel.appendChild(el("div", null, [el("a", { href: it.url, target: "_blank", rel: "noopener" }, [it.url])]));
+        panel.appendChild(el("hr", { style: "margin:8px 0;border:none;border-top:1px solid #ddd" }));
+        panel.appendChild(el("pre", { style: "font-size:11px;background:#fff;padding:8px;border-radius:4px;overflow:auto;max-height:260px" },
+          [JSON.stringify(it.evidence ?? {}, null, 2)]));
+      }
       for (const it of data.items) {
-        const reason = (it.evidence && (it.evidence.queue_reason || JSON.stringify(it.evidence).slice(0, 80))) || "—";
-        const accept = el("button", { class: "ads-btn" }, ["Accept"]);
-        const reject = el("button", { class: "ads-btn", style: "margin-left:6px" }, ["Reject"]);
-        const row = el("tr", null, [
+        const isBulkEligible = Number(it.link_confidence) > 0.90 && it.status === "pending";
+        const cb = isBulkEligible ? el("input", { type: "checkbox" }) : null;
+        if (cb) cb.addEventListener("change", () => { cb.checked ? selected.add(it.id) : selected.delete(it.id); refreshBulk(); });
+        const accept = el("button", { class: "ads-btn", style: "padding:2px 8px;font-size:11px" }, ["Accept"]);
+        const needs = el("button", { class: "ads-btn", style: "padding:2px 8px;font-size:11px;margin-left:4px" }, ["Needs more"]);
+        const reject = el("button", { class: "ads-btn", style: "padding:2px 8px;font-size:11px;margin-left:4px" }, ["Reject"]);
+        const actCell = el("td", null, [accept, needs, reject]);
+        const row = el("tr", { style: "cursor:pointer" }, [
+          el("td", null, [cb || el("span", { class: "ads-muted", title: "Only confidence > 0.90 is bulk-eligible" }, ["—"])]),
           el("td", null, [el("a", { href: `/dashboard/lead.html?id=${encodeURIComponent(it.entity_id)}` }, [it.entity_id.slice(0, 8) + "…"])]),
           el("td", null, [it.platform]),
           el("td", null, [it.url ? el("a", { href: it.url, target: "_blank", rel: "noopener" }, [it.handle]) : it.handle]),
           el("td", null, [it.link_method]),
           el("td", null, [fmtConf(it.link_confidence)]),
-          el("td", { class: "ads-muted", style: "max-width:280px" }, [reason]),
-          el("td", null, [accept, reject]),
+          actCell,
         ]);
+        row.addEventListener("click", (e) => { if (e.target.tagName !== "BUTTON" && e.target.tagName !== "A" && e.target.tagName !== "INPUT") showEvidence(it); });
         accept.onclick = async () => {
-          accept.disabled = true; reject.disabled = true;
-          try { await jpost(`/api/osint/candidates/${encodeURIComponent(it.id)}/accept`, {}); row.style.opacity = ".4"; row.lastChild.textContent = "accepted"; }
-          catch (e) { alert("Accept failed: " + e.message); accept.disabled = false; reject.disabled = false; }
+          accept.disabled = needs.disabled = reject.disabled = true;
+          try { await jpost(`/api/osint/candidates/${encodeURIComponent(it.id)}/accept`, {}); row.style.opacity = ".4"; actCell.textContent = "accepted"; selected.delete(it.id); refreshBulk(); }
+          catch (e) { alert("Accept failed: " + e.message); accept.disabled = needs.disabled = reject.disabled = false; }
+        };
+        needs.onclick = async () => {
+          const note = prompt("What additional evidence is required?") || "";
+          accept.disabled = needs.disabled = reject.disabled = true;
+          try { await jpost(`/api/osint/candidates/${encodeURIComponent(it.id)}/needs_evidence`, { note }); row.style.opacity = ".55"; actCell.textContent = "awaiting"; }
+          catch (e) { alert("Update failed: " + e.message); accept.disabled = needs.disabled = reject.disabled = false; }
         };
         reject.onclick = async () => {
           const reason = prompt("Reject reason (optional)") || null;
-          accept.disabled = true; reject.disabled = true;
-          try { await jpost(`/api/osint/candidates/${encodeURIComponent(it.id)}/reject`, { reason }); row.style.opacity = ".4"; row.lastChild.textContent = "rejected"; }
-          catch (e) { alert("Reject failed: " + e.message); accept.disabled = false; reject.disabled = false; }
+          accept.disabled = needs.disabled = reject.disabled = true;
+          try { await jpost(`/api/osint/candidates/${encodeURIComponent(it.id)}/reject`, { reason }); row.style.opacity = ".4"; actCell.textContent = "rejected"; selected.delete(it.id); refreshBulk(); }
+          catch (e) { alert("Reject failed: " + e.message); accept.disabled = needs.disabled = reject.disabled = false; }
         };
         tb.appendChild(row);
       }
       tbl.appendChild(tb);
-      root.appendChild(tbl);
+      leftCol.appendChild(tbl);
     } catch (e) {
       root.innerHTML = `<div class="ads-error">Failed to load: ${escape(e.message)}</div>`;
     }

@@ -11,7 +11,7 @@
 import { Hono } from "hono";
 import type { Env } from "../types";
 import { PLATFORMS, getPlatform } from "../osint/platforms";
-import { resolveEntity } from "../osint/resolve";
+import { resolveEntity, acquireEntityLock } from "../osint/resolve";
 import { simpleGet, bodyLooksLikeMiss } from "../osint/pivots/_util";
 
 export const osint = new Hono<{ Bindings: Env; Variables: { email: string } }>();
@@ -158,23 +158,88 @@ osint.post("/candidates/:id/accept", async (c) => {
   ).bind(id).first<CandidateRow>();
   if (!row) return c.json({ error: "not_found_or_already_reviewed" }, 404);
 
-  // Promote → identity_handles. Manual accept overrides guardrails.
-  await c.env.DB.prepare(
-    `INSERT INTO identity_handles (id, entity_id, platform, handle, url, link_method, link_confidence, evidence_json, is_active, last_verified_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'))
-     ON CONFLICT(entity_id, platform, handle) DO UPDATE SET
-       url = COALESCE(excluded.url, identity_handles.url),
-       link_method = excluded.link_method,
-       link_confidence = max(identity_handles.link_confidence, excluded.link_confidence),
-       evidence_json = excluded.evidence_json,
-       is_active = 1, last_verified_at = datetime('now'), updated_at = datetime('now')`,
-  ).bind(
-    crypto.randomUUID(), row.entity_id, row.platform, row.handle, row.url,
-    row.link_method, Math.max(0.85, row.link_confidence), row.evidence_json,
-  ).run();
-  await c.env.DB.prepare(
-    `UPDATE handle_candidates SET status = 'accepted', reviewer_email = ?, reviewed_at = datetime('now') WHERE id = ?`,
-  ).bind(email, id).run();
+  // Promote → identity_handles. Manual accept overrides guardrails but
+  // MUST go through the same EntityLock as the resolver so concurrent
+  // resolves vs accepts cannot race on the same (entity, platform, handle).
+  const release = await acquireEntityLock(c.env, row.entity_id);
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO identity_handles (id, entity_id, platform, handle, url, link_method, link_confidence, evidence_json, is_active, last_verified_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'))
+       ON CONFLICT(entity_id, platform, handle) DO UPDATE SET
+         url = COALESCE(excluded.url, identity_handles.url),
+         link_method = excluded.link_method,
+         link_confidence = max(identity_handles.link_confidence, excluded.link_confidence),
+         evidence_json = excluded.evidence_json,
+         is_active = 1, last_verified_at = datetime('now'), updated_at = datetime('now')`,
+    ).bind(
+      crypto.randomUUID(), row.entity_id, row.platform, row.handle, row.url,
+      row.link_method, Math.max(0.85, row.link_confidence), row.evidence_json,
+    ).run();
+    await c.env.DB.prepare(
+      `UPDATE handle_candidates SET status = 'accepted', reviewer_email = ?, reviewed_at = datetime('now') WHERE id = ?`,
+    ).bind(email, id).run();
+  } finally {
+    await release();
+  }
+  return c.json({ ok: true });
+});
+
+// Bulk-accept gated to ultra-high confidence (>0.90). Operator-driven; same
+// EntityLock guarantee per entity. Returns per-id outcome map.
+osint.post("/candidates/bulk_accept", async (c) => {
+  const email = c.get("email") ?? null;
+  const body = await c.req.json().catch(() => ({})) as { ids?: string[] };
+  const ids = Array.isArray(body.ids) ? body.ids.slice(0, 200) : [];
+  if (!ids.length) return c.json({ error: "no_ids" }, 400);
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = await c.env.DB.prepare(
+    `SELECT id, entity_id, platform, handle, url, link_method, link_confidence, evidence_json
+       FROM handle_candidates WHERE status = 'pending' AND id IN (${placeholders})`,
+  ).bind(...ids).all<CandidateRow>();
+  const results: Array<{ id: string; ok: boolean; reason?: string }> = [];
+  for (const row of rows.results ?? []) {
+    if ((row.link_confidence ?? 0) <= 0.90) {
+      results.push({ id: row.id, ok: false, reason: "below_bulk_threshold_0.90" });
+      continue;
+    }
+    const release = await acquireEntityLock(c.env, row.entity_id);
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO identity_handles (id, entity_id, platform, handle, url, link_method, link_confidence, evidence_json, is_active, last_verified_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'))
+         ON CONFLICT(entity_id, platform, handle) DO UPDATE SET
+           link_method = excluded.link_method,
+           link_confidence = max(identity_handles.link_confidence, excluded.link_confidence),
+           evidence_json = excluded.evidence_json,
+           is_active = 1, last_verified_at = datetime('now'), updated_at = datetime('now')`,
+      ).bind(
+        crypto.randomUUID(), row.entity_id, row.platform, row.handle, row.url,
+        row.link_method, row.link_confidence, row.evidence_json,
+      ).run();
+      await c.env.DB.prepare(
+        `UPDATE handle_candidates SET status = 'accepted', reviewer_email = ?, reviewer_notes = 'bulk_accept', reviewed_at = datetime('now') WHERE id = ?`,
+      ).bind(email, row.id).run();
+      results.push({ id: row.id, ok: true });
+    } finally {
+      await release();
+    }
+  }
+  return c.json({ results });
+});
+
+// "Needs more evidence" — keeps the candidate pending but records that an
+// operator has reviewed it and explicitly asked for more pivot signal.
+osint.post("/candidates/:id/needs_evidence", async (c) => {
+  const id = c.req.param("id");
+  const email = c.get("email") ?? null;
+  const body = await c.req.json().catch(() => ({})) as { note?: string };
+  const r = await c.env.DB.prepare(
+    `UPDATE handle_candidates
+        SET reviewer_email = ?, reviewer_notes = ?, reviewed_at = datetime('now')
+        WHERE id = ? AND status = 'pending'`,
+  ).bind(email, `needs_more_evidence:${body.note ?? ""}`, id).run();
+  if (!r.meta || !r.meta.changes) return c.json({ error: "not_found" }, 404);
   return c.json({ ok: true });
 });
 

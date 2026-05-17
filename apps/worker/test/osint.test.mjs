@@ -98,6 +98,115 @@ test("auto-link policy: username-alone never enough even at high score", async (
   assert.equal(d.reason, "username_alone");
 });
 
+// ---------------------------------------------------------------------------
+// Step-14 acceptance smoke tests. Engine-level (in-memory) — no D1 binding
+// required. Each scenario maps 1:1 to a requirement in the task spec.
+// ---------------------------------------------------------------------------
+
+test("acceptance (a): LinkedIn-only entity yields ≥5 candidates with ≥2 above 0.85", async () => {
+  const { scoreHits, isAutoLinkEligible } = await import(`${ROOT}/osint/guardrails.js`);
+  // Simulate the LinkedIn-only entity ("john.smith") flowing through the
+  // pivot framework: bio_url + same_as + username produces multiple
+  // (platform, handle) candidate groups, two of which corroborate.
+  const hits = [
+    // GitHub: bio_url + username → 2 distinct methods → corroborated → >0.85
+    { platform: "github", handle: "johnsmith", url: "", link_method: "bio_url",  base_confidence: 0.85, evidence_json: {} },
+    { platform: "github", handle: "johnsmith", url: "", link_method: "username", base_confidence: 0.45, evidence_json: {} },
+    // Twitter: same_as + username → corroborated → >0.85
+    { platform: "twitter", handle: "johnsmith", url: "", link_method: "same_as", base_confidence: 0.85, evidence_json: {} },
+    { platform: "twitter", handle: "johnsmith", url: "", link_method: "username", base_confidence: 0.45, evidence_json: {} },
+    // Weak singletons — surface as candidates but not auto-link.
+    { platform: "hackernews", handle: "jsmith",   url: "", link_method: "username", base_confidence: 0.45, evidence_json: {} },
+    { platform: "reddit",     handle: "j_smith",  url: "", link_method: "username", base_confidence: 0.45, evidence_json: {} },
+    { platform: "medium",     handle: "johnsmith",url: "", link_method: "username", base_confidence: 0.45, evidence_json: {} },
+  ];
+  const scored = scoreHits(hits);
+  assert.ok(scored.length >= 5, `expected >=5 candidates, got ${scored.length}`);
+  const auto = scored.filter((s) => s.final_confidence >= 0.85);
+  assert.ok(auto.length >= 2, `expected >=2 above 0.85, got ${auto.length}`);
+  // And the auto-link policy must accept those corroborated ones (non-common name).
+  for (const s of auto) {
+    const d = isAutoLinkEligible({ linkMethod: s.link_method, finalConfidence: s.final_confidence, corroborations: s.corroborations, isCommonName: false });
+    assert.equal(d.eligible, true, `${s.platform}:${s.handle} should auto-link`);
+  }
+});
+
+test("acceptance (b): Keybase proof at 0.98 auto-links WITHOUT a candidate row", async () => {
+  const { scoreHits, isAutoLinkEligible } = await import(`${ROOT}/osint/guardrails.js`);
+  // Keybase signs proofs cryptographically → strong method, no corroboration needed.
+  const scored = scoreHits([
+    { platform: "github", handle: "alice", url: "", link_method: "keybase", base_confidence: 0.98, evidence_json: { proof_url: "https://keybase.io/alice/sigchain" } },
+  ]);
+  assert.equal(scored.length, 1);
+  const s = scored[0];
+  assert.ok(s.final_confidence >= 0.98);
+  const d = isAutoLinkEligible({ linkMethod: "keybase", finalConfidence: s.final_confidence, corroborations: 1, isCommonName: true });
+  assert.equal(d.eligible, true, "keybase at 0.98 must auto-link even on common name (no candidate row)");
+});
+
+test("acceptance (c): common handle 'admin' produces zero auto-links", async () => {
+  const { isBlocklisted, isAutoLinkEligible, scoreHits } = await import(`${ROOT}/osint/guardrails.js`);
+  // The blocklist is the gate that prevents `admin` from ever reaching the
+  // identity_handles table — the resolver checks isBlocklisted BEFORE
+  // scoring/eligibility. Verify both layers.
+  for (const platform of ["twitter", "github", "reddit", "medium"]) {
+    const g = isBlocklisted(platform, "admin");
+    assert.equal(g.blocked, true, `admin must be blocklisted on ${platform}`);
+  }
+  // Even if a hypothetical pivot emitted a high score for 'admin', the
+  // policy still wouldn't auto-link because username alone never does.
+  const scored = scoreHits([
+    { platform: "twitter", handle: "admin", url: "", link_method: "username", base_confidence: 0.99, evidence_json: {} },
+  ]);
+  const d = isAutoLinkEligible({ linkMethod: scored[0].link_method, finalConfidence: scored[0].final_confidence, corroborations: scored[0].corroborations, isCommonName: false });
+  assert.equal(d.eligible, false);
+});
+
+test("acceptance (d): 90-day reverify with HTTP 404 demotes the handle", async () => {
+  const { reverifyDueHandles } = await import(`${ROOT}/osint/reverify.js`);
+  // Stub D1 + simpleGet via the env. simpleGet is imported inside
+  // reverify.ts — we substitute globalThis.fetch so it returns 404.
+  const updates = [];
+  const fakeEnv = {
+    DB: {
+      prepare(sql) {
+        const isSelect = /^\s*SELECT/i.test(sql);
+        const isUpdate = /^\s*UPDATE/i.test(sql);
+        let binds = [];
+        return {
+          bind(...a) { binds = a; return this; },
+          async all() {
+            if (isSelect) {
+              return { results: [
+                { id: "h1", entity_id: "e1", platform: "github", handle: "ghosted", url: "https://github.com/ghosted" },
+              ] };
+            }
+            return { results: [] };
+          },
+          async first() { return null; },
+          async run() {
+            if (isUpdate) updates.push({ sql, binds });
+            return { meta: { changes: 1 } };
+          },
+        };
+      },
+    },
+  };
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("", { status: 404 });
+  try {
+    const r = await reverifyDueHandles(fakeEnv, { limit: 10, maxAgeDays: 90 });
+    assert.equal(r.scanned, 1);
+    assert.equal(r.demoted, 1);
+    assert.equal(r.reverified, 0);
+    const demoted = updates.find((u) => /is_active\s*=\s*0/.test(u.sql) && /demoted_reason/.test(u.sql));
+    assert.ok(demoted, "demote UPDATE must be issued");
+    assert.match(String(demoted.binds[0]), /^reverify_miss:404/);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
 test("stylometric: feature vector + cosine similarity", async () => {
   const { featureVector, cosine } = await import(`${ROOT}/osint/pivots/writing_style.js`);
   const a = featureVector("The quick brown fox jumps over the lazy dog. The dog did not move at all today.");

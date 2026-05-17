@@ -85,7 +85,10 @@ export async function resolveEntity(env: Env, entityId: string, opts: ResolveOpt
   }
 }
 
-async function acquireEntityLock(env: Env, entityId: string): Promise<() => Promise<void>> {
+// Exported so route handlers that mutate identity_handles (e.g. operator
+// accept on a candidate) go through the same single write path. Returns a
+// release() — caller must invoke it in a finally block.
+export async function acquireEntityLock(env: Env, entityId: string): Promise<() => Promise<void>> {
   if (!env.ENTITY_LOCK) return async () => undefined;
   try {
     const id = env.ENTITY_LOCK.idFromName(entityId);
