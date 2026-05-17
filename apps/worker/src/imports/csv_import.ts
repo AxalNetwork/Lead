@@ -154,6 +154,11 @@ export async function processCsvImport(env: Env, importId: string, opts: { insid
         await env.DB.prepare(
           "UPDATE csv_imports SET detected_columns_json = ?, updated_at = ? WHERE id = ?",
         ).bind(JSON.stringify(detected), new Date().toISOString(), importId).run();
+        // Task #5: if the mapping came from the deterministic
+        // fallback (longest avg non-URL column), the caller surfaces
+        // the proposed mapping but holds the import for operator
+        // review — no rows are written until the operator confirms.
+        if (isFallbackMapping(detected)) { needsManualMapping = true; return false; }
       }
       if (pendingRows.length >= BATCH_SIZE && detected) await flushBatch();
       return true;
@@ -237,9 +242,12 @@ export async function processCsvImport(env: Env, importId: string, opts: { insid
     if (!detected && headers && pendingRows.length > 0 && !needsManualMapping) {
       detected = await detectSchema(env, headers, pendingRows.slice(0, 5));
       if (!detected) needsManualMapping = true;
-      else await env.DB.prepare(
-        "UPDATE csv_imports SET detected_columns_json = ?, updated_at = ? WHERE id = ?",
-      ).bind(JSON.stringify(detected), new Date().toISOString(), importId).run();
+      else {
+        await env.DB.prepare(
+          "UPDATE csv_imports SET detected_columns_json = ?, updated_at = ? WHERE id = ?",
+        ).bind(JSON.stringify(detected), new Date().toISOString(), importId).run();
+        if (isFallbackMapping(detected)) needsManualMapping = true;
+      }
     }
     try { await reader.cancel(); } catch { /* swallow */ }
 
@@ -399,13 +407,16 @@ async function detectSchema(env: Env, headers: string[], sample: string[][]): Pr
   // fail in a real environment, the handler must mark the import
   // status='needs_manual_mapping' with detected_columns_json='{}'.
   if (!env.AI) {
-    // Dev/test path: heuristic mapper + strict validation. No silent
-    // repair — if heuristic doesn't yield a valid firm.name column,
-    // return null so caller marks status='needs_manual_mapping'.
+    // Dev/test path: heuristic mapper + strict validation. If invalid,
+    // try the deterministic fallback (longest avg non-URL column);
+    // if even that yields nothing, return null so caller marks
+    // status='needs_manual_mapping'.
     const h = heuristicDetect(headers);
-    return isNameMappingValid(h, headers, sample) ? h : null;
+    if (isNameMappingValid(h, headers, sample)) return h;
+    return repairNameMapping(h, headers, sample);
   }
   const prompt = buildDetectPrompt(headers, sample);
+  let lastParsed: DetectedColumns | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const model = attempt === 0 ? PRIMARY_MODEL : FALLBACK_MODEL;
@@ -418,17 +429,84 @@ async function detectSchema(env: Env, headers: string[], sample: string[][]): Pr
       })) as { response?: string; entity_type?: string; column_map?: unknown };
       const parsed = parseDetectResponse(res);
       if (!parsed) continue;
+      lastParsed = parsed;
       // Task #5: validate the proposed firm.name column against the
       // proper-noun + type-string gates. On attempt 0, fall through
-      // to attempt 1 (different model) when invalid. On attempt 1,
-      // return null per strict contract — caller marks
-      // status='needs_manual_mapping' (NO silent column repair).
+      // to attempt 1 (different model) when invalid.
       if (isNameMappingValid(parsed, headers, sample)) return parsed;
     } catch (e) {
       console.warn("detectSchema attempt failed", attempt, (e as Error).message);
     }
   }
+  // Both AI attempts failed validation. Deterministic fallback per
+  // task spec: pick the longest avg non-URL/non-type column as
+  // firm.name. The caller is still expected to surface this for
+  // operator review (the returned column_map carries a `fallback:`
+  // notes marker that the handler uses to set
+  // status='needs_manual_mapping' so the operator confirms before
+  // bulk inserts proceed) — i.e. NOT silently accepted as final.
+  if (lastParsed) {
+    const repaired = repairNameMapping(lastParsed, headers, sample);
+    if (repaired) return repaired;
+  }
   return null;
+}
+
+// True when the firm.name column was assigned by repairNameMapping
+// (caller uses this to set status='needs_manual_mapping' even though
+// detectSchema returned a usable mapping — the operator must confirm
+// the heuristic pick before rows are written).
+function isFallbackMapping(detected: DetectedColumns): boolean {
+  for (const entry of Object.values(detected.column_map)) {
+    if (entry?.predicate === "firm.name" && typeof entry.notes === "string"
+        && entry.notes.startsWith("fallback:")) return true;
+  }
+  return false;
+}
+
+// Deterministic fallback per spec: pick the column whose sample cells
+// have the highest average length AMONG columns that never contain a
+// URL/money/ISO2/type-string/numeric cell. Returns a patched
+// DetectedColumns or null if no column qualifies.
+function repairNameMapping(
+  detected: DetectedColumns,
+  headers: string[],
+  sample: string[][],
+): DetectedColumns | null {
+  let bestIdx = -1;
+  let bestAvg = 0;
+  for (let i = 0; i < headers.length; i++) {
+    let total = 0, count = 0, disqualified = false;
+    for (const row of sample) {
+      const v = (row[i] ?? "").trim();
+      if (!v) continue;
+      if (!looksLikeProperNoun(v) || looksLikeTypeString(v)) { disqualified = true; break; }
+      total += v.length;
+      count++;
+    }
+    if (disqualified || count === 0) continue;
+    const avg = total / count;
+    if (avg > bestAvg) { bestAvg = avg; bestIdx = i; }
+  }
+  if (bestIdx < 0) return null;
+  const patched: DetectedColumns = {
+    entity_type: detected.entity_type,
+    column_map: { ...detected.column_map },
+  };
+  for (const h of headers) {
+    const m = patched.column_map[h];
+    if (m?.predicate === "firm.name") {
+      patched.column_map[h] = { ...m, predicate: null, notes: "rejected by name-mapping validator" };
+    }
+  }
+  const chosen = headers[bestIdx];
+  patched.column_map[chosen] = {
+    predicate: "firm.name",
+    value_type: "text",
+    confidence: 0.5,
+    notes: "fallback: longest avg non-URL non-type column (operator review required)",
+  };
+  return patched;
 }
 
 // ---- Task #5: firm.name mapping validation -------------------------------
