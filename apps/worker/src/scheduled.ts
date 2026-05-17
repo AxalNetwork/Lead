@@ -309,6 +309,22 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       } catch (e) {
         console.error("nightly classify-batch failed", (e as Error).message);
       }
+      // Task #3 (this task): nightly AI Profile Filler — picks the 200
+      // stalest entities (no `ai_profile_filled_at` fact, oldest first)
+      // and fills each. Bounded so a single tick fits inside the
+      // shared AI_DAILY_NEURONS_CAP.
+      try {
+        if (env.WF_PROFILE_FILLER_BATCH) {
+          await env.WF_PROFILE_FILLER_BATCH.create({ params: { limit: 200 } });
+          console.log("ai-profile-filler-batch workflow dispatched");
+        } else {
+          const { fillStalestBatch } = await import("./ai/profileFiller");
+          const r = await fillStalestBatch(env, { limit: 50 });
+          console.log("ai-profile-filler-batch inline", JSON.stringify(r));
+        }
+      } catch (e) {
+        console.error("nightly ai-profile-filler-batch failed", (e as Error).message);
+      }
       // Task #3 (this task): nightly OSINT batch + 90-day reverify sweep.
       // Free-plan cron slot cap (5/5 booked) means we piggyback the 0 4
       // slot. Both jobs are bounded so they fit inside a single tick.

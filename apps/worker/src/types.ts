@@ -144,6 +144,9 @@ export interface Env {
   WF_CLASSIFY_ENTITY?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   WF_CLASSIFY_BATCH?:  { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   WF_REFRESH_GOVERNMENT?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+  // Task #3 (this task): Workers-AI Profile Filler.
+  WF_PROFILE_FILLER?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+  WF_PROFILE_FILLER_BATCH?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   // ---- Task #2 (this task): link discovery workflows ----
   WF_DISCOVER_FROM_SEED?: { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   WF_CRAWL_FRONTIER?:     { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };

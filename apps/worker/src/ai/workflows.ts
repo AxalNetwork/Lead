@@ -310,6 +310,131 @@ export class ClassifyBatchWorkflow {
   }
 }
 
+// Task #3 (this task): per-entity AI Profile Filler workflow. Each
+// phase (web fetch / canonical name / structured extraction / write /
+// search corroboration) is wrapped in step.do so a 30s CPU trip never
+// restarts the entire fill.
+export class AIProfileFillerWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ entityId: string; force?: boolean; triggeredBy?: string }>, step: WorkflowStep): Promise<{ ok: boolean; entityId: string; reason?: string; facts_written: number; team_added: number; portfolio_added: number; pages_fetched?: number; name_corrected?: boolean }> {
+    const env = this.env;
+    const { entityId, force, triggeredBy } = event.payload;
+    const pf = await import("./profileFiller");
+
+    // Phase 0 — preflight: load entity, cooldown, budget, site URL.
+    const preflight = await step.do("preflight", { retries: { limit: 1 } }, async () => {
+      const ent = await env.DB.prepare(
+        `SELECT id, kind, display_name, primary_url, primary_domain FROM u_entities WHERE id = ? AND status = 'active'`,
+      ).bind(entityId).first<{ id: string; kind: string; display_name: string | null; primary_url: string | null; primary_domain: string | null }>();
+      if (!ent) return { ok: false as const, reason: "entity_not_found" };
+      if (!force) {
+        const cool = await pf.isWithinCooldown(env, entityId);
+        if (cool.blocked) return { ok: false as const, reason: "cooldown_active" };
+      }
+      const { assertBudget } = await import("./budget");
+      const b = await assertBudget(env, "ai");
+      if (!b.ok) return { ok: false as const, reason: `budget_blocked:${b.reason ?? "ai"}` };
+      const siteUrl = ent.primary_url ?? (ent.primary_domain ? `https://${ent.primary_domain}` : null);
+      if (!siteUrl) return { ok: false as const, reason: "no_website" };
+      return { ok: true as const, ent, siteUrl };
+    });
+    if (!preflight.ok) {
+      return { ok: false, entityId, reason: preflight.reason, facts_written: 0, team_added: 0, portfolio_added: 0 };
+    }
+    const ent = preflight.ent;
+    const siteUrl = preflight.siteUrl;
+
+    // Phase A — fetch site pages.
+    const pages = await step.do("fetch_pages", { retries: { limit: 2, backoff: "exponential" } }, async () => {
+      return await pf.fetchSitePages(env, siteUrl);
+    });
+    if (!pages.length) {
+      await step.do("stamp_cooldown_no_pages", {}, async () => { await pf.stampCooldown(env, entityId); });
+      return { ok: false, entityId, reason: "no_pages_fetched", facts_written: 0, team_added: 0, portfolio_added: 0, pages_fetched: 0 };
+    }
+    const homepage = pages[0];
+
+    // Phase B — canonical name + correction.
+    const nameRes = await step.do("canonical_name", { retries: { limit: 1 } }, async () => {
+      const aiName = await pf.extractCanonicalName(env, homepage.text);
+      let corrected = false;
+      if (aiName) corrected = await pf.maybeApplyNameCorrection(env, ent, aiName, homepage.url);
+      return { aiName, corrected };
+    });
+
+    // Phase C — structured extraction.
+    const profile = await step.do("structured_extract", { retries: { limit: 2, backoff: "exponential" } }, async () => {
+      return await pf.extractStructuredProfile(env, pages);
+    });
+    if (!profile) {
+      await step.do("stamp_cooldown_extract_fail", {}, async () => { await pf.stampCooldown(env, entityId); });
+      return { ok: false, entityId, reason: "extraction_failed", facts_written: 0, team_added: 0, portfolio_added: 0, pages_fetched: pages.length, name_corrected: nameRes.corrected };
+    }
+
+    // Phase D — light validation (coercion).
+    if (profile.headquarters_country_iso2 && !/^[A-Za-z]{2}$/.test(profile.headquarters_country_iso2)) {
+      profile.headquarters_country_iso2 = undefined;
+    }
+    if (profile.contact_email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profile.contact_email)) {
+      profile.contact_email = undefined;
+    }
+
+    // Phase E — write to DB.
+    const written = await step.do("write_db", { retries: { limit: 1 } }, async () => {
+      return await pf.writeProfileToDb(env, entityId, profile, homepage.url);
+    });
+
+    // Phase F — search corroboration (best-effort).
+    const canonicalName = nameRes.corrected && nameRes.aiName ? nameRes.aiName : (ent.display_name ?? nameRes.aiName ?? "");
+    if (canonicalName) {
+      await step.do("corroborate", { retries: { limit: 0 } }, async () => {
+        try { await pf.corroborateClaims(env, entityId, canonicalName, profile, homepage.url); } catch (e) {
+          console.warn("corroborateClaims failed", entityId, (e as Error).message);
+        }
+        return { ok: true };
+      });
+    }
+
+    // Phase G — stamp freshness + cooldown.
+    await step.do("stamp_freshness", {}, async () => {
+      const { insertFact } = await import("../entities/facts");
+      await insertFact(env, {
+        entity_id: entityId, predicate: "ai_profile_filled_at",
+        value_text: new Date().toISOString(),
+        value_json: { triggered_by: triggeredBy ?? "workflow", force: !!force, pages: pages.length },
+        source_kind: "ai", source: pf.PROFILE_FILLER_VERSION, evidence_url: homepage.url, confidence: 1,
+      });
+      await pf.stampCooldown(env, entityId);
+    });
+
+    return {
+      ok: true, entityId,
+      facts_written: written.facts_written,
+      team_added: written.team_added,
+      portfolio_added: written.portfolio_added,
+      pages_fetched: pages.length,
+      name_corrected: nameRes.corrected,
+    };
+  }
+}
+
+// Task #3: nightly batch — picks the N stalest entities and fills each.
+export class AIProfileFillerBatchWorkflow {
+  env: Env;
+  ctx: ExecutionContext;
+  constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
+  async run(event: WorkflowEvent<{ limit?: number }>, step: WorkflowStep): Promise<{ ok: true; scanned: number; filled: number; errors: number; skipped: number }> {
+    const limit = event.payload?.limit ?? 200;
+    const { fillStalestBatch } = await import("./profileFiller");
+    const r = await step.do("fill_batch", { retries: { limit: 1 } }, async () => {
+      return await fillStalestBatch(this.env, { limit });
+    });
+    return { ok: true, ...r };
+  }
+}
+
 // Task #3: refresh government appointments + donations for a single
 // entity. Stand-alone workflow so an operator can re-pull political
 // rows without re-running the full classifier.

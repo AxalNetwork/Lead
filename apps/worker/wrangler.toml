@@ -260,6 +260,19 @@ binding = "WF_CLASSIFY_BATCH"
 name = "classify-batch"
 class_name = "ClassifyBatchWorkflow"
 
+# Task #3 (this task): Workers-AI Profile Filler — per-entity AI fill
+# of thesis/sectors/stages/geo/check size/team/portfolio. Triggered on
+# POST /api/profile/:id/fill and from the nightly batch cron.
+[[workflows]]
+binding = "WF_PROFILE_FILLER"
+name = "ai-profile-filler"
+class_name = "AIProfileFillerWorkflow"
+
+[[workflows]]
+binding = "WF_PROFILE_FILLER_BATCH"
+name = "ai-profile-filler-batch"
+class_name = "AIProfileFillerBatchWorkflow"
+
 # Task #3: refresh government appointments + political donations for a
 # single entity without re-running the full classifier.
 [[workflows]]

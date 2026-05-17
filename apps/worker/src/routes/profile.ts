@@ -145,6 +145,45 @@ profileRoute.post("/classify/:id/dispatch", async (c) => {
   return c.json({ ok: true, workflow_id: wf.id });
 });
 
+// ---------------- POST /:id/fill (Task #3 AI Profile Filler) ----------------
+
+profileRoute.post("/:id/fill", async (c) => {
+  const id = c.req.param("id");
+  const body = await c.req.json<{ force?: boolean }>().catch(() => ({} as { force?: boolean }));
+  const email = c.var.email || "anonymous";
+
+  // Per-(user, entity) 1 fill/min throttle so the manual endpoint can't
+  // hammer Workers AI from a stuck button click.
+  if (c.env.SCRAPE_CACHE) {
+    const rlKey = `pf:rl:${email}:${id}`;
+    const hit = await c.env.SCRAPE_CACHE.get(rlKey);
+    if (hit) return c.json({ ok: false, error: "rate_limited", retry_in_seconds: 60 }, 429);
+    await c.env.SCRAPE_CACHE.put(rlKey, "1", { expirationTtl: 60 });
+  }
+
+  // 7-day cap enforced even when dispatching to a workflow — Force
+  // Refresh bypasses it but never the daily neuron cap.
+  if (!body.force) {
+    const { isWithinCooldown } = await import("../ai/profileFiller");
+    const cool = await isWithinCooldown(c.env, id);
+    if (cool.blocked) {
+      return c.json({ ok: false, error: "cooldown_active", last_filled_at: cool.last_at, retry_with_force: true }, 429);
+    }
+  }
+
+  if (c.env.WF_PROFILE_FILLER) {
+    try {
+      const wf = await c.env.WF_PROFILE_FILLER.create({ params: { entityId: id, force: !!body.force, triggeredBy: `manual:${email}` } });
+      return c.json({ ok: true, dispatched: true, workflow_id: wf.id });
+    } catch (e) {
+      console.warn("WF_PROFILE_FILLER dispatch failed; falling back to inline", (e as Error).message);
+    }
+  }
+  const { fillProfile } = await import("../ai/profileFiller");
+  const r = await fillProfile(c.env, id, { force: !!body.force, triggeredBy: `manual:${email}` });
+  return c.json(r);
+});
+
 // ---------------- POST /:id/refresh-government ----------------
 
 profileRoute.post("/:id/refresh-government", async (c) => {
