@@ -209,17 +209,40 @@ interface DeliverContext { entityId: string; occurredAt: string }
 
 export async function deliverEvent(env: Env, eventId: string, rule: AlertRuleRow, evt: EvaluatedAlert, dctx: DeliverContext): Promise<DispatchOutcome> {
   const channelCfg = parseJson<Record<string, unknown>>(rule.channel_config_json) ?? {};
-  const log: Array<{ ts: string; channel: string; status: string; error?: string }> = [];
+  // Structured delivery attempt log. Each row carries the channel,
+  // outcome status, an HTTP-style status_code when the channel produced
+  // one (email/slack/webhook), a coarse error_class for grouping
+  // (network|http_4xx|http_5xx|config|none), and the freeform message.
+  const log: Array<{
+    ts: string; channel: string; status: string;
+    status_code?: number; error_class?: string; error?: string;
+  }> = [];
   const now = () => new Date().toISOString();
+  // Classify an error string + optional HTTP status into a coarse bucket
+  // so operators can filter "all 5xx vs network vs config" without
+  // re-parsing message text.
+  function classify(err: string | undefined, status: number | undefined): string {
+    if (!err) return "none";
+    if (typeof status === "number") {
+      if (status >= 500) return "http_5xx";
+      if (status === 429 || status === 408) return "http_retryable";
+      if (status >= 400) return "http_4xx";
+    }
+    if (/_network:|network|fetch failed|ECONN|ETIMEDOUT/i.test(err)) return "network";
+    if (/missing_|bad_url|no_recipients|bad_slack_url|rate_limited/i.test(err)) return "config";
+    return "other";
+  }
   let ok = false;
   let retryable = false;
   let lastErr: string | undefined;
+  let lastStatus: number | undefined;
 
   switch (rule.channel) {
     case "in_app": {
       const r = await deliverInApp(env, eventId);
-      ok = r.ok; lastErr = r.error;
-      log.push({ ts: now(), channel: "in_app", status: ok ? "ok" : "error", error: r.error });
+      ok = r.ok; lastErr = r.error; lastStatus = undefined;
+      log.push({ ts: now(), channel: "in_app", status: ok ? "ok" : "error",
+        error_class: classify(r.error, undefined), error: r.error });
       break;
     }
     case "email": {
@@ -230,8 +253,9 @@ export async function deliverEvent(env: Env, eventId: string, rule: AlertRuleRow
         bodyHtml: `<p>${escapeHtml(evt.body).replace(/\n/g, "<br>")}</p>`,
         entityLink: `https://aidatasignal.com/dashboard/profile/?entity=${encodeURIComponent(dctx.entityId)}`,
       });
-      ok = r.ok; lastErr = r.error;
-      log.push({ ts: now(), channel: "email", status: ok ? "ok" : "error", error: r.error });
+      ok = r.ok; lastErr = r.error; lastStatus = r.status;
+      log.push({ ts: now(), channel: "email", status: ok ? "ok" : "error",
+        status_code: r.status, error_class: classify(r.error, r.status), error: r.error });
       break;
     }
     case "slack": {
@@ -242,8 +266,9 @@ export async function deliverEvent(env: Env, eventId: string, rule: AlertRuleRow
         entityUrl: `https://aidatasignal.com/dashboard/profile/?entity=${encodeURIComponent(dctx.entityId)}`,
         diff: evt.diff, body: evt.body,
       });
-      ok = r.ok; lastErr = r.error;
-      log.push({ ts: now(), channel: "slack", status: ok ? "ok" : "error", error: r.error });
+      ok = r.ok; lastErr = r.error; lastStatus = r.status;
+      log.push({ ts: now(), channel: "slack", status: ok ? "ok" : "error",
+        status_code: r.status, error_class: classify(r.error, r.status), error: r.error });
       break;
     }
     case "webhook": {
@@ -267,9 +292,10 @@ export async function deliverEvent(env: Env, eventId: string, rule: AlertRuleRow
             payload: evt.payload,
           },
         });
-        ok = r.ok; lastErr = r.error; retryable = r.retryable;
+        ok = r.ok; lastErr = r.error; retryable = r.retryable; lastStatus = r.status;
       }
-      log.push({ ts: now(), channel: "webhook", status: ok ? "ok" : "error", error: lastErr });
+      log.push({ ts: now(), channel: "webhook", status: ok ? "ok" : "error",
+        status_code: lastStatus, error_class: classify(lastErr, lastStatus), error: lastErr });
       break;
     }
     case "digest":
@@ -283,7 +309,10 @@ export async function deliverEvent(env: Env, eventId: string, rule: AlertRuleRow
   const existing = await env.DB.prepare(
     `SELECT delivery_attempts, delivery_log_json FROM alert_events WHERE id = ?`,
   ).bind(eventId).first<{ delivery_attempts: number; delivery_log_json: string | null }>();
-  const prevLog = parseJson<Array<{ ts: string; channel: string; status: string; error?: string }>>(existing?.delivery_log_json ?? null) ?? [];
+  const prevLog = parseJson<Array<{
+    ts: string; channel: string; status: string;
+    status_code?: number; error_class?: string; error?: string;
+  }>>(existing?.delivery_log_json ?? null) ?? [];
   const fullLog = prevLog.concat(log);
   const attempts = (existing?.delivery_attempts ?? 0) + 1;
 
