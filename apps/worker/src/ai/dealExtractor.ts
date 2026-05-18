@@ -186,7 +186,7 @@ export async function runDealExtractor(
   return toCandidate(raw, input);
 }
 
-function toCandidate(raw: RawDealExtraction, input: DealExtractInput): DealCandidate | null {
+export function toCandidate(raw: RawDealExtraction, input: DealExtractInput): DealCandidate | null {
   const conf = typeof raw.confidence === "number" ? raw.confidence : 0;
   if (!Number.isFinite(conf) || conf < 0.2) return null;
   const company = (raw.company_name ?? "").trim();
