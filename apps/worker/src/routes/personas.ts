@@ -139,31 +139,34 @@ function normalizeBody(body: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
-// Task #3: server-side guard. The form should hide criteria sections
-// that don't apply to a kind, but the server still rejects writes
-// that fall outside the kind's allowlist so a hand-crafted request
-// can't sneak off-shape criteria into the row.
-function stripOffShapeSections(kind: string | undefined, fields: Record<string, unknown>): Record<string, unknown> {
-  if (!kind) return fields;
+// Task #3: server-side shape validation. The form should hide
+// sections that don't apply to a kind, but the server still rejects
+// writes that fall outside the kind's allowlist so a hand-crafted
+// request can't sneak off-shape criteria into the row. Returns a
+// list of offending field names (empty when the body is in shape).
+const SECTION_FOR_FIELD: Record<string, taxonomy.CriteriaSection> = {
+  size_min: "sizing", size_max: "sizing", size_bands_json: "sizing",
+  geos_json: "geography",
+  industries_json: "industry",
+  techs_required_json: "tech_stack", techs_preferred_json: "tech_stack", techs_excluded_json: "tech_stack",
+  signal_kinds_json: "signals",
+  buyer_titles_json: "buyer_profile", buyer_seniority_json: "buyer_profile", buyer_departments_json: "buyer_profile",
+  semantic_fit_threshold: "tuning", recency_boost: "tuning", weights_json: "tuning",
+};
+function offShapeFields(kind: string | undefined, fields: Record<string, unknown>): string[] {
+  if (!kind) return [];
   const def = taxonomy.KINDS[kind as taxonomy.PersonaKind];
-  if (!def) return fields;
+  if (!def) return [];
   const allowed = new Set(def.sections);
-  const sectionFor: Record<string, taxonomy.CriteriaSection> = {
-    size_min: "sizing", size_max: "sizing", size_bands_json: "sizing",
-    geos_json: "geography",
-    industries_json: "industry",
-    techs_required_json: "tech_stack", techs_preferred_json: "tech_stack", techs_excluded_json: "tech_stack",
-    signal_kinds_json: "signals",
-    buyer_titles_json: "buyer_profile", buyer_seniority_json: "buyer_profile", buyer_departments_json: "buyer_profile",
-    semantic_fit_threshold: "tuning", recency_boost: "tuning", weights_json: "tuning",
-  };
-  const out: Record<string, unknown> = {};
+  const bad: string[] = [];
   for (const [k, v] of Object.entries(fields)) {
-    const sec = sectionFor[k];
-    if (sec && !allowed.has(sec)) continue;
-    out[k] = v;
+    if (v === undefined || v === null || v === "") continue;
+    // Empty arrays/objects passed through normalizeBody as "[]" / "{}"
+    if (typeof v === "string" && (v === "[]" || v === "{}")) continue;
+    const sec = SECTION_FOR_FIELD[k];
+    if (sec && !allowed.has(sec)) bad.push(k);
   }
-  return out;
+  return bad;
 }
 
 function previewSpecFromBody(body: Record<string, unknown>): PersonaSpec & { name: string; thesis: string | null } {
@@ -234,7 +237,10 @@ personasRoute.post("/", async (c) => {
   } else {
     fields.kind = "account_company";
   }
-  fields = stripOffShapeSections(fields.kind as string, fields);
+  const bad = offShapeFields(fields.kind as string, fields);
+  if (bad.length) {
+    return c.json({ error: "off_shape_criteria", kind: fields.kind, fields: bad, message: `fields ${bad.join(", ")} not allowed for kind ${fields.kind}` }, 400);
+  }
   fields.name = body.name;
   const row = await insertPersona(c.env, fields as Partial<PersonaRow> & { name: string }, c.get("email"));
   // Embed + full rescore in the background.
@@ -275,7 +281,10 @@ personasRoute.patch("/:id", async (c) => {
     const existing = await getPersona(c.env, id);
     effectiveKind = existing?.kind;
   }
-  fields = stripOffShapeSections(effectiveKind, fields);
+  const badPatch = offShapeFields(effectiveKind, fields);
+  if (badPatch.length) {
+    return c.json({ error: "off_shape_criteria", kind: effectiveKind, fields: badPatch, message: `fields ${badPatch.join(", ")} not allowed for kind ${effectiveKind}` }, 400);
+  }
   const row = await updatePersona(c.env, id, fields as Partial<PersonaRow>, c.get("email"));
   if (!row) return c.json({ error: "not_found" }, 404);
   c.executionCtx.waitUntil((async () => {
@@ -491,28 +500,54 @@ personasRoute.post("/preview", async (c) => {
       kind: resolved, status: "active",
       hard_filters_json: body.hard_filters_json ? (typeof body.hard_filters_json === "string" ? body.hard_filters_json : JSON.stringify(body.hard_filters_json)) : null,
     } as unknown as PersonaRow;
-    const filter = plugin.defaultEntityFilter(previewPersona, { limit: 25, offset: 0 });
+    // Pull a wider candidate pool than 25 so the real scorer has
+    // something to rank; then take the top 25 after scoring.
+    const filter = plugin.defaultEntityFilter(previewPersona, { limit: 200, offset: 0 });
     const r = await c.env.DB.prepare(filter.sql).bind(...filter.binds).all<{ id: string }>();
     const ids = (r.results ?? []).map((x) => x.id);
-    // Fetch display name for each candidate.
+
+    // Score each candidate via the plugin. For person targets the
+    // generic plugin (and most bespoke plugins) delegate to the
+    // person-graph scorer so we get a real per-candidate score that
+    // varies across the list. For non-person targets (e.g. funds)
+    // scoreEntity returns null; we fall back to a structural 0.5 so
+    // the candidate still surfaces but is clearly marked.
+    const scored: Array<{ id: string; fit_score: number; components: Record<string, unknown>; reasons: string[] }> = [];
+    for (const id of ids) {
+      try {
+        const s = await plugin.scoreEntity(c.env, previewPersona, id);
+        if (s) {
+          scored.push({
+            id,
+            fit_score: Math.round(s.score * 100),
+            components: s.components as unknown as Record<string, unknown>,
+            reasons: [s.rationale ?? plugin.explainMatch(id)],
+          });
+        } else {
+          scored.push({
+            id, fit_score: 50,
+            components: { role_match: { value: 1, weight: 1, reason: plugin.explainMatch(id) } },
+            reasons: [plugin.explainMatch(id)],
+          });
+        }
+      } catch (e) {
+        // Skip individual scoring failures rather than failing the
+        // whole preview — keeps the right rail responsive.
+        console.warn("preview scoreEntity failed", id, (e as Error).message);
+      }
+    }
+    scored.sort((a, b) => b.fit_score - a.fit_score);
+    const top = scored.slice(0, 25);
+
     const items: Array<{ id: string; name: string; fit_score: number; components: Record<string, unknown>; reasons: string[] }> = [];
-    if (ids.length) {
-      const ph = ids.map(() => "?").join(",");
+    if (top.length) {
+      const topIds = top.map((t) => t.id);
+      const ph = topIds.map(() => "?").join(",");
       const ents = await c.env.DB.prepare(
         `SELECT id, display_name FROM u_entities WHERE id IN (${ph})`,
-      ).bind(...ids).all<{ id: string; display_name: string | null }>();
+      ).bind(...topIds).all<{ id: string; display_name: string | null }>();
       const nameById = new Map((ents.results ?? []).map((e) => [e.id, e.display_name]));
-      for (const id of ids) {
-        items.push({
-          id, name: nameById.get(id) ?? id,
-          // Structural-only preview score: 0.5 placeholder. Real
-          // scores arrive once the persona is saved and the entity-
-          // matcher workflow has run.
-          fit_score: 50,
-          components: { role_match: { value: 1, weight: 1, reason: plugin.explainMatch(id) } },
-          reasons: [plugin.explainMatch(id)],
-        });
-      }
+      for (const t of top) items.push({ ...t, name: nameById.get(t.id) ?? t.id });
     }
     return c.json({ items, candidate_count: ids.length, kind: resolved, source: "kind_plugin_preview" });
   }
