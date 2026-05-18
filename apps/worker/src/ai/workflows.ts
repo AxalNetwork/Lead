@@ -196,9 +196,11 @@ export class MatchProjectWorkflow {
   constructor(ctx: ExecutionContext, env: Env) { this.ctx = ctx; this.env = env; }
   async run(event: WorkflowEvent<{ projectId: string }>, step: WorkflowStep): Promise<{ ok: true; projectId: string; audiences: number }> {
     const { projectId } = event.payload;
-    const { matchProject } = await import("../projects/match");
+    // Task #4: runAudienceMatching wraps matchProject and additionally
+    // populates project_audience_matches with feedback applied + TTL.
+    const { runAudienceMatching } = await import("../services/projects/audienceMatcher");
     const r = await step.do("match", { retries: { limit: 2, backoff: "exponential" } }, async () => {
-      return await matchProject(this.env, projectId);
+      return await runAudienceMatching(this.env, projectId);
     });
     return { ok: true, projectId, audiences: r.audiences.length };
   }

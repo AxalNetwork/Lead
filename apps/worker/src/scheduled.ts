@@ -211,9 +211,9 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
             try { await env.WF_MATCH_PROJECT.create({ params: { projectId: row.id } }); }
             catch (e) { console.warn("nightly WF_MATCH_PROJECT.create failed", row.id, (e as Error).message); }
           } else {
-            const { matchProject } = await import("./projects/match");
-            try { await matchProject(env, row.id); }
-            catch (e) { console.warn("nightly matchProject failed", row.id, (e as Error).message); }
+            const { runAudienceMatching } = await import("./services/projects/audienceMatcher");
+            try { await runAudienceMatching(env, row.id); }
+            catch (e) { console.warn("nightly runAudienceMatching failed", row.id, (e as Error).message); }
           }
         }
       } catch (e) {

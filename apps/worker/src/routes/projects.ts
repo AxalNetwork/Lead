@@ -23,9 +23,12 @@ import {
   listProjectHistory, rowToSpec, type ProjectRow,
 } from "../projects/repo";
 import { embedProject } from "../projects/embed";
-import { matchProject } from "../projects/match";
 import { suggestFromDeckText, extractTextFromUpload } from "../projects/pitch";
 import { AUDIENCES } from "../projects/score";
+import {
+  runAudienceMatching, listAudienceTop, getAudienceCounts, recordFeedback,
+  API_AUDIENCES, type ApiAudience,
+} from "../services/projects/audienceMatcher";
 
 export const projectsRoute = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
@@ -69,7 +72,7 @@ async function dispatchMatch(env: Env, projectId: string, ctx: ExecutionContext)
     try { await env.WF_MATCH_PROJECT.create({ params: { projectId } }); return; }
     catch (e) { console.warn("WF_MATCH_PROJECT.create failed; falling back inline", (e as Error).message); }
   }
-  ctx.waitUntil(matchProject(env, projectId).catch((e) => console.error("matchProject inline failed", (e as Error).message)));
+  ctx.waitUntil(runAudienceMatching(env, projectId).catch((e) => console.error("runAudienceMatching inline failed", (e as Error).message)));
 }
 
 // ---- list
@@ -376,6 +379,60 @@ projectsRoute.post("/:id/materials", async (c) => {
 projectsRoute.get("/:id/history", async (c) => {
   const items = await listProjectHistory(c.env, c.req.param("id"), Number(c.req.query("limit") ?? 200));
   return c.json({ history: items });
+});
+
+// ---- Task #4: audience-typed matches (counts + top 25 per audience).
+projectsRoute.get("/:id/audiences", async (c) => {
+  const id = c.req.param("id");
+  const project = await getProject(c.env, id);
+  if (!project) return c.json({ error: "not_found" }, 404);
+  const counts = await getAudienceCounts(c.env, id);
+  const top: Record<string, unknown> = {};
+  for (const aud of API_AUDIENCES) top[aud] = await listAudienceTop(c.env, id, aud, 25);
+  return c.json({
+    project: { id: project.id, name: project.name, matched_at: project.matched_at },
+    counts, top,
+  });
+});
+
+// ---- Task #4: manual run-matching trigger. Dispatches the durable
+// workflow when available, falls back to inline run otherwise. Returns
+// 202 immediately; UI polls /:id/audiences for the refreshed counts.
+projectsRoute.post("/:id/run-matching", async (c) => {
+  const id = c.req.param("id");
+  const project = await getProject(c.env, id);
+  if (!project) return c.json({ error: "not_found" }, 404);
+  let dispatched: "workflow" | "inline" = "inline";
+  if (c.env.WF_MATCH_PROJECT) {
+    try {
+      await c.env.WF_MATCH_PROJECT.create({ params: { projectId: id } });
+      dispatched = "workflow";
+    } catch (e) { console.warn("WF_MATCH_PROJECT.create failed; falling back inline", (e as Error).message); }
+  }
+  // Always also run the audience projection (writes project_audience_matches).
+  // The underlying matchProject is idempotent so running it twice is safe.
+  c.executionCtx.waitUntil(
+    runAudienceMatching(c.env, id).catch((e) => console.error("runAudienceMatching failed", id, (e as Error).message)),
+  );
+  return c.json({ ok: true, dispatched }, 202);
+});
+
+// ---- Task #4: negative feedback. Permanently lowers the entity's
+// score for that (project, audience) via project_audience_feedback.
+projectsRoute.post("/:id/audiences/:audience/feedback", async (c) => {
+  const id = c.req.param("id");
+  const audience = c.req.param("audience");
+  if (!(API_AUDIENCES as readonly string[]).includes(audience)) return c.json({ error: "bad_audience" }, 400);
+  const body = (await c.req.json<{ entity_id?: string; entity_kind?: string; signal?: string }>().catch(() => ({}))) as { entity_id?: string; entity_kind?: string; signal?: string };
+  const entityId = String(body.entity_id ?? "").trim();
+  const entityKind = String(body.entity_kind ?? "").trim();
+  const signal = String(body.signal ?? "not_relevant");
+  if (!entityId || !entityKind) return c.json({ error: "entity_id_and_kind_required" }, 400);
+  if (!["not_relevant", "wrong_audience", "duplicate"].includes(signal)) return c.json({ error: "bad_signal" }, 400);
+  const project = await getProject(c.env, id);
+  if (!project) return c.json({ error: "not_found" }, 404);
+  const r = await recordFeedback(c.env, id, audience as ApiAudience, entityKind, entityId, signal, c.get("email") ?? null);
+  return c.json(r);
 });
 
 // ---- AI suggest from arbitrary deck text (called by the wizard)

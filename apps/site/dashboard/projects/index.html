@@ -16,42 +16,212 @@ permalink: /dashboard/projects/
   <div class="ads-muted">Loading projects…</div>
 </div>
 
+<div id="ads-aud-drawer" class="ads-drawer" hidden>
+  <div class="ads-drawer-backdrop" data-close="1"></div>
+  <aside class="ads-drawer-panel">
+    <header style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px;border-bottom:1px solid var(--ads-border)">
+      <div>
+        <div id="ads-drawer-title" style="font-weight:600">Audience</div>
+        <div id="ads-drawer-sub" class="ads-muted" style="font-size:12px"></div>
+      </div>
+      <button class="ads-btn ads-btn--ghost" data-close="1" aria-label="Close">Close</button>
+    </header>
+    <div id="ads-drawer-body" style="padding:12px 16px;overflow:auto;max-height:calc(100vh - 60px)">
+      <div class="ads-muted">Loading…</div>
+    </div>
+  </aside>
+</div>
+
 <script>
-(async function () {
-  const list = document.getElementById('ads-projects-list');
-  try {
-    const r = await fetch('https://api.aidatasignal.com/api/projects', { credentials: 'include' });
-    if (!r.ok) throw new Error('http ' + r.status);
-    const { projects } = await r.json();
+(function () {
+  var API = 'https://api.aidatasignal.com';
+  var fmt = function (n) { return Number(n || 0).toLocaleString(); };
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+  }); };
+  var AUD = [
+    { key: 'customers', label: 'Customers' },
+    { key: 'investors', label: 'Investors' },
+    { key: 'partners',  label: 'Partners'  },
+    { key: 'hires',     label: 'Hires'     },
+    { key: 'design',    label: 'Design'    },
+  ];
+  var drawer = document.getElementById('ads-aud-drawer');
+  var dTitle = document.getElementById('ads-drawer-title');
+  var dSub   = document.getElementById('ads-drawer-sub');
+  var dBody  = document.getElementById('ads-drawer-body');
+  var currentProjectId = null;
+  var currentAudience = null;
+  var cachedTop = null;
+  var sortDir = 'desc';
+
+  function api(path, opts) {
+    return fetch(API + path, Object.assign({ credentials: 'include' }, opts || {}))
+      .then(function (r) {
+        if (!r.ok) throw new Error('http ' + r.status);
+        var ct = r.headers.get('content-type') || '';
+        return ct.indexOf('json') >= 0 ? r.json() : r.text();
+      });
+  }
+
+  function openDrawer(projectId, projectName, audience) {
+    currentProjectId = projectId; currentAudience = audience;
+    var aud = AUD.find(function (a) { return a.key === audience; });
+    dTitle.textContent = (aud ? aud.label : audience) + ' — ' + projectName;
+    dSub.textContent = 'Loading top 25…';
+    dBody.innerHTML = '<div class="ads-muted">Loading…</div>';
+    drawer.hidden = false;
+    api('/api/projects/' + encodeURIComponent(projectId) + '/audiences').then(function (data) {
+      cachedTop = data.top || {};
+      renderDrawer();
+    }).catch(function (e) {
+      dBody.innerHTML = '<div class="ads-muted">Failed to load: ' + esc(e.message) + '</div>';
+    });
+  }
+
+  function renderDrawer() {
+    var items = ((cachedTop && cachedTop[currentAudience]) || []).slice();
+    items.sort(function (a, b) {
+      var diff = (a.match_score || 0) - (b.match_score || 0);
+      return sortDir === 'desc' ? -diff : diff;
+    });
+    dSub.textContent = items.length + ' matched';
+    if (!items.length) {
+      dBody.innerHTML = '<div class="ads-empty">No matches yet. Click <b>Run matching</b> on the project to refresh.</div>';
+      return;
+    }
+    var arrow = sortDir === 'desc' ? '▼' : '▲';
+    dBody.innerHTML = ''
+      + '<div style="display:flex;justify-content:flex-end;margin-bottom:8px">'
+      +   '<button class="ads-btn ads-btn--ghost" id="ads-aud-sort" style="font-size:12px">Sort: Score ' + arrow + '</button>'
+      + '</div>'
+      + '<table class="ads-table"><thead><tr>'
+      + '<th>#</th><th>Name</th><th>Score</th><th>Reason</th><th></th>'
+      + '</tr></thead><tbody>' + items.map(function (m, i) {
+        var name = m.entity_name || (m.entity_kind + ':' + String(m.entity_id).slice(0, 8));
+        var sub  = m.entity_subtitle ? '<div class="ads-muted" style="font-size:11px">' + esc(m.entity_subtitle) + '</div>' : '';
+        var pct  = Math.round((m.match_score || 0) * 100);
+        return '<tr data-kind="' + esc(m.entity_kind) + '" data-id="' + esc(m.entity_id) + '" data-name="' + esc(name) + '">'
+          + '<td>' + (i + 1) + '</td>'
+          + '<td><div>' + esc(name) + '</div>' + sub + '</td>'
+          + '<td><b>' + pct + '</b></td>'
+          + '<td style="max-width:280px"><div class="ads-muted" style="font-size:12px">' + esc(m.reason) + '</div></td>'
+          + '<td style="white-space:nowrap">'
+          +   '<button class="ads-btn" data-action="add_outreach" style="font-size:12px;margin-right:4px">+ Outreach</button>'
+          +   '<button class="ads-btn ads-btn--ghost" data-action="not_relevant" style="font-size:12px">Not relevant</button>'
+          + '</td>'
+          + '</tr>';
+      }).join('') + '</tbody></table>';
+    var sortBtn = document.getElementById('ads-aud-sort');
+    if (sortBtn) sortBtn.addEventListener('click', function () {
+      sortDir = sortDir === 'desc' ? 'asc' : 'desc';
+      renderDrawer();
+    });
+    dBody.querySelectorAll('button[data-action="not_relevant"]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var tr = btn.closest('tr');
+        var kind = tr.getAttribute('data-kind');
+        var id   = tr.getAttribute('data-id');
+        btn.disabled = true; btn.textContent = 'Marking…';
+        api('/api/projects/' + encodeURIComponent(currentProjectId) + '/audiences/' + encodeURIComponent(currentAudience) + '/feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entity_id: id, entity_kind: kind, signal: 'not_relevant' }),
+        }).then(function () {
+          tr.style.opacity = '0.45';
+          btn.textContent = 'Penalty applied';
+        }).catch(function (e) {
+          btn.disabled = false; btn.textContent = 'Not relevant';
+          alert('Failed: ' + e.message);
+        });
+      });
+    });
+    dBody.querySelectorAll('button[data-action="add_outreach"]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var tr = btn.closest('tr');
+        var kind = tr.getAttribute('data-kind');
+        var id   = tr.getAttribute('data-id');
+        // Map ApiAudience back to internal singular for legacy bulk-status route.
+        var internal = ({ customers: 'customer', investors: 'investor', partners: 'partner', hires: 'hire', design: 'design_partner' })[currentAudience];
+        btn.disabled = true; btn.textContent = 'Adding…';
+        api('/api/projects/' + encodeURIComponent(currentProjectId) + '/matches/' + encodeURIComponent(internal) + '/bulk-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keys: [{ kind: kind, id: id }], status: 'shortlisted' }),
+        }).then(function () { btn.textContent = '✓ Outreach'; })
+          .catch(function (e) { btn.disabled = false; btn.textContent = '+ Outreach'; alert('Failed: ' + e.message); });
+      });
+    });
+  }
+
+  drawer.addEventListener('click', function (e) {
+    if (e.target && e.target.getAttribute('data-close') === '1') drawer.hidden = true;
+  });
+
+  function renderProjects(projects) {
+    var list = document.getElementById('ads-projects-list');
     if (!projects.length) {
       list.innerHTML = '<div class="ads-muted">No projects yet. Click <b>+ New project</b> to get started.</div>';
       return;
     }
-    const fmt = (n) => Number(n || 0).toLocaleString();
-    list.innerHTML = projects.map((p) => `
-      <a href="/dashboard/projects/workspace/?id=${encodeURIComponent(p.id)}" class="ads-project-card" style="display:block;padding:14px;border-bottom:1px solid var(--ads-border);color:var(--ads-text);text-decoration:none">
-        <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline">
-          <div>
-            <div style="font-weight:600">${p.name}</div>
-            <div class="ads-muted" style="font-size:12px">${p.one_liner || ''}</div>
-          </div>
-          <div style="display:flex;gap:8px;font-size:12px;flex-wrap:wrap;justify-content:flex-end">
-            <span class="ads-chip">Customers ${fmt(p.match_count_customer)}</span>
-            <span class="ads-chip">Investors ${fmt(p.match_count_investor)}</span>
-            <span class="ads-chip">Partners ${fmt(p.match_count_partner)}</span>
-            <span class="ads-chip">Hires ${fmt(p.match_count_hire)}</span>
-            <span class="ads-chip">Design ${fmt(p.match_count_design_partner)}</span>
-          </div>
-        </div>
-      </a>
-    `).join('');
-  } catch (e) {
-    list.innerHTML = '<div class="ads-muted">Failed to load projects: ' + e.message + '</div>';
+    list.innerHTML = projects.map(function (p) {
+      var counts = {
+        customers: p.match_count_customer,
+        investors: p.match_count_investor,
+        partners:  p.match_count_partner,
+        hires:     p.match_count_hire,
+        design:    p.match_count_design_partner,
+      };
+      var chips = AUD.map(function (a) {
+        return '<button type="button" class="ads-chip ads-chip--btn" data-aud="' + a.key + '" data-pid="' + esc(p.id) + '" data-pname="' + esc(p.name) + '">'
+          + a.label + ' ' + fmt(counts[a.key]) + '</button>';
+      }).join('');
+      return ''
+        + '<div class="ads-project-card" style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:14px;border-bottom:1px solid var(--ads-border)">'
+        +   '<a href="/dashboard/projects/workspace/?id=' + encodeURIComponent(p.id) + '" style="color:var(--ads-text);text-decoration:none;flex:1">'
+        +     '<div style="font-weight:600">' + esc(p.name) + '</div>'
+        +     '<div class="ads-muted" style="font-size:12px">' + esc(p.one_liner || '') + '</div>'
+        +   '</a>'
+        +   '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">'
+        +     '<div style="display:flex;gap:6px;font-size:12px;flex-wrap:wrap;justify-content:flex-end">' + chips + '</div>'
+        +     '<button class="ads-btn ads-btn--ghost ads-run-match" data-pid="' + esc(p.id) + '" style="font-size:12px">Run matching</button>'
+        +   '</div>'
+        + '</div>';
+    }).join('');
+    list.querySelectorAll('.ads-chip--btn').forEach(function (b) {
+      b.addEventListener('click', function () {
+        openDrawer(b.getAttribute('data-pid'), b.getAttribute('data-pname'), b.getAttribute('data-aud'));
+      });
+    });
+    list.querySelectorAll('.ads-run-match').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var pid = b.getAttribute('data-pid');
+        b.disabled = true; b.textContent = 'Running…';
+        api('/api/projects/' + encodeURIComponent(pid) + '/run-matching', { method: 'POST' })
+          .then(function () {
+            b.textContent = 'Refreshing in ~30s…';
+            setTimeout(function () { load(); }, 30000);
+          })
+          .catch(function (e) { b.disabled = false; b.textContent = 'Run matching'; alert('Failed: ' + e.message); });
+      });
+    });
   }
+
+  function load() {
+    var list = document.getElementById('ads-projects-list');
+    api('/api/projects').then(function (data) { renderProjects(data.projects || []); })
+      .catch(function (e) { list.innerHTML = '<div class="ads-muted">Failed to load projects: ' + esc(e.message) + '</div>'; });
+  }
+  load();
 })();
 </script>
 
 <style>
   .ads-chip { display:inline-block; padding:2px 8px; border-radius:999px; background:var(--ads-panel-2); border:1px solid var(--ads-border); font-size:12px; color:var(--ads-text) }
+  .ads-chip--btn { cursor:pointer; }
+  .ads-chip--btn:hover { background:var(--ads-accent-2, #2a2a2a); }
   .ads-project-card:hover { background:var(--ads-panel-2) }
+  .ads-drawer { position:fixed; inset:0; z-index:1000; }
+  .ads-drawer-backdrop { position:absolute; inset:0; background:rgba(0,0,0,0.4); }
+  .ads-drawer-panel { position:absolute; top:0; right:0; bottom:0; width:min(720px, 95vw); background:var(--ads-panel, #1a1a1a); border-left:1px solid var(--ads-border); box-shadow:-8px 0 32px rgba(0,0,0,0.4); display:flex; flex-direction:column; }
 </style>
