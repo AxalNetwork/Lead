@@ -235,7 +235,7 @@ export async function expandFrontier(
         `INSERT INTO smart_frontier (id, url, url_canonical, host, profile_type_id, discovery_reason,
                                      priority, source_url, source_authority, novelty_score, status)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued')
-         ON CONFLICT(profile_type_id, url_canonical) DO UPDATE SET
+         ON CONFLICT(COALESCE(profile_type_id, ''), url_canonical) DO UPDATE SET
            priority         = MAX(smart_frontier.priority, excluded.priority),
            source_authority = excluded.source_authority,
            novelty_score    = excluded.novelty_score,
