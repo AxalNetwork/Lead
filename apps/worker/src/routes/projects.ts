@@ -402,18 +402,23 @@ projectsRoute.post("/:id/run-matching", async (c) => {
   const id = c.req.param("id");
   const project = await getProject(c.env, id);
   if (!project) return c.json({ error: "not_found" }, 404);
+  // Prefer durable workflow; fall back to inline only when workflow
+  // binding is missing or dispatch fails. Avoids double Vectorize/AI
+  // spend from running both paths in parallel.
   let dispatched: "workflow" | "inline" = "inline";
   if (c.env.WF_MATCH_PROJECT) {
     try {
       await c.env.WF_MATCH_PROJECT.create({ params: { projectId: id } });
       dispatched = "workflow";
-    } catch (e) { console.warn("WF_MATCH_PROJECT.create failed; falling back inline", (e as Error).message); }
+    } catch (e) {
+      console.warn("WF_MATCH_PROJECT.create failed; falling back inline", (e as Error).message);
+    }
   }
-  // Always also run the audience projection (writes project_audience_matches).
-  // The underlying matchProject is idempotent so running it twice is safe.
-  c.executionCtx.waitUntil(
-    runAudienceMatching(c.env, id).catch((e) => console.error("runAudienceMatching failed", id, (e as Error).message)),
-  );
+  if (dispatched === "inline") {
+    c.executionCtx.waitUntil(
+      runAudienceMatching(c.env, id).catch((e) => console.error("runAudienceMatching failed", id, (e as Error).message)),
+    );
+  }
   return c.json({ ok: true, dispatched }, 202);
 });
 
