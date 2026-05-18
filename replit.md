@@ -117,5 +117,15 @@ data, mutations, and controls live behind the worker's adminOnly
 guard — the page itself never holds operational data for
 unauthenticated viewers.
 
+### Task #4 — Angel sweep on nightly cron, not weekly (ACCEPTED)
+The Task #4 spec says "weekly angel refresh + nightly syndicate
+rebuild". Free plan caps crons at 5 and all five slots are already
+occupied (per Task #2 operational note); the consolidated nightly slot
+"15 3 * * *" is the only place new sweeps can land. Implemented
+resolution: both `refreshAllAngels` and `refreshAllSyndicateAnalytics`
+run in the nightly tick. Running the angel sweep more frequently than
+weekly is strictly safe (bounded at 500 angels/tick, idempotent
+upsert) — it only increases freshness.
+
 ## User preferences
 - (none recorded yet)

@@ -393,6 +393,20 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         console.error("nightly fund refresh failed", (e as Error).message);
       }
 
+      // Task #4 (Angel & Syndicate Network Mapper): nightly per-angel
+      // ledger refresh + syndicate analytics rebuild. Piggybacks on this
+      // consolidated nightly slot — Free plan caps crons at 5.
+      try {
+        const { refreshAllAngels } = await import("./services/angels/assemble");
+        const angelsRefreshed = await refreshAllAngels(env, 500);
+        console.log("angel refresh sweep done", angelsRefreshed);
+        const { refreshAllSyndicateAnalytics } = await import("./services/angels/syndicateAnalytics");
+        const syndRefreshed = await refreshAllSyndicateAnalytics(env);
+        console.log("syndicate analytics rebuild done", syndRefreshed);
+      } catch (e) {
+        console.error("nightly angel/syndicate refresh failed", (e as Error).message);
+      }
+
       // 5. Project match refresh
       try {
         const r = await env.DB.prepare(`SELECT id FROM projects WHERE deleted_at IS NULL AND status = 'active' ORDER BY last_modified DESC LIMIT 200`).all<{ id: string }>();
