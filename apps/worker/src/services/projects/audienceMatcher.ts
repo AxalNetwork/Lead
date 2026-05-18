@@ -145,8 +145,11 @@ export async function runAudienceMatching(env: Env, projectId: string): Promise<
   await matchProject(env, projectId);
 
   const now = new Date();
-  const computedAt = now.toISOString();
-  const expiresAt = new Date(now.getTime() + TTL_DAYS * 86400_000).toISOString();
+  // Use SQLite's `YYYY-MM-DD HH:MM:SS` format (matches datetime('now'))
+  // so lexical comparisons in TTL filters stay exact across days.
+  const sqliteTs = (d: Date) => d.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "");
+  const computedAt = sqliteTs(now);
+  const expiresAt = sqliteTs(new Date(now.getTime() + TTL_DAYS * 86400_000));
   const summary: ProjectMatchSummary = { ok: true, project_id: projectId, audiences: [] };
   const newCounts: Record<string, number> = {};
 
