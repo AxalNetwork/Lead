@@ -124,6 +124,20 @@ export async function getType(env: Env, id: string): Promise<ProfileType | null>
   return all.find((t) => t.id === id) ?? null;
 }
 
+// Convenience wrapper matching the signature called out in task spec
+// (`testPage(typeId, {url, html})`). The route handler uses the lower-
+// level `testPage(type, page)` form so it can return 404 separately
+// when the type id is unknown.
+export async function testPageById(
+  env: Env,
+  typeId: string,
+  page: { url?: string; html?: string },
+): Promise<TestPageResult | null> {
+  const t = await getType(env, typeId);
+  if (!t) return null;
+  return testPage(t, page);
+}
+
 export function invalidateRegistry(env?: Env): void {
   memCache = null;
   if (env?.SCRAPE_CACHE) {
