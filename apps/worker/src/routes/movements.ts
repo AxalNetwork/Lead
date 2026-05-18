@@ -188,6 +188,7 @@ firmsMovementsRoute.get("/:entity_id/team-history", async (c) => {
   // Build first-seen / last-seen / current per normalized name.
   interface Slot {
     name: string;
+    entity_id: string | null;
     first_seen: string;
     last_seen: string;
     current: boolean;
@@ -199,14 +200,19 @@ firmsMovementsRoute.get("/:entity_id/team-history", async (c) => {
   const allSnaps = snaps.results ?? [];
   const latestDate = allSnaps.length ? allSnaps[allSnaps.length - 1].snapshot_date : null;
   for (const s of allSnaps) {
-    const members = safeJson<Array<{ name: string; role_title?: string | null; profile_url?: string | null }>>(s.members_json) ?? [];
+    const members = safeJson<Array<{ name: string; entity_id?: string | null; role_title?: string | null; profile_url?: string | null }>>(s.members_json) ?? [];
     for (const m of members) {
-      const key = m.name.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+      const nameNorm = m.name.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+      // Identity key: prefer the resolved entity_id (distinct same-name
+      // partners stay distinct) and fall back to normalized name only
+      // when the snapshotter could not resolve a canonical person.
+      const key = m.entity_id ? `id:${m.entity_id}` : (nameNorm ? `n:${nameNorm}` : "");
       if (!key) continue;
       const slot = ledger.get(key);
       if (!slot) {
         ledger.set(key, {
           name: m.name,
+          entity_id: m.entity_id ?? null,
           first_seen: s.snapshot_date,
           last_seen: s.snapshot_date,
           current: s.snapshot_date === latestDate,
@@ -217,6 +223,7 @@ firmsMovementsRoute.get("/:entity_id/team-history", async (c) => {
       } else {
         slot.last_seen = s.snapshot_date;
         slot.current = s.snapshot_date === latestDate;
+        slot.entity_id = slot.entity_id ?? m.entity_id ?? null;
         slot.role_title_latest = m.role_title ?? slot.role_title_latest;
         slot.profile_url_latest = m.profile_url ?? slot.profile_url_latest;
         slot.snapshots_seen += 1;
