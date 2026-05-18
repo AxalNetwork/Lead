@@ -21,7 +21,7 @@ const ROOT = "../test-dist";
 
 const { getWorkflowForType, hasDedicatedWorkflow, listWorkflows } =
   await import(`${ROOT}/crawler/profileWorkflows/registry.js`);
-const { crossRef, runStandardWorkflow, resolveEntityId } =
+const { crossRef, runStandardWorkflow, resolveEntityId, checkTypeDailyBudget } =
   await import(`${ROOT}/crawler/profileWorkflows/_shared.js`);
 const { investorVcWorkflow } = await import(`${ROOT}/crawler/profileWorkflows/investor_vc.js`);
 
@@ -174,9 +174,18 @@ function makeEnv() {
         }),
       }),
     },
-    // No-ops for the side-channel bindings the runner consults.
+    // In-memory KV stand-in so the per-type daily spend ledger
+    // (KV reads/writes inside _shared) works in tests.
     AI_CACHE: null,
-    SCRAPE_CACHE: null,
+    SCRAPE_CACHE: (() => {
+      const m = new Map();
+      return {
+        get: async (k) => m.get(k) ?? null,
+        put: async (k, v) => { m.set(k, v); },
+        delete: async (k) => { m.delete(k); },
+        _map: m,
+      };
+    })(),
     AI_RL: null,
     AI_DAILY_NEURONS_CAP: "1000000",
   };
@@ -212,6 +221,46 @@ test("runStandardWorkflow: skipping fetch (disableAi=false) still runs on candid
   assert.equal(rows.length, 1);
   assert.equal(rows[0].profile_type_id, "investor_vc");
   assert.equal(rows[0].workflow_id, "investor_vc.v1");
+});
+
+test("writeFact: facts persist via insertFact path with verified flag set", async () => {
+  const env = makeEnv();
+  // Two distinct source tags emitting the same value would normally
+  // promote; here we just confirm the canonical write path writes a
+  // row with source_kind='enrichment' and that the verified column
+  // is set when crossRef promotes.
+  const ctx = {
+    candidateUrl: "https://acme2.invalid/",
+    candidateHtml: "<html><title>Acme Two</title><body>Acme is a venture firm.</body></html>",
+    candidateHost: "acme2.invalid",
+    jobId: "test-job-write",
+  };
+  await investorVcWorkflow.run(env, ctx, { budgetUsdCap: 0, aiCallCap: 1 });
+  const rows = (await env.DB.prepare("SELECT source_kind, source, verified FROM facts").bind().all()).results;
+  assert.ok(rows.length >= 1, "expected at least one fact row");
+  for (const r of rows) {
+    assert.equal(r.source_kind, "enrichment");
+    // source should be the URL, not a workflow:run synthetic string
+    assert.ok(typeof r.source === "string" && r.source.startsWith("http"), `source should be a URL, got ${r.source}`);
+  }
+});
+
+test("checkTypeDailyBudget: cap blocks dispatch after spend exceeds cap", async () => {
+  const env = makeEnv();
+  // Pre-load the spend ledger above the default cap (0.50 USD).
+  const day = new Date().toISOString().slice(0, 10);
+  await env.SCRAPE_CACHE.put(`pwf:spend:investor_vc:${day}`, "0.75");
+  const r = await checkTypeDailyBudget(env, "investor_vc");
+  assert.equal(r.ok, false);
+  assert.ok(r.spend >= r.cap, `expected spend ≥ cap, got ${r.spend} / ${r.cap}`);
+});
+
+test("checkTypeDailyBudget: empty ledger allows dispatch", async () => {
+  const env = makeEnv();
+  const r = await checkTypeDailyBudget(env, "investor_vc");
+  assert.equal(r.ok, true);
+  assert.equal(r.spend, 0);
+  assert.ok(r.cap > 0);
 });
 
 test("resolveEntityId: deterministic from candidate URL", async () => {

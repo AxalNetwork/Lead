@@ -22,6 +22,7 @@ import { extractPeopleFromPage, nameKeyOf, type ExtractedPerson } from "./firmcr
 // the page classifier when env.PROFILE_WORKFLOWS_ENABLED is set; otherwise
 // inert (and the registry lookup short-circuits).
 import { getWorkflowForType } from "../crawler/profileWorkflows/registry";
+import { checkTypeDailyBudget } from "../crawler/profileWorkflows/_shared";
 import { loadRegistry, testPage as testProfileType } from "../services/profileTypes";
 import { aiExtractPeople } from "../ai/extract";
 import { guessEmails } from "./firmcrawl/emailGuess";
@@ -618,15 +619,24 @@ async function processSingleUrl(
           const r = testProfileType(t, { url: fetched.url || url, html: fetched.html });
           if (r.matched && r.confidence >= (best?.conf ?? 0.5)) best = { id: t.id, conf: r.confidence };
         }
-        if (best) {
-          const wf = getWorkflowForType(best.id);
+        // Fallback dispatch: if no e_types entry matched but the
+        // classifier still considers the page profile-like, route to
+        // the generic `_default` workflow (web-search bootstrap +
+        // top-3 result extraction) so we still capture facts for
+        // unknown / unimplemented types.
+        const chosenTypeId = best?.id ?? "_default";
+        const budget = await checkTypeDailyBudget(env, chosenTypeId);
+        if (!budget.ok) {
+          console.log("profile_workflow skipped:type_daily_cap", { type: chosenTypeId, spend: budget.spend, cap: budget.cap });
+        } else {
+          const wf = getWorkflowForType(chosenTypeId);
           const out = await wf.run(env, {
             candidateUrl: fetched.url || url,
             candidateHtml: fetched.html,
             candidateHost: safeHost(fetched.url || url),
             jobId,
           }, { budgetUsdCap: 0.05 });
-          console.log("profile_workflow", { type: best.id, status: out.status, facts: out.facts_written, verified: out.facts_verified });
+          console.log("profile_workflow", { type: chosenTypeId, matched: !!best, status: out.status, facts: out.facts_written, verified: out.facts_verified });
         }
       } catch (e) {
         console.warn("profile_workflow dispatch failed", (e as Error).message);

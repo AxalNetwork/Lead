@@ -26,12 +26,13 @@
 // typed workflows.
 
 import type { Env } from "../../types";
-import { fetchPage } from "../../scraper/fetcher";
+import { fetchPage, type FetchTier } from "../../scraper/fetcher";
 import { aiCacheGet, aiCachePut, sha256Hex } from "../../ai/cache";
 import { assertBudget } from "../../ai/budget";
 import { limitAi } from "../../scraper/rateLimit";
 import { trackAi } from "../../analytics/events";
 import { sha256 } from "../../entities/normalize";
+import { insertFact } from "../../entities/facts";
 import type {
   FactCandidate, PlannedSource, ProfileWorkflow, WorkflowContext,
   WorkflowDef, WorkflowError, WorkflowResult, WorkflowRunOpts,
@@ -41,7 +42,13 @@ const AI_TIMEOUT_MS = 30_000;
 const DEFAULT_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
 const FALLBACK_MODEL = "@cf/meta/llama-3.1-8b-instruct";
 const DEFAULT_BUDGET_USD = 0.05;
+const DEFAULT_PER_TYPE_DAILY_CAP_USD = 0.50;
 const STRIP_BODY_BYTES = 4500;
+// Mirror of fetcher.ts TIER_COST_USD. Used to charge the per-run /
+// per-type-daily budgets from the real per-source-tier rates the fetcher
+// records into `fetch_log.cost_usd`, instead of a flat estimate.
+const TIER_COST_USD: Record<FetchTier, number> = { 0: 0, 1: 0.0009, 2: 0.0015, 3: 0.005, 4: 0, 5: 0 };
+const AI_NEURON_COST_USD = 0.001;
 
 // ---- URL helpers ---------------------------------------------------------
 
@@ -224,55 +231,56 @@ export async function resolveEntityId(typeId: string, ctx: WorkflowContext): Pro
   return `pwf_${h.slice(0, 32)}`;
 }
 
+/**
+ * Persist one fact via the canonical `insertFact` write path so the
+ * supersede trigger, summary rebuild, and persona-match refresh fire
+ * the same way they do for every other fact in the system. After the
+ * insert (or UPDATE-on-collision inside insertFact), we set the
+ * `verified` column for the row matching the canonical hash. The hash
+ * recipe is duplicated here from `entities/facts.ts insertFact` so we
+ * can target the exact row without an extra query.
+ */
 async function writeFact(
   env: Env,
   entityId: string,
   f: FactCandidate,
   verified: boolean,
   adjustedConfidence: number,
-  workflowId: string,
-  runId: string,
   observedAt: string,
 ): Promise<void> {
-  const hash = await sha256(`${entityId}|${f.predicate}|${f.sourceUrl}`);
   const valueText = f.valueText ?? null;
   const valueNumber = f.valueNumber ?? null;
-  const valueJsonStr = f.valueJson != null ? JSON.stringify(f.valueJson) : null;
+  const valueJson = f.valueJson ?? null;
+  const source = f.sourceUrl;
+  await insertFact(env, {
+    entity_id: entityId,
+    predicate: f.predicate,
+    value_text: valueText,
+    value_number: valueNumber,
+    value_json: valueJson,
+    value_entity_id: null,
+    source_kind: "enrichment",
+    source,
+    evidence_url: f.sourceUrl,
+    confidence: adjustedConfidence,
+    observed_at: observedAt,
+  });
+  // Stamp the `verified` flag on the row we just wrote/updated. We
+  // recompute insertFact's hash recipe to target the exact row without
+  // a SELECT — the column may not exist on legacy schemas, so the
+  // UPDATE is best-effort.
+  const valueKey = JSON.stringify({
+    t: valueText, n: valueNumber, j: valueJson, e: null,
+  });
+  const hash = await sha256(`${entityId}|${f.predicate}|${valueKey}|${source}`);
   try {
     await env.DB.prepare(
-      `INSERT INTO facts (
-         id, entity_id, predicate, value_text, value_number, value_json,
-         value_entity_id, source_kind, source, evidence_url, confidence,
-         observed_at, valid_from, valid_to, is_current, hash, verified
-       ) VALUES (?, ?, ?, ?, ?, ?, NULL, 'enrichment', ?, ?, ?, ?, NULL, NULL, 1, ?, ?)`,
-    ).bind(
-      crypto.randomUUID(),
-      entityId,
-      f.predicate,
-      valueText,
-      valueNumber,
-      valueJsonStr,
-      `profile_workflow:${workflowId}:${runId}`,
-      f.sourceUrl,
-      adjustedConfidence,
-      observedAt,
-      hash,
-      verified ? 1 : 0,
-    ).run();
+      "UPDATE facts SET verified = MAX(COALESCE(verified, 0), ?) WHERE hash = ?",
+    ).bind(verified ? 1 : 0, hash).run();
   } catch (e) {
-    const msg = (e as Error).message || "";
-    if (/UNIQUE/i.test(msg)) {
-      await env.DB.prepare(
-        `UPDATE facts
-            SET value_text = ?, value_number = ?, value_json = ?,
-                confidence = MAX(confidence, ?),
-                observed_at = ?, is_current = 1,
-                verified = MAX(verified, ?)
-          WHERE hash = ?`,
-      ).bind(valueText, valueNumber, valueJsonStr, adjustedConfidence, observedAt, verified ? 1 : 0, hash).run();
-    } else {
-      throw e;
-    }
+    // Migration 345 introduces the column; older deployments may not
+    // have it yet. Don't fail the workflow on bookkeeping.
+    console.warn("profile_workflow verified stamp failed", (e as Error).message);
   }
 }
 
@@ -370,7 +378,11 @@ export async function runStandardWorkflow(
     }
     try {
       const r = await fetchPage(env, src.url, { jobId: ctx.jobId ?? undefined, minIntervalMs: 4000 });
-      actualCostUsd += (r.ok ? 0.001 : 0); // conservative; fetcher logs precise tier cost
+      // Charge from the per-tier rate the fetcher itself records into
+      // `fetch_log.cost_usd`. Failed attempts still consume a tier
+      // slot (and a tier-0 cost = 0), so we add the tier cost
+      // regardless of `r.ok`.
+      actualCostUsd += TIER_COST_USD[r.tier] ?? 0;
       if (!r.ok) {
         if (!src.optional) sourcesFailed += 1;
         errors.push({ tag: src.tag, message: `fetch_failed:${r.blockReason ?? r.status}` });
@@ -429,7 +441,7 @@ export async function runStandardWorkflow(
   let factsVerified = 0;
   for (const v of verifiedList) {
     try {
-      await writeFact(env, entityId, v.fact, v.verified, v.adjustedConfidence, def.id, runId, observedAt);
+      await writeFact(env, entityId, v.fact, v.verified, v.adjustedConfidence, observedAt);
       factsWritten += 1;
       if (v.verified) factsVerified += 1;
     } catch (e) {
@@ -455,13 +467,75 @@ export async function runStandardWorkflow(
     facts_verified: factsVerified,
     ai_calls: aiCalls,
     ai_neurons: aiNeurons,
-    estimated_cost_usd: def.estimated_cost_per_run.sources * 0.0009 + def.estimated_cost_per_run.ai_neurons * 0.001,
-    actual_cost_usd: actualCostUsd + aiNeurons * 0.001,
+    estimated_cost_usd: def.estimated_cost_per_run.sources * 0.0009 + def.estimated_cost_per_run.ai_neurons * AI_NEURON_COST_USD,
+    actual_cost_usd: actualCostUsd + aiNeurons * AI_NEURON_COST_USD,
     errors,
     duration_ms: Date.now() - t0,
   };
   await recordRun(env, { runId, workflow: def, ctx, entityId, result });
+  // Charge the per-type daily spend ledger so the next dispatch can
+  // gate on remaining daily budget for THIS profile type.
+  await addTypeDailySpend(env, def.profile_type_id, result.actual_cost_usd);
   return result;
+}
+
+// ---- Per-profile-type daily spend cap -----------------------------------
+
+/**
+ * Read the per-profile-type daily-cap config. Operators can tighten or
+ * loosen on a per-type basis via `PWF_TYPE_CAP_<TYPE_ID>_USD`; otherwise
+ * the global default applies.
+ */
+function perTypeDailyCapUsd(env: Env, typeId: string): number {
+  const envAny = env as unknown as Record<string, string | undefined>;
+  const safe = typeId.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+  const specific = Number(envAny[`PWF_TYPE_CAP_${safe}_USD`] ?? "");
+  if (Number.isFinite(specific) && specific > 0) return specific;
+  const fallback = Number(envAny["PWF_DAILY_TYPE_CAP_USD"] ?? "");
+  if (Number.isFinite(fallback) && fallback > 0) return fallback;
+  return DEFAULT_PER_TYPE_DAILY_CAP_USD;
+}
+
+function spendKey(typeId: string, day: string): string {
+  return `pwf:spend:${typeId}:${day}`;
+}
+
+async function getTypeDailySpend(env: Env, typeId: string): Promise<{ day: string; spend: number; cap: number }> {
+  const day = new Date().toISOString().slice(0, 10);
+  const cap = perTypeDailyCapUsd(env, typeId);
+  let spend = 0;
+  try {
+    const raw = await env.SCRAPE_CACHE?.get(spendKey(typeId, day));
+    if (raw) spend = Number(raw) || 0;
+  } catch {
+    /* KV unavailable in some environments — treat as zero spend. */
+  }
+  return { day, spend, cap };
+}
+
+async function addTypeDailySpend(env: Env, typeId: string, deltaUsd: number): Promise<void> {
+  if (!Number.isFinite(deltaUsd) || deltaUsd <= 0) return;
+  try {
+    const { day, spend } = await getTypeDailySpend(env, typeId);
+    const next = spend + deltaUsd;
+    // 25h TTL keeps "today" alive across the midnight boundary in any
+    // tz while letting old keys evict naturally.
+    await env.SCRAPE_CACHE?.put(spendKey(typeId, day), String(next), { expirationTtl: 90_000 });
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Public guard: returns `{ ok: false }` when this profile_type has
+ * already exceeded its daily USD cap. Called by the dispatch site
+ * before invoking a workflow so we don't pay AI/fetch costs we cannot
+ * record. Exposed at module scope so the cron driver (follow-up #14)
+ * can use the same gate.
+ */
+export async function checkTypeDailyBudget(env: Env, typeId: string): Promise<{ ok: boolean; spend: number; cap: number; day: string }> {
+  const s = await getTypeDailySpend(env, typeId);
+  return { ok: s.spend < s.cap, ...s };
 }
 
 /** Build a `ProfileWorkflow` from a `WorkflowDef`. */
