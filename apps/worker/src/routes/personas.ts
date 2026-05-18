@@ -185,21 +185,43 @@ function offShapeFields(kind: string | undefined, fields: Record<string, unknown
   return bad;
 }
 
-// Task #3: build the effective full row for PATCH validation by
-// merging the incoming patch on top of the existing persona, so a
-// patch that changes only `kind` still catches stale criteria from
-// disallowed sections already persisted in the row.
-function mergePatchForValidation(existing: PersonaRow | null | undefined, patch: Record<string, unknown>): Record<string, unknown> {
-  const merged: Record<string, unknown> = {};
-  if (existing) {
-    for (const k of Object.keys(SECTION_FOR_FIELD)) {
-      const v = (existing as unknown as Record<string, unknown>)[k];
-      if (v !== undefined && v !== null && v !== "") merged[k] = v;
-    }
-    if (existing.hard_filters_json) merged.hard_filters_json = existing.hard_filters_json;
+// Task #3: when a PATCH changes `kind`, auto-scrub stored fields that
+// are no longer allowed for the new kind by adding `field: null`
+// entries to the patch. This preserves backward compatibility for
+// migrated personas (existing 'buyer' rows backfilled to
+// 'buyer_person' that still carry old sizing/tech fields) while still
+// guaranteeing the post-patch row is shape-valid. Hint keys inside
+// hard_filters_json are scrubbed the same way.
+function scrubStaleFieldsOnKindChange(
+  existing: PersonaRow | null | undefined,
+  newKind: string,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!existing) return patch;
+  const def = taxonomy.KINDS[newKind as taxonomy.PersonaKind];
+  if (!def) return patch;
+  const allowedSections = new Set(def.sections);
+  const allowedHints = new Set<string>(def.hints);
+  const out = { ...patch };
+  for (const [col, sec] of Object.entries(SECTION_FOR_FIELD)) {
+    if (allowedSections.has(sec)) continue;
+    const v = (existing as unknown as Record<string, unknown>)[col];
+    if (v != null && v !== "" && v !== "[]" && v !== "{}" && !(col in out)) out[col] = null;
   }
-  for (const [k, v] of Object.entries(patch)) merged[k] = v;
-  return merged;
+  // Scrub now-disallowed hints inside hard_filters_json if the patch
+  // didn't already overwrite it.
+  if (!("hard_filters_json" in out) && existing.hard_filters_json) {
+    try {
+      const parsed = JSON.parse(existing.hard_filters_json) as Record<string, unknown>;
+      if (parsed && typeof parsed === "object" && parsed.hints && typeof parsed.hints === "object") {
+        const hints = parsed.hints as Record<string, unknown>;
+        let dirty = false;
+        for (const hk of Object.keys(hints)) if (!allowedHints.has(hk)) { delete hints[hk]; dirty = true; }
+        if (dirty) out.hard_filters_json = JSON.stringify(parsed);
+      }
+    } catch { /* leave existing value untouched */ }
+  }
+  return out;
 }
 
 function previewSpecFromBody(body: Record<string, unknown>): PersonaSpec & { name: string; thesis: string | null } {
@@ -306,19 +328,26 @@ personasRoute.patch("/:id", async (c) => {
   // off-shape criteria so the row stays consistent with the kind.
   let effectiveKind: string | undefined;
   const existingRow = await getPersona(c.env, id);
+  let kindChanged = false;
   if (typeof body.kind === "string") {
     const k = resolveKindStatic(body.kind);
     if (!k) return c.json({ error: "bad_request", message: `unknown kind: ${body.kind}` }, 400);
     fields.kind = k;
     effectiveKind = k;
+    kindChanged = existingRow?.kind !== k;
   } else {
     effectiveKind = existingRow?.kind;
   }
-  // Validate the effective full row (existing + patch). This catches
-  // the case where a client PATCHes only `kind` and the previously
-  // stored criteria are now off-shape for the new kind.
-  const merged = mergePatchForValidation(existingRow, fields);
-  const badPatch = offShapeFields(effectiveKind, merged);
+  // On a kind change, auto-scrub stored fields no longer allowed for
+  // the new kind so migrated/legacy personas can still be edited
+  // without manually clearing every off-shape value first.
+  if (kindChanged && effectiveKind) {
+    fields = scrubStaleFieldsOnKindChange(existingRow, effectiveKind, fields);
+  }
+  // Validate only the fields actually being written. Off-shape values
+  // already persisted on the row are left intact unless the user is
+  // changing kind (handled above).
+  const badPatch = offShapeFields(effectiveKind, fields);
   if (badPatch.length) {
     return c.json({ error: "off_shape_criteria", kind: effectiveKind, fields: badPatch, message: `fields ${badPatch.join(", ")} not allowed for kind ${effectiveKind}` }, 400);
   }
@@ -528,7 +557,7 @@ personasRoute.post("/preview", async (c) => {
   // 'partner_at_firm')) rather than the legacy accounts/buyers tables.
   const rawKind = typeof body.kind === "string" ? body.kind : "account_company";
   const resolved = resolveKindStatic(rawKind);
-  if (resolved && resolved !== "account_company" && resolved !== "buyer_person") {
+  if (resolved && resolved !== "account_company") {
     const plugin = getPluginFor(resolved);
     // Build a full throw-away PersonaRow from the body so plugin
     // scoring sees all criteria (industries_json, geos_json, size_*,

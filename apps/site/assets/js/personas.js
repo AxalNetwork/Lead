@@ -187,16 +187,45 @@
 
     function setMsg(text, color) { msg.textContent = text || ""; msg.style.color = color || "#666"; }
 
+    // Task #3: map a form-field name to the criteria section the
+    // server uses to validate it. Keep in sync with SECTION_FOR_FIELD
+    // in apps/worker/src/routes/personas.ts.
+    var SECTION_FOR_FIELD = {
+      size_min: "sizing", size_max: "sizing", size_bands: "sizing",
+      geos: "geography",
+      industries: "industry",
+      techs_required: "tech_stack", techs_preferred: "tech_stack", techs_excluded: "tech_stack",
+      signal_kinds: "signals",
+      buyer_titles: "buyer_profile", buyer_seniority: "buyer_profile", buyer_departments: "buyer_profile",
+      semantic_fit_threshold: "tuning", recency_boost: "tuning", weights_json: "tuning"
+    };
+    function allowedSet(kind) {
+      var def = kindDef(kind);
+      return def ? def.sections : null;
+    }
+    function isAllowed(field, allowed) {
+      if (!allowed) return true;
+      var sec = SECTION_FOR_FIELD[field];
+      if (!sec) return true; // name/thesis/kind/hard_filters_json — always sent
+      return allowed.indexOf(sec) >= 0;
+    }
+
     function readForm() {
       var fd = new FormData(form);
       var b = {};
       ["name","thesis","kind"].forEach(function (k) { var v = fd.get(k); if (v != null && v !== "") b[k] = String(v); });
-      ["size_min","size_max","semantic_fit_threshold","recency_boost"].forEach(function (k) { var v = fd.get(k); if (v != null && v !== "") b[k] = Number(v); });
+      var allowed = allowedSet(fd.get("kind"));
+      ["size_min","size_max","semantic_fit_threshold","recency_boost"].forEach(function (k) {
+        if (!isAllowed(k, allowed)) return;
+        var v = fd.get(k); if (v != null && v !== "") b[k] = Number(v);
+      });
       ["geos","industries","techs_required","techs_preferred","techs_excluded","signal_kinds","buyer_titles","buyer_seniority","buyer_departments","size_bands"].forEach(function (k) {
+        if (!isAllowed(k, allowed)) return;
         var arr = commaList(fd.get(k));
         if (arr.length) b[k + "_json"] = arr;
       });
       ["hard_filters_json","weights_json"].forEach(function (k) {
+        if (k === "weights_json" && !isAllowed("weights_json", allowed)) return;
         var v = fd.get(k);
         if (v && String(v).trim()) {
           try { b[k] = JSON.parse(v); } catch (e) { /* leave out — server will ignore unparseable */ }
