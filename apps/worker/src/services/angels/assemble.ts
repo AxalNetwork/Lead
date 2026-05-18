@@ -163,7 +163,8 @@ async function isTechFirm(env: Env, firmEntityId: string | null): Promise<boolea
   return false;
 }
 
-/** Read fact value_text for a single predicate. */
+/** Read fact value_text for a single predicate (latest current row only).
+ *  Use for boolean/freshness signals where authority arbitration is N/A. */
 async function loadFactText(env: Env, entityId: string, predicate: string): Promise<{ value: string | null; source: string | null }> {
   const r = await env.DB.prepare(
     `SELECT value_text, source FROM facts
@@ -171,6 +172,22 @@ async function loadFactText(env: Env, entityId: string, predicate: string): Prom
       ORDER BY observed_at DESC LIMIT 1`,
   ).bind(entityId, predicate).first<{ value_text: string | null; source: string | null }>();
   return { value: r?.value_text ?? null, source: r?.source ?? null };
+}
+
+/** Load every CURRENT candidate for a predicate so pickByAuthority can
+ *  arbitrate across competing sources. Without this, the latest-observed
+ *  row wins by recency before the SEC > company > press > tech > social
+ *  hierarchy ever runs (the Task #1 source-authority contract).
+ *  Bounded at 50 candidates per predicate — angel facts are sparse. */
+async function loadFactCandidates(
+  env: Env, entityId: string, predicate: string,
+): Promise<Array<{ value: string | null; source: string | null }>> {
+  const r = await env.DB.prepare(
+    `SELECT value_text, source FROM facts
+      WHERE entity_id = ? AND predicate = ? AND is_current = 1
+      ORDER BY observed_at DESC LIMIT 50`,
+  ).bind(entityId, predicate).all<{ value_text: string | null; source: string | null }>();
+  return (r.results ?? []).map((row) => ({ value: row.value_text, source: row.source }));
 }
 
 /** Resolve participant rows for one person into normalized investment rows. */
@@ -276,9 +293,28 @@ export async function assembleAngel(
   const dayJobTechFlag = await isTechFirm(env, dayJob.day_job_entity_id);
   const investments = await loadInvestments(env, personEntityId);
 
-  const syndicateFact = await loadFactText(env, personEntityId, "person.syndicate_handle");
-  const rollingFact   = await loadFactText(env, personEntityId, "person.rolling_fund_handle");
-  const warmFact      = await loadFactText(env, personEntityId, "person.open_to_warm_intros");
+  // Load ALL current candidates for handle facts so pickByAuthority can
+  // arbitrate across competing sources (SEC > company > press > tech >
+  // social). warmFact is a boolean; latest-current is sufficient.
+  const syndicateCandidates = await loadFactCandidates(env, personEntityId, "person.syndicate_handle");
+  const rollingCandidates   = await loadFactCandidates(env, personEntityId, "person.rolling_fund_handle");
+  const warmFact            = await loadFactText(env, personEntityId, "person.open_to_warm_intros");
+  // Pre-compute the authority-arbitrated values so downstream stamping
+  // (SPV mini-adapter, investment via_syndicate_handle backfill) uses
+  // the canonical pick rather than whatever happened to be observed
+  // most recently.
+  const syndPick = pickByAuthority<string>(
+    syndicateCandidates.map((c) => ({
+      value: c.value, source_type: normalizeSourceType(c.source), source_url: c.source,
+    })),
+  );
+  const rollingPick = pickByAuthority<string>(
+    rollingCandidates.map((c) => ({
+      value: c.value, source_type: normalizeSourceType(c.source), source_url: c.source,
+    })),
+  );
+  const syndicateFact = { value: syndPick.value };
+  const rollingFact   = { value: rollingPick.value };
 
   // Stamp via_syndicate_handle on any investment where this angel is
   // recorded as the lead and is a syndicate_lead — without this, the
@@ -358,15 +394,10 @@ export async function assembleAngel(
   }
 
   // --- Per-field source-authority picks ------------------------------
-  // syndicate_handle and rolling_fund_handle can be claimed by multiple
-  // sources; the canonical pick uses ANGEL_AUTHORITY ranking (SEC >
-  // company > angellist > crunchbase > press > tech-press > social).
-  const syndPick = pickByAuthority<string>([
-    { value: syndicateFact.value, source_type: normalizeSourceType(syndicateFact.source), source_url: null },
-  ]);
-  const rollingPick = pickByAuthority<string>([
-    { value: rollingFact.value, source_type: normalizeSourceType(rollingFact.source), source_url: null },
-  ]);
+  // syndPick / rollingPick were arbitrated above across ALL current
+  // candidates so downstream stamping uses the canonical value. day_job
+  // comes from `career_history` (a structured row, not `facts`), so a
+  // single-candidate pick is correct here.
   const dayJobPick = pickByAuthority<string>([
     { value: dayJob.day_job_entity_id, source_type: normalizeSourceType(dayJob.day_job_evidence_url), source_url: dayJob.day_job_evidence_url },
   ]);
