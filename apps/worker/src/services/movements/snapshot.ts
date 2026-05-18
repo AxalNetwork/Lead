@@ -11,6 +11,8 @@ import { crawlerFetch } from "../../crawler/fetcher";
 import { pickAdapter } from "../../crawler/adapters";
 import { venturePartnerListings } from "../../crawler/adapters/venturePartnerListings";
 import type { AdapterResult } from "../../crawler/adapters/types";
+import { canonicalLinkedin } from "../../entities/normalize";
+import { createEntity, addRole } from "../../entities/roles";
 
 export interface SnapshotMember {
   entity_id?: string | null;
@@ -87,11 +89,21 @@ export async function snapshotFirm(
       if (!key || seen.has(key)) continue;
       seen.add(key);
       const data = (cand.data ?? {}) as { role?: string | null; profile_url?: string | null };
+      const profile_url = cand.url ?? data.profile_url ?? null;
+      // Resolve (or mint) a canonical person entity so downstream
+      // movements, corroboration, and timelines all link by id, not
+      // just by name. Linkedin URL is the strongest dedupe key;
+      // otherwise we fall back to normalized name within the same
+      // firm to avoid two snapshots of the same team minting twins.
+      const entity_id = await resolvePersonEntity(env, {
+        name, profile_url, person_norm: key, firm_entity_id: firmEntityId,
+      });
       members.push({
+        entity_id,
         name,
         role_title: data.role ?? null,
-        profile_url: cand.url ?? data.profile_url ?? null,
-        slug: slugFromUrl(cand.url ?? null),
+        profile_url,
+        slug: slugFromUrl(profile_url),
       });
     }
     if (!members.length) reason = "no_members_parsed";
@@ -131,6 +143,62 @@ export async function snapshotFirm(
     inserted: true, members_count: members.length,
     reason: reason ?? undefined,
   };
+}
+
+/**
+ * Resolve (or mint) a canonical person entity for a parsed team
+ * member. Linkedin canonical key wins; otherwise we dedupe on
+ * (person_norm, firm_entity_id) by walking past snapshots so two
+ * weeks of "Jane Smith" at Sequoia map to the same person, not two.
+ * Newly minted persons get the `investor` role since they were found
+ * on a firm team page.
+ */
+async function resolvePersonEntity(env: Env, args: {
+  name: string; profile_url: string | null;
+  person_norm: string; firm_entity_id: string;
+}): Promise<string | null> {
+  // 1. Linkedin canonical lookup.
+  const lk = canonicalLinkedin(args.profile_url);
+  if (lk) {
+    const r = await env.DB.prepare(
+      `SELECT id FROM u_entities
+        WHERE primary_linkedin_key = ? AND status NOT IN ('merged','soft_deleted')
+        LIMIT 1`,
+    ).bind(lk).first<{ id: string }>();
+    if (r?.id) return r.id;
+  }
+  // 2. Same-firm prior snapshot lookup: find a prior member row at
+  //    this firm whose normalized name matches and has an entity_id.
+  const prior = await env.DB.prepare(
+    `SELECT members_json FROM firm_team_snapshots
+      WHERE firm_entity_id = ?
+      ORDER BY snapshot_date DESC LIMIT 10`,
+  ).bind(args.firm_entity_id).all<{ members_json: string }>();
+  for (const row of prior.results ?? []) {
+    try {
+      const arr = JSON.parse(row.members_json) as Array<{ name?: string; entity_id?: string | null }>;
+      for (const m of arr) {
+        if (!m?.entity_id || !m?.name) continue;
+        if (normName(m.name) === args.person_norm) return m.entity_id;
+      }
+    } catch { /* skip malformed */ }
+  }
+  // 3. Mint a new person entity. Mark suppressAutoProfileFill via the
+  //    org path? createEntity only auto-fills orgs; persons trigger the
+  //    persona match refresh which is what we want.
+  try {
+    const created = await createEntity(env, {
+      kind: "person",
+      display_name: args.name,
+      primary_url: args.profile_url ?? null,
+      primary_linkedin_key: lk ?? null,
+    });
+    await addRole(env, created.id, "investor", { source: "movements:firm_team_snapshot" });
+    return created.id;
+  } catch (e) {
+    console.warn("resolvePersonEntity create failed", args.name, (e as Error).message);
+    return null;
+  }
 }
 
 /**

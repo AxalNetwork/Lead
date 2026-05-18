@@ -119,14 +119,18 @@ peopleMovementsRoute.get("/:entity_id/career-timeline", async (c) => {
   // bio adapters wrote. We surface every relevant fact alongside the
   // movements with its evidence URL — the consumer assembles the merged
   // timeline.
+  // Full longitudinal timeline: include superseded (is_current=0)
+  // career/title segments too, so the consumer can render the
+  // person's entire trajectory — not just their current state. Each
+  // segment carries its own observed_at + confidence + source so
+  // stale and current rows are distinguishable.
   const facts = await c.env.DB.prepare(
     `SELECT predicate, value_text, value_number, value_json, evidence_url,
-            observed_at, source, confidence
+            observed_at, source, confidence, is_current
        FROM facts
       WHERE entity_id = ?
         AND predicate IN ('person.career','person.current_firm','person.current_title',
                           'person.linkedin_url','person.bio','person.past_role')
-        AND is_current = 1
       ORDER BY observed_at ASC`,
   ).bind(id).all<{
     predicate: string;
@@ -137,6 +141,7 @@ peopleMovementsRoute.get("/:entity_id/career-timeline", async (c) => {
     observed_at: string;
     source: string | null;
     confidence: number;
+    is_current: number;
   }>();
 
   const segments = [
@@ -158,6 +163,7 @@ peopleMovementsRoute.get("/:entity_id/career-timeline", async (c) => {
         value_number: f.value_number,
         value_json: safeJson<unknown>(f.value_json),
         source: f.source,
+        is_current: f.is_current === 1,
       },
     })),
   ].sort((a, b) => a.at.localeCompare(b.at));
