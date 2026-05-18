@@ -127,21 +127,52 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
              WHERE (p.rate - r.rate) >= 0.30`,
         ).all<{ profile_type_id: string; recent_rate: number; prior_rate: number; recent_n: number; prior_n: number }>();
         for (const d of drift.results ?? []) {
+          const payload = {
+            recent_success_rate: +d.recent_rate.toFixed(3),
+            prior_success_rate: +d.prior_rate.toFixed(3),
+            drop_pp: +(((d.prior_rate - d.recent_rate) * 100)).toFixed(1),
+            recent_n: d.recent_n, prior_n: d.prior_n,
+          };
           await env.DB.prepare(
             `INSERT INTO ops_audit (actor_email, action, target_kind, target_id, payload_json)
              VALUES (?, ?, ?, ?, ?)`,
           ).bind(
-            "system:drift-monitor",
-            "drift.detected",
-            "profile_type",
-            d.profile_type_id,
-            JSON.stringify({
-              recent_success_rate: +d.recent_rate.toFixed(3),
-              prior_success_rate: +d.prior_rate.toFixed(3),
-              drop_pp: +(((d.prior_rate - d.recent_rate) * 100)).toFixed(1),
-              recent_n: d.recent_n, prior_n: d.prior_n,
-            }),
+            "system:drift-monitor", "drift.detected",
+            "profile_type", d.profile_type_id, JSON.stringify(payload),
           ).run();
+          // Also emit into the alert_events pipeline so the operator
+          // alert/insight surfaces consume drift the same way as any
+          // other monitoring event. trigger_kind='crawler_drift' is a
+          // free-form text column (no CHECK constraint on this field
+          // in migration 280); owner is the admin allowlist root.
+          try {
+            const owner = (env.ALLOWED_EMAIL || "system:drift-monitor").split(",")[0].trim().toLowerCase();
+            const today = new Date().toISOString().slice(0, 10);
+            const dedupeKey = `${d.profile_type_id}|${today}`;
+            const dedupeData = new TextEncoder().encode(`system:crawler-drift|${d.profile_type_id}|crawler_drift|${dedupeKey}`);
+            const buf = await crypto.subtle.digest("SHA-256", dedupeData);
+            const hash = Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+            // Deterministic id derived from dedupe_hash → ON CONFLICT
+            // on the PRIMARY KEY enforces daily idempotency without a
+            // migration. alert_events has no UNIQUE on dedupe_hash, so
+            // we piggyback on the id PK by deriving a stable id.
+            const id = `drift:${hash.slice(0, 32)}`;
+            await env.DB.prepare(
+              `INSERT INTO alert_events
+                 (id, owner_email, rule_id, watchlist_id, entity_id, trigger_kind,
+                  dedupe_key, dedupe_hash, title, body, payload_json, channel,
+                  delivery_status, occurred_at)
+               VALUES (?, ?, 'system:crawler-drift', NULL, ?, 'crawler_drift',
+                       ?, ?, ?, ?, ?, 'in_app', 'delivered', datetime('now'))
+               ON CONFLICT(id) DO NOTHING`,
+            ).bind(
+              id, owner, d.profile_type_id,
+              dedupeKey, hash,
+              `Crawler drift: ${d.profile_type_id}`,
+              `Parse-success rate dropped ${payload.drop_pp}pp (from ${(payload.prior_success_rate*100).toFixed(0)}% to ${(payload.recent_success_rate*100).toFixed(0)}%) over the last 7 days.`,
+              JSON.stringify(payload),
+            ).run();
+          } catch (e) { console.warn("alert_events drift insert failed", (e as Error).message); }
         }
         if ((drift.results ?? []).length > 0) {
           console.log("hourly drift check flagged", JSON.stringify({ count: (drift.results ?? []).length }));

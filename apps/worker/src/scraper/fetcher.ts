@@ -104,6 +104,33 @@ async function waitForRateLimit(env: Env, host: string, minIntervalMs: number): 
   await env.SCRAPE_CACHE.put(key, JSON.stringify(next), { expirationTtl: 3600 });
 }
 
+// Task #2 — HTML replay cache. Successful fetchPage() writes the body
+// into SCRAPE_CACHE under html:<sha256(url)>. The ops console replays
+// extractions against this cached snapshot (no live network), per the
+// "replay from cached HTML without commit" requirement.
+const HTML_CACHE_MAX_BYTES = 512 * 1024;
+const HTML_CACHE_TTL_SECONDS = 7 * 24 * 3600;
+async function htmlCacheKey(url: string): Promise<string> {
+  const data = new TextEncoder().encode(url);
+  const buf = await crypto.subtle.digest("SHA-256", data);
+  const hex = Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `html:${hex}`;
+}
+export async function cacheHtmlForReplay(env: Env, url: string, html: string | undefined | null): Promise<void> {
+  if (!html || typeof html !== "string") return;
+  if (html.length > HTML_CACHE_MAX_BYTES) return;
+  try {
+    const key = await htmlCacheKey(url);
+    await env.SCRAPE_CACHE.put(key, html, { expirationTtl: HTML_CACHE_TTL_SECONDS });
+  } catch { /* best-effort */ }
+}
+export async function readCachedHtml(env: Env, url: string): Promise<string | null> {
+  try {
+    const key = await htmlCacheKey(url);
+    return (await env.SCRAPE_CACHE.get(key)) ?? null;
+  } catch { return null; }
+}
+
 function visibleTextLength(html: string): number {
   // Strip script/style blocks, then collapse all tags. Cheap heuristic; enough
   // to detect skeleton "loading" pages and JS-rendered shells.
@@ -519,6 +546,11 @@ export async function fetchPage(env: Env, url: string, opts: FetchOptions = {}):
     if (r.ok) {
       // Success resets the breaker counter for this host.
       if (!opts.skipPolicy) await recordFetchOutcome(env, host, true);
+      // Task #2: cache the HTML body for ops-console replay (no-commit
+      // re-extraction). Best-effort, capped at 512KB to keep KV usage
+      // bounded. TTL 7d; replay reads from this same key and fails
+      // with no_cached_html if the snapshot has expired.
+      await cacheHtmlForReplay(env, url, r.html).catch(() => undefined);
       return r;
     }
     last = r;
@@ -551,6 +583,7 @@ export async function fetchPage(env: Env, url: string, opts: FetchOptions = {}):
       fetched_from: "live",
     };
     await logAttempt(env, opts.jobId, host, url, braveResult);
+    await cacheHtmlForReplay(env, url, braveResult.html).catch(() => undefined);
     return braveResult;
   }
   await logAttempt(env, opts.jobId, host, url, {
@@ -578,6 +611,7 @@ export async function fetchPage(env: Env, url: string, opts: FetchOptions = {}):
       fetched_from: "wayback",
     };
     await logAttempt(env, opts.jobId, host, url, wbResult);
+    await cacheHtmlForReplay(env, url, wbResult.html).catch(() => undefined);
     return wbResult;
   }
   await logAttempt(env, opts.jobId, host, url, {

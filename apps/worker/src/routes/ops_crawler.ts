@@ -27,7 +27,7 @@
 
 import { Hono } from "hono";
 import type { Env } from "../types";
-import { fetchPage } from "../scraper/fetcher";
+import { fetchPage, readCachedHtml } from "../scraper/fetcher";
 import { classifyPage } from "../services/pageClassifier";
 import { extractCandidates } from "../crawler/extractor";
 
@@ -660,10 +660,11 @@ opsCrawlerRoute.post("/recrawl-entity", async (c) => {
   return c.json({ ok: true, entity_id: entityId, dispatched });
 });
 
-// REPLAY EXTRACT — re-run the classifier against the cached HTML of a
-// past extraction. We don't store the HTML on profile_workflow_runs,
-// so we re-fetch the candidate_url and classify (read-only — writes
-// nothing to facts/entities).
+// REPLAY EXTRACT — re-run classifier + extractor against the CACHED
+// HTML (written by fetchPage into SCRAPE_CACHE under html:<sha256(url)>
+// with a 7d TTL). No live network fetch, no writes to facts/entities.
+// Returns 410 no_cached_html when the snapshot has expired; the
+// operator can then issue Test URL to re-fetch on demand.
 opsCrawlerRoute.post("/extractions/:id/replay", async (c) => {
   const id = c.req.param("id");
   const row = await c.env.DB.prepare(
@@ -672,21 +673,37 @@ opsCrawlerRoute.post("/extractions/:id/replay", async (c) => {
   if (!row) return c.json({ error: "not_found" }, 404);
   await audit(c.env, c.var.email, "extraction.replay", "extraction", id, { candidate_url: row.candidate_url });
   const t0 = Date.now();
-  let fetched: Record<string, unknown> | null = null;
   let classification: unknown = null;
+  let extraction: Record<string, unknown> | null = null;
   let error: string | null = null;
+  const html = await readCachedHtml(c.env, row.candidate_url);
+  if (!html) {
+    return c.json({
+      ok: false, extraction_id: id, candidate_url: row.candidate_url,
+      profile_type_id: row.profile_type_id,
+      error: "no_cached_html",
+      message: "Cached HTML for this URL has expired (7d TTL). Use Test URL to re-fetch and re-cache.",
+      duration_ms: Date.now() - t0,
+    }, 410);
+  }
   try {
-    const r = await fetchPage(c.env, row.candidate_url, { jobId: `ops-replay-${id}` });
-    fetched = { status: r.status, html_length: r.html?.length ?? 0, tier: r.tier, blockReason: r.blockReason ?? null };
-    if (r.status >= 200 && r.status < 300 && typeof r.html === "string" && r.html.length > 0) {
-      classification = await classifyPage(c.env, row.candidate_url, r.html);
-    }
+    classification = await classifyPage(c.env, row.candidate_url, html);
+    const ext = await extractCandidates(c.env, row.candidate_url, html);
+    extraction = {
+      route: ext.route, adapter_used: ext.adapter_used,
+      adapter_fallback: ext.adapter_fallback, adapter_error: ext.adapter_error,
+      used_ai: ext.used_ai, ai_error: ext.ai_error,
+      matched_types: ext.matched_types, candidates: ext.candidates,
+      child_urls: ext.child_urls,
+    };
   } catch (e) { error = (e as Error).message; }
   return c.json({
     ok: error === null,
     extraction_id: id, candidate_url: row.candidate_url,
     profile_type_id: row.profile_type_id,
-    fetched, classification, error,
+    source: "cached_html",
+    html_length: html.length,
+    classification, extraction, error,
     duration_ms: Date.now() - t0,
   });
 });
@@ -694,31 +711,45 @@ opsCrawlerRoute.post("/extractions/:id/replay", async (c) => {
 // TEST URL — fetch + classify any URL, no commit. Audited because it
 // burns budget (one tier-escalating fetch + one AI classifier call).
 opsCrawlerRoute.post("/test-url", async (c) => {
-  const body = await c.req.json().catch(() => ({})) as { url?: string };
+  const body = await c.req.json().catch(() => ({})) as { url?: string; html?: string };
   const url = body.url;
+  const providedHtml = typeof body.html === "string" && body.html.length > 0 ? body.html : null;
   if (!url || !/^https?:\/\//i.test(url)) {
     return c.json({ error: "url_required" }, 400);
   }
-  await audit(c.env, c.var.email, "test-url", "url", url, null);
+  await audit(c.env, c.var.email, "test-url", "url", url, providedHtml ? { html_bytes: providedHtml.length } : null);
   const t0 = Date.now();
   let fetched: Record<string, unknown> | null = null;
   let classification: unknown = null;
   let extraction: Record<string, unknown> | null = null;
   let error: string | null = null;
   try {
-    const r = await fetchPage(c.env, url, { jobId: `ops-test-${crypto.randomUUID()}` });
-    fetched = {
-      status: r.status,
-      html_length: typeof r.html === "string" ? r.html.length : 0,
-      tier: typeof r.tier === "number" ? r.tier : null,
-      blockReason: r.blockReason ?? null,
-    };
-    if (r.status >= 200 && r.status < 300 && typeof r.html === "string" && r.html.length > 0) {
-      classification = await classifyPage(c.env, url, r.html);
+    // Dry-run mode: when {html} is provided, skip the network fetch
+    // and run classifier + extractor against the supplied content.
+    // This is the contract for operator-pasted HTML.
+    let html: string | null = null;
+    if (providedHtml) {
+      fetched = { status: 200, html_length: providedHtml.length, tier: null, blockReason: null, source: "provided" };
+      html = providedHtml;
+    } else {
+      const r = await fetchPage(c.env, url, { jobId: `ops-test-${crypto.randomUUID()}` });
+      fetched = {
+        status: r.status,
+        html_length: typeof r.html === "string" ? r.html.length : 0,
+        tier: typeof r.tier === "number" ? r.tier : null,
+        blockReason: r.blockReason ?? null,
+        source: "live",
+      };
+      if (r.status >= 200 && r.status < 300 && typeof r.html === "string" && r.html.length > 0) {
+        html = r.html;
+      }
+    }
+    if (html) {
+      classification = await classifyPage(c.env, url, html);
       // Full extractor: adapter run + JSON-LD/OG/Readability/classifier
       // chain. No-commit — this endpoint only returns the result for
       // operator inspection; nothing is written to facts.
-      const ext = await extractCandidates(c.env, url, r.html);
+      const ext = await extractCandidates(c.env, url, html);
       extraction = {
         url: ext.url,
         route: ext.route,
@@ -732,15 +763,17 @@ opsCrawlerRoute.post("/test-url", async (c) => {
         child_urls: ext.child_urls,
       };
     }
-    try {
-      const host = new URL(url).hostname.toLowerCase();
-      const now = new Date().toISOString();
-      await c.env.DB.prepare(
-        `INSERT INTO crawler_host_config (host, last_tested_at, updated_at)
-         VALUES (?, ?, ?)
-         ON CONFLICT(host) DO UPDATE SET last_tested_at = excluded.last_tested_at, updated_at = excluded.updated_at`,
-      ).bind(host, now, now).run();
-    } catch { /* host parse fine */ }
+    if (!providedHtml) {
+      try {
+        const host = new URL(url).hostname.toLowerCase();
+        const now = new Date().toISOString();
+        await c.env.DB.prepare(
+          `INSERT INTO crawler_host_config (host, last_tested_at, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(host) DO UPDATE SET last_tested_at = excluded.last_tested_at, updated_at = excluded.updated_at`,
+        ).bind(host, now, now).run();
+      } catch { /* host parse fine */ }
+    }
   } catch (e) {
     error = (e as Error).message;
   }
