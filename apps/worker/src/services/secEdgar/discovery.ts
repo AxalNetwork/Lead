@@ -267,15 +267,112 @@ export async function pollEdgarRss(env: Env, formType?: string): Promise<Discove
 }
 
 /**
- * Hourly tick: poll the RSS feed for fresh filings, and once per day
- * (between 02:00 and 03:00 UTC) walk yesterday's daily index for the
- * authoritative pass. Idempotent — re-running an hour later is a no-op
- * since sec_filings dedupes on accession_no.
+ * Browse the EDGAR company-browse endpoint for every filing of a given
+ * form type accepted in the last N days. Used to backfill new RIAs
+ * (Form ADV) and new private companies (Form D) that haven't yet
+ * appeared on the daily-index walker because the discovery cadence
+ * missed them.
+ *
+ * URL pattern:
+ *   /cgi-bin/browse-edgar?action=getcompany&type={form}&dateb=&action=getcompany&output=atom&count=100
  */
-export async function runEdgarDiscoveryTick(env: Env): Promise<{ rss: DiscoveryResult; daily: DiscoveryResult | null }> {
+export async function browseEdgarByForm(env: Env, formType: string, count = 100): Promise<DiscoveryResult> {
+  const out: DiscoveryResult = { channel: "rss", fetched: 0, staged: 0, enqueued: 0, errors: 0 };
+  const url = `${EDGAR_BASE}/cgi-bin/browse-edgar?action=getcompany&type=${encodeURIComponent(formType)}&dateb=&owner=include&count=${count}&output=atom`;
+  try {
+    const res = await fetch(url, { headers: secHeaders() });
+    if (!res.ok) { out.errors++; return out; }
+    const xml = await res.text();
+    out.fetched++;
+    const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
+    let m: RegExpExecArray | null;
+    while ((m = entryRe.exec(xml))) {
+      const block = m[1];
+      const link = block.match(/<link\s+[^>]*href="([^"]+)"/)?.[1];
+      const titleRaw = block.match(/<title>([^<]+)<\/title>/)?.[1] ?? "";
+      const updated = block.match(/<updated>([^<]+)<\/updated>/)?.[1] ?? null;
+      if (!link) continue;
+      const accession_no = normalizeAccession(link.match(/(\d{10}-?\d{2}-?\d{6})/)?.[1]);
+      const cikMatch = link.match(/data\/(\d+)\//);
+      const cik = padCik(cikMatch?.[1]);
+      if (!accession_no || !cik) continue;
+      const tm = /^([^\-]+?)\s*-\s*(.+?)\s*\(\d{1,10}\)/.exec(titleRaw);
+      const detectedForm = tm ? tm[1].trim() : formType;
+      const filerName = tm ? tm[2].trim() : null;
+      const r = await stageFiling(env, {
+        cik, form_type: detectedForm, filer_name: filerName,
+        filed_at: updated ? updated.slice(0, 10) : null,
+        filing_url: link, accession_no,
+      }, "edgar_browse");
+      if (r.staged) out.staged++;
+      if (r.enqueued) out.enqueued++;
+    }
+  } catch (e) {
+    out.errors++;
+    console.warn("browseEdgarByForm failed", formType, (e as Error).message);
+  }
+  return out;
+}
+
+/**
+ * Discovery cadence (called from scheduled.ts hourly cron):
+ *   • Every hour: poll the EDGAR "current" RSS feed for the freshest filings.
+ *   • 02 UTC: walk yesterday's daily-index (the authoritative pass; the SEC
+ *     publishes day N's index at ~01 UTC on day N+1).
+ *   • 03 UTC: company-browse backfill for the highest-value form types
+ *     (ADV, D, 13F-HR) — catches anything the RSS or daily-index missed.
+ *   • 04 UTC: FTS backfill for any tracked-issuer queue (no-op when empty).
+ *
+ * All channels are idempotent — re-ingest of the same accession_no is a
+ * no-op via sec_filings PK.
+ */
+export async function runEdgarDiscoveryTick(env: Env): Promise<{
+  rss: DiscoveryResult;
+  daily: DiscoveryResult | null;
+  browse: DiscoveryResult[];
+  fts: DiscoveryResult | null;
+}> {
   const rss = await pollEdgarRss(env);
   const hour = new Date().getUTCHours();
-  // Daily index is published ~01:00 UTC the next day; pull it in the 02-03 UTC window.
   const daily = hour === 2 ? await walkDailyIndex(env, 1, 5000) : null;
-  return { rss, daily };
+  // 03 UTC: hit the company-browse endpoint for the three highest-yield
+  // forms so a daily-index miss doesn't drop a new RIA / private company.
+  const browse: DiscoveryResult[] = [];
+  if (hour === 3) {
+    for (const form of ["ADV", "D", "13F-HR"]) {
+      browse.push(await browseEdgarByForm(env, form, 100));
+    }
+  }
+  // 04 UTC: FTS backfill. Operators can stage targeted queries in
+  // sec_fts_queue (created elsewhere); the no-table-found case is
+  // swallowed so this stays a no-op until the queue lands.
+  let fts: DiscoveryResult | null = null;
+  if (hour === 4) {
+    try {
+      const q = await env.DB.prepare(
+        `SELECT query, forms FROM sec_fts_queue WHERE status='queued' ORDER BY created_at LIMIT 5`,
+      ).all<{ query: string; forms: string | null }>();
+      const queries = q.results ?? [];
+      if (queries.length > 0) {
+        const merged: DiscoveryResult = { channel: "fts", fetched: 0, staged: 0, enqueued: 0, errors: 0 };
+        for (const row of queries) {
+          const r = await searchEdgar(env, row.query, {
+            forms: row.forms ? row.forms.split(",").map((s) => s.trim()) : undefined,
+            maxPages: 3,
+          });
+          merged.fetched += r.fetched;
+          merged.staged += r.staged;
+          merged.enqueued += r.enqueued;
+          merged.errors += r.errors;
+          await env.DB.prepare(
+            `UPDATE sec_fts_queue SET status='done', completed_at=CURRENT_TIMESTAMP WHERE query=?`,
+          ).bind(row.query).run().catch(() => undefined);
+        }
+        fts = merged;
+      }
+    } catch {
+      // sec_fts_queue table doesn't exist yet — no-op.
+    }
+  }
+  return { rss, daily, browse, fts };
 }

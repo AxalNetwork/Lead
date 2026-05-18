@@ -17,16 +17,19 @@ CREATE TABLE IF NOT EXISTS sec_filings (
   filed_at          TEXT,                       -- ISO date the filing was accepted by EDGAR
   period_of_report  TEXT,                       -- ISO date covering the reporting period
   filing_url        TEXT NOT NULL,              -- canonical /Archives/edgar/data/... index page
+  raw_url           TEXT,                       -- raw filing URL (alias of filing_url; spec field)
   primary_doc_url   TEXT,                       -- primary document URL (10-K body, 13F XML, …)
+  parsed_payload_json TEXT,                     -- structured per-form payload as serialized JSON
   entity_id         TEXT,                       -- cross-ref to u_entities once resolved
   ingest_status     TEXT NOT NULL DEFAULT 'pending',  -- pending | parsed | failed
-  ingest_error      TEXT,
+  errors            TEXT,                       -- parse/ingest error messages (NULL on success)
   parsed_at         TEXT,
   discovered_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   source            TEXT NOT NULL DEFAULT 'edgar_daily_index' -- edgar_daily_index | edgar_fts | edgar_rss | manual
 );
 CREATE INDEX IF NOT EXISTS idx_secf_cik       ON sec_filings(cik);
 CREATE INDEX IF NOT EXISTS idx_secf_form      ON sec_filings(form_type, filed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_secf_cik_form  ON sec_filings(cik, form_type);
 CREATE INDEX IF NOT EXISTS idx_secf_status    ON sec_filings(ingest_status, discovered_at);
 CREATE INDEX IF NOT EXISTS idx_secf_entity    ON sec_filings(entity_id) WHERE entity_id IS NOT NULL;
 

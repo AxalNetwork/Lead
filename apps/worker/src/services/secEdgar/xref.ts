@@ -1,21 +1,26 @@
 // Task #1: SEC EDGAR cross-reference layer.
 //
 // Resolves a SEC-emitted name + identifier triple to a `u_entities.id`,
-// creating the entity row on the fly if no match exists. Identifiers
-// are matched in priority order:
+// creating the entity on the fly if no match exists. Identifiers are
+// matched in priority order:
 //   1. CIK   (most specific — globally unique within SEC)
 //   2. CRD   (Form ADV adviser identifier)
 //   3. CUSIP (security identifier — implies an issuer entity)
-//   4. Name + state/jurisdiction (last-resort fuzzy match)
+//   4. Ticker (public-market symbol)
+//   5. Name + state/jurisdiction (last-resort fuzzy match)
 //
-// Identifier facts (sec.cik, sec.crd, sec.cusip) are written through
-// `insertFact` so downstream lookup uses the same canonical store the
-// rest of the entity layer reads from.
+// Entity creation routes through the canonical entity write path
+// (`createEntity` / `addRole` from src/entities/roles.ts) — never a
+// direct INSERT into `u_entities` / `entity_roles`. Identifier facts
+// (sec.cik, sec.crd, sec.cusip, sec.ticker) are backfilled via
+// `insertFact` so subsequent lookups hit the indexed fact path.
 
 import type { Env } from "../../types";
 import { insertFact } from "../../entities/facts";
+import { createEntity as createCanonicalEntity, addRole } from "../../entities/roles";
+import type { EntityKind, EntityRole } from "../../entities/model";
 
-export type ResolveKind = "person" | "org";
+export type ResolveKind = EntityKind;
 
 export interface ResolveInput {
   name: string;
@@ -29,7 +34,7 @@ export interface ResolveInput {
   /** Provenance for any identifier facts written during resolution. */
   source: string;
   /** Optional role to attach (e.g. "firm", "fund", "investor"). */
-  role?: string;
+  role?: EntityRole;
 }
 
 export interface ResolveResult {
@@ -38,16 +43,7 @@ export interface ResolveResult {
   matched_by: "cik" | "crd" | "cusip" | "ticker" | "name+jurisdiction" | "name" | "created";
 }
 
-const SLUG_RE = /[^a-z0-9]+/g;
-
-function slugifyName(s: string): string {
-  return s.toLowerCase().replace(SLUG_RE, "-").replace(/^-|-$/g, "").slice(0, 80);
-}
-
-/**
- * Find an entity that already has the given identifier fact.
- * Returns the entity_id or null.
- */
+/** Find an entity by a known SEC identifier fact. */
 async function findByIdentifier(env: Env, predicate: string, value: string): Promise<string | null> {
   const r = await env.DB.prepare(
     `SELECT entity_id FROM facts
@@ -58,8 +54,6 @@ async function findByIdentifier(env: Env, predicate: string, value: string): Pro
 }
 
 async function findByName(env: Env, name: string, kind: ResolveKind, jurisdiction?: string | null): Promise<string | null> {
-  // Exact display_name match scoped to kind. Then optionally narrow by
-  // a jurisdiction fact (state or country) to disambiguate common names.
   const norm = name.trim().toLowerCase();
   const r = await env.DB.prepare(
     `SELECT e.id FROM u_entities e
@@ -72,7 +66,6 @@ async function findByName(env: Env, name: string, kind: ResolveKind, jurisdictio
   if (ids.length === 0) return null;
   if (ids.length === 1) return ids[0];
   if (!jurisdiction) return ids[0];
-  // Try to narrow by hq_country_iso2 / hq_city / region facts.
   for (const id of ids) {
     const hit = await env.DB.prepare(
       `SELECT 1 FROM facts
@@ -86,28 +79,22 @@ async function findByName(env: Env, name: string, kind: ResolveKind, jurisdictio
   return ids[0];
 }
 
-async function createEntity(env: Env, name: string, kind: ResolveKind, role?: string): Promise<string> {
-  const id = crypto.randomUUID();
-  const slug = `${slugifyName(name)}-${id.slice(0, 6)}`;
-  await env.DB.prepare(
-    `INSERT INTO u_entities (id, kind, display_name, slug, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-  ).bind(id, kind, name.slice(0, 200), slug).run();
-  if (role) {
-    await env.DB.prepare(
-      `INSERT OR IGNORE INTO entity_roles (entity_id, role, is_primary, confidence)
-       VALUES (?, ?, 1, 0.9)`,
-    ).bind(id, role).run();
-  }
-  return id;
-}
-
 /**
  * Resolve a SEC-emitted name + identifier set to an entity_id. Will
  * create the entity if no existing match is found. Writes back any
  * provided identifier facts so future lookups are O(1).
+ *
+ * Lookup-only mode: pass `createIfMissing: false` to return null
+ * instead of creating an entity. Used by the 13F holdings persister
+ * to populate `issuer_entity_id` without minting a fresh entity for
+ * every CUSIP in a 5000-row holdings table.
  */
-export async function resolveSecEntity(env: Env, input: ResolveInput): Promise<ResolveResult> {
+export async function resolveSecEntity(env: Env, input: ResolveInput): Promise<ResolveResult>;
+export async function resolveSecEntity(env: Env, input: ResolveInput & { createIfMissing: false }): Promise<ResolveResult | null>;
+export async function resolveSecEntity(
+  env: Env,
+  input: ResolveInput & { createIfMissing?: boolean },
+): Promise<ResolveResult | null> {
   let matchedBy: ResolveResult["matched_by"] | null = null;
   let entity_id: string | null = null;
 
@@ -131,24 +118,37 @@ export async function resolveSecEntity(env: Env, input: ResolveInput): Promise<R
     entity_id = await findByName(env, input.name, input.kind, input.jurisdiction ?? null);
     if (entity_id) matchedBy = input.jurisdiction ? "name+jurisdiction" : "name";
   }
+
   let created = false;
   if (!entity_id) {
-    entity_id = await createEntity(env, input.name, input.kind, input.role);
+    if (input.createIfMissing === false) return null;
+    // Canonical entity create: src/entities/roles.ts. NEVER direct INSERT
+    // into u_entities / entity_roles. Side-effects (entity_history,
+    // persona match trigger, profile-filler auto-dispatch) are handled
+    // by createCanonicalEntity.
+    const row = await createCanonicalEntity(env, {
+      kind: input.kind,
+      display_name: input.name.slice(0, 200),
+      // SEC ingest creates many shell entities (CUSIP holdings, etc.);
+      // suppress auto profile-fill on org creates so a single 13F doesn't
+      // dispatch thousands of profile-filler workflows.
+      suppressAutoProfileFill: input.kind === "org",
+    });
+    entity_id = row.id;
     matchedBy = "created";
     created = true;
-  } else if (input.role) {
-    // Make sure the role is attached, even on existing entities.
-    await env.DB.prepare(
-      `INSERT OR IGNORE INTO entity_roles (entity_id, role, is_primary, confidence)
-       VALUES (?, ?, 0, 0.7)`,
-    ).bind(entity_id, input.role).run();
+  }
+  if (input.role) {
+    await addRole(env, entity_id, input.role, {
+      is_primary: created, source: input.source, confidence: created ? 0.9 : 0.7,
+    });
   }
 
   // Backfill identifier facts so the next lookup hits the index.
   const writeIdent = async (predicate: string, value: string | null | undefined) => {
-    if (!value) return;
+    if (!value || !entity_id) return;
     await insertFact(env, {
-      entity_id: entity_id!,
+      entity_id,
       predicate,
       value_text: value,
       source_kind: "scrape",
@@ -163,5 +163,5 @@ export async function resolveSecEntity(env: Env, input: ResolveInput): Promise<R
     writeIdent("sec.ticker", input.ticker ?? null),
   ]);
 
-  return { entity_id: entity_id!, created, matched_by: matchedBy! };
+  return { entity_id, created, matched_by: matchedBy! };
 }

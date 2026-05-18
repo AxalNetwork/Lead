@@ -28,18 +28,24 @@ export interface PersistResult {
   reason?: string;
 }
 
-async function recordFilingHeader(env: Env, h: FilingHeader, entityId: string | null): Promise<void> {
+async function recordFilingHeader(
+  env: Env, h: FilingHeader, entityId: string | null, parsedPayload?: unknown,
+): Promise<void> {
   if (!h.accession_no) return;
+  const payloadJson = parsedPayload === undefined ? null : JSON.stringify(parsedPayload);
   await env.DB.prepare(
     `INSERT INTO sec_filings
        (accession_no, cik, form_type, filer_name, filed_at, period_of_report,
-        filing_url, primary_doc_url, entity_id, ingest_status, parsed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'parsed', CURRENT_TIMESTAMP)
+        filing_url, raw_url, primary_doc_url, parsed_payload_json,
+        entity_id, ingest_status, errors, parsed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'parsed', NULL, CURRENT_TIMESTAMP)
      ON CONFLICT(accession_no) DO UPDATE SET
        entity_id = COALESCE(sec_filings.entity_id, excluded.entity_id),
        ingest_status = 'parsed',
+       errors = NULL,
        parsed_at = CURRENT_TIMESTAMP,
-       primary_doc_url = COALESCE(sec_filings.primary_doc_url, excluded.primary_doc_url)`,
+       primary_doc_url = COALESCE(sec_filings.primary_doc_url, excluded.primary_doc_url),
+       parsed_payload_json = COALESCE(excluded.parsed_payload_json, sec_filings.parsed_payload_json)`,
   ).bind(
     h.accession_no,
     h.cik ?? "",
@@ -48,7 +54,9 @@ async function recordFilingHeader(env: Env, h: FilingHeader, entityId: string | 
     h.filed_at,
     h.period_of_report,
     h.filing_url,
+    h.filing_url,         // raw_url (spec alias)
     h.primary_doc_url,
+    payloadJson,
     entityId,
   ).run();
 }
@@ -131,11 +139,14 @@ async function persistAdv(env: Env, h: FilingHeader, d: AdvPayload, source: stri
   }
 
   for (const cp of d.control_persons) {
+    // Spec requires control persons disclosed on Form ADV be tagged
+    // role='investor' (they are the GP/principals of an investment
+    // adviser). Title-based gp/operator promotion happens downstream.
     const personXref = await resolveSecEntity(env, {
       name: cp.name,
       kind: "person",
       source,
-      role: cp.title?.match(/PARTNER|GP|MANAGING/) ? "gp" : "operator",
+      role: "investor",
     });
     await insertFact(env, {
       entity_id: personXref.entity_id,
@@ -161,7 +172,7 @@ async function persistAdv(env: Env, h: FilingHeader, d: AdvPayload, source: stri
     facts++;
   }
 
-  await recordFilingHeader(env, h, xref.entity_id);
+  await recordFilingHeader(env, h, xref.entity_id, d);
   return { accession_no: h.accession_no, entity_id: xref.entity_id, facts_written: facts, rows_written: rows, skipped: false };
 }
 
@@ -228,7 +239,7 @@ async function persistFormD(env: Env, h: FilingHeader, d: FormDPayload, source: 
     facts++;
   }
 
-  await recordFilingHeader(env, h, xref.entity_id);
+  await recordFilingHeader(env, h, xref.entity_id, d);
   return { accession_no: h.accession_no, entity_id: xref.entity_id, facts_written: facts, rows_written: 1, skipped: false };
 }
 
@@ -238,23 +249,50 @@ async function persist13F(env: Env, h: FilingHeader, d: Form13FPayload, source: 
     kind: "org", cik: d.filer_cik ?? h.cik, source, role: "firm",
   });
   let rows = 0;
+  // Cross-reference holdings to existing issuer entities by CUSIP.
+  // Lookup-only (createIfMissing=false): a 13F can list 5000 positions
+  // and minting a shell entity for every CUSIP would blow the entity
+  // table. When the issuer was already created by another flow (S-1,
+  // 10-K, Form D), the resulting `issuer_entity_id` joins the holding
+  // to that entity; otherwise it stays NULL until an issuer-specific
+  // adapter resolves the CUSIP.
+  const cusipCache = new Map<string, string | null>();
+  const resolveCusip = async (cusip: string, issuerName: string | null): Promise<string | null> => {
+    if (cusipCache.has(cusip)) return cusipCache.get(cusip)!;
+    const r = await resolveSecEntity(env, {
+      name: issuerName ?? `CUSIP ${cusip}`,
+      kind: "org",
+      cusip,
+      source,
+      createIfMissing: false,
+    });
+    const id = r?.entity_id ?? null;
+    cusipCache.set(cusip, id);
+    return id;
+  };
   // Bulk-insert holdings in batches. D1 caps statement size, so we chunk.
   const batchSize = 50;
   for (let i = 0; i < d.holdings.length; i += batchSize) {
     const slice = d.holdings.slice(i, i + batchSize);
-    const stmts = slice.map((hold) => env.DB.prepare(
-      `INSERT OR IGNORE INTO sec_13f_holdings
-         (id, accession_no, filer_cik, filer_name, period_of_report,
-          cusip, issuer_name, title_of_class, value_usd, shares_or_principal,
-          share_type, put_call, investment_discretion,
-          voting_sole, voting_shared, voting_none, filer_entity_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(
-      crypto.randomUUID(), h.accession_no, d.filer_cik ?? "", d.filer_name, d.period_of_report ?? "",
-      hold.cusip, hold.issuer_name, hold.title_of_class, hold.value_usd, hold.shares_or_principal,
-      hold.share_type, hold.put_call, hold.investment_discretion,
-      hold.voting_sole, hold.voting_shared, hold.voting_none, xref.entity_id,
-    ));
+    const stmts: D1PreparedStatement[] = [];
+    for (const hold of slice) {
+      const issuerEntityId = await resolveCusip(hold.cusip, hold.issuer_name);
+      stmts.push(env.DB.prepare(
+        `INSERT OR IGNORE INTO sec_13f_holdings
+           (id, accession_no, filer_cik, filer_name, period_of_report,
+            cusip, issuer_name, title_of_class, value_usd, shares_or_principal,
+            share_type, put_call, investment_discretion,
+            voting_sole, voting_shared, voting_none,
+            filer_entity_id, issuer_entity_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(
+        crypto.randomUUID(), h.accession_no, d.filer_cik ?? "", d.filer_name, d.period_of_report ?? "",
+        hold.cusip, hold.issuer_name, hold.title_of_class, hold.value_usd, hold.shares_or_principal,
+        hold.share_type, hold.put_call, hold.investment_discretion,
+        hold.voting_sole, hold.voting_shared, hold.voting_none,
+        xref.entity_id, issuerEntityId,
+      ));
+    }
     await env.DB.batch(stmts);
     rows += slice.length;
   }
@@ -267,7 +305,7 @@ async function persist13F(env: Env, h: FilingHeader, d: Form13FPayload, source: 
     observed_at: d.period_of_report ? `${d.period_of_report}T00:00:00Z` : undefined,
   });
   facts++;
-  await recordFilingHeader(env, h, xref.entity_id);
+  await recordFilingHeader(env, h, xref.entity_id, d);
   return { accession_no: h.accession_no, entity_id: xref.entity_id, facts_written: facts, rows_written: rows, skipped: false };
 }
 
@@ -307,7 +345,7 @@ async function persist13D(env: Env, h: FilingHeader, d: BeneficialOwner, source:
     source_kind: "scrape", source, confidence: 0.9,
   });
   facts++;
-  await recordFilingHeader(env, h, ownerXref.entity_id);
+  await recordFilingHeader(env, h, ownerXref.entity_id, d);
   return { accession_no: h.accession_no, entity_id: ownerXref.entity_id, facts_written: facts, rows_written: 1, skipped: false };
 }
 
@@ -366,7 +404,7 @@ async function persistForm4(env: Env, h: FilingHeader, d: Form4Trade, source: st
     observed_at: d.transaction_date ? `${d.transaction_date}T00:00:00Z` : undefined,
   });
   facts++;
-  await recordFilingHeader(env, h, ownerXref.entity_id);
+  await recordFilingHeader(env, h, ownerXref.entity_id, d);
   return { accession_no: h.accession_no, entity_id: ownerXref.entity_id, facts_written: facts, rows_written: 1, skipped: false };
 }
 
@@ -387,7 +425,7 @@ async function persistS1(env: Env, h: FilingHeader, d: FormS1Payload, source: st
     await insertFact(env, { ...ctx, predicate: "sec.s1.underwriter", value_text: uw });
     facts++;
   }
-  await recordFilingHeader(env, h, xref.entity_id);
+  await recordFilingHeader(env, h, xref.entity_id, d);
   return { accession_no: h.accession_no, entity_id: xref.entity_id, facts_written: facts, rows_written: 0, skipped: false };
 }
 
@@ -406,7 +444,7 @@ async function persist8K(env: Env, h: FilingHeader, d: Form8KPayload, source: st
     });
     facts++;
   }
-  await recordFilingHeader(env, h, xref.entity_id);
+  await recordFilingHeader(env, h, xref.entity_id, d);
   return { accession_no: h.accession_no, entity_id: xref.entity_id, facts_written: facts, rows_written: 0, skipped: false };
 }
 
@@ -431,7 +469,7 @@ async function persist10K(env: Env, h: FilingHeader, d: Form10KPayload, source: 
     await insertFact(env, { ...ctx, predicate: "sec.10k.executive", value_json: { name: exec.name, title: exec.title, total_compensation_usd: exec.total_compensation_usd }, value_entity_id: execXref.entity_id });
     facts++;
   }
-  await recordFilingHeader(env, h, xref.entity_id);
+  await recordFilingHeader(env, h, xref.entity_id, d);
   return { accession_no: h.accession_no, entity_id: xref.entity_id, facts_written: facts, rows_written: 0, skipped: false };
 }
 
@@ -451,7 +489,7 @@ async function persistPF(env: Env, h: FilingHeader, d: FormPFPayload, source: st
     });
     facts++;
   }
-  await recordFilingHeader(env, h, xref.entity_id);
+  await recordFilingHeader(env, h, xref.entity_id, d);
   return { accession_no: h.accession_no, entity_id: xref.entity_id, facts_written: facts, rows_written: 0, skipped: false };
 }
 
@@ -495,8 +533,24 @@ export async function persistParsedFiling(env: Env, parsed: ParsedFiling, source
   }
   // Quality gate: refuse to mark a filing 'parsed' from a sparse/empty
   // payload. Leaves sec_filings row (if any) in 'pending' so the
-  // engine can re-crawl the primary_doc_url and try again.
+  // engine can re-crawl the primary_doc_url and try again. We DO record
+  // an error so operators can see why the filing keeps coming back.
   if (parsed.kind !== "index" && !isPayloadSufficient(parsed)) {
+    if (parsed.header.accession_no) {
+      await env.DB.prepare(
+        `INSERT INTO sec_filings (accession_no, cik, form_type, filer_name, filed_at, filing_url, raw_url, primary_doc_url, ingest_status, errors)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+         ON CONFLICT(accession_no) DO UPDATE SET
+           errors = excluded.errors,
+           primary_doc_url = COALESCE(sec_filings.primary_doc_url, excluded.primary_doc_url)`,
+      ).bind(
+        parsed.header.accession_no, parsed.header.cik ?? "",
+        parsed.header.form_type ?? "UNKNOWN", parsed.header.filer_name,
+        parsed.header.filed_at, parsed.header.filing_url, parsed.header.filing_url,
+        parsed.header.primary_doc_url,
+        `payload_insufficient: ${parsed.kind} parser returned a sparse payload`,
+      ).run().catch(() => undefined);
+    }
     return { accession_no: parsed.header.accession_no, entity_id: null, facts_written: 0, rows_written: 0, skipped: true, reason: "payload_insufficient" };
   }
   // Short-circuit on already-parsed filings so re-crawls don't churn.
@@ -526,10 +580,23 @@ export async function persistParsedFiling(env: Env, parsed: ParsedFiling, source
         return { accession_no: null, entity_id: null, facts_written: 0, rows_written: 0, skipped: true, reason: "index_page" };
     }
   } catch (e) {
+    // Spec: malformed filings record an error in sec_filings.errors and
+    // never silently swallow data. We INSERT-or-UPDATE so a failure
+    // before any per-form sec_* write still leaves a ledger row.
     if (parsed.header.accession_no) {
       await env.DB.prepare(
-        `UPDATE sec_filings SET ingest_status = 'failed', ingest_error = ? WHERE accession_no = ?`,
-      ).bind((e as Error).message.slice(0, 500), parsed.header.accession_no).run().catch(() => undefined);
+        `INSERT INTO sec_filings (accession_no, cik, form_type, filer_name, filed_at, filing_url, raw_url, primary_doc_url, ingest_status, errors)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'failed', ?)
+         ON CONFLICT(accession_no) DO UPDATE SET
+           ingest_status = 'failed',
+           errors = excluded.errors`,
+      ).bind(
+        parsed.header.accession_no, parsed.header.cik ?? "",
+        parsed.header.form_type ?? "UNKNOWN", parsed.header.filer_name,
+        parsed.header.filed_at, parsed.header.filing_url, parsed.header.filing_url,
+        parsed.header.primary_doc_url,
+        (e as Error).message.slice(0, 500),
+      ).run().catch(() => undefined);
     }
     throw e;
   }

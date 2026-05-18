@@ -306,6 +306,12 @@ function extractHeader(html: string, url: string): FilingHeader {
   const period_of_report = toIsoDate(
     html.match(/Period of Report[^<]*<[^>]+>\s*([^<]+)</i)?.[1]
     ?? html.match(/Period:\s*<[^>]+>\s*([^<]+)</i)?.[1]
+    // XML payloads (13F-HR informationTable, Form 4 ownershipDocument,
+    // Form D primaryIssuer) carry the period as a structured tag rather
+    // than an HTML row. Pull it directly so 13F persistence can satisfy
+    // the period_of_report quality gate without an HTML header pass.
+    ?? html.match(/<periodOfReport>\s*([0-9]{4}-[0-9]{2}-[0-9]{2})\s*<\/periodOfReport>/i)?.[1]
+    ?? html.match(/<reportCalendarOrQuarter>\s*([0-9]{4}-[0-9]{2}-[0-9]{2})\s*<\/reportCalendarOrQuarter>/i)?.[1]
     ?? null,
   );
   const primary = html.match(/<a[^>]+href=["']([^"']+\.(?:htm|html|xml|txt))["'][^>]*>\s*Primary\s*Document/i)?.[1] ?? null;
