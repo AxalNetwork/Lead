@@ -166,6 +166,35 @@ export const PREDICATE_REGISTRY: PredicateMeta[] = [
   { predicate: "employees",            label: "Employees",         icon: "users",       formatter: "text",  category: "firm",     value_type: "number",       description: "Employee headcount or band." },
   { predicate: "industry",             label: "Industry",          icon: "layers",      formatter: "badge", category: "firm",     value_type: "text",         description: "Industry classification." },
   { predicate: "display_name",         label: "Display name",      icon: "user",        formatter: "text",  category: "identity", value_type: "text",         description: "Canonical display name." },
+
+  // ---- Task #1: SEC EDGAR deep-adapter predicates -----------------------
+  // Mirror in migration 349_sec_edgar.sql — two-file change enforced by
+  // test/profile.test.mjs.
+  { predicate: "sec.cik",                       label: "SEC CIK",              icon: "hash",         formatter: "text", category: "identity", value_type: "text",         description: "SEC Central Index Key (10-digit, zero-padded)." },
+  { predicate: "sec.crd",                       label: "SEC CRD",              icon: "hash",         formatter: "text", category: "identity", value_type: "text",         description: "Investment Adviser CRD# from Form ADV." },
+  { predicate: "sec.cusip",                     label: "CUSIP",                icon: "hash",         formatter: "text", category: "identity", value_type: "text",         description: "Committee on Uniform Securities Identification Procedures code." },
+  { predicate: "sec.ticker",                    label: "Ticker",               icon: "trending-up",  formatter: "badge",category: "identity", value_type: "text",         description: "Public ticker symbol." },
+  { predicate: "sec.sec_file_number",           label: "SEC file number",      icon: "hash",         formatter: "text", category: "identity", value_type: "text",         description: "SEC file number (e.g. 801-12345 for advisers)." },
+  { predicate: "sec.fund_id_807",               label: "SEC fund ID",          icon: "hash",         formatter: "text", category: "identity", value_type: "text",         description: "SEC fund identifier (807-XXXXXXXX)." },
+  { predicate: "aum_usd",                       label: "AUM (USD)",            icon: "dollar-sign",  formatter: "usd",  category: "firm",     value_type: "currency_usd", description: "Assets under management in USD." },
+  { predicate: "sec.form_adv.filed_at",         label: "Last Form ADV filed",  icon: "calendar",     formatter: "date", category: "firm",     value_type: "date",         description: "Most recent Form ADV acceptance date." },
+  { predicate: "sec.form_adv.fund",             label: "Form ADV fund",        icon: "briefcase",    formatter: "json", category: "firm",     value_type: "json",         description: "Fund disclosed on Schedule D §7.B.(1)." },
+  { predicate: "sec.form_d.round",              label: "Form D round",         icon: "dollar-sign",  formatter: "json", category: "firm",     value_type: "json",         description: "Private placement disclosed on Form D." },
+  { predicate: "sec.form_d.issuer_industry",    label: "Form D industry",      icon: "layers",       formatter: "badge",category: "firm",     value_type: "text",         description: "Industry group declared on Form D." },
+  { predicate: "sec.13f.holding",               label: "13F holding",          icon: "briefcase",    formatter: "json", category: "firm",     value_type: "json",         description: "Equity position disclosed on Form 13F-HR." },
+  { predicate: "sec.13f.filer_aum_usd",         label: "13F filer AUM (USD)",  icon: "dollar-sign",  formatter: "usd",  category: "firm",     value_type: "currency_usd", description: "Aggregate USD value of 13F holdings (proxy AUM)." },
+  { predicate: "sec.13d.beneficial_owner",      label: "13D beneficial owner", icon: "users",        formatter: "json", category: "firm",     value_type: "json",         description: "Schedule 13D 5%+ beneficial-ownership disclosure." },
+  { predicate: "sec.form4.insider_trade",       label: "Insider trade",        icon: "arrow-up-down",formatter: "json", category: "firm",     value_type: "json",         description: "Form 4 §16 insider transaction." },
+  { predicate: "sec.form4.officer_title",       label: "Officer title",        icon: "briefcase",    formatter: "text", category: "career",   value_type: "text",         description: "Officer title declared on Form 4 (when reporter is officer)." },
+  { predicate: "sec.s1.ipo_intent",             label: "S-1 IPO intent",       icon: "rocket",       formatter: "text", category: "firm",     value_type: "text",         description: "Company filed Form S-1 (IPO registration)." },
+  { predicate: "sec.s1.underwriter",            label: "IPO underwriter",      icon: "briefcase",    formatter: "text", category: "firm",     value_type: "text",         description: "Underwriter listed on Form S-1." },
+  { predicate: "sec.8k.material_event",         label: "8-K material event",   icon: "alert-circle", formatter: "json", category: "firm",     value_type: "json",         description: "Form 8-K current report item." },
+  { predicate: "sec.10k.revenue_usd",           label: "10-K revenue (USD)",   icon: "dollar-sign",  formatter: "usd",  category: "firm",     value_type: "currency_usd", description: "Annual revenue from Form 10-K." },
+  { predicate: "sec.10k.net_income_usd",        label: "10-K net income",      icon: "dollar-sign",  formatter: "usd",  category: "firm",     value_type: "currency_usd", description: "Net income from Form 10-K." },
+  { predicate: "sec.10k.fiscal_year_end",       label: "10-K fiscal year-end", icon: "calendar",     formatter: "date", category: "firm",     value_type: "date",         description: "Fiscal year-end from Form 10-K." },
+  { predicate: "sec.10k.executive",             label: "10-K executive",       icon: "users",        formatter: "json", category: "firm",     value_type: "json",         description: "Named executive officer compensation from Form 10-K." },
+  { predicate: "sec.pf.fund",                   label: "Form PF fund",         icon: "briefcase",    formatter: "json", category: "firm",     value_type: "json",         description: "Private fund disclosure from Form PF (large private fund adviser)." },
+  { predicate: "sec.gp_disclosed",              label: "GP disclosed (SEC)",   icon: "user-check",   formatter: "text", category: "firm",     value_type: "text",         description: "GP / control-person disclosed on a SEC filing." },
 ];
 
 export const PREDICATE_MAP: Record<string, PredicateMeta> = Object.freeze(

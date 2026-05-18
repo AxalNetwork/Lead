@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<informationTable xmlns="http://www.sec.gov/edgar/document/thirteenf/informationtable">
+<title>Form 13F-HR - Sequoia Capital Operations LLC</title>
+<companyName>SEQUOIA CAPITAL OPERATIONS LLC</companyName>
+<periodOfReport>2024-12-31</periodOfReport>
+<infoTable>
+  <nameOfIssuer>APPLE INC</nameOfIssuer>
+  <titleOfClass>COM</titleOfClass>
+  <cusip>037833100</cusip>
+  <value>1500000</value>
+  <shrsOrPrnAmt>
+    <sshPrnamt>7800000</sshPrnamt>
+    <sshPrnamtType>SH</sshPrnamtType>
+  </shrsOrPrnAmt>
+  <investmentDiscretion>SOLE</investmentDiscretion>
+  <votingAuthority>
+    <Sole>7800000</Sole>
+    <Shared>0</Shared>
+    <None>0</None>
+  </votingAuthority>
+</infoTable>
+<infoTable>
+  <nameOfIssuer>NVIDIA CORP</nameOfIssuer>
+  <titleOfClass>COM</titleOfClass>
+  <cusip>67066G104</cusip>
+  <value>980000</value>
+  <shrsOrPrnAmt>
+    <sshPrnamt>720000</sshPrnamt>
+    <sshPrnamtType>SH</sshPrnamtType>
+  </shrsOrPrnAmt>
+  <investmentDiscretion>SOLE</investmentDiscretion>
+  <votingAuthority>
+    <Sole>720000</Sole>
+    <Shared>0</Shared>
+    <None>0</None>
+  </votingAuthority>
+</infoTable>
+<infoTable>
+  <nameOfIssuer>MICROSOFT CORP</nameOfIssuer>
+  <titleOfClass>COM</titleOfClass>
+  <cusip>594918104</cusip>
+  <value>620000</value>
+  <shrsOrPrnAmt>
+    <sshPrnamt>1450000</sshPrnamt>
+    <sshPrnamtType>SH</sshPrnamtType>
+  </shrsOrPrnAmt>
+  <investmentDiscretion>SOLE</investmentDiscretion>
+  <votingAuthority>
+    <Sole>1450000</Sole>
+    <Shared>0</Shared>
+    <None>0</None>
+  </votingAuthority>
+</infoTable>
+</informationTable>

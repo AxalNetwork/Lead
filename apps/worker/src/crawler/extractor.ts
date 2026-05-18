@@ -209,6 +209,25 @@ export async function extractCandidates(
       });
     }
     result.child_urls = adapterOutcome.result.child_urls.slice(0, 500);
+
+    // Task #1: SEC EDGAR deep-adapter side-effect. The secEdgar adapter
+    // attaches a typed `parsed` ParsedFiling payload to candidate.data;
+    // route it through the dedicated persist layer (insertFact + sec_*
+    // tables, idempotent on accession_no). A persist failure must never
+    // block the rest of extraction — we log and move on.
+    if (adapterOutcome.used_adapter_id === "sec_edgar") {
+      const cand = adapterOutcome.result.candidates[0];
+      const parsed = (cand?.data as Record<string, unknown> | undefined)?.parsed as
+        import("../services/secEdgar/persist").ParsedFiling | undefined;
+      if (parsed && parsed.kind !== "index") {
+        try {
+          const { persistParsedFiling } = await import("../services/secEdgar/persist");
+          await persistParsedFiling(env, parsed, "edgar_crawler");
+        } catch (e) {
+          console.warn("secEdgar persist failed", url, (e as Error).message);
+        }
+      }
+    }
   }
 
   const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);

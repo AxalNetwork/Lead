@@ -67,6 +67,9 @@ function makeEnv() {
   // Apply the two new migrations verbatim.
   db.exec(readFileSync(join(repoRoot, "migrations/327_rich_person_profile.sql"), "utf8"));
   db.exec(readFileSync(join(repoRoot, "migrations/328_predicate_registry.sql"), "utf8"));
+  // Task #1: SEC EDGAR deep adapter — adds 25 new predicates that the
+  // TS PREDICATE_REGISTRY mirrors. Drift test enforces both sides match.
+  db.exec(readFileSync(join(repoRoot, "migrations/349_sec_edgar.sql"), "utf8"));
 
   const prepare = (sql) => {
     let pending = [];

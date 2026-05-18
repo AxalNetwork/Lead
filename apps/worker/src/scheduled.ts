@@ -99,6 +99,19 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       } catch (e) {
         console.error("hourly smart_frontier drain failed", (e as Error).message);
       }
+      // Task #1: SEC EDGAR discovery tick. RSS hourly + daily-index pass
+      // at 02:00 UTC. Both channels stage filings into the crawl
+      // frontier; the engine fetches them and the secEdgar adapter +
+      // persist layer write through insertFact + sec_* tables.
+      try {
+        const { runEdgarDiscoveryTick } = await import("./services/secEdgar/discovery");
+        const edgarRes = await runEdgarDiscoveryTick(env);
+        if (edgarRes.rss.staged > 0 || edgarRes.daily?.staged) {
+          console.log("hourly edgar discovery", JSON.stringify(edgarRes));
+        }
+      } catch (e) {
+        console.error("hourly edgar discovery failed", (e as Error).message);
+      }
       // Task #2: hourly adapter-drift check. Compares parse-success rate
       // over the last 7 days vs the prior 7 days for each profile-type
       // workflow; emits one ops_audit row per significant drop (>=30pp).
