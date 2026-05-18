@@ -30,10 +30,16 @@ import { politicianFederalWorkflow }     from "./politician_federal";
 import { regulatorSecWorkflow }          from "./regulator_sec";
 import { academicResearcherWorkflow }    from "./academic_researcher";
 import { journalistBusinessWorkflow }    from "./journalist_business";
+import { TEMPLATED_WORKFLOWS }            from "./templated";
 
 import type { ProfileWorkflow } from "./_types";
 
-const WORKFLOWS: Record<string, ProfileWorkflow> = {
+// Dedicated typed workflows are listed first; the templated registry
+// then fills coverage for every remaining seeded e_types id (see
+// `templated.ts`). Dedicated entries always win because the templated
+// roster is spread *after* — JS object-literal semantics keep the
+// earlier value when the same key is overwritten.
+const DEDICATED: Record<string, ProfileWorkflow> = {
   investor_vc:           investorVcWorkflow,
   investor_pe:           investorPeWorkflow,
   investor_angel:        investorAngelWorkflow,
@@ -52,6 +58,11 @@ const WORKFLOWS: Record<string, ProfileWorkflow> = {
   regulator_sec:         regulatorSecWorkflow,
   academic_researcher:   academicResearcherWorkflow,
   journalist_business:   journalistBusinessWorkflow,
+};
+
+const WORKFLOWS: Record<string, ProfileWorkflow> = {
+  ...TEMPLATED_WORKFLOWS,
+  ...DEDICATED,
 };
 
 /**

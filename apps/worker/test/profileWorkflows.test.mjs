@@ -28,13 +28,51 @@ const { investorVcWorkflow } = await import(`${ROOT}/crawler/profileWorkflows/in
 // ---------------------------------------------------------------------------
 // 1. Registry — every claimed type id resolves to a non-default workflow.
 
+// Full seeded e_types roster (mirrors
+// migrations/340_profile_types_seed.sql). Coverage test below fails
+// if a seed id is missing from the registry — keeps the registry in
+// lockstep with the seed without requiring a live D1.
 const CLAIMED_TYPES = [
+  // Dedicated typed workflows.
   "investor_vc", "investor_pe", "investor_angel", "investor_corporate_vc",
   "accelerator", "fund_of_funds", "family_office",
   "investor_person", "lawyer_securities", "banker_investment",
   "founder", "co_founder", "founding_engineer", "repeat_founder",
   "politician_federal", "regulator_sec",
   "academic_researcher", "journalist_business",
+  // Templated firm workflows.
+  "investor", "investor_micro_vc", "investor_family_office",
+  "investor_endowment", "investor_sovereign", "investor_pension",
+  "incubator", "venture_studio", "syndicate", "secondary_buyer",
+  "hedge_fund", "asset_manager", "investment_bank", "commercial_bank",
+  "private_bank", "broker_dealer", "exchange_traditional",
+  "exchange_crypto", "custodian", "clearinghouse", "payment_processor",
+  "insurance", "reinsurer", "accounting_firm", "consulting_firm",
+  "law_firm", "marketing_agency", "pr_firm", "design_agency", "dev_shop",
+  "executive_search_firm", "conference_organizer", "portfolio_company",
+  "public_company", "enterprise", "sme",
+  "startup_pre_seed", "startup_seed", "startup_series_a",
+  "startup_growth", "startup_late_stage", "acquirer_strategic",
+  "government_agency_federal", "government_agency_state",
+  "government_agency_local", "multilateral_org", "ngo", "think_tank",
+  // Templated person workflows.
+  "firm_person", "gp_partner", "principal", "associate", "scout",
+  "venture_partner", "operating_partner", "entrepreneur_in_residence",
+  "advisor", "board_member", "lawyer", "lawyer_corporate", "lawyer_ip",
+  "lawyer_employment", "lawyer_immigration", "lawyer_tax", "patent_agent",
+  "banker_commercial", "banker_private", "banker_m_and_a",
+  "operator_growth", "operator_sales", "operator_marketing",
+  "operator_product", "operator_engineering",
+  "fractional_cfo", "fractional_cto", "fractional_coo", "fractional_cmo",
+  "executive_recruiter",
+  "business_founder", "founder_solo", "founding_designer", "founding_pm",
+  "technical_founder", "serial_entrepreneur",
+  "politician_state", "politician_local", "policy_advisor",
+  "professor", "research_scientist", "lab_principal_investigator",
+  "postdoc", "phd_student", "technology_transfer_officer",
+  "journalist_tech", "journalist_crypto", "analyst_industry",
+  "newsletter_writer", "podcast_host", "thought_leader",
+  "youtuber_business",
 ];
 
 test("registry: every claimed profile_type_id has a dedicated workflow", () => {
