@@ -2090,7 +2090,10 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
         await processParseFile(env, importId, { skipOcr: cfg.skip_ocr === true });
       } else {
         const { processImportFile } = await import("../imports/import");
-        await processImportFile(env, importId);
+        // Pass the dispatching jobId so processImportFile can early-bail
+        // if the operator cancelled this job (e.g. via /confirm-map?force=1
+        // superseding an in-flight import).
+        await processImportFile(env, importId, { jobId });
       }
       await markCompleted(env, jobId, 0, 0, 0, 0, Date.now() - start, { kind: msg.kind, importId });
       return;

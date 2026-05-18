@@ -194,8 +194,39 @@ uploads.post("/:id/confirm-map", async (c) => {
     .bind(id, ...own.binds)
     .first<{ id: string; status: string; entity: string | null }>();
   if (!row) return c.json({ error: "not_found" }, 404);
-  if (row.status === "importing" || row.status === "done") {
-    return c.json({ error: "bad_state", status: row.status }, 409);
+  // `?force=1` lets the operator re-confirm a mapping while a previous
+  // import is still in flight. The previous queued/running job(s) for
+  // this import are marked 'cancelled' (the worker checks job status
+  // before persisting), counters are reset so progress reflects the
+  // new run, and the import is re-enqueued. We still refuse force on
+  // 'done' imports — those need to go through a fresh /rerun.
+  const force = c.req.query("force") === "1" || c.req.query("force") === "true";
+  if (row.status === "done") {
+    return c.json({ error: "bad_state", status: row.status, message: "import already completed — use rerun" }, 409);
+  }
+  if (row.status === "importing" && !force) {
+    return c.json({
+      error: "bad_state",
+      status: row.status,
+      message: "import is in progress — re-confirm with ?force=1 to cancel the running job and re-map",
+    }, 409);
+  }
+  if (row.status === "importing" && force) {
+    await c.env.DB.prepare(
+      `UPDATE jobs SET status = 'cancelled', finished_at = ?
+        WHERE target = ? AND kind = 'import_file' AND status IN ('queued','running')`,
+    ).bind(new Date().toISOString(), id).run().catch(() => undefined);
+    await c.env.DB.prepare(
+      `UPDATE file_imports
+          SET status = 'mapped',
+              rows_imported = 0,
+              firms_created = 0, firms_updated = 0,
+              leads_created = 0, leads_updated = 0,
+              queued_jobs = 0,
+              error = NULL,
+              updated_at = ?
+        WHERE id = ?`,
+    ).bind(new Date().toISOString(), id).run().catch(() => undefined);
   }
   // Per-tab path (v2): persist each tab's overrides to file_import_tabs.
   if (Array.isArray(body?.tabs) && body!.tabs!.length) {

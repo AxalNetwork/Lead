@@ -78,7 +78,19 @@ interface TabSummary {
   errors: string[];
 }
 
-export async function processImportFile(env: Env, importId: string): Promise<void> {
+export async function processImportFile(env: Env, importId: string, opts: { jobId?: string } = {}): Promise<void> {
+  // Cancellation gate: if this job was cancelled before the queue
+  // delivered it (e.g. operator re-confirmed mapping via
+  // /confirm-map?force=1, which marks pending import_file jobs as
+  // 'cancelled'), bail without touching file_imports. The replacement
+  // job already updated the row and will run its own processImportFile.
+  if (opts.jobId) {
+    const job = await env.DB
+      .prepare("SELECT status FROM jobs WHERE id = ?")
+      .bind(opts.jobId)
+      .first<{ status: string }>();
+    if (job?.status === "cancelled") return;
+  }
   const row = await env.DB
     .prepare("SELECT id, filename, mime, r2_key, entity, scrape_urls, format, created_by FROM file_imports WHERE id = ?")
     .bind(importId)
@@ -313,6 +325,19 @@ export async function processImportFile(env: Env, importId: string): Promise<voi
     merged.leads_created = totalLeadsCreated;
     merged.leads_updated = totalLeadsUpdated;
 
+    // Final-boundary cancellation gate: if the operator cancelled this
+    // job mid-run (e.g. via /confirm-map?force=1 enqueuing a replacement),
+    // do NOT clobber the file_imports row to 'done' — the replacement
+    // job is the source of truth. Side-effects already written to the
+    // graph are fine (the replacement re-imports idempotently via
+    // existing upsert/superseded chains).
+    if (opts.jobId) {
+      const job = await env.DB
+        .prepare("SELECT status FROM jobs WHERE id = ?")
+        .bind(opts.jobId)
+        .first<{ status: string }>();
+      if (job?.status === "cancelled") return;
+    }
     const errFlat = summaries.flatMap((s) => s.errors).slice(0, 20).join("; ");
     await env.DB.prepare(
       `UPDATE file_imports

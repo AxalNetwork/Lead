@@ -682,31 +682,67 @@
     }
 
     // ---- step 3: progress ---------------------------------------------
+    async function submitConfirmMap(force) {
+      // Build per-tab payload.
+      var tabsPayload = current.tabs.map(function (t) {
+        return {
+          tab_index: t.tab_index,
+          intent: t.intent,
+          intent_subkind: t.intent_subkind,
+          column_map: t.column_map,
+        };
+      });
+      // Primary tab's map drives the legacy column_map field.
+      var primary = current.tabs[0] || { column_map: {}, intent: "firms" };
+      var body = {
+        column_map: primary.column_map,
+        entity: primary.intent === "leads" ? "leads" : "firms",
+        scrape_urls: scrapeChk.checked ? 1 : 0,
+        tabs: tabsPayload,
+      };
+      var url = API_BASE + "/api/uploads/" + current.id + "/confirm-map" + (force ? "?force=1" : "");
+      var res = await fetch(url, {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      var text = await res.text();
+      var data = null;
+      try { data = text ? JSON.parse(text) : null; } catch (_e) { data = null; }
+      return { res: res, data: data, text: text };
+    }
+
     confirmBtn.addEventListener("click", async function () {
       try {
         confirmBtn.disabled = true;
-        // Build per-tab payload.
-        var tabsPayload = current.tabs.map(function (t) {
-          return {
-            tab_index: t.tab_index,
-            intent: t.intent,
-            intent_subkind: t.intent_subkind,
-            column_map: t.column_map,
+        var out = await submitConfirmMap(false);
+        // If the server says we're already importing, surface a clear
+        // "cancel & re-map" affordance instead of a raw JSON error.
+        // The operator can edit any column dropdown, then click Re-map
+        // to cancel the in-flight job and re-confirm with ?force=1.
+        if (!out.res.ok && out.data && out.data.error === "bad_state" && out.data.status === "importing") {
+          confirmBtn.textContent = "Cancel running import & re-map";
+          confirmBtn.disabled = false;
+          tellMsg("This file is already importing. Edit any mapping above, then click again to cancel the running import and re-map.", "warn");
+          confirmBtn.onclick = async function () {
+            try {
+              confirmBtn.disabled = true;
+              var out2 = await submitConfirmMap(true);
+              if (!out2.res.ok) throw new Error(out2.text || ("HTTP " + out2.res.status));
+              confirmBtn.onclick = null;
+              confirmBtn.textContent = "Confirm map & import";
+              setStep("progress");
+              progMeta.textContent = "Re-importing " + current.totalRows + " rows across " + current.tabs.length + " tab(s)…";
+              bar.style.width = "0%";
+              counts.innerHTML = "";
+              pollProgress();
+            } catch (err2) {
+              tellMsg("Re-map failed: " + err2.message, "err");
+              confirmBtn.disabled = false;
+            }
           };
-        });
-        // Primary tab's map drives the legacy column_map field.
-        var primary = current.tabs[0] || { column_map: {}, intent: "firms" };
-        var body = {
-          column_map: primary.column_map,
-          entity: primary.intent === "leads" ? "leads" : "firms",
-          scrape_urls: scrapeChk.checked ? 1 : 0,
-          tabs: tabsPayload,
-        };
-        var res = await fetch(API_BASE + "/api/uploads/" + current.id + "/confirm-map", {
-          method: "POST", credentials: "include",
-          headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-        });
-        if (!res.ok) throw new Error(await res.text() || ("HTTP " + res.status));
+          return;
+        }
+        if (!out.res.ok) throw new Error(out.text || ("HTTP " + out.res.status));
         setStep("progress");
         progMeta.textContent = "Importing " + current.totalRows + " rows across " + current.tabs.length + " tab(s)…";
         bar.style.width = "0%";
