@@ -220,17 +220,28 @@ export async function runWeeklySnapshotSweep(env: Env, limit = 25): Promise<{
   // Pick up to `limit` firms whose team_url fact exists and whose most
   // recent snapshot is missing or >7 days old. We left-join on the
   // most-recent snapshot date and filter via HAVING-equivalent.
+  // Deterministic team-url tie-break: when an entity has more than
+  // one current `firm.team_url` fact, pick the most recently observed
+  // (then created) row so the crawl target is stable across runs.
   const rows = await env.DB.prepare(
-    `SELECT f.entity_id AS firm_entity_id, f.value_text AS team_url,
-            (SELECT MAX(snapshot_date) FROM firm_team_snapshots s WHERE s.firm_entity_id = f.entity_id) AS last_date
-       FROM facts f
-       JOIN entity_roles r ON r.entity_id = f.entity_id
-                          AND r.role = 'investor_firm'
-      WHERE f.predicate = 'firm.team_url'
-        AND f.is_current = 1
-        AND f.value_text IS NOT NULL
-        AND f.value_text <> ''
-      GROUP BY f.entity_id
+    `SELECT picked.firm_entity_id, picked.team_url,
+            (SELECT MAX(snapshot_date) FROM firm_team_snapshots s
+              WHERE s.firm_entity_id = picked.firm_entity_id) AS last_date
+       FROM (
+         SELECT f.entity_id AS firm_entity_id, f.value_text AS team_url,
+                ROW_NUMBER() OVER (
+                  PARTITION BY f.entity_id
+                  ORDER BY f.observed_at DESC, f.created_at DESC, f.id ASC
+                ) AS rn
+           FROM facts f
+           JOIN entity_roles r ON r.entity_id = f.entity_id
+                              AND r.role = 'investor_firm'
+          WHERE f.predicate = 'firm.team_url'
+            AND f.is_current = 1
+            AND f.value_text IS NOT NULL
+            AND f.value_text <> ''
+       ) picked
+      WHERE picked.rn = 1
       HAVING last_date IS NULL OR last_date < date('now','-7 days')
       ORDER BY (last_date IS NULL) DESC, last_date ASC
       LIMIT ?`,
