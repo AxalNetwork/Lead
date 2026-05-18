@@ -107,13 +107,31 @@ async function maybeLinkVehicle(env: Env, adapter: IntlAdapter, filing: IntlFili
   const canonicalSrc = filing.data?.canonical_firm_source_id;
   const role = filing.data?.vehicle_role;
   if (typeof canonicalSrc !== "string" || typeof role !== "string") return;
-  const r = await env.DB.prepare(
+  // 1. Look up an existing canonical firm by its intl.source_id fact.
+  let r = await env.DB.prepare(
     `SELECT entity_id FROM facts WHERE predicate = 'intl.source_id'
        AND value_text = ?
        AND value_json LIKE ?
        AND is_current = 1 LIMIT 1`,
   ).bind(canonicalSrc, `%"jurisdiction":"${adapter.jurisdiction}"%`).first<{ entity_id: string }>();
-  if (!r?.entity_id || r.entity_id === vehicleEntityId) return;
+  // 2. If the canonical firm isn't on file yet, mint it through the
+  //    canonical resolveIntlEntity path so the linker has a real
+  //    target. This is what makes auto-linking end-to-end on the
+  //    first sighting of "<vehicle> managed by <canonical>".
+  if (!r?.entity_id) {
+    const displayName = typeof filing.data?.canonical_firm_display_name === "string"
+      ? filing.data.canonical_firm_display_name : canonicalSrc;
+    const canonId = await resolveIntlEntity(env, {
+      jurisdiction: adapter.jurisdiction,
+      source_id: canonicalSrc,
+      display_name: displayName,
+      kind: "manager",
+      url: filing.url,
+      confidence: 0.7,
+    }, `intl:${adapter.id}:firmgraph`);
+    r = { entity_id: canonId };
+  }
+  if (!r.entity_id || r.entity_id === vehicleEntityId) return;
   await linkVehicleToCanonicalFirm(env, {
     canonical_firm_entity_id: r.entity_id,
     vehicle_entity_id: vehicleEntityId,

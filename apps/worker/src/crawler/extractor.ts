@@ -53,6 +53,10 @@ export interface ExtractionResult {
   adapter_fallback: "no_adapter" | "adapter_threw" | "low_confidence" | null;
   adapter_error: string | null;
   child_urls: string[];
+  // Task #3: structured failure records from intl dispatch. Empty (or
+  // omitted) when nothing went wrong. Surfaced verbatim so acceptance
+  // probes see explicit per-adapter failures instead of silent skips.
+  errors?: Array<{ stage: "intl_parse" | "intl_persist"; adapter_id: string; url: string; message: string }>;
 }
 
 function parseJsonLd(html: string): Array<Record<string, unknown>> {
@@ -184,6 +188,7 @@ export async function extractCandidates(
     url, matched_types: [], candidates: [], used_ai: false, ai_error: null,
     classification: null, route: "skip",
     adapter_used: null, adapter_fallback: null, adapter_error: null, child_urls: [],
+    errors: [],
   };
   if (!html) return result;
 
@@ -285,11 +290,23 @@ export async function extractCandidates(
   // returns a hit we also persist it through services/intl/persist
   // (canonical createEntity + insertFact write path). Engine never
   // special-cases any one jurisdiction.
-  try {
+  // Intl dispatch. Failures are surfaced as structured records on the
+  // extractor result (so acceptance probes see explicit failures, not
+  // silent degradation) but never abort the rest of the extraction —
+  // one broken jurisdiction must not blank the whole candidates list.
+  {
     const { pickIntlAdapter } = await import("./adapters/intl/registry");
     const intl = pickIntlAdapter(url, opts.intlJurisdictionHint ?? null);
     if (intl) {
-      const hit = intl.parsePage(html, url);
+      let hit: import("./adapters/intl/types").IntlEntityHit | null = null;
+      try {
+        hit = intl.parsePage(html, url);
+      } catch (e) {
+        const msg = (e as Error).message;
+        console.error("intl parsePage failed", intl.id, url, msg);
+        result.errors = result.errors ?? [];
+        result.errors.push({ stage: "intl_parse", adapter_id: intl.id, url, message: msg });
+      }
       if (hit) {
         result.candidates.push({
           profile_type: hit.kind === "person" ? "person" : "investor_firm",
@@ -297,22 +314,19 @@ export async function extractCandidates(
           source: "ai_semantic",
           name: hit.display_name,
           url: hit.url,
-          data: {
-            intl_hit: hit,
-            jurisdiction: intl.jurisdiction,
-            adapter_id: intl.id,
-          },
+          data: { intl_hit: hit, jurisdiction: intl.jurisdiction, adapter_id: intl.id },
         });
         try {
           const { persistIntlEntityFromPage } = await import("../services/intl/persist");
           await persistIntlEntityFromPage(env, intl, html, url);
         } catch (e) {
-          console.warn("intl persist failed", url, (e as Error).message);
+          const msg = (e as Error).message;
+          console.error("intl persist failed", intl.id, url, msg);
+          result.errors = result.errors ?? [];
+          result.errors.push({ stage: "intl_persist", adapter_id: intl.id, url, message: msg });
         }
       }
     }
-  } catch (e) {
-    console.warn("intl dispatch failed", url, (e as Error).message);
   }
 
   const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);

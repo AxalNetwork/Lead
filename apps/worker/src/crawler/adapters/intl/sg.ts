@@ -66,12 +66,25 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
     const start = Math.max(0, m.index - 80);
     const end = Math.min(text.length, m.index + m[0].length + 200);
     const { raw_amount, raw_currency } = extractAmount(text.slice(start, end));
+    // "Managed by" pattern → bind this fund vehicle to a canonical
+    // firm in the next persist step. MAS notices commonly include
+    // "managed by <NAME> (UEN: XXXXXXXX)" — when we see it, emit the
+    // canonical_firm_source_id + vehicle_role so persist's
+    // maybeLinkVehicle can call linkVehicleToCanonicalFirm.
+    const mgr = /managed\s+by\s+([A-Z][A-Za-z0-9 &.,'-]{2,120}?)\s*\(?UEN[:\s]+(\d{8,9}[A-Z]|[TS]\d{2}[A-Z]{2}\d{4}[A-Z])\)?/i
+      .exec(text.slice(start, end));
+    const data: Record<string, unknown> = {};
+    if (mgr) {
+      data.canonical_firm_source_id = mgr[2];
+      data.canonical_firm_display_name = mgr[1].trim();
+      data.vehicle_role = "management_company";
+    }
     out.push({
       jurisdiction: "SG", source_id: `mas:${yy}-${mm}-${dd}:${m[2].slice(0,40)}`,
       filer_name: m[2].trim(), filing_type: `mas-${m[3].toLowerCase()}`,
       filed_at: `${yy}-${mm}-${dd}`, url,
       raw_amount, raw_currency,
-      data: {}, source_evidence_json: { row: m[0], window: text.slice(start, end) },
+      data, source_evidence_json: { row: m[0], window: text.slice(start, end) },
     });
     if (out.length >= 100) break;
   }
