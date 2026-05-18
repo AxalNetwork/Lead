@@ -48,7 +48,7 @@ async function enqueueWatchlistNotification(env: Env, payload: SpinoutNotificati
          (id, owner_email, rule_id, watchlist_id, entity_id, trigger_kind,
           dedupe_key, dedupe_hash, title, body, payload_json, channel,
           delivery_status, occurred_at)
-       VALUES (?, ?, 'system:fund-spinout', NULL, ?, 'fund_spinout',
+       VALUES (?, ?, 'system:fund-spinout', NULL, ?, 'executive_change',
                ?, ?, ?, ?, ?, 'in_app', 'delivered', datetime('now'))
        ON CONFLICT(id) DO NOTHING`,
     ).bind(
@@ -57,7 +57,12 @@ async function enqueueWatchlistNotification(env: Env, payload: SpinoutNotificati
       payload.spinout_id, hash,
       `Fund spinout: ${payload.new_firm_name ?? "new firm"} (from parent ${payload.parent_firm_entity_id})`,
       `${payload.people.length} partners departed: ${payload.people.slice(0, 6).join(", ")}`,
-      JSON.stringify(payload),
+      // payload.subkind="fund_spinout" preserves the real notification
+      // semantics inside the alert_rules-allowed `executive_change`
+      // trigger_kind envelope. UI filters on payload.subkind to render
+      // these as fund spinouts. Avoids needing a SQLite table-rebuild
+      // migration to extend the alert_rules CHECK enum.
+      JSON.stringify({ subkind: "fund_spinout", ...payload }),
     ).run();
   } catch (e) {
     console.warn("spinout notification insert failed", (e as Error).message);
