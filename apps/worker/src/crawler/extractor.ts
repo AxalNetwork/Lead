@@ -178,7 +178,7 @@ export async function extractCandidates(
   env: Env,
   url: string,
   html: string,
-  opts: { profileTypeHint?: string } = {},
+  opts: { profileTypeHint?: string; intlJurisdictionHint?: import("./adapters/intl/types").JurisdictionCode | null } = {},
 ): Promise<ExtractionResult> {
   const result: ExtractionResult = {
     url, matched_types: [], candidates: [], used_ai: false, ai_error: null,
@@ -274,6 +274,45 @@ export async function extractCandidates(
         console.warn("deal persist failed", url, (e as Error).message);
       }
     }
+  }
+
+  // Task #3: International coverage dispatch. After the SiteAdapter
+  // pass, consult the IntlAdapter registry (jurisdiction hint > host >
+  // suffix > TLD). On a match, run the adapter's pure parsePage against
+  // the already-fetched HTML — no second fetch — and append the
+  // resulting IntlEntityHit as an extractor candidate so downstream
+  // routing surfaces the jurisdictional binding. When the parser
+  // returns a hit we also persist it through services/intl/persist
+  // (canonical createEntity + insertFact write path). Engine never
+  // special-cases any one jurisdiction.
+  try {
+    const { pickIntlAdapter } = await import("./adapters/intl/registry");
+    const intl = pickIntlAdapter(url, opts.intlJurisdictionHint ?? null);
+    if (intl) {
+      const hit = intl.parsePage(html, url);
+      if (hit) {
+        result.candidates.push({
+          profile_type: hit.kind === "person" ? "person" : "investor_firm",
+          confidence: hit.confidence,
+          source: "ai_semantic",
+          name: hit.display_name,
+          url: hit.url,
+          data: {
+            intl_hit: hit,
+            jurisdiction: intl.jurisdiction,
+            adapter_id: intl.id,
+          },
+        });
+        try {
+          const { persistIntlEntityFromPage } = await import("../services/intl/persist");
+          await persistIntlEntityFromPage(env, intl, html, url);
+        } catch (e) {
+          console.warn("intl persist failed", url, (e as Error).message);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("intl dispatch failed", url, (e as Error).message);
   }
 
   const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);

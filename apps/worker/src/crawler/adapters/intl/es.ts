@@ -48,10 +48,17 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   return filterSince(out, since);
 }
 
+const CNMV = "https://www.cnmv.es";
+
 export const esIntl = defineIntlAdapter({
   jurisdiction: "ES", id: "intl_es",
   hosts: ["www.cnmv.es"],
   throttle: { rps: 0.5, burst: 2 }, // CNMV HTML index is slow.
   needs_translation: true,
-  parseSearch, parseCompany, parseFilings,
+  endpoints: {
+    search: (name) => `${CNMV}/portal/Consultas/BusquedaPorEntidad.aspx?nombre=${encodeURIComponent(name)}`,
+    company: (id) => `${CNMV}/portal/Consultas/EE/InformacionEntidad.aspx?nif=${encodeURIComponent(id)}`,
+    filings: (_since) => `${CNMV}/portal/HR/UltimasHR.aspx`,
+  },
+  parsers: { parseSearch, parseCompany, parseFilings },
 });

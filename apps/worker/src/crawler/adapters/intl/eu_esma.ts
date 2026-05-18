@@ -44,10 +44,17 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   return filterSince(out, since);
 }
 
+const ESMA = "https://registers.esma.europa.eu";
+
 export const euEsmaIntl = defineIntlAdapter({
   jurisdiction: "EU", id: "intl_eu_esma",
   hosts: ["registers.esma.europa.eu", "www.esma.europa.eu"],
   throttle: { rps: 1, burst: 3 },
   needs_translation: false,
-  parseSearch, parseCompany, parseFilings,
+  endpoints: {
+    search: (name) => `${ESMA}/publication/searchRegister?core=esma_registers_mifid_firms&query=${encodeURIComponent(name)}`,
+    company: (id) => `${ESMA}/publication/entity/${encodeURIComponent(id)}`,
+    filings: (since) => `https://www.esma.europa.eu/press-news/esma-news?from=${encodeURIComponent(since)}`,
+  },
+  parsers: { parseSearch, parseCompany, parseFilings },
 });

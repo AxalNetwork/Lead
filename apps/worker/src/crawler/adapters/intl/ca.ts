@@ -46,10 +46,17 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   return filterSince(out, since);
 }
 
+const CSA = "https://info.securities-administrators.ca";
+
 export const caIntl = defineIntlAdapter({
   jurisdiction: "CA", id: "intl_ca",
   hosts: ["info.securities-administrators.ca", "www.osc.ca", "www.bcsc.bc.ca", "www.asc.ca"],
   throttle: { rps: 1, burst: 3 },
   needs_translation: false,
-  parseSearch, parseCompany, parseFilings,
+  endpoints: {
+    search: (name) => `${CSA}/nrsmobile/nrssearch/Search.aspx?q=${encodeURIComponent(name)}`,
+    company: (id) => `${CSA}/nrsmobile/nrssearch/FirmInfo.aspx?nrd=${encodeURIComponent(id)}`,
+    filings: (_since) => `https://www.osc.ca/en/news-events/news`,
+  },
+  parsers: { parseSearch, parseCompany, parseFilings },
 });

@@ -48,10 +48,17 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   return filterSince(out, since);
 }
 
+const GECO = "https://geco.amf-france.org";
+
 export const frIntl = defineIntlAdapter({
   jurisdiction: "FR", id: "intl_fr",
   hosts: ["geco.amf-france.org", "www.amf-france.org", "www.infogreffe.fr"],
   throttle: { rps: 1, burst: 3 },
   needs_translation: true,
-  parseSearch, parseCompany, parseFilings,
+  endpoints: {
+    search: (name) => `${GECO}/Bio/info_bio.aspx?nom=${encodeURIComponent(name)}`,
+    company: (id) => `${GECO}/Bio/info_bio.aspx?codeBio=${encodeURIComponent(id)}`,
+    filings: (_since) => `https://www.amf-france.org/fr/recherche/resultat?form_build_id=&search_api_fulltext=&type_de_publication=visa`,
+  },
+  parsers: { parseSearch, parseCompany, parseFilings },
 });

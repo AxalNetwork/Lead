@@ -59,6 +59,9 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   return filterSince(out, since);
 }
 
+const CH = "https://find-and-update.company-information.service.gov.uk";
+const FCA = "https://register.fca.org.uk";
+
 export const ukIntl = defineIntlAdapter({
   jurisdiction: "UK", id: "intl_uk",
   hosts: [
@@ -69,5 +72,10 @@ export const ukIntl = defineIntlAdapter({
   ],
   throttle: { rps: 2, burst: 5 }, // Companies House free tier: 600/5min ~ 2 rps.
   needs_translation: false,
-  parseSearch, parseCompany, parseFilings,
+  endpoints: {
+    search: (name) => `${CH}/search/companies?q=${encodeURIComponent(name)}`,
+    company: (id) => `${CH}/company/${encodeURIComponent(id)}`,
+    filings: (_since) => `${FCA}/s/search?q=*&type=Notice`,
+  },
+  parsers: { parseSearch, parseCompany, parseFilings },
 });

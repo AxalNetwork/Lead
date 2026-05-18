@@ -50,10 +50,17 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   return filterSince(out, since);
 }
 
+const AFM = "https://www.afm.nl";
+
 export const nlIntl = defineIntlAdapter({
   jurisdiction: "NL", id: "intl_nl",
   hosts: ["www.afm.nl", "www.kvk.nl"],
   throttle: { rps: 1, burst: 3 },
   needs_translation: true,
-  parseSearch, parseCompany, parseFilings,
+  endpoints: {
+    search: (name) => `${AFM}/nl-nl/sector/registers/zoeken?query=${encodeURIComponent(name)}`,
+    company: (id) => `${AFM}/nl-nl/sector/registers/onderneming/${encodeURIComponent(id)}`,
+    filings: (_since) => `${AFM}/nl-nl/nieuws`,
+  },
+  parsers: { parseSearch, parseCompany, parseFilings },
 });

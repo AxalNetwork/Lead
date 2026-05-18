@@ -47,10 +47,17 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   return filterSince(out, since);
 }
 
+const FI = "https://www.fi.se";
+
 export const seIntl = defineIntlAdapter({
   jurisdiction: "SE", id: "intl_se",
   hosts: ["www.fi.se", "www.bolagsverket.se"],
   throttle: { rps: 1, burst: 3 },
   needs_translation: true,
-  parseSearch, parseCompany, parseFilings,
+  endpoints: {
+    search: (name) => `${FI}/sv/vara-register/foretagsregistret/?query=${encodeURIComponent(name)}`,
+    company: (id) => `${FI}/sv/vara-register/foretagsregistret/foretag/?id=${encodeURIComponent(id)}`,
+    filings: (_since) => `${FI}/sv/publicerat/nyheter/`,
+  },
+  parsers: { parseSearch, parseCompany, parseFilings },
 });

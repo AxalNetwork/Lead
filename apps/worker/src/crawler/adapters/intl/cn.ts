@@ -55,10 +55,17 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   return filterSince(out, since);
 }
 
+const AMAC = "https://gs.amac.org.cn";
+
 export const cnIntl = defineIntlAdapter({
   jurisdiction: "CN", id: "intl_cn",
   hosts: ["gs.amac.org.cn", "www.amac.org.cn", "www.csrc.gov.cn", "www.samr.gov.cn"],
   throttle: { rps: 0.5, burst: 2 },
   needs_translation: true,
-  parseSearch, parseCompany, parseFilings,
+  endpoints: {
+    search: (name) => `${AMAC}/amac-infodisc/res/pof/manager/managerList.html?q=${encodeURIComponent(name)}`,
+    company: (id) => `${AMAC}/amac-infodisc/res/pof/manager/${encodeURIComponent(id)}.html`,
+    filings: (_since) => `http://www.csrc.gov.cn/csrc/c100028/zfxxgk_zdgk.shtml`,
+  },
+  parsers: { parseSearch, parseCompany, parseFilings },
 });

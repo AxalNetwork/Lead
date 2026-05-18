@@ -47,10 +47,17 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   return filterSince(out, since);
 }
 
+const CBI = "https://registers.centralbank.ie";
+
 export const ieIntl = defineIntlAdapter({
   jurisdiction: "IE", id: "intl_ie",
   hosts: ["registers.centralbank.ie", "www.cro.ie"],
   throttle: { rps: 1, burst: 3 },
   needs_translation: false,
-  parseSearch, parseCompany, parseFilings,
+  endpoints: {
+    search: (name) => `${CBI}/FirmSearchPage.aspx?searchEntity=${encodeURIComponent(name)}`,
+    company: (id) => `${CBI}/FirmDataPage.aspx?firmReferenceNumber=${encodeURIComponent(id)}`,
+    filings: (_since) => `https://www.centralbank.ie/news-media`,
+  },
+  parsers: { parseSearch, parseCompany, parseFilings },
 });

@@ -51,10 +51,17 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   return filterSince(out, since);
 }
 
+const BAFIN = "https://portal.mvp.bafin.de";
+
 export const deIntl = defineIntlAdapter({
   jurisdiction: "DE", id: "intl_de",
   hosts: ["portal.mvp.bafin.de", "www.bafin.de", "www.unternehmensregister.de"],
   throttle: { rps: 1, burst: 3 },
   needs_translation: true,
-  parseSearch, parseCompany, parseFilings,
+  endpoints: {
+    search: (name) => `${BAFIN}/database/InstInfo/sucheForm.do?cmd=sucheNeu&searchString=${encodeURIComponent(name)}`,
+    company: (id) => `${BAFIN}/database/InstInfo/details.do?inst=${encodeURIComponent(id)}`,
+    filings: (_since) => `https://www.bafin.de/SiteGlobals/Forms/Suche/EN/Konsultationssuche_Formular.html`,
+  },
+  parsers: { parseSearch, parseCompany, parseFilings },
 });

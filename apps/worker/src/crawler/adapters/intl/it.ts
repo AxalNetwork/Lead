@@ -48,10 +48,17 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   return filterSince(out, since);
 }
 
+const CONSOB = "https://www.consob.it";
+
 export const itIntl = defineIntlAdapter({
   jurisdiction: "IT", id: "intl_it",
   hosts: ["www.consob.it"],
   throttle: { rps: 0.5, burst: 2 },
   needs_translation: true,
-  parseSearch, parseCompany, parseFilings,
+  endpoints: {
+    search: (name) => `${CONSOB}/web/area-pubblica/albi?text=${encodeURIComponent(name)}`,
+    company: (id) => `${CONSOB}/web/area-pubblica/soggetto?cf=${encodeURIComponent(id)}`,
+    filings: (_since) => `${CONSOB}/web/area-pubblica/ultime-pubblicazioni`,
+  },
+  parsers: { parseSearch, parseCompany, parseFilings },
 });

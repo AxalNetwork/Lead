@@ -48,10 +48,17 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   return filterSince(out, since);
 }
 
+const ASIC = "https://connectonline.asic.gov.au";
+
 export const auIntl = defineIntlAdapter({
   jurisdiction: "AU", id: "intl_au",
   hosts: ["asic.gov.au", "connectonline.asic.gov.au", "www.austrac.gov.au"],
   throttle: { rps: 1, burst: 3 },
   needs_translation: false,
-  parseSearch, parseCompany, parseFilings,
+  endpoints: {
+    search: (name) => `${ASIC}/RegistrySearch/faces/landing/SearchRegisters.jspx?searchText=${encodeURIComponent(name)}`,
+    company: (id) => `${ASIC}/RegistrySearch/faces/landing/panelSearch.jspx?searchText=${encodeURIComponent(id)}`,
+    filings: (_since) => `https://asic.gov.au/about-asic/news-centre/news-items/`,
+  },
+  parsers: { parseSearch, parseCompany, parseFilings },
 });

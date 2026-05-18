@@ -407,6 +407,27 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         console.error("nightly angel/syndicate refresh failed", (e as Error).message);
       }
 
+      // Task #3 (International Coverage Pack): nightly intl filings
+      // drain — pulls recent filings from each of the 17 jurisdictional
+      // adapters since the last successful drain (KV cursor) and routes
+      // them through persistIntlFiling for USD normalization +
+      // translation + canonical fact writes. Per-adapter errors are
+      // isolated. Piggybacks the consolidated nightly slot (Free plan
+      // caps crons at 5).
+      try {
+        const { drainAllIntlFilings } = await import("./services/intl/drain");
+        const intlSummary = await drainAllIntlFilings(env, { defaultDaysBack: 7, perAdapterCap: 50 });
+        const totals = intlSummary.reduce((a, s) => ({
+          seen: a.seen + s.filings_seen,
+          persisted: a.persisted + s.filings_persisted,
+          fx_errors: a.fx_errors + s.fx_errors,
+          translated: a.translated + s.translated,
+        }), { seen: 0, persisted: 0, fx_errors: 0, translated: 0 });
+        console.log("intl filings drain done", totals);
+      } catch (e) {
+        console.error("nightly intl drain failed", (e as Error).message);
+      }
+
       // 5. Project match refresh
       try {
         const r = await env.DB.prepare(`SELECT id FROM projects WHERE deleted_at IS NULL AND status = 'active' ORDER BY last_modified DESC LIMIT 200`).all<{ id: string }>();

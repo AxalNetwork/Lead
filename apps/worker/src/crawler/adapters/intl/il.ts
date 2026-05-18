@@ -55,10 +55,17 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   return filterSince(out, since);
 }
 
+const MAGNA = "https://magna.isa.gov.il";
+
 export const ilIntl = defineIntlAdapter({
   jurisdiction: "IL", id: "intl_il",
   hosts: ["www.isa.gov.il", "magna.isa.gov.il", "www.gov.il"],
   throttle: { rps: 1, burst: 3 },
   needs_translation: true,
-  parseSearch, parseCompany, parseFilings,
+  endpoints: {
+    search: (name) => `${MAGNA}/Pages/SearchResults.aspx?k=${encodeURIComponent(name)}`,
+    company: (id) => `${MAGNA}/CompanyDetails.aspx?CompanyId=${encodeURIComponent(id)}`,
+    filings: (_since) => `${MAGNA}/Pages/Reports.aspx`,
+  },
+  parsers: { parseSearch, parseCompany, parseFilings },
 });

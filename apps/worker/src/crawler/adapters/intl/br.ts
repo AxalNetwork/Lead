@@ -49,10 +49,17 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   return filterSince(out, since);
 }
 
+const CVM = "https://sistemas.cvm.gov.br";
+
 export const brIntl = defineIntlAdapter({
   jurisdiction: "BR", id: "intl_br",
   hosts: ["www.cvm.gov.br", "sistemas.cvm.gov.br", "servicos.receita.fazenda.gov.br"],
   throttle: { rps: 1, burst: 3 },
   needs_translation: true,
-  parseSearch, parseCompany, parseFilings,
+  endpoints: {
+    search: (name) => `${CVM}/cvmsite/SecuredAcessoExterno/asp/cadastroSearchAdministrador.asp?nome=${encodeURIComponent(name)}`,
+    company: (id) => `${CVM}/cvmsite/asp/cadastro_view.asp?cnpj=${encodeURIComponent(id)}`,
+    filings: (_since) => `https://www.cvm.gov.br/noticias/`,
+  },
+  parsers: { parseSearch, parseCompany, parseFilings },
 });

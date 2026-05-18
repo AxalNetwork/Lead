@@ -54,10 +54,17 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   return filterSince(out, since);
 }
 
+const SFC = "https://apps.sfc.hk";
+
 export const hkIntl = defineIntlAdapter({
   jurisdiction: "HK", id: "intl_hk",
   hosts: ["www.sfc.hk", "apps.sfc.hk", "www.cr.gov.hk"],
   throttle: { rps: 1, burst: 3 },
   needs_translation: false,
-  parseSearch, parseCompany, parseFilings,
+  endpoints: {
+    search: (name) => `${SFC}/publicregWeb/searchByName?licName=${encodeURIComponent(name)}`,
+    company: (id) => `${SFC}/publicregWeb/corp/${encodeURIComponent(id)}/details`,
+    filings: (_since) => `https://www.sfc.hk/en/News-and-announcements/News`,
+  },
+  parsers: { parseSearch, parseCompany, parseFilings },
 });

@@ -57,10 +57,17 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   return filterSince(out, since);
 }
 
+const MAS = "https://eservices.mas.gov.sg";
+
 export const sgIntl = defineIntlAdapter({
   jurisdiction: "SG", id: "intl_sg",
   hosts: ["eservices.mas.gov.sg", "www.mas.gov.sg", "www.bizfile.gov.sg", "data.gov.sg"],
   throttle: { rps: 2, burst: 5 },
   needs_translation: false,
-  parseSearch, parseCompany, parseFilings,
+  endpoints: {
+    search: (name) => `${MAS}/fid/institution/search?name=${encodeURIComponent(name)}`,
+    company: (id) => `${MAS}/fid/institution/${encodeURIComponent(id)}`,
+    filings: (since) => `https://www.mas.gov.sg/news?content_type=Media%20Release&from_date=${encodeURIComponent(since)}`,
+  },
+  parsers: { parseSearch, parseCompany, parseFilings },
 });

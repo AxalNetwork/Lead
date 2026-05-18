@@ -48,10 +48,18 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   return filterSince(out, since);
 }
 
+const SEBI = "https://www.sebi.gov.in";
+
 export const inIntl = defineIntlAdapter({
   jurisdiction: "IN", id: "intl_in",
   hosts: ["www.sebi.gov.in", "www.mca.gov.in", "rbi.org.in", "www.rbi.org.in"],
   throttle: { rps: 1, burst: 3 },
   needs_translation: false,
-  parseSearch, parseCompany, parseFilings,
+  endpoints: {
+    search: (name) => `${SEBI}/sebiweb/other/OtherAction.do?doRecognisedFpi=yes&search=${encodeURIComponent(name)}`,
+    company: (id) => `${SEBI}/sebiweb/other/OtherAction.do?doAif=yes&intmId=${encodeURIComponent(id)}`,
+    fund: (id) => `${SEBI}/sebiweb/other/OtherAction.do?doAif=yes&intmId=${encodeURIComponent(id)}`,
+    filings: (_since) => `${SEBI}/sebiweb/home/HomeAction.do?doListingAll=yes&search=Order`,
+  },
+  parsers: { parseSearch, parseCompany, parseFilings },
 });
