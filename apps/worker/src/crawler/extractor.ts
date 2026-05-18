@@ -9,7 +9,19 @@
 
 import type { Env } from "../types";
 import { loadRegistry, testPage, type ProfileType } from "../services/profileTypes";
-import { classifyPage, isNewsLike, type PageClassification } from "../services/pageClassifier";
+import { classifyPage, isNewsLike, type PageClassification, type PageType } from "../services/pageClassifier";
+
+// Task #1 step 5: classifier-authoritative routing. Single source of
+// truth that maps a page_type to a downstream commit route. News-like
+// types go to the news pipeline; surface-level entity pages
+// (company_home / team_page / profile) go to the entity persister;
+// directory hubs and unknown pages are explicitly skipped so the
+// PredicateRouter never commits ambiguous rows.
+function routeForPageType(pt: PageType): "entity" | "news_item" | "skip" {
+  if (isNewsLike(pt)) return "news_item";
+  if (pt === "profile" || pt === "team_page" || pt === "company_home") return "entity";
+  return "skip";
+}
 
 export interface ExtractedCandidate {
   profile_type: string | null;
@@ -260,26 +272,26 @@ export async function extractCandidates(
     }
   }
 
-  // Step 7: Page classification — decides downstream routing. News /
-  // blog / press-release pages go to `news_items` (+ entity mentions);
-  // company/team/profile pages flow to the entity persister via the
-  // PredicateRouter. `skip` is reserved for directory hubs and unknown
-  // pages with no usable signals.
+  // Step 7: Page classification — authoritative source of the
+  // downstream `route`. classifyPage() already has internal fallback
+  // behavior (defaults to {page_type:"other",source:"default"}); if it
+  // throws outright we record a deterministic fallback classification
+  // with an explicit error signal so misroutes surface in telemetry
+  // instead of being silently dropped as "skip".
+  let classification: PageClassification;
   try {
-    const classification = await classifyPage(env, url, html);
-    result.classification = classification;
-    if (isNewsLike(classification.page_type)) {
-      result.route = "news_item";
-    } else if (matched.length > 0 || classification.page_type === "profile" || classification.page_type === "team_page" || classification.page_type === "company_home") {
-      result.route = "entity";
-    } else {
-      result.route = "skip";
-    }
+    classification = await classifyPage(env, url, html);
   } catch (e) {
-    // Never let classification failure abort extraction — preview will
-    // still surface candidates and matched_types.
-    console.warn("crawler.classifyPage failed", (e as Error).message);
+    console.warn("crawler.classifyPage threw", (e as Error).message);
+    classification = {
+      page_type: "other",
+      confidence: 0,
+      source: "default",
+      signals: [`error:${(e as Error).message}`],
+    };
   }
+  result.classification = classification;
+  result.route = routeForPageType(classification.page_type);
 
   return result;
 }
