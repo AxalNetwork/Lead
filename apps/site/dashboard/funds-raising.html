@@ -1,0 +1,68 @@
+---
+layout: default
+title: Funds raising
+permalink: /dashboard/funds-raising/
+---
+<section class="ads-section">
+  <h1 class="ads-h1">Funds raising</h1>
+  <p class="ads-sub">Every fund with status=raising — target size, % raised, GP team, strategy, sectors, geos.</p>
+  {% include charts/dashboard_shell.html %}
+
+  <div id="dashboard-content" hidden>
+    <div class="ads-card">
+      <form id="filter-form" style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <input class="ads-input" name="strategy" placeholder="strategy (e.g. seed)">
+        <input class="ads-input" name="sector" placeholder="sector (e.g. climate)">
+        <input class="ads-input" name="geo" placeholder="geo (e.g. US)">
+        <input class="ads-input" name="min_target_usd" placeholder="min target $" type="number">
+        <input class="ads-input" name="max_target_usd" placeholder="max target $" type="number">
+        <button class="ads-btn" type="submit">Apply</button>
+        <span style="flex:1"></span>
+        <button class="ads-btn" id="export-csv" type="button">Export CSV</button>
+      </form>
+    </div>
+    <div class="ads-card" style="margin-top:1rem">
+      <div id="funds-count" class="ads-mono"></div>
+      <div class="ads-table-wrap">
+        <table class="ads-table">
+          <thead><tr><th>Firm</th><th>Fund</th><th>Vintage</th><th>Target</th><th>% raised</th><th>Strategy</th><th>Sectors</th><th>Geos</th></tr></thead>
+          <tbody id="funds-tbody"><tr><td colspan="8">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script src="/assets/js/dashboards.js"></script>
+<script>
+(async function(){
+  var ok = await adsDashboards.gate("funds-raising"); if(!ok) return;
+  var d = adsDashboards;
+  var currentFilters = {};
+  function readFilters(){
+    var fd = new FormData(document.getElementById("filter-form"));
+    var o = {}; fd.forEach(function(v,k){ if(v) o[k]=v; });
+    return o;
+  }
+  async function load(){
+    currentFilters = readFilters();
+    try {
+      var r = await d.api("/funds-raising" + d.qs(currentFilters));
+      document.getElementById("funds-count").textContent = r.count + " funds";
+      var rows = (r.items||[]).map(function(f){
+        return '<tr><td>'+d.esc(f.firm_name||"")+'</td><td>'+d.esc(f.fund_name)
+          + (f.fund_number?' '+f.fund_number:'') + '</td><td>'+d.esc(f.vintage_year||"")
+          +'</td><td>'+d.esc(d.fmtUsd(f.target_size_usd))+'</td><td>'+(f.pct_raised!=null?f.pct_raised+"%":"—")
+          +'</td><td>'+d.esc(f.strategy||"")+'</td><td>'+d.esc((f.sectors||[]).join(", "))
+          +'</td><td>'+d.esc((f.geos||[]).join(", "))+'</td></tr>';
+      }).join("") || '<tr><td colspan="8">No matching funds.</td></tr>';
+      document.getElementById("funds-tbody").innerHTML = rows;
+    } catch(e){ console.warn(e); }
+  }
+  document.getElementById("filter-form").addEventListener("submit", function(e){ e.preventDefault(); load(); });
+  document.getElementById("export-csv").addEventListener("click", function(){
+    d.csv("/funds-raising","funds-raising", currentFilters);
+  });
+  load();
+})();
+</script>

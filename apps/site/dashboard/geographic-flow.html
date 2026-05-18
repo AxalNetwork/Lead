@@ -1,0 +1,43 @@
+---
+layout: default
+title: Geographic flow
+permalink: /dashboard/geographic-flow/
+---
+<section class="ads-section">
+  <h1 class="ads-h1">Geographic flow</h1>
+  <p class="ads-sub">Investor-HQ → portfolio-company-HQ flows; stroke weight = total $.</p>
+  {% include charts/dashboard_shell.html %}
+
+  <div id="dashboard-content" hidden>
+    <div class="ads-card">
+      <form id="filter-form" style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <select class="ads-input" name="months_back">
+          <option value="3">last 3 months</option>
+          <option value="6" selected>last 6 months</option>
+          <option value="12">last 12 months</option>
+        </select>
+        <button class="ads-btn" type="submit">Apply</button>
+        <span style="flex:1"></span>
+        <button class="ads-btn" id="export-csv" type="button">Export CSV</button>
+      </form>
+    </div>
+    <div class="ads-card" style="margin-top:1rem"><div id="world-arcs">Loading…</div></div>
+  </div>
+</section>
+
+<script src="/assets/js/dashboards.js"></script>
+<script>
+(async function(){
+  var ok = await adsDashboards.gate("geographic-flow"); if(!ok) return;
+  var d = adsDashboards; var current = {months_back:"6"};
+  async function load(){
+    var fd = new FormData(document.getElementById("filter-form")); current={}; fd.forEach(function(v,k){if(v)current[k]=v;});
+    try { var r = await d.api("/geographic-flow" + d.qs(current));
+      d.charts.worldArcs(document.getElementById("world-arcs"), r.items||[], {});
+    } catch(e){ console.warn(e); }
+  }
+  document.getElementById("filter-form").addEventListener("submit", function(e){ e.preventDefault(); load(); });
+  document.getElementById("export-csv").addEventListener("click", function(){ d.csv("/geographic-flow","geo-flow", current); });
+  load();
+})();
+</script>

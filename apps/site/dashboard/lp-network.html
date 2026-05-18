@@ -1,0 +1,59 @@
+---
+layout: default
+title: LP network
+permalink: /dashboard/lp-network/
+---
+<section class="ads-section">
+  <h1 class="ads-h1">LP network</h1>
+  <p class="ads-sub">Bipartite graph of LPs ↔ funds. Edge thickness = committed $.</p>
+  {% include charts/dashboard_shell.html %}
+
+  <div id="dashboard-content" hidden>
+    <div class="ads-card">
+      <form id="filter-form" style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <select class="ads-input" name="lp_class">
+          <option value="">All LP classes</option>
+          <option value="public_pension">Public pension</option>
+          <option value="endowment">Endowment</option>
+          <option value="sovereign_wealth">Sovereign wealth</option>
+          <option value="family_office">Family office</option>
+          <option value="foundation">Foundation</option>
+        </select>
+        <input class="ads-input" name="vintage_year" type="number" placeholder="vintage year">
+        <button class="ads-btn" type="submit">Apply</button>
+        <span style="flex:1"></span>
+        <button class="ads-btn" id="export-csv" type="button">Export CSV</button>
+      </form>
+    </div>
+    <div class="ads-card" style="margin-top:1rem">
+      <div id="lp-graph">Loading…</div>
+    </div>
+  </div>
+</section>
+
+<script src="/assets/js/dashboards.js"></script>
+<script>
+(async function(){
+  var ok = await adsDashboards.gate("lp-network"); if(!ok) return;
+  var d = adsDashboards;
+  var current = {};
+  function readFilters(){
+    var fd = new FormData(document.getElementById("filter-form"));
+    var o = {}; fd.forEach(function(v,k){ if(v) o[k]=v; }); return o;
+  }
+  async function load(){
+    current = readFilters();
+    try {
+      var r = await d.api("/lp-network" + d.qs(current));
+      // Render as two-column bipartite using sankey primitive (LP→fund as links).
+      var links = (r.edges||[]).map(function(e){
+        return { from_firm_entity_id: e.lp_name||e.lp_entity_id, to_firm_entity_id: e.fund_name||e.fund_name_raw, count: Math.max(1, Math.round(e.committed_usd/1e6)) };
+      });
+      d.charts.sankey(document.getElementById("lp-graph"), links, {});
+    } catch(e){ console.warn(e); }
+  }
+  document.getElementById("filter-form").addEventListener("submit", function(e){ e.preventDefault(); load(); });
+  document.getElementById("export-csv").addEventListener("click", function(){ d.csv("/lp-network","lp-network", current); });
+  load();
+})();
+</script>

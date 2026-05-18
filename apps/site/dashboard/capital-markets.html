@@ -1,0 +1,101 @@
+---
+layout: default
+title: Capital markets
+permalink: /dashboard/capital-markets/
+---
+<section class="ads-section">
+  <h1 class="ads-h1">Capital markets</h1>
+  <p class="ads-sub">Live VC / PE / Angel intelligence — deals, partner moves, dry powder, LP commitments.</p>
+  {% include charts/dashboard_shell.html %}
+
+  <div id="dashboard-content" hidden>
+    <div class="ads-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.75rem;margin-top:.5rem">
+      <a class="ads-card" href="/dashboard/funds-raising/" style="text-decoration:none"><h3>Funds raising</h3><div id="kpi-funds-raising" class="ads-kpi">…</div></a>
+      <a class="ads-card" href="/dashboard/sector-momentum/" style="text-decoration:none"><h3>Deals · 7d</h3><div id="kpi-deals-7" class="ads-kpi">…</div></a>
+      <a class="ads-card" href="/dashboard/sector-momentum/" style="text-decoration:none"><h3>Deals · 30d</h3><div id="kpi-deals-30" class="ads-kpi">…</div></a>
+      <a class="ads-card" href="/dashboard/sector-momentum/" style="text-decoration:none"><h3>$ raised · 30d</h3><div id="kpi-raised-30" class="ads-kpi">…</div></a>
+      <a class="ads-card" href="/dashboard/partner-moves/" style="text-decoration:none"><h3>Partner moves · 7d</h3><div id="kpi-moves-7" class="ads-kpi">…</div></a>
+      <a class="ads-card" href="/dashboard/sector-momentum/" style="text-decoration:none"><h3>IPO filings · 30d</h3><div id="kpi-ipo-30" class="ads-kpi">…</div></a>
+      <a class="ads-card" href="/dashboard/sector-momentum/" style="text-decoration:none"><h3>M&amp;A · 30d</h3><div id="kpi-ma-30" class="ads-kpi">…</div></a>
+    </div>
+
+    <div class="ads-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem">
+      <div class="ads-card">
+        <h3>Deal feed</h3>
+        <div id="feed-deals" style="max-height:380px;overflow:auto">Loading…</div>
+      </div>
+      <div class="ads-card">
+        <h3>Movement feed</h3>
+        <div id="feed-movements" style="max-height:380px;overflow:auto">Loading…</div>
+      </div>
+    </div>
+
+    <h2 class="ads-h2" style="margin-top:1.5rem">Dry powder map (bubble per firm)</h2>
+    <div class="ads-card">
+      <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem">
+        <span class="ads-mono" id="dry-powder-total"></span>
+        <span style="flex:1"></span>
+        <button class="ads-btn" id="export-dry-powder-csv">Export CSV</button>
+        <button class="ads-btn" id="snapshot-landing">Snapshot</button>
+      </div>
+      <div id="dry-powder-map">Loading…</div>
+    </div>
+  </div>
+</section>
+
+<script src="/assets/js/dashboards.js"></script>
+<script>
+(async function(){
+  var ok = await adsDashboards.gate("capital-markets");
+  if (!ok) return;
+  var d = adsDashboards;
+
+  // KPI strip
+  try {
+    var k = await d.api("/kpi");
+    document.getElementById("kpi-funds-raising").textContent = k.funds_raising;
+    document.getElementById("kpi-deals-7").textContent = k.deals_7d;
+    document.getElementById("kpi-deals-30").textContent = k.deals_30d;
+    document.getElementById("kpi-raised-30").textContent = d.fmtUsd(k.total_raised_usd_30d);
+    document.getElementById("kpi-moves-7").textContent = k.partner_moves_7d;
+    document.getElementById("kpi-ipo-30").textContent = k.ipo_filings_30d;
+    document.getElementById("kpi-ma-30").textContent = k.ma_events_30d;
+  } catch(e){ console.warn("kpi", e); }
+
+  // Deals feed
+  try {
+    var deals = await d.api("/feeds/deals?limit=25");
+    var html = (deals.items||[]).map(function(it){
+      return '<div class="ads-feed-row" style="padding:.5rem 0;border-bottom:1px solid #2a2e36">'
+        + '<strong>'+d.esc(it.company_name_raw)+'</strong> · '+d.esc(it.round_name||it.event_type)
+        + ' · <span class="ads-mono">'+d.esc(d.fmtUsd(it.amount_usd))+'</span>'
+        + '<div style="font-size:12px;color:#aab3bf">'+d.esc(it.announcement_date||"")+' · '+d.esc((it.sector_tags||[]).join(", "))+'</div></div>';
+    }).join("") || '<div class="ads-empty">No recent deals.</div>';
+    document.getElementById("feed-deals").innerHTML = html;
+  } catch(e){ console.warn("deals", e); }
+
+  // Movements feed
+  try {
+    var moves = await d.api("/feeds/movements?limit=25");
+    var html = (moves.items||[]).map(function(it){
+      return '<div class="ads-feed-row" style="padding:.5rem 0;border-bottom:1px solid #2a2e36">'
+        + '<strong>'+d.esc(it.person_name_raw)+'</strong> · '+d.esc(it.movement_type)
+        + (it.to_title? ' → '+d.esc(it.to_title):'')
+        + '<div style="font-size:12px;color:#aab3bf">'+d.esc(it.observed_at||"")+'</div></div>';
+    }).join("") || '<div class="ads-empty">No recent movements.</div>';
+    document.getElementById("feed-movements").innerHTML = html;
+  } catch(e){ console.warn("moves", e); }
+
+  // Dry powder map
+  try {
+    var dp = await d.api("/dry-powder-map?limit=100");
+    var total = (dp.items||[]).reduce(function(s,i){return s+(i.dry_powder_usd||0);},0);
+    document.getElementById("dry-powder-total").textContent = "Total mid-band: " + d.fmtUsd(total) + " · " + dp.total_firms + " firms";
+    d.charts.bubble(document.getElementById("dry-powder-map"), dp.items, {sizeKey:"dry_powder_usd", labelKey:"firm_name"});
+    document.getElementById("export-dry-powder-csv").onclick = function(){ d.csv("/dry-powder-map","dry-powder-map"); };
+    document.getElementById("snapshot-landing").onclick = async function(){
+      try { var r = await d.snapshot("capital-markets", {}, {kpi:null, dryPowder:dp}); alert("Snapshot saved: "+r.id); } catch(e){ alert("Snapshot failed: "+e.message); }
+    };
+  } catch(e){ console.warn("dry-powder", e); }
+})();
+</script>

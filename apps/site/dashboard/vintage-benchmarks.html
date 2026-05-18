@@ -1,0 +1,44 @@
+---
+layout: default
+title: Vintage benchmarks
+permalink: /dashboard/vintage-benchmarks/
+---
+<section class="ads-section">
+  <h1 class="ads-h1">Vintage benchmarks</h1>
+  <p class="ads-sub">Box-plot of net IRR / TVPI / DPI per (vintage_year × strategy) bucket.</p>
+  {% include charts/dashboard_shell.html %}
+
+  <div id="dashboard-content" hidden>
+    <div class="ads-card">
+      <form id="filter-form" style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <select class="ads-input" name="metric">
+          <option value="net_irr_pct">Net IRR %</option>
+          <option value="tvpi">TVPI</option>
+          <option value="dpi">DPI</option>
+        </select>
+        <button class="ads-btn" type="submit">Apply</button>
+        <span style="flex:1"></span>
+        <button class="ads-btn" id="export-csv" type="button">Export CSV</button>
+      </form>
+    </div>
+    <div class="ads-card" style="margin-top:1rem"><div id="boxplot">Loading…</div></div>
+  </div>
+</section>
+
+<script src="/assets/js/dashboards.js"></script>
+<script>
+(async function(){
+  var ok = await adsDashboards.gate("vintage-benchmarks"); if(!ok) return;
+  var d = adsDashboards; var current = {metric:"net_irr_pct"};
+  async function load(){
+    var fd = new FormData(document.getElementById("filter-form")); current = {}; fd.forEach(function(v,k){if(v)current[k]=v;});
+    try {
+      var r = await d.api("/vintage-benchmarks" + d.qs(current));
+      d.charts.boxPlot(document.getElementById("boxplot"), r.items||[], {});
+    } catch(e){ console.warn(e); }
+  }
+  document.getElementById("filter-form").addEventListener("submit", function(e){ e.preventDefault(); load(); });
+  document.getElementById("export-csv").addEventListener("click", function(){ d.csv("/vintage-benchmarks","vintage", current); });
+  load();
+})();
+</script>

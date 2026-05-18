@@ -1,0 +1,72 @@
+---
+layout: default
+title: Angel finder
+permalink: /dashboard/angel-finder/
+---
+<section class="ads-section">
+  <h1 class="ads-h1">Angel finder</h1>
+  <p class="ads-sub">Search angels by check size, sector, geo, operator day-job, syndicate, type.</p>
+  {% include charts/dashboard_shell.html %}
+
+  <div id="dashboard-content" hidden>
+    <div class="ads-card">
+      <form id="filter-form" style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <input class="ads-input" name="q" placeholder="name">
+        <select class="ads-input" name="angel_type">
+          <option value="">All types</option>
+          <option value="solo_capitalist">Solo capitalist</option>
+          <option value="operator_angel">Operator angel</option>
+          <option value="super_angel">Super angel</option>
+          <option value="syndicate_lead">Syndicate lead</option>
+          <option value="rolling_fund_manager">Rolling fund manager</option>
+          <option value="casual_angel">Casual angel</option>
+        </select>
+        <input class="ads-input" name="sector" placeholder="sector">
+        <input class="ads-input" name="geo" placeholder="geo">
+        <input class="ads-input" name="min_check_usd" type="number" placeholder="min check $">
+        <input class="ads-input" name="max_check_usd" type="number" placeholder="max check $">
+        <input class="ads-input" name="syndicate_handle" placeholder="syndicate handle">
+        <label style="display:flex;align-items:center;gap:.25rem"><input type="checkbox" name="open_to_warm_intros" value="1"> open to warm intros</label>
+        <button class="ads-btn" type="submit">Search</button>
+        <span style="flex:1"></span>
+        <button class="ads-btn" id="export-csv" type="button">Export CSV</button>
+      </form>
+    </div>
+    <div class="ads-card" style="margin-top:1rem">
+      <div id="ang-count" class="ads-mono"></div>
+      <div class="ads-table-wrap">
+        <table class="ads-table">
+          <thead><tr><th>Name</th><th>Type</th><th>Day job</th><th>Role</th><th>Check $</th><th>Portfolio</th><th>Syndicate</th><th>Warm intro</th><th>Last invested</th></tr></thead>
+          <tbody id="ang-tbody"><tr><td colspan="9">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script src="/assets/js/dashboards.js"></script>
+<script>
+(async function(){
+  var ok = await adsDashboards.gate("angel-finder"); if(!ok) return;
+  var d = adsDashboards; var current = {};
+  function readFilters(){ var fd=new FormData(document.getElementById("filter-form")); var o={}; fd.forEach(function(v,k){if(v)o[k]=v;}); return o; }
+  async function load(){
+    current = readFilters();
+    try {
+      var r = await d.api("/angel-finder" + d.qs(current));
+      document.getElementById("ang-count").textContent = r.count + " angels";
+      var rows = (r.items||[]).map(function(a){
+        return '<tr><td>'+d.esc(a.person_name||a.person_entity_id)+'</td><td>'+d.esc(a.angel_type||"")
+          +'</td><td>'+d.esc(a.day_job_firm_name||"")+'</td><td>'+d.esc(a.day_job_role||"")
+          +'</td><td>'+d.esc(d.fmtUsd(a.typical_check_min_usd)+"–"+d.fmtUsd(a.typical_check_max_usd))
+          +'</td><td>'+(a.portfolio_count||0)+'</td><td>'+d.esc(a.syndicate_handle||"")
+          +'</td><td>'+(a.open_to_warm_intros?"yes":"")+'</td><td>'+d.esc(a.last_investment_at||"")+'</td></tr>';
+      }).join("") || '<tr><td colspan="9">No matching angels.</td></tr>';
+      document.getElementById("ang-tbody").innerHTML = rows;
+    } catch(e){ console.warn(e); }
+  }
+  document.getElementById("filter-form").addEventListener("submit", function(e){ e.preventDefault(); load(); });
+  document.getElementById("export-csv").addEventListener("click", function(){ d.csv("/angel-finder","angels", current); });
+  load();
+})();
+</script>

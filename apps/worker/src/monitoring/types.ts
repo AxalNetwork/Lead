@@ -23,7 +23,14 @@ export type TriggerKind =
   | "handle_added"
   | "relationship_change"
   | "geo_change"
-  | "any_change";
+  | "any_change"
+  // Task #4 capital-markets saved-alert predicates. Source-driven —
+  // anchor lives in partner_movements / funds / sec_filings / deal_events
+  // rather than the entity summary fingerprint.
+  | "partner_movement_match"
+  | "new_fund_match"
+  | "sec_filing_match"
+  | "pe_deal_match";
 
 export const ALL_TRIGGER_KINDS: TriggerKind[] = [
   "new_employer","title_change","new_investment","new_portfolio_addition",
@@ -31,6 +38,7 @@ export const ALL_TRIGGER_KINDS: TriggerKind[] = [
   "new_tweet","new_podcast","new_post","dd_finding_new","dd_score_change",
   "fit_score_change","intent_score_change","prediction_above_threshold",
   "handle_added","relationship_change","geo_change","any_change",
+  "partner_movement_match","new_fund_match","sec_filing_match","pe_deal_match",
 ];
 
 export type Channel = "in_app" | "email" | "slack" | "webhook" | "digest";

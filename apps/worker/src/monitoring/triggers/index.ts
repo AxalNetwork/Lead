@@ -22,6 +22,10 @@ import { evalFundingEvent } from "./funding_event";
 import { evalNewTweet, evalNewPodcast, evalNewPost } from "./social_post";
 import { evalPredictionAboveThreshold } from "./prediction_above_threshold";
 import { evalRelationshipChange } from "./relationship_change";
+import { evalPartnerMovementMatch } from "./partner_movement_match";
+import { evalNewFundMatch } from "./new_fund_match";
+import { evalSecFilingMatch } from "./sec_filing_match";
+import { evalPeDealMatch } from "./pe_deal_match";
 
 export const EVALUATORS: Record<TriggerKind, EvaluatorFn> = {
   any_change: evalAnyChange,
@@ -44,6 +48,10 @@ export const EVALUATORS: Record<TriggerKind, EvaluatorFn> = {
   new_post: evalNewPost,
   prediction_above_threshold: evalPredictionAboveThreshold,
   relationship_change: evalRelationshipChange,
+  partner_movement_match: evalPartnerMovementMatch,
+  new_fund_match: evalNewFundMatch,
+  sec_filing_match: evalSecFilingMatch,
+  pe_deal_match: evalPeDealMatch,
 };
 
 // Trigger kinds whose change anchors live in source tables rather than
@@ -58,6 +66,10 @@ export const SOURCE_DRIVEN_TRIGGERS: ReadonlySet<TriggerKind> = new Set<TriggerK
   "adverse_media",
   "new_tweet",
   "new_podcast",
+  "partner_movement_match",
+  "new_fund_match",
+  "sec_filing_match",
+  "pe_deal_match",
   "new_post",
   "new_news_item",
   "new_investment",

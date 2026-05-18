@@ -1,0 +1,23 @@
+{%- comment -%}
+Task #4: shared page shell for the eight VC/PE/Angel dashboard pages.
+Implements the page-level gate (per replit.md Task #2 page-level gating
+precedent): #dashboard-content is hidden; window.adsDashboards.gate(page)
+performs a pre-flight against /api/dashboards/kpi and reveals the
+content wrapper on 200, or surfaces #dashboard-forbidden on 403.
+
+Include with:
+  {% include charts/dashboard_shell.html page="capital-markets" title="…" sub="…" %}
+
+The included content (the page-specific cards) lives inside
+#dashboard-content via the consumer page's own markup BEFORE this include
+closes the wrapper. To keep this simple and Jekyll-idiomatic, the page
+itself owns the wrapper open/close — this file only emits the gate
+banners + the script bootstrap.
+{%- endcomment -%}
+
+<div id="dashboard-auth-check" class="ads-card">
+  <strong>Verifying access…</strong>
+</div>
+<div id="dashboard-forbidden" hidden class="ads-card ads-card--err">
+  <strong>403 Forbidden.</strong> Sign in via Cloudflare Access to view this dashboard.
+</div>

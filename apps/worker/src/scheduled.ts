@@ -428,6 +428,18 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         console.error("nightly intl drain failed", (e as Error).message);
       }
 
+      // Task #4: Monday capital-markets weekly digest. Folded into this
+      // nightly tick (Free plan caps crons at 5/5). Internal Monday-UTC
+      // gate inside runCapitalMarketsWeeklyDigest — non-Monday runs are
+      // cheap no-ops.
+      try {
+        const { runCapitalMarketsWeeklyDigest } = await import("./monitoring/capitalDigest");
+        const r = await runCapitalMarketsWeeklyDigest(env);
+        console.log("capital-markets weekly digest done", JSON.stringify(r));
+      } catch (e) {
+        console.error("capital-markets weekly digest failed", (e as Error).message);
+      }
+
       // 5. Project match refresh
       try {
         const r = await env.DB.prepare(`SELECT id FROM projects WHERE deleted_at IS NULL AND status = 'active' ORDER BY last_modified DESC LIMIT 200`).all<{ id: string }>();
