@@ -134,6 +134,121 @@ test("runDiscovery wires expandFrontier into the crawl path", () => {
   assert.match(src, /recordSeedEntitiesByUrl/);
 });
 
+test("smart_frontier drains into crawl_frontier and threads profile_type_id", () => {
+  const runSrc = readFileSync(resolve(__dirname, "../src/discovery/runDiscovery.ts"), "utf8");
+  const drainSrc = readFileSync(resolve(__dirname, "../src/services/frontier/drain.ts"), "utf8");
+  const schedSrc = readFileSync(resolve(__dirname, "../src/scheduled.ts"), "utf8");
+  const lookupSrc = readFileSync(resolve(__dirname, "../src/services/crawlerSeeds/lookup.ts"), "utf8");
+  // Drainer must upsert + enqueue into the Task #2 crawl_frontier path.
+  assert.match(drainSrc, /upsertDiscoveredUrl/);
+  assert.match(drainSrc, /enqueueFrontier/);
+  // Hourly cron must invoke the drainer.
+  assert.match(schedSrc, /drainSmartFrontier/);
+  // runDiscovery must thread the seed's profile_type_id, not pass null.
+  assert.match(runSrc, /lookupSeedProfileType/);
+  assert.match(runSrc, /profileTypeId:\s*ptid/);
+  // Lookup must use the candidate-set strategy.
+  assert.match(lookupSrc, /value IN \(\$\{placeholders\}\)/);
+  // And walk discovered_urls.discovered_from_url for descendant pages.
+  assert.match(lookupSrc, /discovered_from_url/);
+  assert.match(lookupSrc, /for \(let hop = 0/);
+});
+
+test("lookupSeedProfileType behavioral: descendant inherits seed type via parent walk", async () => {
+  const { lookupSeedProfileType } = await import("../test-dist/services/crawlerSeeds/lookup.js");
+  // Stub D1 modeling: child -> parent -> seed.
+  //   crawler_seeds has one row: value='https://example.com/team', profile_type_id='pt-team'.
+  //   discovered_urls: child https://example.com/team/alice has discovered_from_url=https://example.com/team.
+  const queries = [];
+  const env = {
+    DB: {
+      prepare(sql) {
+        const binds = [];
+        return {
+          bind(...args) { binds.push(...args); return this; },
+          async first() {
+            queries.push({ sql: sql.replace(/\s+/g, " ").trim(), binds: [...binds] });
+            if (sql.includes("FROM crawler_seeds")) {
+              if (binds.some((v) => typeof v === "string" && v.includes("example.com/team") && !v.includes("/team/alice"))) {
+                return { profile_type_id: "pt-team" };
+              }
+              return null;
+            }
+            if (sql.includes("FROM discovered_urls")) {
+              const canon = binds[0];
+              if (typeof canon === "string" && canon.includes("/team/alice")) {
+                return { discovered_from_url: "https://example.com/team" };
+              }
+              return null;
+            }
+            return null;
+          },
+        };
+      },
+    },
+  };
+  const ptid = await lookupSeedProfileType(env, "https://example.com/team/alice");
+  assert.equal(ptid, "pt-team", "descendant must inherit seed's profile_type_id via parent walk");
+  // Verify the walk actually happened: direct miss, parent lookup, then parent seed hit.
+  const sawCrawlerSeeds = queries.filter((q) => q.sql.includes("FROM crawler_seeds")).length;
+  const sawDiscoveredUrls = queries.filter((q) => q.sql.includes("FROM discovered_urls")).length;
+  assert.ok(sawCrawlerSeeds >= 2, "should consult crawler_seeds for child and parent");
+  assert.ok(sawDiscoveredUrls >= 1, "should look up parent via discovered_urls");
+});
+
+test("lookupSeedProfileType behavioral: returns null with no match and respects hop bound", async () => {
+  const { lookupSeedProfileType } = await import("../test-dist/services/crawlerSeeds/lookup.js");
+  let dUrlCalls = 0;
+  // Infinite parent chain to verify the 10-hop guard prevents runaway walks.
+  const env = {
+    DB: {
+      prepare(sql) {
+        const binds = [];
+        return {
+          bind(...args) { binds.push(...args); return this; },
+          async first() {
+            if (sql.includes("FROM crawler_seeds")) return null;
+            if (sql.includes("FROM discovered_urls")) {
+              dUrlCalls++;
+              // Each row points to a brand-new ancestor so the walk never repeats.
+              return { discovered_from_url: `https://chain.example/h${dUrlCalls}` };
+            }
+            return null;
+          },
+        };
+      },
+    },
+  };
+  const ptid = await lookupSeedProfileType(env, "https://chain.example/start");
+  assert.equal(ptid, null, "no seed match anywhere => null");
+  assert.ok(dUrlCalls <= 10, `walk must be bounded to 10 hops, observed ${dUrlCalls}`);
+});
+
+test("lookupSeedProfileType walk logic structure", () => {
+  // Behavioral verification via direct TS import is impractical (node
+  // --test cannot resolve .ts imports without a loader). Instead assert
+  // the walk has the right shape:
+  //   - direct match attempt first
+  //   - then a hop-bounded loop walking parent URLs
+  //   - parent obtained via discovered_urls.discovered_from_url
+  //   - each parent re-checked against crawler_seeds
+  const src = readFileSync(resolve(__dirname, "../src/services/crawlerSeeds/lookup.ts"), "utf8");
+  const directIdx = src.indexOf("const direct = await matchSeedByUrl");
+  const loopIdx = src.indexOf("for (let hop = 0");
+  const parentMatchIdx = src.indexOf("const hit = await matchSeedByUrl(env, parent)");
+  assert.ok(directIdx > 0, "direct seed match must happen first");
+  assert.ok(loopIdx > directIdx, "parent-chain loop must follow the direct check");
+  assert.ok(parentMatchIdx > loopIdx, "loop must re-check each parent against crawler_seeds");
+  assert.match(src, /discovered_from_url/);
+  assert.match(src, /hop < 10/);
+});
+
+test("migration 344 adds COALESCE-based unique index on smart_frontier", () => {
+  const sql = readFileSync(resolve(__dirname, "../migrations/344_smart_frontier_dedup.sql"), "utf8");
+  assert.match(sql, /COALESCE\(profile_type_id, ''\)/);
+  assert.match(sql, /CREATE UNIQUE INDEX/);
+});
+
 test("URL seed normalization + recordSeedEntitiesByUrl tolerate trailing slash", () => {
   const sweepSrc = readFileSync(resolve(__dirname, "../src/services/crawlerSeeds/sweep.ts"), "utf8");
   const routeSrc = readFileSync(resolve(__dirname, "../src/routes/crawler_seeds.ts"), "utf8");

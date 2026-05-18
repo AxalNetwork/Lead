@@ -82,6 +82,16 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       } catch (e) {
         console.error("hourly seed sweep failed", (e as Error).message);
       }
+      // Task #3 (review fix): drain smart_frontier into crawl_frontier so
+      // expander-emitted candidates actually become crawler work. Bounded
+      // (200/tick) so a packed staging area can't starve other hourly jobs.
+      try {
+        const { drainSmartFrontier } = await import("./services/frontier/drain");
+        const drainRes = await drainSmartFrontier(env, 200);
+        if (drainRes.picked > 0) console.log("hourly smart_frontier drain", JSON.stringify(drainRes));
+      } catch (e) {
+        console.error("hourly smart_frontier drain failed", (e as Error).message);
+      }
       try {
         if (env.WF_CRAWL_SIGNALS) {
           await env.WF_CRAWL_SIGNALS.create({ params: {} });

@@ -270,12 +270,18 @@ export async function runCrawlFrontier(env: Env, opts: FrontierOpts = {}): Promi
       try {
         const { expandFrontier } = await import("../services/frontier/expand");
         const { extractLinksFromHtml } = await import("./linkExtract");
+        const { lookupSeedProfileType } = await import("../services/crawlerSeeds/lookup");
         const links = extractLinksFromHtml(it.url, f.html);
         if (links.length > 0) {
+          // Thread the originating seed's profile_type_id through so
+          // emitted candidates are typed. Walks the source URL first;
+          // if not a registered seed, falls back to the URL's discovery
+          // parent (best-effort, NULL if neither matches).
+          const ptid = await lookupSeedProfileType(env, it.url);
           await expandFrontier(env, {
             sourceUrl: it.url,
             sourceHost: it.host,
-            profileTypeId: null,
+            profileTypeId: ptid,
             links,
           });
         }
