@@ -263,17 +263,37 @@ function previewSpecFromBody(body: Record<string, unknown>): PersonaSpec & { nam
 }
 
 // ----- list (also seeds on first call)
+//
+// Perf: previously this endpoint ran two queries PER persona serially
+// (countMatches + listMatches), so a workspace with N personas paid
+// 2N D1 round-trips before the page rendered. We now:
+//   1. Fetch ALL fit_counts in one GROUP BY query.
+//   2. Fan out the per-persona top-5 listMatches in parallel via
+//      Promise.all (D1 pipelines these on a single connection).
+// Cuts a ~20-persona load from ~40 sequential RTTs to ~2 parallel
+// rounds.
 personasRoute.get("/", async (c) => {
   await ensurePersonasSeeded(c.env);
   const status = c.req.query("status") ?? "active";
   const items = await listPersonas(c.env, { status });
-  // Augment with fit_count + top-5
-  const out = [];
-  for (const p of items) {
-    const fitCount = await countMatches(c.env, p.id, 60);
-    const top5 = await listMatches(c.env, p.id, { kind: legacyEntityKind(p.kind), minScore: 0, limit: 5 });
-    out.push({ ...p, fit_count: fitCount, top5 });
-  }
+  if (!items.length) return c.json({ items: [] });
+
+  const ids = items.map((p) => p.id);
+  const placeholders = ids.map(() => "?").join(",");
+  const countsRes = await c.env.DB.prepare(
+    `SELECT persona_id, COUNT(*) AS c
+       FROM persona_matches
+      WHERE persona_id IN (${placeholders}) AND fit_score >= 60
+      GROUP BY persona_id`,
+  ).bind(...ids).all<{ persona_id: string; c: number }>();
+  const counts = new Map<string, number>();
+  for (const r of countsRes.results ?? []) counts.set(r.persona_id, r.c);
+
+  const top5s = await Promise.all(items.map((p) =>
+    listMatches(c.env, p.id, { kind: legacyEntityKind(p.kind), minScore: 0, limit: 5 }),
+  ));
+
+  const out = items.map((p, i) => ({ ...p, fit_count: counts.get(p.id) ?? 0, top5: top5s[i] }));
   return c.json({ items: out });
 });
 
