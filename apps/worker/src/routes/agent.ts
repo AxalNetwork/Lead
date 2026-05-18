@@ -352,19 +352,19 @@ agent.post("/ask", async (c) => {
               content: `tool_result ${ev.name} (${ev.row_count} rows)`,
             });
           } else if (ev.type === "citation_registered") {
-            await persistEvent("system", {
-              content: `citation ${ev.marker}`,
-              tool_result_json: { marker: ev.marker, payload: ev.payload },
-            });
+            // Buffered into the final assistant row to keep the per-invocation
+            // D1 subrequest count under Cloudflare's cap. The session-wide
+            // citation index in GET /sessions/:id is rebuilt from the final
+            // row's citations_json anyway.
           } else if (ev.type === "error") {
             await persistEvent("system", { content: `error: ${ev.message}` });
           } else if (ev.type === "follow_ups") {
             await persistEvent("system", { content: `follow_ups`, tool_result_json: { questions: ev.questions } });
           } else if (ev.type === "assistant_token") {
-            // Persist token chunks (~5 words each) as discrete rows so
-            // event-stream replay is exact. Aggregated answer is also
-            // written in the final summary row after the loop.
-            await persistEvent("system", { content: "assistant_token", tool_result_json: { text: ev.text } });
+            // Intentionally NOT persisted per-chunk. The complete answer is
+            // written once in the final assistant summary row below; writing
+            // one D1 row per ~5-word chunk blows past Workers' subrequest
+            // cap on any non-trivial answer.
           }
           // `final`, `session`, `budget`, `done` are emitted by the route
           // itself (not the loop) and persisted at their emission sites.
