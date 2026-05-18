@@ -115,6 +115,16 @@ export interface FilingHeader {
   period_of_report: string | null;
   filing_url: string;
   primary_doc_url: string | null;
+  /**
+   * Set by parseEdgarPage when a per-form parser throws. The dispatcher
+   * degrades to an index parse so the crawl still surfaces child URLs,
+   * but persistParsedFiling reads this field FIRST and writes a
+   * sec_filings row with ingest_status='failed' + errors=<message>
+   * before the index branch can short-circuit on `index_page`. This is
+   * how the contract "malformed filings record an error and never
+   * silently swallow data" stays true even on a parser exception.
+   */
+  parser_error?: string;
 }
 
 export interface AdvFund {
@@ -776,11 +786,16 @@ export function parseEdgarPage(html: string, url: string): ParsedFiling {
       default:       return parseIndexPage(html, url, header);
     }
   } catch (e) {
-    // Per the adapter contract: parsers must never throw out of the
-    // dispatcher. Degrade to the index parse so the page is at least
-    // crawled and we surface child filing URLs for the frontier.
+    // Adapter contract: parsers must never throw out of the dispatcher
+    // (the engine relies on a typed result). Degrade to the index
+    // parse so child URLs still reach the frontier — but stamp
+    // header.parser_error so persistParsedFiling can record an entry
+    // in sec_filings.errors for operator visibility.
+    const msg = `${kind}_parser_failed: ${(e as Error).message}`;
     console.warn("secEdgar parser failed", kind, (e as Error).message);
-    return parseIndexPage(html, url, header);
+    const idx = parseIndexPage(html, url, header);
+    idx.header.parser_error = msg;
+    return idx;
   }
 }
 

@@ -531,6 +531,26 @@ export async function persistParsedFiling(env: Env, parsed: ParsedFiling, source
   if (!parsed.header.accession_no && parsed.kind !== "index") {
     return { accession_no: null, entity_id: null, facts_written: 0, rows_written: 0, skipped: true, reason: "no_accession" };
   }
+  // Parser-exception path: parseEdgarPage stamps header.parser_error
+  // and degrades to an index parse. Before the `index` branch
+  // short-circuits below, record the failure to sec_filings so the
+  // operator dashboard can surface it and a retry pass can re-fetch.
+  if (parsed.header.parser_error && parsed.header.accession_no) {
+    await env.DB.prepare(
+      `INSERT INTO sec_filings (accession_no, cik, form_type, filer_name, filed_at, filing_url, raw_url, primary_doc_url, ingest_status, errors)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'failed', ?)
+       ON CONFLICT(accession_no) DO UPDATE SET
+         ingest_status = 'failed',
+         errors = excluded.errors`,
+    ).bind(
+      parsed.header.accession_no, parsed.header.cik ?? "",
+      parsed.header.form_type ?? "UNKNOWN", parsed.header.filer_name,
+      parsed.header.filed_at, parsed.header.filing_url, parsed.header.filing_url,
+      parsed.header.primary_doc_url,
+      parsed.header.parser_error.slice(0, 500),
+    ).run().catch(() => undefined);
+    return { accession_no: parsed.header.accession_no, entity_id: null, facts_written: 0, rows_written: 0, skipped: true, reason: "parser_error" };
+  }
   // Quality gate: refuse to mark a filing 'parsed' from a sparse/empty
   // payload. Leaves sec_filings row (if any) in 'pending' so the
   // engine can re-crawl the primary_doc_url and try again. We DO record

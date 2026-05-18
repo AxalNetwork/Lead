@@ -22,12 +22,24 @@
 // AxalVCBot UA — we add nothing here.
 
 import type { Env } from "../../types";
-import { CRAWLER_UA } from "../../crawler/fetcher";
+import { crawlerFetch } from "../../crawler/fetcher";
 import { upsertDiscoveredUrl, enqueueFrontier } from "../../discovery/store.discovery";
 import { normalizeAccession, padCik } from "../../crawler/adapters/secEdgar";
 
 const EDGAR_BASE = "https://www.sec.gov";
 const EDGAR_FTS  = "https://efts.sec.gov/LATEST/search-index";
+
+// All SEC discovery fetches route through the canonical `crawlerFetch`
+// path (apps/worker/src/crawler/fetcher.ts). That wrapper enforces
+// every politeness/observability requirement the task spec calls for:
+//   • per-host throttle via the hostThrottle DO (caps SEC at <5 rps),
+//   • AxalVCBot User-Agent with contact URL (CRAWLER_UA constant),
+//   • robots.txt + policy gates (acquireViaThrottle),
+//   • tier ladder (direct → browser → distributed retry),
+//   • crawler_fetch_log entries for the ops dashboard,
+//   • R2 archive of successful HTML (7-day TTL).
+// We must NOT use the raw `fetch()` here — that bypasses the engine's
+// politeness contract and is explicitly rejected by code review.
 
 const SEC_FORMS_OF_INTEREST = new Set([
   "10-K", "10-Q", "8-K", "S-1", "S-3",
@@ -38,21 +50,6 @@ const SEC_FORMS_OF_INTEREST = new Set([
   "ADV", "ADV/A",
   "PF", "PF/A",
 ]);
-
-// SEC requires an identifiable User-Agent with contact info. The
-// engine's CRAWLER_UA already meets that contract.
-function secHeaders(): Record<string, string> {
-  return {
-    "User-Agent": CRAWLER_UA,
-    "Accept": "text/html,application/json,*/*",
-    "Accept-Encoding": "gzip, deflate",
-    "Host": "www.sec.gov",
-  };
-}
-
-function ftsHeaders(): Record<string, string> {
-  return { ...secHeaders(), "Host": "efts.sec.gov", "Accept": "application/json" };
-}
 
 function quarterOf(d: Date): number {
   return Math.floor(d.getUTCMonth() / 3) + 1;
@@ -136,9 +133,9 @@ export async function walkDailyIndex(env: Env, daysBack = 1, limit = 5000): Prom
     const q = quarterOf(d);
     const url = `${EDGAR_BASE}/Archives/edgar/daily-index/${year}/QTR${q}/form.${yyyymmdd(d)}.idx`;
     try {
-      const res = await fetch(url, { headers: secHeaders() });
+      const res = await crawlerFetch(env, url);
       if (!res.ok) { out.errors++; continue; }
-      const txt = await res.text();
+      const txt = res.html;
       out.fetched++;
       // The .idx is a fixed-width text file. After a 7-line header,
       // each row is:
@@ -193,9 +190,11 @@ export async function searchEdgar(
   for (let page = 0; page < maxPages; page++) {
     const url = `${EDGAR_FTS}?q=${encodeURIComponent(q)}${formsParam}${dateParam}&from=${page * 100}`;
     try {
-      const res = await fetch(url, { headers: ftsHeaders() });
-      if (!res.ok) { out.errors++; break; }
-      const j = await res.json<{ hits?: { hits?: Array<{ _source?: Record<string, unknown>; _id?: string }> } }>();
+      const res = await crawlerFetch(env, url);
+      if (!res.ok || !res.html) { out.errors++; break; }
+      // efts.sec.gov returns JSON in the response body — the crawler
+      // tier-0 fetch is content-agnostic, so we JSON.parse manually.
+      const j = JSON.parse(res.html) as { hits?: { hits?: Array<{ _source?: Record<string, unknown>; _id?: string }> } };
       out.fetched++;
       const hits = j.hits?.hits ?? [];
       if (hits.length === 0) break;
@@ -231,9 +230,9 @@ export async function pollEdgarRss(env: Env, formType?: string): Promise<Discove
   const out: DiscoveryResult = { channel: "rss", fetched: 0, staged: 0, enqueued: 0, errors: 0 };
   const url = `${EDGAR_BASE}/cgi-bin/browse-edgar?action=getcurrent&type=${formType ? encodeURIComponent(formType) : ""}&company=&dateb=&owner=include&count=40&output=atom`;
   try {
-    const res = await fetch(url, { headers: secHeaders() });
+    const res = await crawlerFetch(env, url);
     if (!res.ok) { out.errors++; return out; }
-    const xml = await res.text();
+    const xml = res.html;
     out.fetched++;
     const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
     let m: RegExpExecArray | null;
@@ -280,9 +279,9 @@ export async function browseEdgarByForm(env: Env, formType: string, count = 100)
   const out: DiscoveryResult = { channel: "rss", fetched: 0, staged: 0, enqueued: 0, errors: 0 };
   const url = `${EDGAR_BASE}/cgi-bin/browse-edgar?action=getcompany&type=${encodeURIComponent(formType)}&dateb=&owner=include&count=${count}&output=atom`;
   try {
-    const res = await fetch(url, { headers: secHeaders() });
+    const res = await crawlerFetch(env, url);
     if (!res.ok) { out.errors++; return out; }
-    const xml = await res.text();
+    const xml = res.html;
     out.fetched++;
     const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
     let m: RegExpExecArray | null;
