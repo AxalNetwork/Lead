@@ -166,6 +166,9 @@ const TEMPLATED_SPECS: TemplateSpec[] = [
   { typeId: "multilateral_org",         label: "multilateral organization", kind: "firm" },
   { typeId: "ngo",                      label: "non-governmental organization", kind: "firm" },
   { typeId: "think_tank",               label: "think tank",             kind: "firm" },
+  // Firms — target-customer profiles (sales-intent enrichment).
+  { typeId: "target_customer_b2b",      label: "B2B target customer",    kind: "firm" },
+  { typeId: "target_customer_b2c",      label: "B2C target customer",    kind: "firm" },
 
   // Persons — capital
   { typeId: "firm_person",              label: "person at a firm",        kind: "person" },

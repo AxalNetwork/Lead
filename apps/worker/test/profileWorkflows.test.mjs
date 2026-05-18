@@ -55,6 +55,7 @@ const CLAIMED_TYPES = [
   "startup_growth", "startup_late_stage", "acquirer_strategic",
   "government_agency_federal", "government_agency_state",
   "government_agency_local", "multilateral_org", "ngo", "think_tank",
+  "target_customer_b2b", "target_customer_b2c",
   // Templated person workflows.
   "firm_person", "gp_partner", "principal", "associate", "scout",
   "venture_partner", "operating_partner", "entrepreneur_in_residence",
@@ -96,6 +97,26 @@ test("registry: listWorkflows includes default + every claimed type", () => {
   const ids = new Set(rows.map((r) => r.profile_type_id));
   for (const id of CLAIMED_TYPES) assert.ok(ids.has(id), `missing ${id}`);
   assert.ok(ids.has("_default"));
+});
+
+// Data-driven backstop: derive the source-of-truth seed list directly
+// from migrations/340_profile_types_seed.sql so the registry cannot
+// silently drift away from the seed. The hand-maintained CLAIMED_TYPES
+// above stays as documentation of the *intended* coverage; this test
+// is the safety net.
+import { readFileSync } from "node:fs";
+const SEED_SQL = readFileSync(
+  new URL("../migrations/340_profile_types_seed.sql", import.meta.url),
+  "utf8",
+);
+const SEEDED_TYPE_IDS = [...SEED_SQL.matchAll(/^\('([a-z0-9_]+)'/gm)]
+  .map((m) => m[1])
+  .filter((id, i, a) => a.indexOf(id) === i);
+
+test("registry: every seeded e_types id resolves to a dedicated workflow", () => {
+  assert.ok(SEEDED_TYPE_IDS.length >= 100, `parsed only ${SEEDED_TYPE_IDS.length} seed ids`);
+  const missing = SEEDED_TYPE_IDS.filter((id) => !hasDedicatedWorkflow(id));
+  assert.deepEqual(missing, [], `seed ids missing from registry: ${missing.join(", ")}`);
 });
 
 // ---------------------------------------------------------------------------
@@ -317,6 +338,48 @@ test("checkTypeDailyBudget: empty ledger allows dispatch", async () => {
   assert.equal(r.ok, true);
   assert.equal(r.spend, 0);
   assert.ok(r.cap > 0);
+});
+
+test("runStandardWorkflow: planned URL equal to candidateUrl is deduped (no false verified)", async () => {
+  // Regression: if a planned same-origin sibling (e.g. /about) happens
+  // to resolve to the exact same canonical URL as ctx.candidateUrl,
+  // the runner must drop the duplicate before extraction. Otherwise
+  // the same page's facts would land in two distinct sourceTag
+  // buckets (`candidate` + `about`) and crossRef would incorrectly
+  // mark single-page evidence as verified=1.
+  const env = makeEnv();
+  // Build a tiny workflow whose plan deliberately re-emits the exact
+  // candidate URL under a different tag. We reuse the FIRM mapper
+  // via investorVcWorkflow's def, but we need a custom plan — so we
+  // construct a minimal def directly through makeWorkflow.
+  const { makeWorkflow } = await import(`${ROOT}/crawler/profileWorkflows/_shared.js`);
+  const dup = makeWorkflow({
+    id: "dup_test.v1",
+    profile_type_id: "investor_vc",
+    estimated_cost_per_run: { sources: 2, ai_neurons: 0.1 },
+    plan: (ctx) => [
+      // Same URL as ctx.candidateUrl, only tag differs.
+      { tag: "about", url: ctx.candidateUrl },
+      // And a trailing-slash variant — must also be deduped.
+      { tag: "about_slash", url: ctx.candidateUrl + (ctx.candidateUrl.endsWith("/") ? "" : "/") },
+    ],
+    extractionSchema: { type: "object" },
+    systemPrompt: "stub",
+    map: ({ source }) => [
+      { predicate: "firm.aum_usd", valueNumber: 500_000_000, sourceUrl: source.url, sourceTag: source.tag, confidence: 0.8 },
+    ],
+  });
+  const ctx = {
+    candidateUrl: "https://dup.invalid/about",
+    candidateHtml: "<html><title>Dup</title><body>Acme firm.</body></html>",
+    candidateHost: "dup.invalid",
+    jobId: "dup-job",
+  };
+  const out = await dup.run(env, ctx, { budgetUsdCap: 0.05 });
+  // Only the candidate bucket should have produced facts; duplicates dropped.
+  assert.equal(out.sources_planned, 1, `expected dedupe to leave 1 source, got ${out.sources_planned}`);
+  // Single-source → MUST NOT be verified.
+  assert.equal(out.facts_verified, 0, "duplicated-URL facts must not promote to verified");
 });
 
 test("resolveEntityId: deterministic from candidate URL", async () => {

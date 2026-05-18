@@ -62,6 +62,24 @@ function originOf(url: string): string {
   catch { return ""; }
 }
 
+/**
+ * Canonicalize a URL for cross-source distinctness checks. Lowercases
+ * scheme + host, strips fragment + query + trailing slash. We
+ * intentionally keep the path case-sensitive (some hosts care) but
+ * normalize a trailing slash so `/about` and `/about/` collapse.
+ * Returns "" when the URL fails to parse.
+ */
+export function canonicalizeUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const scheme = u.protocol.toLowerCase();
+    const host = u.hostname.toLowerCase();
+    let path = u.pathname || "/";
+    if (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
+    return `${scheme}//${host}${path}`;
+  } catch { return ""; }
+}
+
 /** Build sibling URLs by appending common subpaths to the candidate's origin. */
 export function sameOrigin(candidateUrl: string, paths: string[]): { tag: string; url: string }[] {
   const origin = originOf(candidateUrl);
@@ -361,10 +379,27 @@ export async function runStandardWorkflow(
 
   // Step 1: build source plan. The candidate page itself is always the
   // first bucket — its HTML was fetched upstream and lives in ctx.
+  //
+  // Dedupe planned sources by canonical URL so a planned same-origin
+  // sibling that happens to equal `ctx.candidateUrl` (e.g. the candidate
+  // *is* /about) cannot be ingested twice under different tags. If the
+  // duplicate slipped through, `crossRef` — which keys on sourceTag —
+  // would mark single-page evidence as `verified=1`, violating the
+  // ≥2-distinct-source contract. We canonicalize on origin+path
+  // (lowercased, no fragment, no trailing slash, query stripped) so
+  // trivial casing/trailing-slash variants don't escape the dedupe.
   const planned = def.plan(ctx);
+  const seenUrls = new Set<string>([canonicalizeUrl(ctx.candidateUrl)]);
+  const dedupedPlanned: PlannedSource[] = [];
+  for (const p of planned) {
+    const c = canonicalizeUrl(p.url);
+    if (!c || seenUrls.has(c)) continue;
+    seenUrls.add(c);
+    dedupedPlanned.push(p);
+  }
   const sources: PlannedSource[] = [
     { tag: "candidate", url: ctx.candidateUrl },
-    ...planned,
+    ...dedupedPlanned,
   ];
 
   // Step 2: fetch sources (skip the candidate — already in ctx).
