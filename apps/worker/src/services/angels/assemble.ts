@@ -275,14 +275,36 @@ export async function assembleAngel(
   const dayJob = await loadDayJob(env, personEntityId);
   const dayJobTechFlag = await isTechFirm(env, dayJob.day_job_entity_id);
   const investments = await loadInvestments(env, personEntityId);
-  await persistInvestments(env, investments);
-
-  const stats = statsFromInvestments(investments);
-  const band = checkBand(investments);
 
   const syndicateFact = await loadFactText(env, personEntityId, "person.syndicate_handle");
   const rollingFact   = await loadFactText(env, personEntityId, "person.rolling_fund_handle");
   const warmFact      = await loadFactText(env, personEntityId, "person.open_to_warm_intros");
+
+  // Stamp via_syndicate_handle on any investment where this angel is
+  // recorded as the lead and is a syndicate_lead — without this, the
+  // syndicate analytics service can never populate deals_count /
+  // velocity / last_deal_at for handles known only via facts.
+  if (syndicateFact.value) {
+    for (const inv of investments) {
+      if (inv.role === "lead" && !inv.via_syndicate_handle) {
+        inv.via_syndicate_handle = syndicateFact.value;
+      }
+    }
+  }
+
+  // Form D SPV mini-adapter: an SPV is a single-LLC angel vehicle
+  // whose issuer_name matches a syndicate naming pattern. We look up
+  // Form D filings where this person appears in related_persons, then
+  // (a) stamp via_syndicate_handle on matching angel_investments, and
+  // (b) record each named individual as a syndicate_backer.
+  await ingestFormDSpvSignals(env, personEntityId, investments, syndicateFact.value);
+
+  // Persist investments AFTER via_syndicate_handle has been stamped by
+  // both the syndicate-fact pass and the Form D SPV mini-adapter.
+  await persistInvestments(env, investments);
+
+  const stats = statsFromInvestments(investments);
+  const band = checkBand(investments);
 
   // --- Sectors / geos / stages from investment data ------------------
   const sectors: string[] = [];
@@ -467,6 +489,119 @@ export async function assembleAngel(
     domain_expertise_tags: expertise.map((e) => e.tag),
     refreshed_at: now,
   };
+}
+
+/** Form D SPV mini-adapter — scans `sec_form_d_rounds` for filings that
+ *  name this person in `related_persons_json` and whose `issuer_name`
+ *  matches an angel-SPV naming pattern (e.g. "X Syndicate LLC",
+ *  "X Angels SPV", "X Capital LLC – Series N"). For each match:
+ *
+ *   - Slugifies the syndicate name into a handle (or reuses the
+ *     person's known `person.syndicate_handle` when set).
+ *   - Stamps `via_syndicate_handle` on any in-memory investment row
+ *     whose announcement_date falls within ~120 days of the filing,
+ *     bridging the SPV → press-release linkage that adapters would
+ *     otherwise have to produce explicitly.
+ *   - Records every named `related_person` (other than the angel) as a
+ *     row in `syndicate_backers`, so the `syndicate_overlap` view has
+ *     real data to join on.
+ */
+async function ingestFormDSpvSignals(
+  env: Env,
+  personEntityId: string,
+  investments: AngelInvestmentRow[],
+  knownHandle: string | null,
+): Promise<void> {
+  // Pull the person's display name to match against related_persons_json.
+  const pers = await env.DB.prepare(
+    `SELECT display_name FROM u_entities WHERE id = ?`,
+  ).bind(personEntityId).first<{ display_name: string | null }>();
+  const personName = (pers?.display_name ?? "").trim().toLowerCase();
+  if (!personName) return;
+
+  const res = await env.DB.prepare(
+    `SELECT id, issuer_name, related_persons_json, date_of_first_sale, accession_no
+       FROM sec_form_d_rounds
+      WHERE lower(related_persons_json) LIKE ?
+      ORDER BY date_of_first_sale DESC NULLS LAST
+      LIMIT 100`,
+  ).bind(`%${personName}%`).all<{
+    id: string; issuer_name: string; related_persons_json: string;
+    date_of_first_sale: string | null; accession_no: string;
+  }>();
+
+  const SPV_RE = /\b(syndicate|angels?\s+spv|spv|series\s+[a-z0-9]+|special\s+purpose)\b/i;
+  const now = new Date().toISOString();
+
+  for (const row of res.results ?? []) {
+    if (!SPV_RE.test(row.issuer_name)) continue;
+    let related: Array<{ name?: string; role?: string }> = [];
+    try { related = JSON.parse(row.related_persons_json ?? "[]"); } catch { /* ignore */ }
+    const namedHere = related.some((r) => typeof r?.name === "string" && r.name.toLowerCase().includes(personName));
+    if (!namedHere) continue;
+
+    // Derive a handle: prefer the angel's known one; else slugify issuer.
+    const handle = knownHandle ?? row.issuer_name.toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-").replace(/(^-+|-+$)/g, "").slice(0, 60);
+    if (!handle) continue;
+
+    const filed = row.date_of_first_sale;
+    if (filed) {
+      const filedTs = Date.parse(filed);
+      for (const inv of investments) {
+        if (inv.via_syndicate_handle) continue;
+        if (!inv.announced_at) continue;
+        const invTs = Date.parse(inv.announced_at);
+        if (Number.isNaN(filedTs) || Number.isNaN(invTs)) continue;
+        if (Math.abs(invTs - filedTs) <= 120 * 24 * 3600 * 1000) {
+          inv.via_syndicate_handle = handle;
+        }
+      }
+    }
+
+    // Record co-backers (anyone named in related_persons other than the angel).
+    for (const r of related) {
+      const nm = typeof r?.name === "string" ? r.name.trim() : "";
+      if (!nm || nm.toLowerCase() === personName) continue;
+      // Try to resolve to an existing person entity; if none, use the raw
+      // name as a stable surrogate id (`raw:<lowercased-name>`) so the
+      // overlap view still joins on a deterministic backer key.
+      const ent = await env.DB.prepare(
+        `SELECT id FROM u_entities WHERE kind = 'person' AND lower(display_name) = ? LIMIT 1`,
+      ).bind(nm.toLowerCase()).first<{ id: string }>();
+      const backerId = ent?.id ?? `raw:${nm.toLowerCase()}`;
+      try {
+        await env.DB.prepare(
+          `INSERT INTO syndicate_backers (syndicate_handle, backer_entity_id, backer_name_raw, source_url, observed_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(syndicate_handle, backer_entity_id) DO UPDATE SET
+             backer_name_raw = COALESCE(excluded.backer_name_raw, syndicate_backers.backer_name_raw),
+             observed_at     = excluded.observed_at`,
+        ).bind(handle, backerId, nm, null, now).run();
+      } catch (e) {
+        console.warn("syndicate_backers upsert failed", handle, (e as Error).message);
+      }
+    }
+
+    // Also create / touch the syndicate row so the analytics rebuild has
+    // a handle to compute against, even if no fact stamping happened.
+    try {
+      await env.DB.prepare(
+        `INSERT INTO syndicates (handle, display_name, lead_angel_entity_id,
+                                 focus_sectors_json, focus_stages_json, geos_json,
+                                 backer_count, deals_count, last_deal_at,
+                                 avg_raise_usd, median_check_usd, velocity_per_quarter,
+                                 source_evidence_json, updated_at, created_at)
+         VALUES (?, ?, ?, NULL, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, ?, ?)
+         ON CONFLICT(handle) DO UPDATE SET
+           lead_angel_entity_id = COALESCE(syndicates.lead_angel_entity_id, excluded.lead_angel_entity_id),
+           display_name         = COALESCE(syndicates.display_name, excluded.display_name),
+           updated_at           = excluded.updated_at`,
+      ).bind(handle, row.issuer_name, personEntityId, now, now).run();
+    } catch (e) {
+      console.warn("syndicates touch failed", handle, (e as Error).message);
+    }
+  }
 }
 
 /** Walk every person entity that has been observed as a deal participant

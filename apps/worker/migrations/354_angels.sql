@@ -110,3 +110,19 @@ CREATE TABLE IF NOT EXISTS syndicate_backers (
 );
 
 CREATE INDEX IF NOT EXISTS idx_synd_backers_backer ON syndicate_backers(backer_entity_id);
+
+-- Backer-overlap view: every pair of distinct syndicate handles together
+-- with the count of shared backer_entity_id rows. Ordered (a < b) so
+-- each pair appears once. Backed by syndicate_backers, which is
+-- populated from Form D SPV `related_persons` by the assembler.
+DROP VIEW IF EXISTS syndicate_overlap;
+CREATE VIEW syndicate_overlap AS
+  SELECT a.syndicate_handle AS syndicate_a,
+         b.syndicate_handle AS syndicate_b,
+         COUNT(*)           AS shared_backer_count
+    FROM syndicate_backers a
+    JOIN syndicate_backers b
+      ON a.backer_entity_id = b.backer_entity_id
+     AND a.syndicate_handle < b.syndicate_handle
+   GROUP BY a.syndicate_handle, b.syndicate_handle;
+
