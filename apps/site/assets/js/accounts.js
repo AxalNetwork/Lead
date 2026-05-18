@@ -95,7 +95,7 @@
     api("/api/accounts?" + buildQs()).then(function (r) {
       renderRows(r.items || []);
       renderStrip(r.aggregates);
-      var more = document.getElementById("ads-accounts-loadmore");
+      var more = document.getElementById("ads-accounts-more");
       if (more) {
         if (r.nextOffset != null) { more.hidden = false; more.dataset.next = String(r.nextOffset); }
         else { more.hidden = true; }
@@ -124,7 +124,7 @@
     if (!form) return;
     form.addEventListener("submit", function (e) { e.preventDefault(); state.offset = 0; load(false); });
     form.addEventListener("reset", function () { setTimeout(function () { state.offset = 0; load(false); }, 0); });
-    var more = document.getElementById("ads-accounts-loadmore");
+    var more = document.getElementById("ads-accounts-more");
     if (more) more.addEventListener("click", function () {
       state.offset = Number(more.dataset.next || 0); load(true);
     });

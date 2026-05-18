@@ -98,18 +98,20 @@
       }).catch(function () {});
     }
 
-    form.addEventListener("submit", function (e) { e.preventDefault(); state.offset = 0; load(false); });
-    form.addEventListener("reset", function () { setTimeout(function () { state.offset = 0; load(false); }, 0); });
+    var bar = null;
+    form.addEventListener("submit", function (e) { e.preventDefault(); state.offset = 0; load(false); if (bar) bar.onFilterChange(); });
+    form.addEventListener("reset", function () { setTimeout(function () { state.offset = 0; load(false); if (bar) bar.onFilterChange(); }, 0); });
     moreBtn.addEventListener("click", function () { load(true); });
 
     loadAggregate();
     load(false);
 
     if (window.adsBulkBar) {
-      window.adsBulkBar.init({
+      bar = window.adsBulkBar.init({
         pageId: "companies",
         getRowHost: function () { return document.getElementById("ads-companies-list"); },
         getRows: function () { return document.querySelectorAll("#ads-companies-tbody tr[data-id]"); },
+        getFilterSignature: function () { return buildQuery().toString(); },
         fetchAllMatchingIds: function () {
           var all = []; var off = 0;
           function nextPage() {

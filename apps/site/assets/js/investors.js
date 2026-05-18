@@ -109,18 +109,20 @@
       }).catch(function () {});
     }
 
-    form.addEventListener("submit", function (e) { e.preventDefault(); state.offset = 0; load(false); });
-    form.addEventListener("reset", function () { setTimeout(function () { state.offset = 0; load(false); }, 0); });
+    var bar = null;
+    form.addEventListener("submit", function (e) { e.preventDefault(); state.offset = 0; load(false); if (bar) bar.onFilterChange(); });
+    form.addEventListener("reset", function () { setTimeout(function () { state.offset = 0; load(false); if (bar) bar.onFilterChange(); }, 0); });
     moreBtn.addEventListener("click", function () { load(true); });
 
     loadAggregate();
     load(false);
 
     if (window.adsBulkBar) {
-      window.adsBulkBar.init({
+      bar = window.adsBulkBar.init({
         pageId: "investors",
         getRowHost: function () { return document.getElementById("ads-investors-list"); },
         getRows: function () { return document.querySelectorAll("#ads-investors-tbody tr[data-id]"); },
+        getFilterSignature: function () { return buildQuery().toString(); },
         fetchAllMatchingIds: function () {
           // Server caps `limit` at 200 — paginate until cap (5000) or empty.
           var all = []; var off = 0;
