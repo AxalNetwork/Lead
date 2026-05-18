@@ -12,6 +12,15 @@ import { acquire, recordOutcome, type AcquireResult } from "./hostThrottle";
 // Object when bound, so concurrent fetches of the same host see a
 // consistent token bucket / backoff counter. Falls back to the direct
 // helpers in dev / test where the DO binding is absent.
+//
+// Host keying note: the DO is keyed on full hostname (e.g.
+// `www.firstround.com` and `firstround.com` get separate DOs). This is
+// deliberate and matches the `crawler_host_config.host PRIMARY KEY`
+// schema (migration 341) — robots.txt + rate-limit policy is published
+// per-hostname, not per-eTLD+1, and a subdomain throttling itself
+// shouldn't cascade to siblings. A future spec revision may add an
+// eTLD+1 normalization layer, but it requires schema changes outside
+// the scope of Task #1.
 function safeHostFromUrl(url: string): string {
   try { return new URL(url).hostname.toLowerCase(); } catch { return ""; }
 }
