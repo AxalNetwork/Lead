@@ -54,6 +54,7 @@ import { vcSourcesRoute } from "./routes/vc_sources";
 import { lpsRoute, fundsLpRoute, firmsLpRoute } from "./routes/lps";
 import { dealsRoute, companiesDealsRoute, investorsDealsRoute } from "./routes/deals";
 import { movementsRoute, peopleMovementsRoute, firmsMovementsRoute } from "./routes/movements";
+import { fundsRoute, firmsFundsRoute } from "./routes/funds";
 export { EntityLock } from "./do/EntityLock";
 export { HostThrottle } from "./do/HostThrottle";
 export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, PersonaEntityMatchWorkflow, PersonaMatchRefreshWorkflow, PersonaMatchEntityWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, AIProfileFillerWorkflow, AIProfileFillerBatchWorkflow, RefreshGovernmentWorkflow, DiscoverFromSeedWorkflow, CrawlFrontierWorkflow, MonitorEntityWorkflow, MonitorBatchWorkflow, DigestWorkflow, IndividualProfilerWorkflow } from "./ai/workflows";
@@ -166,6 +167,8 @@ api.route("/api/investors", investorsDealsRoute);
 api.route("/api/movements", movementsRoute);
 api.route("/api/people", peopleMovementsRoute);
 api.route("/api/firms", firmsMovementsRoute);
+api.route("/api/funds", fundsRoute);
+api.route("/api/firms", firmsFundsRoute);
 
 api.notFound((c) => c.json({ error: "not_found", request_id: c.var.request_id }, 404));
 api.onError((err, c) => {

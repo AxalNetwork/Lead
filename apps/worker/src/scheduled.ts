@@ -366,6 +366,31 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         if (msg.includes("migration_order_stub_active")) throw e;
       }
 
+      // Task #3 (Fund Intelligence Engine): nightly per-fund ledger
+      // refresh — re-assembles ADV / Form D / LP / deal-flow signals
+      // into the structured `funds` table and emits firm-level facts
+      // (latest_fund_vintage, latest_fund_size_usd, strategy_drift)
+      // via the canonical insertFact path. Bounded at 50 funds/tick.
+      try {
+        const { runFundRefreshSweep } = await import("./services/funds/assemble");
+        const r = await runFundRefreshSweep(env, 50);
+        console.log("fund refresh sweep done", JSON.stringify(r));
+        const { computeStrategyDrift } = await import("./services/funds/strategyDrift");
+        const firms = await env.DB.prepare(
+          `SELECT DISTINCT firm_entity_id FROM funds
+            WHERE updated_at >= datetime('now','-2 day')
+            LIMIT 100`,
+        ).all<{ firm_entity_id: string }>();
+        let drifts = 0;
+        for (const f of firms.results ?? []) {
+          try { await computeStrategyDrift(env, f.firm_entity_id); drifts++; }
+          catch (e) { console.warn("strategy drift failed", f.firm_entity_id, (e as Error).message); }
+        }
+        console.log("fund strategy drift done", drifts);
+      } catch (e) {
+        console.error("nightly fund refresh failed", (e as Error).message);
+      }
+
       // 5. Project match refresh
       try {
         const r = await env.DB.prepare(`SELECT id FROM projects WHERE deleted_at IS NULL AND status = 'active' ORDER BY last_modified DESC LIMIT 200`).all<{ id: string }>();
