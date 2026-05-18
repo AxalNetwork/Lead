@@ -110,7 +110,13 @@ test("migration 343: seeds cover every major profile-type family", () => {
     "government_agency_federal", "professor", "think_tank",
     "public_company", "executive_search_firm", "accounting_firm",
   ]) assert.match(sql, new RegExp(`'${typeId}'`), `seed migration missing ${typeId}`);
-  assert.match(sql, /INSERT OR REPLACE INTO crawler_seeds/);
+  // Migration 343 uses ON CONFLICT DO UPDATE (not INSERT OR REPLACE) so
+  // re-runs preserve operational telemetry (success_count, entity_count,
+  // last_crawled_at) while still upserting definition fields.
+  assert.match(sql, /INSERT INTO crawler_seeds/);
+  assert.match(sql, /ON CONFLICT\(profile_type_id, seed_kind, value\) DO UPDATE SET/);
+  assert.doesNotMatch(sql, /success_count\s*=\s*excluded/, "counters must NOT be overwritten on conflict");
+  assert.doesNotMatch(sql, /last_crawled_at\s*=\s*excluded/, "lifecycle must NOT be overwritten on conflict");
 });
 
 test("crawler-seeds + crawl-frontier routes mounted after accessGuard", () => {
