@@ -8,7 +8,7 @@ export const companiesHouseUK: SiteAdapter = {
   priority: 80,
   hosts: ["find-and-update.company-information.service.gov.uk", "beta.companieshouse.gov.uk"],
   url_patterns: [/^\/company\/[A-Z0-9]+/i, /^\/officers\/[A-Za-z0-9_-]+/i],
-  profile_types_emitted: ["company_founder", "founder", "board_member"],
+  profile_types_emitted: ["founder", "board_member"],
   extract(html, url): AdapterResult {
     const title = pickTitle(html);
     const text = stripTags(html);

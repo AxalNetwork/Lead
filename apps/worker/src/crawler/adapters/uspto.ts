@@ -8,7 +8,7 @@ export const uspto: SiteAdapter = {
   priority: 70,
   hosts: ["uspto.gov", "www.uspto.gov", "patft.uspto.gov", "tsdr.uspto.gov", "patentsview.org"],
   url_patterns: [/\/patent\//i, /\/trademark/i, /netacgi\/nph-Parser/i, /\/api\/patents\//i],
-  profile_types_emitted: ["company_founder", "founder"],
+  profile_types_emitted: ["founder"],
   extract(html, url): AdapterResult {
     const title = pickTitle(html);
     const text = stripTags(html);

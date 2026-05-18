@@ -9,7 +9,7 @@ export const openCorporates: SiteAdapter = {
   priority: 70,
   hosts: ["opencorporates.com"],
   url_patterns: [/^\/companies\/[A-Za-z0-9_-]+\/[A-Za-z0-9._-]+/i, /^\/officers\/\d+/i],
-  profile_types_emitted: ["company_founder", "board_member"],
+  profile_types_emitted: ["founder", "board_member"],
   extract(html, url): AdapterResult {
     const title = pickTitle(html);
     const text = stripTags(html);

@@ -8,7 +8,7 @@ export const courtListener: SiteAdapter = {
   priority: 70,
   hosts: ["courtlistener.com", "www.courtlistener.com"],
   url_patterns: [/^\/docket\/\d+/i, /^\/opinion\/\d+/i, /^\/person\/\d+/i],
-  profile_types_emitted: ["lawyer", "judge"],
+  profile_types_emitted: ["lawyer"],
   extract(html, url): AdapterResult {
     const title = pickTitle(html).replace(/\s*\|\s*CourtListener.*$/i, "").trim();
     const text = stripTags(html);
