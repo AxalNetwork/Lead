@@ -148,7 +148,7 @@
   background: linear-gradient(135deg, var(--ads-accent), var(--ads-accent-2));
 }
 .ads-rail__brand-logo {
-  height: 28px; width: auto; flex: 0 0 auto;
+  height: 44px; width: auto; flex: 0 0 auto;
   display: block;
 }
 .ads-shell[data-rail="collapsed"] .ads-rail__brand-text { display: none; }
