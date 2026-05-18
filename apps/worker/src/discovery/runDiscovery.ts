@@ -261,6 +261,37 @@ export async function runCrawlFrontier(env: Env, opts: FrontierOpts = {}): Promi
       }
       entities += entityIds.length;
       if (attribRun && entityIds.length) perRunEntities[attribRun] = (perRunEntities[attribRun] ?? 0) + entityIds.length;
+      // Task #3: smart frontier expansion + seed entity bookkeeping.
+      // expandFrontier emits next-URL candidates tagged with discovery_reason
+      // + priority into `smart_frontier`. We harvest the outbound links from
+      // the already-fetched HTML so this costs no extra fetch. Failure is
+      // logged and swallowed — the legacy `crawl_frontier` queue is still
+      // populated by `runDiscoverFromSeed` below.
+      try {
+        const { expandFrontier } = await import("../services/frontier/expand");
+        const { extractLinksFromHtml } = await import("./linkExtract");
+        const links = extractLinksFromHtml(it.url, f.html);
+        if (links.length > 0) {
+          await expandFrontier(env, {
+            sourceUrl: it.url,
+            sourceHost: it.host,
+            profileTypeId: null,
+            links,
+          });
+        }
+      } catch (e) {
+        console.warn("smart_frontier_expand_failed", (e as Error).message);
+      }
+      // If this URL is itself a registered crawler_seed, bump its
+      // `entity_count` so the operator dashboard reflects real yield.
+      if (entityIds.length > 0) {
+        try {
+          const { recordSeedEntitiesByUrl } = await import("../services/crawlerSeeds/sweep");
+          await recordSeedEntitiesByUrl(env, it.url, entityIds.length);
+        } catch (e) {
+          console.warn("recordSeedEntitiesByUrl failed", (e as Error).message);
+        }
+      }
       // 2. Recursion: discover further links from this page. When the
       //    frontier row is run-scoped, load the persisted run config so
       //    operator-chosen depth_max / max_per_host carry through every

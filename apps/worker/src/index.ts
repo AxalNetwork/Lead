@@ -49,6 +49,7 @@ import { opsCrawlerRoute } from "./routes/ops_crawler";
 import { bulk } from "./routes/bulk";
 import { profileTypesRoute } from "./routes/profile_types";
 import { crawlerRoute } from "./routes/crawler";
+import { crawlerSeedsRoute, crawlFrontierRoute } from "./routes/crawler_seeds";
 export { EntityLock } from "./do/EntityLock";
 export { HostThrottle } from "./do/HostThrottle";
 export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, PersonaEntityMatchWorkflow, PersonaMatchRefreshWorkflow, PersonaMatchEntityWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, AIProfileFillerWorkflow, AIProfileFillerBatchWorkflow, RefreshGovernmentWorkflow, DiscoverFromSeedWorkflow, CrawlFrontierWorkflow, MonitorEntityWorkflow, MonitorBatchWorkflow, DigestWorkflow, IndividualProfilerWorkflow } from "./ai/workflows";
@@ -149,6 +150,8 @@ api.route("/api/admin", admin);
 api.route("/api/bulk", bulk);
 api.route("/api/profile-types", profileTypesRoute);
 api.route("/api/crawler", crawlerRoute);
+api.route("/api/crawler-seeds", crawlerSeedsRoute);
+api.route("/api/crawl-frontier", crawlFrontierRoute);
 
 api.notFound((c) => c.json({ error: "not_found", request_id: c.var.request_id }, 404));
 api.onError((err, c) => {

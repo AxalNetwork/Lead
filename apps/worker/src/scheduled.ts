@@ -11,6 +11,9 @@ import { loadSeedSources } from "./sources/seed_loader";
 // Task #2: periodic stuck-job sweeper. Guarantees timeout convergence
 // even when queue traffic is too low to trigger the batch-head sweep.
 import { sweepStuckJobs } from "./routes/admin";
+// Task #3: hourly crawler-seed sweep — picks up to 100 stalest enabled
+// seeds whose refresh interval has elapsed and enqueues them.
+import { runSeedSweep } from "./services/crawlerSeeds/sweep";
 
 interface LegacySourceRow {
   id: string;
@@ -70,6 +73,14 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         }
       } catch (e) {
         console.error("hourly digest failed", (e as Error).message);
+      }
+      // Task #3: hourly seed sweep. Idempotent — touches last_crawled_at
+      // before enqueue so a re-tick within the same hour is a no-op.
+      try {
+        const seedRes = await runSeedSweep(env, 100);
+        if (seedRes.picked > 0) console.log("hourly seed sweep", JSON.stringify(seedRes));
+      } catch (e) {
+        console.error("hourly seed sweep failed", (e as Error).message);
       }
       try {
         if (env.WF_CRAWL_SIGNALS) {
