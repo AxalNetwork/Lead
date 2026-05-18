@@ -61,15 +61,27 @@ export async function computeDryPowder(env: Env, fundId: string): Promise<DryPow
   let total_raised: number | null = fund.announced_raised_usd ?? null;
   let formDSum = 0;
   let lpSum = 0;
-  // Form D rows tied to this firm's filings whose issuer matches the
-  // fund name. Conservative substring match (assembler already did the
-  // strong match).
-  const formD = await env.DB.prepare(
-    `SELECT COALESCE(SUM(total_amount_sold), 0) AS s
-       FROM sec_form_d_rounds
-      WHERE lower(issuer_name) LIKE ?`,
-  ).bind(`%${fund.fund_name.toLowerCase().slice(0, 60)}%`).first<{ s: number }>();
-  formDSum = Number(formD?.s ?? 0);
+  // Form D rows tied to THIS firm's filings AND whose issuer matches
+  // the fund name. Firm scoping (entity_id link OR firm display name
+  // present in related_persons_json) prevents similarly-named funds
+  // from other firms from contaminating dry-powder totals.
+  const firmRow = await env.DB.prepare(
+    `SELECT display_name FROM u_entities WHERE id = ?`,
+  ).bind(fund.firm_entity_id).first<{ display_name: string | null }>();
+  const firmName = (firmRow?.display_name ?? "").trim().toLowerCase();
+  if (firmName) {
+    const formD = await env.DB.prepare(
+      `SELECT COALESCE(SUM(total_amount_sold), 0) AS s
+         FROM sec_form_d_rounds
+        WHERE lower(issuer_name) LIKE ?
+          AND (entity_id = ? OR lower(related_persons_json) LIKE ?)`,
+    ).bind(
+      `%${fund.fund_name.toLowerCase().slice(0, 60)}%`,
+      fund.firm_entity_id,
+      `%${firmName}%`,
+    ).first<{ s: number }>();
+    formDSum = Number(formD?.s ?? 0);
+  }
   if (fund.fund_entity_id) {
     const lp = await env.DB.prepare(
       `SELECT COALESCE(SUM(committed_usd), 0) AS s

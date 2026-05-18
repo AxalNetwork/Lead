@@ -170,17 +170,28 @@ async function loadSignals(
   ).bind(firmEntityId, fundName.toLowerCase()).all<AdvFundRow>();
   const adv = advRes.results ?? [];
 
-  // Form D rows whose issuer_name normalizes to the same key.
-  const formDRes = await env.DB.prepare(
-    `SELECT r.issuer_name, r.total_amount_sold, r.total_offering_amount,
-            r.date_of_first_sale, r.industry_group,
-            fl.filing_url, fl.filed_at
-       FROM sec_form_d_rounds r
-       LEFT JOIN sec_filings fl ON fl.accession_no = r.accession_no
-      WHERE lower(r.issuer_name) LIKE ?
-      ORDER BY r.date_of_first_sale DESC NULLS LAST
-      LIMIT 50`,
-  ).bind(`%${fundName.toLowerCase().slice(0, 60)}%`).all<FormDRow>();
+  // Form D rows whose issuer_name normalizes to the same key AND the
+  // adviser/firm is named as a related person on the filing (so a
+  // similarly-named fund from a different firm cannot contaminate the
+  // signal). Firm scoping uses the firm entity's display_name.
+  const firmRow = await env.DB.prepare(
+    `SELECT display_name FROM u_entities WHERE id = ?`,
+  ).bind(firmEntityId).first<{ display_name: string | null }>();
+  const firmName = (firmRow?.display_name ?? "").trim().toLowerCase();
+  const formDRes = firmName
+    ? await env.DB.prepare(
+        `SELECT r.issuer_name, r.total_amount_sold, r.total_offering_amount,
+                r.date_of_first_sale, r.industry_group,
+                fl.filing_url, fl.filed_at
+           FROM sec_form_d_rounds r
+           LEFT JOIN sec_filings fl ON fl.accession_no = r.accession_no
+          WHERE lower(r.issuer_name) LIKE ?
+            AND (r.entity_id = ? OR lower(r.related_persons_json) LIKE ?)
+          ORDER BY r.date_of_first_sale DESC NULLS LAST
+          LIMIT 50`,
+      ).bind(`%${fundName.toLowerCase().slice(0, 60)}%`, firmEntityId, `%${firmName}%`)
+       .all<FormDRow>()
+    : { results: [] as FormDRow[] };
   const form_d = (formDRes.results ?? []).filter((r) => {
     return normalizeFundName(r.issuer_name).includes(normalized) ||
            normalized.includes(normalizeFundName(r.issuer_name));
@@ -380,6 +391,47 @@ export async function assembleFund(env: Env, input: AssembleInput): Promise<Asse
     pressCorroboration: pressRecent,
   });
 
+  // ---- sectors / geos from observed deal flow + Form D industry ------
+  // Aggregated from this firm's recent investments + Form D issuer
+  // industry tags. Bounded to the most-frequent 8 sectors / 5 geos so
+  // a single anomaly can't pollute the declared mix.
+  const sectorCounts: Record<string, number> = {};
+  const geoCounts: Record<string, number> = {};
+  for (const f of signals.form_d) {
+    if (f.industry_group) sectorCounts[f.industry_group] = (sectorCounts[f.industry_group] ?? 0) + 1;
+  }
+  for (const d of signals.deals) {
+    // deal sector tags aren't loaded in the slim DealEventRow above;
+    // skip — sectors_json from Form D industry is enough for the
+    // declared mix. Geo comes from a later enrichment pass.
+    void d;
+  }
+  // Also pull sector/geo tags from this firm's most recent deal_events
+  // (bounded query — read sector_tags_json + geography directly).
+  const tagsRes = await env.DB.prepare(
+    `SELECT d.sector_tags_json, d.geography
+       FROM deal_events d
+       JOIN deal_participants p ON p.deal_id = d.id
+      WHERE p.investor_entity_id = ?
+      ORDER BY COALESCE(d.announcement_date, d.closing_date) DESC
+      LIMIT 200`,
+  ).bind(firmEntityId).all<{ sector_tags_json: string | null; geography: string | null }>();
+  for (const r of tagsRes.results ?? []) {
+    if (r.sector_tags_json) {
+      try {
+        const arr = JSON.parse(r.sector_tags_json) as string[];
+        for (const s of arr) sectorCounts[s] = (sectorCounts[s] ?? 0) + 1;
+      } catch { /* ignore */ }
+    }
+    if (r.geography) geoCounts[r.geography] = (geoCounts[r.geography] ?? 0) + 1;
+  }
+  const topSectors = Object.entries(sectorCounts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k]) => k);
+  const topGeos    = Object.entries(geoCounts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k]) => k);
+  const sectorsJson = topSectors.length > 0 ? JSON.stringify(topSectors) : null;
+  const geosJson    = topGeos.length > 0    ? JSON.stringify(topGeos)    : null;
+  if (sectorsJson) evidence.push({ field: "sectors_json", value: topSectors, source_type: "sec_filing", source_url: null, observed_at: now });
+  if (geosJson)    evidence.push({ field: "geos_json",    value: topGeos,    source_type: "press_release", source_url: null, observed_at: now });
+
   // ---- Persist --------------------------------------------------------
   const id = crypto.randomUUID();
   const evidenceJson = JSON.stringify(evidence.slice(-100));
@@ -398,7 +450,7 @@ export async function assembleFund(env: Env, input: AssembleInput): Promise<Asse
        mgmt_fee_pct, carry_pct, hurdle_pct,
        strategy, sectors_json, geos_json, fund_status,
        source_evidence_json, confidence, updated_at, created_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, NULL, ?, NULL, NULL, ?, ?, ?, ?, ?)
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(firm_entity_id, fund_name) DO UPDATE SET
        fund_entity_id       = COALESCE(excluded.fund_entity_id, funds.fund_entity_id),
        fund_number          = COALESCE(excluded.fund_number, funds.fund_number),
@@ -408,6 +460,8 @@ export async function assembleFund(env: Env, input: AssembleInput): Promise<Asse
        final_close_date     = COALESCE(excluded.final_close_date, funds.final_close_date),
        announced_raised_usd = COALESCE(excluded.announced_raised_usd, funds.announced_raised_usd),
        strategy             = COALESCE(excluded.strategy, funds.strategy),
+       sectors_json         = COALESCE(excluded.sectors_json, funds.sectors_json),
+       geos_json            = COALESCE(excluded.geos_json, funds.geos_json),
        fund_status          = excluded.fund_status,
        source_evidence_json = excluded.source_evidence_json,
        confidence           = MAX(excluded.confidence, funds.confidence),
@@ -418,6 +472,7 @@ export async function assembleFund(env: Env, input: AssembleInput): Promise<Asse
     firstClose.value, finalClose.value,
     raised.value,
     strategy.value,
+    sectorsJson, geosJson,
     status,
     evidenceJson, confidence, now, now,
   ).run();

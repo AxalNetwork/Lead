@@ -15,6 +15,7 @@ import type { Env } from "../types";
 import { computeDryPowder } from "../services/funds/dryPowder";
 import { buildFundPortfolio } from "../services/funds/portfolio";
 import { computeVintageCohort, percentileOfFund, performanceQuartileOfFund } from "../services/funds/vintage";
+import { computeStrategyDrift } from "../services/funds/strategyDrift";
 import type { FundRow } from "../services/funds/types";
 
 type Vars = { email: string; is_admin: boolean };
@@ -171,13 +172,17 @@ fundsRoute.get("/:id", async (c) => {
     `SELECT ${FUND_COLS} FROM funds WHERE id = ?`,
   ).bind(id).first<FundRow>();
   if (!row) return c.json({ error: "not_found" }, 404);
-  const [dryPowder, portfolio, percentile, cohort, perfQuartile] = await Promise.all([
+  const [dryPowder, portfolio, percentile, cohort, perfQuartile, driftReports] = await Promise.all([
     computeDryPowder(c.env, id),
     buildFundPortfolio(c.env, id),
     percentileOfFund(c.env, row),
     row.vintage_year ? computeVintageCohort(c.env, row.vintage_year, row.strategy) : Promise.resolve(null),
     performanceQuartileOfFund(c.env, row),
+    computeStrategyDrift(c.env, id),
   ]);
+  // Latest drift report is what operators care about; full history is
+  // available via the `fund.strategy_drift` fact log.
+  const latestDrift = driftReports.length > 0 ? driftReports[driftReports.length - 1] : null;
   return c.json({
     fund: shape(row),
     dry_powder: dryPowder,
@@ -186,5 +191,7 @@ fundsRoute.get("/:id", async (c) => {
     vintage_cohort: cohort,
     size_percentile_within_cohort: percentile,
     performance_quartile: perfQuartile,
+    strategy_drift_latest: latestDrift,
+    strategy_drift_history: driftReports,
   });
 });
