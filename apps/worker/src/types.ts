@@ -33,6 +33,11 @@ export interface Env {
   BROWSER?: Fetcher;
   LEAD_QUEUE: Queue<QueueMessage>;
   ALLOWED_EMAIL: string;
+  // Task #2: comma-separated allowlist of admin emails (for
+  // /api/ops/* and /ops/crawler). When unset, ALLOWED_EMAIL is
+  // treated as admin so the single-operator deployment works
+  // out of the box.
+  ADMIN_EMAILS?: string;
   // Task #2 bug-triage: explicit prod/debug flags so the error envelope
   // can strip Error.stack in production.
   ENVIRONMENT?: string;

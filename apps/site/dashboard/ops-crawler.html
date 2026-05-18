@@ -1,0 +1,129 @@
+---
+layout: default
+title: Crawler Operator Console
+permalink: /ops/crawler/
+---
+
+<section class="ads-section">
+  <h1 class="ads-h1">Crawler Operator Console</h1>
+  <p class="ads-sub">
+    Live throughput, host health, frontier depth, AI spend and the
+    compliance feed for the in-house crawler. All actions are admin-only
+    and audited.
+  </p>
+
+  <div class="ads-card" id="ops-global-controls" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+    <strong>Global:</strong>
+    <span id="ops-pause-state" class="ads-pill">…</span>
+    <button class="ads-btn" data-action="pause">Pause crawler</button>
+    <button class="ads-btn" data-action="resume">Resume</button>
+    <span style="flex:1"></span>
+    <span class="ads-mono" id="ops-last-refresh"></span>
+    <button class="ads-btn" data-action="refresh">Refresh now</button>
+  </div>
+
+  <div class="ads-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem;margin-top:1rem">
+    <div class="ads-card"><h3>Pages / sec (1h)</h3><div id="ops-kpi-pps" class="ads-kpi">…</div></div>
+    <div class="ads-card"><h3>Attempts (1h)</h3><div id="ops-kpi-att" class="ads-kpi">…</div></div>
+    <div class="ads-card"><h3>Success (1h)</h3><div id="ops-kpi-ok" class="ads-kpi">…</div></div>
+    <div class="ads-card"><h3>Blocked / 429 (1h)</h3><div id="ops-kpi-blk" class="ads-kpi">…</div></div>
+  </div>
+
+  <h2 class="ads-h2">Throughput (last 24h)</h2>
+  <div class="ads-card"><div id="ops-throughput-chart">Loading…</div></div>
+
+  <h2 class="ads-h2">Host health</h2>
+  <div class="ads-card">
+   <div class="ads-table-wrap">
+    <table class="ads-table" id="ops-hosts">
+      <thead><tr>
+        <th>Host</th><th>Tier</th><th>RPS</th>
+        <th>Success rate</th><th>Attempts 24h</th><th>429 / blocked 24h</th>
+        <th>Robots cached</th><th>Quarantine</th><th>Last error</th><th>Actions</th>
+      </tr></thead>
+      <tbody><tr><td colspan="10">Loading…</td></tr></tbody>
+    </table>
+   </div>
+  </div>
+
+  <div class="ads-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem">
+    <div class="ads-card">
+      <h3>Frontier depth (smart_frontier)</h3>
+      <div id="ops-frontier"></div>
+    </div>
+    <div class="ads-card">
+      <h3>AI spend (last 14d)</h3>
+      <div id="ops-aispend"></div>
+    </div>
+  </div>
+
+  <h2 class="ads-h2">Adapter scoreboard (per-profile-type, 7d)</h2>
+  <div class="ads-card">
+   <div class="ads-table-wrap">
+    <table class="ads-table" id="ops-adapters">
+      <thead><tr>
+        <th>Profile type</th><th>Runs</th><th>Parse success</th>
+        <th>Facts written / verified</th><th>AI calls</th><th>Cost (USD)</th><th>Last run</th>
+      </tr></thead>
+      <tbody><tr><td colspan="7">Loading…</td></tr></tbody>
+    </table>
+   </div>
+  </div>
+
+  <h2 class="ads-h2">Compliance feed (24h)</h2>
+  <div class="ads-card">
+   <div class="ads-table-wrap">
+    <table class="ads-table" id="ops-compliance">
+      <thead><tr><th>Kind</th><th>Host</th><th>Reason</th><th>Count</th><th>Last seen</th></tr></thead>
+      <tbody><tr><td colspan="5">Loading…</td></tr></tbody>
+    </table>
+   </div>
+  </div>
+
+  <h2 class="ads-h2">Seeds</h2>
+  <div class="ads-card">
+   <div class="ads-table-wrap">
+    <table class="ads-table" id="ops-seeds">
+      <thead><tr>
+        <th>Type</th><th>Kind</th><th>Value</th><th>Enabled</th>
+        <th>Last crawled</th><th>Success</th><th>Entities</th>
+      </tr></thead>
+      <tbody><tr><td colspan="7">Loading…</td></tr></tbody>
+    </table>
+   </div>
+  </div>
+
+  <h2 class="ads-h2">Recent extractions</h2>
+  <div class="ads-card">
+   <div class="ads-table-wrap">
+    <table class="ads-table" id="ops-extractions">
+      <thead><tr>
+        <th>When</th><th>URL</th><th>Profile type</th><th>Status</th>
+        <th>Facts</th><th>Cost</th><th>Duration</th><th></th>
+      </tr></thead>
+      <tbody><tr><td colspan="8">Loading…</td></tr></tbody>
+    </table>
+   </div>
+  </div>
+
+  <h2 class="ads-h2">Test a URL</h2>
+  <div class="ads-card">
+    <form id="ops-test-url-form" style="display:flex;gap:.5rem;flex-wrap:wrap">
+      <input type="url" name="url" placeholder="https://example.com/team/jane" required style="flex:1;min-width:280px" class="ads-input">
+      <button class="ads-btn" type="submit">Fetch + classify</button>
+    </form>
+    <pre id="ops-test-url-result" class="ads-mono" style="margin-top:.75rem;white-space:pre-wrap;max-height:240px;overflow:auto"></pre>
+  </div>
+
+  <h2 class="ads-h2">Recent ops audit</h2>
+  <div class="ads-card">
+   <div class="ads-table-wrap">
+    <table class="ads-table" id="ops-audit">
+      <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>Payload</th></tr></thead>
+      <tbody><tr><td colspan="5">Loading…</td></tr></tbody>
+    </table>
+   </div>
+  </div>
+</section>
+
+<script src="/assets/js/ops-crawler.js"></script>

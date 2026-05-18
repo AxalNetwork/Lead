@@ -84,11 +84,22 @@ export const accessGuard: MiddlewareHandler<{ Bindings: Env; Variables: { email:
     const claims = await verifyJwt(token, jwks, allowedAuds, iss);
     const email = typeof claims.email === "string" ? claims.email : "";
     if (!email) return c.json({ error: "no_email_claim" }, 401);
-    if (email.toLowerCase() !== c.env.ALLOWED_EMAIL.toLowerCase()) {
+    // Task #2: admin gating. The base allowlist is ALLOWED_EMAIL (the
+    // existing single-tenant operator). ADMIN_EMAILS (comma-separated)
+    // extends that allowlist with additional ops admins — entries there
+    // are ALSO admitted to /api/* and gain `is_admin=true`. When
+    // ADMIN_EMAILS is unset, ALLOWED_EMAIL is treated as the admin set
+    // so the single-operator deployment works without config change.
+    const emailLc = email.toLowerCase();
+    const baseAllowed = c.env.ALLOWED_EMAIL.toLowerCase();
+    const adminRaw = (c.env.ADMIN_EMAILS ?? c.env.ALLOWED_EMAIL ?? "").toLowerCase();
+    const adminSet = new Set(adminRaw.split(",").map((s) => s.trim()).filter(Boolean));
+    const allowed = emailLc === baseAllowed || adminSet.has(emailLc);
+    if (!allowed) {
       return c.json({ error: "forbidden", email }, 403);
     }
     c.set("email", email);
-    c.set("is_admin", false);
+    c.set("is_admin", adminSet.has(emailLc) || emailLc === baseAllowed);
     await next();
   } catch (e) {
     console.warn("Access JWT verification failed:", (e as Error).message);
@@ -97,7 +108,13 @@ export const accessGuard: MiddlewareHandler<{ Bindings: Env; Variables: { email:
 };
 
 export const adminOnly: MiddlewareHandler<{ Bindings: Env; Variables: { email: string; is_admin: boolean } }> = async (c, next) => {
-  const isAdmin = c.var.is_admin === true || c.req.header("X-Admin") === "true";
+  // Trust `is_admin` set by accessGuard (DB-backed allowlist).
+  // The X-Admin header escape hatch is permitted ONLY in non-production
+  // environments — without this guard a forged header would let any
+  // authenticated user reach /api/ops/* in prod.
+  const isProd = c.env.ENVIRONMENT === "production";
+  const headerAdmin = !isProd && c.req.header("X-Admin") === "true";
+  const isAdmin = c.var.is_admin === true || headerAdmin;
   if (!isAdmin) return c.json({ error: "forbidden" }, 403);
   c.set("is_admin", true);
   await next();

@@ -92,6 +92,56 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       } catch (e) {
         console.error("hourly smart_frontier drain failed", (e as Error).message);
       }
+      // Task #2: hourly adapter-drift check. Compares parse-success rate
+      // over the last 7 days vs the prior 7 days for each profile-type
+      // workflow; emits one ops_audit row per significant drop (>=30pp).
+      // Piggybacks the hourly tick (Free plan caps crons at 5/5).
+      try {
+        const drift = await env.DB.prepare(
+          `WITH recent AS (
+              SELECT profile_type_id,
+                     COUNT(*) AS n,
+                     SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) * 1.0 / COUNT(*) AS rate
+                FROM profile_workflow_runs
+               WHERE run_at >= datetime('now','-7 days')
+               GROUP BY profile_type_id
+              HAVING COUNT(*) >= 5),
+            prior AS (
+              SELECT profile_type_id,
+                     COUNT(*) AS n,
+                     SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) * 1.0 / COUNT(*) AS rate
+                FROM profile_workflow_runs
+               WHERE run_at >= datetime('now','-14 days') AND run_at < datetime('now','-7 days')
+               GROUP BY profile_type_id
+              HAVING COUNT(*) >= 5)
+            SELECT r.profile_type_id, r.rate AS recent_rate, p.rate AS prior_rate,
+                   r.n AS recent_n, p.n AS prior_n
+              FROM recent r JOIN prior p USING (profile_type_id)
+             WHERE (p.rate - r.rate) >= 0.30`,
+        ).all<{ profile_type_id: string; recent_rate: number; prior_rate: number; recent_n: number; prior_n: number }>();
+        for (const d of drift.results ?? []) {
+          await env.DB.prepare(
+            `INSERT INTO ops_audit (actor_email, action, target_kind, target_id, payload_json)
+             VALUES (?, ?, ?, ?, ?)`,
+          ).bind(
+            "system:drift-monitor",
+            "drift.detected",
+            "profile_type",
+            d.profile_type_id,
+            JSON.stringify({
+              recent_success_rate: +d.recent_rate.toFixed(3),
+              prior_success_rate: +d.prior_rate.toFixed(3),
+              drop_pp: +(((d.prior_rate - d.recent_rate) * 100)).toFixed(1),
+              recent_n: d.recent_n, prior_n: d.prior_n,
+            }),
+          ).run();
+        }
+        if ((drift.results ?? []).length > 0) {
+          console.log("hourly drift check flagged", JSON.stringify({ count: (drift.results ?? []).length }));
+        }
+      } catch (e) {
+        console.warn("hourly drift check failed", (e as Error).message);
+      }
       try {
         if (env.WF_CRAWL_SIGNALS) {
           await env.WF_CRAWL_SIGNALS.create({ params: {} });
