@@ -117,6 +117,19 @@ data, mutations, and controls live behind the worker's adminOnly
 guard — the page itself never holds operational data for
 unauthenticated viewers.
 
+### Task #4 — Snapshot URL contract uses ?id= not /:id (CONSTRAINT, not deviation)
+The Task #4 spec specifies immutable snapshot URLs at
+`/dashboard/<page>/snapshot/:id`. Jekyll on GitHub Pages serves only
+prebuilt static paths and has no edge router to bind a dynamic `:id`
+path segment (same constraint as the `/ops/crawler/` page-level gating
+note above). The implemented form is
+`/dashboard/<page>/snapshot/?id=<snapshot_id>`. Each of the 8 dashboard
+pages exposes a "Save snapshot" button that POSTs the current payload
+to `/api/dashboards/snapshots` and surfaces the link in that shape.
+Hydration is STRICTLY from the stored payload — `snapshot-viewer.js`
+never re-queries the underlying ledger tables — so immutability is
+preserved.
+
 ### Task #4 — Angel sweep on nightly cron, not weekly (ACCEPTED)
 The Task #4 spec says "weekly angel refresh + nightly syndicate
 rebuild". Free plan caps crons at 5 and all five slots are already

@@ -19,6 +19,7 @@ permalink: /dashboard/vintage-benchmarks/
         <button class="ads-btn" type="submit">Apply</button>
         <span style="flex:1"></span>
         <button class="ads-btn" id="export-csv" type="button">Export CSV</button>
+        <button class="ads-btn" id="save-snapshot" type="button">Save snapshot</button>
       </form>
     </div>
     <div class="ads-card" style="margin-top:1rem"><div id="boxplot">Loading…</div></div>
@@ -39,6 +40,12 @@ permalink: /dashboard/vintage-benchmarks/
   }
   document.getElementById("filter-form").addEventListener("submit", function(e){ e.preventDefault(); load(); });
   document.getElementById("export-csv").addEventListener("click", function(){ d.csv("/vintage-benchmarks","vintage", current); });
+  document.getElementById("save-snapshot").addEventListener("click", async function(){
+    try { var r0 = await d.api("/vintage-benchmarks" + d.qs(current));
+      var s = await d.snapshot("vintage-benchmarks", current, r0);
+      alert("Snapshot saved: /dashboard/vintage-benchmarks/snapshot/?id=" + s.id);
+    } catch(e){ alert("Snapshot failed: " + e.message); }
+  });
   load();
 })();
 </script>

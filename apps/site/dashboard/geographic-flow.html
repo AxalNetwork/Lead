@@ -19,6 +19,7 @@ permalink: /dashboard/geographic-flow/
         <button class="ads-btn" type="submit">Apply</button>
         <span style="flex:1"></span>
         <button class="ads-btn" id="export-csv" type="button">Export CSV</button>
+        <button class="ads-btn" id="save-snapshot" type="button">Save snapshot</button>
       </form>
     </div>
     <div class="ads-card" style="margin-top:1rem"><div id="world-arcs">Loading…</div></div>
@@ -38,6 +39,12 @@ permalink: /dashboard/geographic-flow/
   }
   document.getElementById("filter-form").addEventListener("submit", function(e){ e.preventDefault(); load(); });
   document.getElementById("export-csv").addEventListener("click", function(){ d.csv("/geographic-flow","geo-flow", current); });
+  document.getElementById("save-snapshot").addEventListener("click", async function(){
+    try { var r0 = await d.api("/geographic-flow" + d.qs(current));
+      var s = await d.snapshot("geographic-flow", current, r0);
+      alert("Snapshot saved: /dashboard/geographic-flow/snapshot/?id=" + s.id);
+    } catch(e){ alert("Snapshot failed: " + e.message); }
+  });
   load();
 })();
 </script>

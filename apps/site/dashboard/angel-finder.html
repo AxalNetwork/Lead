@@ -30,6 +30,7 @@ permalink: /dashboard/angel-finder/
         <button class="ads-btn" type="submit">Search</button>
         <span style="flex:1"></span>
         <button class="ads-btn" id="export-csv" type="button">Export CSV</button>
+        <button class="ads-btn" id="save-snapshot" type="button">Save snapshot</button>
       </form>
     </div>
     <div class="ads-card" style="margin-top:1rem">
@@ -67,6 +68,12 @@ permalink: /dashboard/angel-finder/
   }
   document.getElementById("filter-form").addEventListener("submit", function(e){ e.preventDefault(); load(); });
   document.getElementById("export-csv").addEventListener("click", function(){ d.csv("/angel-finder","angels", current); });
+  document.getElementById("save-snapshot").addEventListener("click", async function(){
+    try { var r0 = await d.api("/angel-finder" + d.qs(current));
+      var s = await d.snapshot("angel-finder", current, r0);
+      alert("Snapshot saved: /dashboard/angel-finder/snapshot/?id=" + s.id);
+    } catch(e){ alert("Snapshot failed: " + e.message); }
+  });
   load();
 })();
 </script>

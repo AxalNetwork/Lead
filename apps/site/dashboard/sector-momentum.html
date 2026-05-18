@@ -23,6 +23,7 @@ permalink: /dashboard/sector-momentum/
         <button class="ads-btn" type="submit">Apply</button>
         <span style="flex:1"></span>
         <button class="ads-btn" id="export-csv" type="button">Export CSV</button>
+        <button class="ads-btn" id="save-snapshot" type="button">Save snapshot</button>
       </form>
     </div>
     <div class="ads-card" style="margin-top:1rem"><div id="heatmap">Loading…</div></div>
@@ -43,6 +44,12 @@ permalink: /dashboard/sector-momentum/
   }
   document.getElementById("filter-form").addEventListener("submit", function(e){ e.preventDefault(); load(); });
   document.getElementById("export-csv").addEventListener("click", function(){ d.csv("/sector-momentum","sector-momentum", {months_back: current.months_back}); });
+  document.getElementById("save-snapshot").addEventListener("click", async function(){
+    try { var r0 = await d.api("/sector-momentum" + d.qs({months_back: current.months_back}));
+      var s = await d.snapshot("sector-momentum", current, r0);
+      alert("Snapshot saved: /dashboard/sector-momentum/snapshot/?id=" + s.id);
+    } catch(e){ alert("Snapshot failed: " + e.message); }
+  });
   load();
 })();
 </script>

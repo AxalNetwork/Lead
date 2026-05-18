@@ -134,15 +134,79 @@ dashboards.get("/feeds/deals", async (c) => {
 // Movement feed (partner moves + spinouts + new fund closes).
 dashboards.get("/feeds/movements", async (c) => {
   const limit = Math.min(Number(c.req.query("limit") ?? "30"), 100);
-  const movements = await c.env.DB.prepare(
-    `SELECT id, person_name_raw, movement_type, from_firm_entity_id, to_firm_entity_id,
-            from_title, to_title, observed_at, source_url, status
-       FROM partner_movements WHERE status != 'rejected'
-       ORDER BY observed_at DESC LIMIT ?`,
-  ).bind(limit).all<Record<string, unknown>>();
-  const rows = (movements.results ?? []) as Record<string, unknown>[];
+  // Spec requires the landing-page movement feed to merge three streams
+  // in coherent reverse-chronological order:
+  //   (a) partner_movements (joins/leaves/title changes)
+  //   (b) fund_spinouts     (≥2 partners leaving for a new firm)
+  //   (c) new fund closes   (funds.fund_status transitions, surfaced
+  //       via funds.created_at as a "new fund" event)
+  // We read all three in parallel, normalise to a common shape, then
+  // merge-sort by event timestamp.
+  const [pmRes, spRes, fundRes] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT id, person_name_raw, movement_type, from_firm_entity_id, to_firm_entity_id,
+              from_title, to_title, observed_at, source_url, status
+         FROM partner_movements WHERE status != 'rejected'
+         ORDER BY observed_at DESC LIMIT ?`,
+    ).bind(limit).all<Record<string, unknown>>(),
+    c.env.DB.prepare(
+      `SELECT id, parent_firm_entity_id, new_firm_entity_id, new_firm_name,
+              departing_people_json, window_end, source_urls_json, status
+         FROM fund_spinouts WHERE status != 'rejected'
+         ORDER BY window_end DESC LIMIT ?`,
+    ).bind(limit).all<Record<string, unknown>>(),
+    c.env.DB.prepare(
+      `SELECT f.id, f.fund_name, f.firm_entity_id, f.fund_status,
+              f.target_size_usd, f.created_at,
+              e.display_name AS firm_name
+         FROM funds f
+         LEFT JOIN u_entities e ON e.id = f.firm_entity_id
+        ORDER BY f.created_at DESC LIMIT ?`,
+    ).bind(limit).all<Record<string, unknown>>(),
+  ]);
+  type Item = Record<string, unknown> & { observed_at: string; kind: string };
+  const items: Item[] = [];
+  for (const r of (pmRes.results ?? []) as Record<string, unknown>[]) {
+    items.push({ kind: "partner_movement", ...r, observed_at: String(r.observed_at) });
+  }
+  for (const r of (spRes.results ?? []) as Record<string, unknown>[]) {
+    let sources: string[] = [];
+    try { sources = JSON.parse(String(r.source_urls_json ?? "[]")); } catch { /* noop */ }
+    items.push({
+      kind: "fund_spinout",
+      id: r.id,
+      person_name_raw: r.new_firm_name ?? "",
+      movement_type: "spinout",
+      from_firm_entity_id: r.parent_firm_entity_id,
+      to_firm_entity_id: r.new_firm_entity_id,
+      from_title: null,
+      to_title: null,
+      observed_at: String(r.window_end),
+      source_url: sources[0] ?? null,
+      status: r.status,
+      departing_people_json: r.departing_people_json,
+    });
+  }
+  for (const r of (fundRes.results ?? []) as Record<string, unknown>[]) {
+    items.push({
+      kind: "new_fund",
+      id: r.id,
+      person_name_raw: r.fund_name ?? "",
+      movement_type: r.fund_status === "raising" ? "fund_raising" : "fund_close",
+      from_firm_entity_id: null,
+      to_firm_entity_id: r.firm_entity_id,
+      from_title: null,
+      to_title: r.firm_name ?? null,
+      observed_at: String(r.created_at),
+      source_url: null,
+      status: r.fund_status,
+      target_size_usd: r.target_size_usd,
+    });
+  }
+  items.sort((a, b) => (b.observed_at || "").localeCompare(a.observed_at || ""));
+  const rows = items.slice(0, limit) as unknown as Record<string, unknown>[];
   const fmt = c.req.query("format");
-  const heads = ["observed_at", "person_name_raw", "movement_type", "from_firm_entity_id", "to_firm_entity_id", "to_title", "source_url"];
+  const heads = ["observed_at", "kind", "person_name_raw", "movement_type", "from_firm_entity_id", "to_firm_entity_id", "to_title", "source_url"];
   if (fmt === "csv") return csvResponse(rows, heads, "movements-feed");
   if (fmt === "pdf") return pdfResponse(rows, heads, "movements-feed", "Movement feed", `${rows.length} rows`);
   return c.json({ items: rows });
@@ -247,17 +311,21 @@ dashboards.get("/lp-network", async (c) => {
   const vintage = c.req.query("vintage_year");
   const limit = Math.min(Number(c.req.query("limit") ?? "500"), 2000);
 
+  // SQL placeholder order is: JOIN clause first, then WHERE. Binds
+  // must follow the same order — prior code pushed vintage (WHERE)
+  // before lpClass (JOIN), which swapped the two values at execution.
   const wheres = ["c.committed_usd > 0"];
-  const binds: unknown[] = [];
-  if (vintage) { wheres.push("c.vintage_year = ?"); binds.push(Number(vintage)); }
-  // lp_class is stored as an `lp.class` fact — join via facts.
+  const joinBinds: unknown[] = [];
+  const whereBinds: unknown[] = [];
   let joinFacts = "";
   if (lpClass) {
     joinFacts = `JOIN facts ff ON ff.entity_id = c.lp_entity_id
                                 AND ff.predicate = 'lp.class'
                                 AND ff.value_text = ?`;
-    binds.push(lpClass);
+    joinBinds.push(lpClass);
   }
+  if (vintage) { wheres.push("c.vintage_year = ?"); whereBinds.push(Number(vintage)); }
+  const binds = [...joinBinds, ...whereBinds];
   const r = await c.env.DB.prepare(
     `SELECT c.lp_entity_id, c.fund_entity_id, c.fund_name_raw,
             c.committed_usd, c.vintage_year, c.as_of_date,
