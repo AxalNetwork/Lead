@@ -85,6 +85,23 @@ fund_name_raw, as_of_date)` + `INSERT OR REPLACE` semantics in the
 persist `ON CONFLICT` clause. Re-running the same disclosure overwrites
 the same rows.
 
+### Task #1 — Deal dedupe key includes event_type (ACCEPTED, contract update)
+The task spec documents the dedupe formula as
+`sha256(normalized_company_name + round_name + month_bucket)`.
+Implementation uses
+`sha256(normalized_company + "|" + event_type + "|" + round + "|" + month_bucket)`.
+Reason: without `event_type` in the key, a Series B funding_round and an
+unrelated 8-K acquisition for the same company in the same month would
+collide on one `deal_events` row. `event_type` is therefore required at
+the typed signature of `dealDedupeKey()` and the function returns null
+when it is missing/empty. SEC Form D synthesis (which emits
+`round_name=null`) still corroborates with press-wire rows that have
+`round_name="Series X"` via the persist layer's secondary
+"round-flexible" lookup in `services/deals/persist.ts`, not via the key
+itself. AI extractor (`ai/dealExtractor.ts`) rejects rows with missing
+or unrecognized `event_type` rather than defaulting to `funding_round`,
+preserving the spec's "no silent coercion" contract.
+
 ### Task #2 — /ops/crawler/ page-level gating (CONSTRAINT, not a deviation)
 The Jekyll site is statically hosted on GitHub Pages; there is no
 edge function or origin worker on aidatasignal.com to intercept page

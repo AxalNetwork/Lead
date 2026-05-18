@@ -191,7 +191,12 @@ function toCandidate(raw: RawDealExtraction, input: DealExtractInput): DealCandi
   if (!Number.isFinite(conf) || conf < 0.2) return null;
   const company = (raw.company_name ?? "").trim();
   if (!company || company.length < 2) return null;
-  const event_type = coerceEventType(raw.event_type) ?? "funding_round";
+  // Strict: reject when the model returns a missing or unrecognized
+  // event_type. Defaulting to "funding_round" would violate the spec's
+  // "no silent coercion" contract by mislabeling acquisitions, IPOs,
+  // and bankruptcies as funding rounds.
+  const event_type = coerceEventType(raw.event_type);
+  if (!event_type) return null;
   const amount_usd = typeof raw.amount_usd === "number" && raw.amount_usd > 0 ? raw.amount_usd : null;
   const valuation_usd = typeof raw.valuation_usd === "number" && raw.valuation_usd > 0 ? raw.valuation_usd : null;
   return {

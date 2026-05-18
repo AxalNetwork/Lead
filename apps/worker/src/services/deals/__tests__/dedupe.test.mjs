@@ -31,33 +31,54 @@ test("monthBucket extracts YYYY-MM from announcement OR closing date", () => {
 
 test("dealDedupeKey collapses spelling + date variations within a month", async () => {
   const a = await dealDedupeKey({
-    company_name_raw: "Acme Inc.", round_name: "Series B",
+    company_name_raw: "Acme Inc.", event_type: "funding_round", round_name: "Series B",
     announcement_date: "2025-05-12", closing_date: null,
   });
   const b = await dealDedupeKey({
-    company_name_raw: "Acme, LLC", round_name: "series b",
+    company_name_raw: "Acme, LLC", event_type: "funding_round", round_name: "series b",
     announcement_date: "2025-05-28", closing_date: null,
   });
   assert.ok(a && b);
-  assert.equal(a, b, "same company + round + month bucket must yield same key");
+  assert.equal(a, b, "same company + event_type + round + month bucket must yield same key");
 });
 
 test("dealDedupeKey differs across months (no over-collapse)", async () => {
   const a = await dealDedupeKey({
-    company_name_raw: "Acme", round_name: "Series B",
+    company_name_raw: "Acme", event_type: "funding_round", round_name: "Series B",
     announcement_date: "2025-05-12", closing_date: null,
   });
   const c = await dealDedupeKey({
-    company_name_raw: "Acme", round_name: "Series B",
+    company_name_raw: "Acme", event_type: "funding_round", round_name: "Series B",
     announcement_date: "2025-09-12", closing_date: null,
   });
   assert.notEqual(a, c);
 });
 
+test("dealDedupeKey differs across event_types (no cross-event collision)", async () => {
+  const funding = await dealDedupeKey({
+    company_name_raw: "Acme", event_type: "funding_round", round_name: null,
+    announcement_date: "2025-05-12", closing_date: null,
+  });
+  const acq = await dealDedupeKey({
+    company_name_raw: "Acme", event_type: "acquisition", round_name: null,
+    announcement_date: "2025-05-12", closing_date: null,
+  });
+  assert.ok(funding && acq);
+  assert.notEqual(funding, acq);
+});
+
 test("dealDedupeKey returns null on missing date", async () => {
   const k = await dealDedupeKey({
-    company_name_raw: "Acme", round_name: "Series B",
+    company_name_raw: "Acme", event_type: "funding_round", round_name: "Series B",
     announcement_date: null, closing_date: null,
+  });
+  assert.equal(k, null);
+});
+
+test("dealDedupeKey returns null on missing event_type", async () => {
+  const k = await dealDedupeKey({
+    company_name_raw: "Acme", event_type: "", round_name: "Series B",
+    announcement_date: "2025-05-12", closing_date: null,
   });
   assert.equal(k, null);
 });
