@@ -1,13 +1,13 @@
 -- Task #3: Concrete public starting points for the in-house crawler.
 --
 -- Idempotent: keyed on (profile_type_id, seed_kind, value) UNIQUE.
--- INSERT OR REPLACE lets the migration re-run as the seed list evolves.
+-- ON CONFLICT DO UPDATE lets the migration re-run as the seed list evolves.
 --
 -- Every seed targets a profile_type_id that already exists in e_types
 -- (FK enforced). All sources are PUBLIC pages — no auth, no commercial
 -- APIs. Adding a new family of seeds is a matter of appending rows here.
 
-INSERT OR REPLACE INTO crawler_seeds (id, profile_type_id, seed_kind, value, refresh_interval_hours, enabled, notes) VALUES
+INSERT INTO crawler_seeds (id, profile_type_id, seed_kind, value, refresh_interval_hours, enabled, notes) VALUES
 -- ── investor_vc ────────────────────────────────────────────────────────
 ('seed_vc_nvca_members',           'investor_vc',          'url',           'https://nvca.org/about-us/membership/member-directory/',                  168, 1, 'NVCA member directory'),
 ('seed_vc_wikipedia_list',         'investor_vc',          'url',           'https://en.wikipedia.org/wiki/List_of_venture_capital_firms',             720, 1, 'Wikipedia: List of venture capital firms'),
@@ -155,4 +155,11 @@ INSERT OR REPLACE INTO crawler_seeds (id, profile_type_id, seed_kind, value, ref
 ('seed_exch_crypto_search',        'exchange_crypto',      'search_query',  'top crypto exchanges 2026',                                                 720, 1, 'Bootstrap search'),
 ('seed_custodian_search',          'custodian',            'search_query',  'top securities custodian banks 2026',                                       720, 1, 'Bootstrap search'),
 ('seed_payments_search',           'payment_processor',    'search_query',  'top payment processors 2026',                                               720, 1, 'Bootstrap search'),
-('seed_clearing_search',           'clearinghouse',        'search_query',  'top clearinghouses derivatives 2026',                                       720, 1, 'Bootstrap search');
+('seed_clearing_search',           'clearinghouse',        'search_query',  'top clearinghouses derivatives 2026',                                       720, 1, 'Bootstrap search')
+ON CONFLICT(profile_type_id, seed_kind, value) DO UPDATE SET
+  refresh_interval_hours = excluded.refresh_interval_hours,
+  enabled                = excluded.enabled,
+  notes                  = excluded.notes;
+-- NOTE: counters (success_count, entity_count) and lifecycle
+-- (last_crawled_at) are intentionally NOT overwritten so historical
+-- telemetry survives re-runs of this migration.
