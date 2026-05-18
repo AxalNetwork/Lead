@@ -6,6 +6,7 @@
 // promote this to one once contention warrants it.
 
 import type { Env } from "../types";
+import { getThrottleFor } from "./adapters/intl/registry";
 
 const ROBOTS_TTL_MS = 24 * 3600 * 1000;
 const BACKOFF_LADDER_MS = [1_000, 2_000, 4_000, 16_000, 64_000];
@@ -211,7 +212,13 @@ export async function acquire(env: Env, url: string): Promise<AcquireResult> {
     return { ok: false, reason: "robots_disallow", host, waitedMs: 0,
              recommended_tier: row?.recommended_tier ?? 0 };
   }
-  const maxRps = row?.max_rps && row.max_rps > 0 ? row.max_rps : DEFAULT_MAX_RPS;
+  // Task #3: intl adapters declare per-host throttle at registration.
+  // When present, treat the registry value as the AUTHORITATIVE cap so a
+  // misconfigured crawler_host_config row can never exceed an adapter's
+  // declared politeness (e.g. CNMV at 0.5 rps).
+  const intlThrottle = getThrottleFor(host);
+  const rowRps = row?.max_rps && row.max_rps > 0 ? row.max_rps : DEFAULT_MAX_RPS;
+  const maxRps = intlThrottle ? Math.min(rowRps, intlThrottle.rps) : rowRps;
   const backoff = ladderDelayFor(row?.failure_count ?? 0);
   const wait = await pacerDelay(env, host, maxRps, rules.crawlDelayMs, backoff);
   // Cap the inline sleep at 30s — anything more should be deferred to
