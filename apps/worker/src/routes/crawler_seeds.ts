@@ -177,16 +177,38 @@ interface FrontierRow {
   enqueued_at: string | null;
 }
 
-// GET /api/crawl-frontier?profile_type_id=&status=&limit=
+// GET /api/crawl-frontier?profile_type_id=&status=&limit=&cursor=
+//
+// Cursor pagination. The frontier is ordered (priority DESC,
+// discovered_at ASC, id ASC). The cursor is the last-seen tuple
+// base64-encoded as `${priority}|${discovered_at}|${id}` so a follow-up
+// request gets the next page deterministically even as new rows arrive
+// at the head. `next_cursor` in the response is null when exhausted.
 crawlFrontierRoute.get("/", async (c) => {
   const profileTypeId = c.req.query("profile_type_id");
   const status = c.req.query("status");
   const limit = Math.max(1, Math.min(500, Number(c.req.query("limit") ?? "100")));
+  const cursorRaw = c.req.query("cursor");
 
   const wheres: string[] = [];
   const binds: Array<string | number> = [];
   if (profileTypeId) { wheres.push("profile_type_id = ?"); binds.push(profileTypeId); }
   if (status) { wheres.push("status = ?"); binds.push(status); }
+  if (cursorRaw) {
+    try {
+      const decoded = atob(cursorRaw);
+      const [pStr, dAt, lastId] = decoded.split("|");
+      const p = Number(pStr);
+      if (!Number.isFinite(p) || !dAt || !lastId) throw new Error("bad_cursor");
+      // Keyset predicate matching the ORDER BY tuple.
+      wheres.push(
+        "(priority < ? OR (priority = ? AND (discovered_at > ? OR (discovered_at = ? AND id > ?))))",
+      );
+      binds.push(p, p, dAt, dAt, lastId);
+    } catch {
+      return c.json({ error: "bad_cursor" }, 400);
+    }
+  }
   const where = wheres.length ? `WHERE ${wheres.join(" AND ")}` : "";
 
   const rows = await c.env.DB.prepare(
@@ -194,17 +216,29 @@ crawlFrontierRoute.get("/", async (c) => {
             source_url, source_authority, novelty_score, status,
             discovered_at, enqueued_at
        FROM smart_frontier ${where}
-       ORDER BY priority DESC, discovered_at ASC
+       ORDER BY priority DESC, discovered_at ASC, id ASC
        LIMIT ?`,
   ).bind(...binds, limit).all<FrontierRow>();
 
+  // status_counts deliberately ignores the cursor predicate — operators
+  // want the aggregate funnel, not "remaining after this page".
+  const aggBinds: Array<string | number> = [];
+  const aggWheres: string[] = [];
+  if (profileTypeId) { aggWheres.push("profile_type_id = ?"); aggBinds.push(profileTypeId); }
+  if (status) { aggWheres.push("status = ?"); aggBinds.push(status); }
+  const aggWhere = aggWheres.length ? `WHERE ${aggWheres.join(" AND ")}` : "";
   const counts = await c.env.DB.prepare(
-    `SELECT status, COUNT(*) AS n FROM smart_frontier ${where} GROUP BY status`,
-  ).bind(...binds).all<{ status: string; n: number }>();
+    `SELECT status, COUNT(*) AS n FROM smart_frontier ${aggWhere} GROUP BY status`,
+  ).bind(...aggBinds).all<{ status: string; n: number }>();
+
+  const results = rows.results ?? [];
+  const last = results.length === limit ? results[results.length - 1] : null;
+  const nextCursor = last ? btoa(`${last.priority}|${last.discovered_at}|${last.id}`) : null;
 
   return c.json({
-    count: rows.results?.length ?? 0,
-    candidates: rows.results ?? [],
+    count: results.length,
+    candidates: results,
     status_counts: counts.results ?? [],
+    next_cursor: nextCursor,
   });
 });
