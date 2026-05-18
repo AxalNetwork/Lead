@@ -416,7 +416,10 @@ export async function scoreBatch(env: Env, personaId: string, opts: { batchSize?
     // Task #3: dispatch through the kind plugin so each persona kind
     // selects its own candidate pool (e.g. investor_person filters
     // entity_roles.role IN ('investor','vc','gp','partner_at_firm')).
-    const { getPluginFor } = await import("./personas/kinds");
+    // Note: explicit .js extension here is required by tsconfig.test.json's
+    // NodeNext moduleResolution. The wrangler build / typecheck doesn't
+    // care; this is purely to unblock `pnpm test`.
+    const { getPluginFor } = await import("./personas/kinds/index.js");
     const plugin = getPluginFor(persona.kind);
     const filter = plugin.defaultEntityFilter(persona, { limit: batchSize, offset });
     const r = await env.DB.prepare(filter.sql).bind(...filter.binds).all<{ id: string }>();

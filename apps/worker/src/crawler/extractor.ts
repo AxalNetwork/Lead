@@ -10,6 +10,7 @@
 import type { Env } from "../types";
 import { loadRegistry, testPage, type ProfileType } from "../services/profileTypes";
 import { classifyPage, isNewsLike, type PageClassification, type PageType } from "../services/pageClassifier";
+import { runAdapter } from "./adapters";
 
 // Task #1 step 5: classifier-authoritative routing. Single source of
 // truth that maps a page_type to a downstream commit route. News-like
@@ -44,6 +45,14 @@ export interface ExtractionResult {
   // pick the right table downstream.
   classification: PageClassification | null;
   route: "entity" | "news_item" | "skip";
+  // Task #2: when a site adapter claimed the URL and produced a result,
+  // its id and child-URL set are surfaced here. `adapter_fallback`
+  // explains why we fell through to the generic extractor when the
+  // adapter was skipped.
+  adapter_used: string | null;
+  adapter_fallback: "no_adapter" | "adapter_threw" | "low_confidence" | null;
+  adapter_error: string | null;
+  child_urls: string[];
 }
 
 function parseJsonLd(html: string): Array<Record<string, unknown>> {
@@ -174,8 +183,33 @@ export async function extractCandidates(
   const result: ExtractionResult = {
     url, matched_types: [], candidates: [], used_ai: false, ai_error: null,
     classification: null, route: "skip",
+    adapter_used: null, adapter_fallback: null, adapter_error: null, child_urls: [],
   };
   if (!html) return result;
+
+  // Task #2 step 2: try a site-specific adapter first. On a confident
+  // result we still run the generic chain (so JSON-LD / OG / Readability
+  // / classifier all enrich the same candidate list), but the adapter's
+  // candidates take precedence in downstream merge ordering. On a
+  // throw / low-confidence / no-match we record the fallback reason and
+  // proceed exactly as before — a broken adapter must never block.
+  const adapterOutcome = runAdapter(url, html);
+  result.adapter_used = adapterOutcome.used_adapter_id;
+  result.adapter_fallback = adapterOutcome.fallback_reason;
+  result.adapter_error = adapterOutcome.adapter_error;
+  if (adapterOutcome.result) {
+    for (const c of adapterOutcome.result.candidates) {
+      result.candidates.push({
+        profile_type: c.profile_type,
+        confidence: c.confidence,
+        source: "ai_semantic", // tagged as semantic for downstream merge weight
+        name: c.name ?? null,
+        url: c.url ?? url,
+        data: c.data,
+      });
+    }
+    result.child_urls = adapterOutcome.result.child_urls.slice(0, 500);
+  }
 
   const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
   const title = titleMatch ? titleMatch[1].trim() : "";

@@ -7,6 +7,7 @@
 
 import type { Env } from "../types";
 import { acquire, recordOutcome, type AcquireResult } from "./hostThrottle";
+import { archiveHtml } from "./archive";
 
 // Task #1: per-host politeness goes through the HOST_THROTTLE Durable
 // Object when bound, so concurrent fetches of the same host see a
@@ -292,6 +293,9 @@ export async function crawlerFetch(env: Env, url: string, opts: FetchOptions = {
     last = r;
     if (r.ok) {
       await recordOutcomeViaThrottle(env, r.host, { ok: true, status: r.status, tierUsed: tier });
+      // Task #2 step 4: archive successful fetches in R2 (7-day TTL).
+      // Best-effort: archive failures must never break the crawl.
+      await archiveHtml(env, r.finalUrl || r.url, r.html);
       return r;
     }
     await recordOutcomeViaThrottle(env, r.host, { ok: false, status: r.status, tierUsed: tier });
