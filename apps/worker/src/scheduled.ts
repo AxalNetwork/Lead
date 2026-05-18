@@ -112,6 +112,47 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       } catch (e) {
         console.error("hourly edgar discovery failed", (e as Error).message);
       }
+      // Task #2 (People-at-Firms Tracker): weekly firm team-page
+      // snapshot + diff + corroborate + spinout + carry-heuristic.
+      // Piggybacks the hourly tick (Free plan caps crons at 5/5).
+      // Each phase is bounded so a single tick fits in the budget;
+      // per-firm gating in snapshot.runWeeklySnapshotSweep ensures a
+      // firm is only re-snapshotted if its last snapshot is >7d old.
+      try {
+        const { runWeeklySnapshotSweep } = await import("./services/movements/snapshot");
+        const snapRes = await runWeeklySnapshotSweep(env, 25);
+        if (snapRes.picked > 0) console.log("hourly movements snapshot", JSON.stringify(snapRes));
+      } catch (e) {
+        console.error("hourly movements snapshot failed", (e as Error).message);
+      }
+      try {
+        const { runDiffSweep } = await import("./services/movements/differ");
+        const diffRes = await runDiffSweep(env, 50);
+        if (diffRes.firms > 0) console.log("hourly movements diff", JSON.stringify(diffRes));
+      } catch (e) {
+        console.error("hourly movements diff failed", (e as Error).message);
+      }
+      try {
+        const { runCorroborationSweep } = await import("./services/movements/corroborate");
+        const corrRes = await runCorroborationSweep(env, 100);
+        if (corrRes.picked > 0) console.log("hourly movements corroborate", JSON.stringify(corrRes));
+      } catch (e) {
+        console.error("hourly movements corroborate failed", (e as Error).message);
+      }
+      try {
+        const { runSpinoutSweep } = await import("./services/movements/spinout");
+        const spinRes = await runSpinoutSweep(env, 50);
+        if (spinRes.spinouts_emitted > 0) console.log("hourly movements spinout", JSON.stringify(spinRes));
+      } catch (e) {
+        console.error("hourly movements spinout failed", (e as Error).message);
+      }
+      try {
+        const { runCarrySweep } = await import("./services/movements/carry");
+        const carryRes = await runCarrySweep(env, 25);
+        if (carryRes.firms > 0) console.log("hourly movements carry", JSON.stringify(carryRes));
+      } catch (e) {
+        console.error("hourly movements carry failed", (e as Error).message);
+      }
       // Task #2: hourly adapter-drift check. Compares parse-success rate
       // over the last 7 days vs the prior 7 days for each profile-type
       // workflow; emits one ops_audit row per significant drop (>=30pp).
