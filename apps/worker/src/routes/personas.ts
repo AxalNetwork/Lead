@@ -166,7 +166,40 @@ function offShapeFields(kind: string | undefined, fields: Record<string, unknown
     const sec = SECTION_FOR_FIELD[k];
     if (sec && !allowed.has(sec)) bad.push(k);
   }
+  // Hint-field validation: keys under hard_filters_json.hints must
+  // appear in def.hints for this kind. Unknown hint keys are rejected
+  // so a hand-crafted body can't smuggle off-shape hints in via the
+  // free-form JSON column.
+  const hf = fields["hard_filters_json"];
+  let hfObj: Record<string, unknown> | null = null;
+  if (hf && typeof hf === "object" && !Array.isArray(hf)) hfObj = hf as Record<string, unknown>;
+  else if (typeof hf === "string" && hf.trim()) {
+    try { const j = JSON.parse(hf); if (j && typeof j === "object" && !Array.isArray(j)) hfObj = j as Record<string, unknown>; } catch { /* ignore */ }
+  }
+  if (hfObj && hfObj.hints && typeof hfObj.hints === "object" && !Array.isArray(hfObj.hints)) {
+    const allowedHints = new Set<string>(def.hints);
+    for (const hk of Object.keys(hfObj.hints as Record<string, unknown>)) {
+      if (!allowedHints.has(hk)) bad.push(`hint:${hk}`);
+    }
+  }
   return bad;
+}
+
+// Task #3: build the effective full row for PATCH validation by
+// merging the incoming patch on top of the existing persona, so a
+// patch that changes only `kind` still catches stale criteria from
+// disallowed sections already persisted in the row.
+function mergePatchForValidation(existing: PersonaRow | null | undefined, patch: Record<string, unknown>): Record<string, unknown> {
+  const merged: Record<string, unknown> = {};
+  if (existing) {
+    for (const k of Object.keys(SECTION_FOR_FIELD)) {
+      const v = (existing as unknown as Record<string, unknown>)[k];
+      if (v !== undefined && v !== null && v !== "") merged[k] = v;
+    }
+    if (existing.hard_filters_json) merged.hard_filters_json = existing.hard_filters_json;
+  }
+  for (const [k, v] of Object.entries(patch)) merged[k] = v;
+  return merged;
 }
 
 function previewSpecFromBody(body: Record<string, unknown>): PersonaSpec & { name: string; thesis: string | null } {
@@ -272,16 +305,20 @@ personasRoute.patch("/:id", async (c) => {
   // Task #3: validate + resolve kind on PATCH too, then strip
   // off-shape criteria so the row stays consistent with the kind.
   let effectiveKind: string | undefined;
+  const existingRow = await getPersona(c.env, id);
   if (typeof body.kind === "string") {
     const k = resolveKindStatic(body.kind);
     if (!k) return c.json({ error: "bad_request", message: `unknown kind: ${body.kind}` }, 400);
     fields.kind = k;
     effectiveKind = k;
   } else {
-    const existing = await getPersona(c.env, id);
-    effectiveKind = existing?.kind;
+    effectiveKind = existingRow?.kind;
   }
-  const badPatch = offShapeFields(effectiveKind, fields);
+  // Validate the effective full row (existing + patch). This catches
+  // the case where a client PATCHes only `kind` and the previously
+  // stored criteria are now off-shape for the new kind.
+  const merged = mergePatchForValidation(existingRow, fields);
+  const badPatch = offShapeFields(effectiveKind, merged);
   if (badPatch.length) {
     return c.json({ error: "off_shape_criteria", kind: effectiveKind, fields: badPatch, message: `fields ${badPatch.join(", ")} not allowed for kind ${effectiveKind}` }, 400);
   }

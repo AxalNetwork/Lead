@@ -15,7 +15,7 @@ import { assertBudget } from "../ai/budget";
 import { getPersona, type PersonaRow } from "../personas/repo";
 import type { PersonaSpec } from "../personas/score";
 import {
-  DEFAULT_WEIGHTS, MODEL_VERSION, type ComponentKey, type ComponentMap,
+  DEFAULT_WEIGHTS, MODEL_VERSION, type ComponentKey, type ComponentMap, type ScoreComponentResult as _ScoreComponentResult,
   type MatchResult, type ScoreComponentResult, type PersonaTargets,
   cosine, aggregate, buildRationale, extractTargets,
   scoreSeniority, scoreFunction, scoreIndustry, scoreCompanySize, scoreStage, scoreGeo,
@@ -23,6 +23,20 @@ import {
 
 export { DEFAULT_WEIGHTS, MODEL_VERSION, extractTargets };
 export type { MatchResult, ComponentMap, ComponentKey, ScoreComponentResult, PersonaTargets };
+
+// Task #3: structural-only fallback used when a kind plugin returns
+// null (e.g. fund/company targets that have no per-entity scoring
+// pipeline). Builds a properly-typed ComponentMap with zeroed
+// components so downstream consumers (rationale builder, persistence)
+// don't have to special-case the structural row. Replaces an earlier
+// `as unknown as MatchResult` cast that bypassed the type system.
+export function buildStructuralFallback(reason: string): MatchResult {
+  const components = {} as ComponentMap;
+  for (const key of Object.keys(DEFAULT_WEIGHTS) as ComponentKey[]) {
+    components[key] = { value: 0, weight: 0, reason: "n/a (structural fallback)" } satisfies _ScoreComponentResult;
+  }
+  return { score: 0.5, components, rationale: reason };
+}
 
 export interface PersonEntity {
   id: string;
@@ -419,13 +433,7 @@ export async function scoreBatch(env: Env, personaId: string, opts: { batchSize?
         // persist a deterministic structural-match row at score 50
         // so non-person kinds still surface candidates in the UI.
         let res = await plugin.scoreEntity(env, persona, id);
-        if (!res) {
-          res = {
-            score: 0.5,
-            components: { role_match: { value: 1, weight: 1, reason: plugin.explainMatch(id) } } as unknown as MatchResult["components"],
-            rationale: plugin.explainMatch(id),
-          } as MatchResult;
-        }
+        if (!res) res = buildStructuralFallback(plugin.explainMatch(id));
         await upsertMatch(env, personaId, id, res);
         scored += 1;
       } catch (e) {
