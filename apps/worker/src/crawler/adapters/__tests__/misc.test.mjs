@@ -101,7 +101,12 @@ test("runAdapter drops low-confidence result so generic extractor takes over", (
   }
 });
 
-test("archiveKey is day-prefixed and 16-hex sliced for lifecycle policy", () => {
-  const k = archiveKey("https://example.com/x", "2025-05-18T12:00:00Z", "a".repeat(64));
-  assert.equal(k, "crawler/2025-05-18/aaaaaaaaaaaaaaaa.html");
+test("archiveKey is day-prefixed, 16-hex sliced, AND time-suffixed so same-day refetches don't overwrite", () => {
+  const morning = archiveKey("https://example.com/x", "2025-05-18T01:02:03.456Z", "a".repeat(64));
+  const evening = archiveKey("https://example.com/x", "2025-05-18T22:00:00.000Z", "a".repeat(64));
+  assert.equal(morning, "crawler/2025-05-18/aaaaaaaaaaaaaaaa-010203456.html");
+  assert.notEqual(morning, evening, "same URL on same day must yield distinct keys");
+  // Lex order: morning sorts before evening, so a list() sort surfaces
+  // the latest snapshot at the tail (relied on by readArchive).
+  assert.ok(morning < evening);
 });
