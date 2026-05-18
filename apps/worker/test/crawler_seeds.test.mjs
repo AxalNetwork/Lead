@@ -274,3 +274,108 @@ test("POST /api/crawler-seeds/:id/run uses runSeedById, not bulk sweep", () => {
   // It must NOT mutate last_crawled_at on the way in (that was the old bug).
   assert.doesNotMatch(src, /UPDATE crawler_seeds SET last_crawled_at = NULL/);
 });
+
+test("expandFrontier executes INSERT OR IGNORE + UPDATE against stub DB", async () => {
+  const { expandFrontier } = await import("../test-dist/services/frontier/expand.js");
+  const inserts = [];
+  const updates = [];
+  let rowCount = 0;
+  const env = {
+    DB: {
+      prepare(sql) {
+        const binds = [];
+        const trimmed = sql.replace(/\s+/g, " ").trim();
+        return {
+          bind(...args) { binds.push(...args); return this; },
+          async all() { return { results: [] }; },
+          async first() { return null; },
+          async run() {
+            if (trimmed.startsWith("INSERT OR IGNORE INTO smart_frontier")) {
+              inserts.push(binds);
+              // Simulate dedup: 2nd insert of the same canonical+type yields 0 changes.
+              const key = `${binds[2]}|${binds[4]}`;
+              if (inserts.filter((b) => `${b[2]}|${b[4]}` === key).length > 1) {
+                return { success: true, meta: { changes: 0 } };
+              }
+              rowCount++;
+              return { success: true, meta: { changes: 1 } };
+            }
+            if (trimmed.startsWith("UPDATE smart_frontier")) {
+              updates.push(binds);
+              return { success: true, meta: { changes: 1 } };
+            }
+            return { success: true, meta: { changes: 0 } };
+          },
+        };
+      },
+    },
+  };
+  // First call: 1 candidate -> 1 insert, 0 updates.
+  const links = [{ url: "https://a16z.com/team/alice", anchor: "Alice" }];
+  const r1 = await expandFrontier(env, {
+    sourceUrl: "https://a16z.com/team/",
+    sourceHost: "a16z.com",
+    profileTypeId: "investor_vc",
+    links,
+  });
+  assert.equal(r1.inserted, 1, "first expansion inserts the row");
+  assert.equal(inserts.length, 1);
+  assert.equal(updates.length, 0);
+  // SQL parameter shape: id, url, canonical, host, type, reason, prio, source, auth, novelty.
+  assert.equal(inserts[0].length, 10, "insert binds 10 columns");
+  assert.equal(inserts[0][4], "investor_vc", "profile_type_id threaded into insert");
+
+  // Second call: same link -> 0 inserts, 1 update (dedup path exercised).
+  const r2 = await expandFrontier(env, {
+    sourceUrl: "https://a16z.com/team/",
+    sourceHost: "a16z.com",
+    profileTypeId: "investor_vc",
+    links,
+  });
+  assert.equal(r2.inserted, 0, "re-expansion does not double-insert");
+  assert.equal(inserts.length, 2, "INSERT OR IGNORE still attempted (and ignored)");
+  assert.equal(updates.length, 1, "update path runs when insert returns 0 changes");
+  // Update binds: 3 SET (priority, source_authority, novelty_score) + 2 WHERE
+  // (url_canonical, profile_type_id) = 5 total. discovered_at uses CURRENT_TIMESTAMP, no bind.
+  assert.equal(updates[0].length, 5, "update binds 5 params");
+  assert.equal(updates[0][4], "investor_vc", "update WHERE uses profile_type_id");
+});
+
+test("expandFrontier untyped (NULL profile_type_id) takes UPDATE path with NULL bind", async () => {
+  const { expandFrontier } = await import("../test-dist/services/frontier/expand.js");
+  let insertCalls = 0;
+  let updateBinds = null;
+  const env = {
+    DB: {
+      prepare(sql) {
+        const binds = [];
+        const trimmed = sql.replace(/\s+/g, " ").trim();
+        return {
+          bind(...args) { binds.push(...args); return this; },
+          async all() { return { results: [] }; },
+          async first() { return null; },
+          async run() {
+            if (trimmed.startsWith("INSERT OR IGNORE INTO smart_frontier")) {
+              insertCalls++;
+              return { success: true, meta: { changes: 0 } };
+            }
+            if (trimmed.startsWith("UPDATE smart_frontier")) {
+              updateBinds = binds;
+              return { success: true, meta: { changes: 1 } };
+            }
+            return { success: true, meta: { changes: 0 } };
+          },
+        };
+      },
+    },
+  };
+  await expandFrontier(env, {
+    sourceUrl: "https://example.com/team/",
+    sourceHost: "example.com",
+    profileTypeId: null,
+    links: [{ url: "https://example.com/team/bob", anchor: "Bob" }],
+  });
+  assert.equal(insertCalls, 1, "insert still attempted for untyped row");
+  assert.ok(updateBinds, "update path ran when insert ignored");
+  assert.equal(updateBinds[4], null, "WHERE profile_type_id IS NULL bind preserved");
+});

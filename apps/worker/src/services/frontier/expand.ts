@@ -230,23 +230,52 @@ export async function expandFrontier(
       if (used >= GLOBAL_PER_TYPE_PER_CYCLE) { capped++; continue; }
       cycleCounters.set(key, used + 1);
     }
+    // Two-step upsert. We can't use ON CONFLICT with an expression-index
+    // target reliably across SQLite versions, and the original auto-index
+    // for the UNIQUE(profile_type_id, url_canonical) constraint treats
+    // NULL as distinct (so untyped rows would never conflict there).
+    // Both branches together correctly dedup typed AND untyped rows:
+    //   1) INSERT OR IGNORE — IGNOREs duplicates against EITHER the
+    //      original UNIQUE constraint (typed rows) OR uq_sf_type_canon
+    //      (the COALESCE expression index from migration 344, which
+    //      catches NULL-typed rows the auto-index misses).
+    //   2) If no row was inserted (changes === 0), UPDATE the existing
+    //      row to refresh priority/authority/novelty. The WHERE uses
+    //      IS-comparison so NULL profile_type_id matches NULL.
     try {
-      const r = await env.DB.prepare(
-        `INSERT INTO smart_frontier (id, url, url_canonical, host, profile_type_id, discovery_reason,
-                                     priority, source_url, source_authority, novelty_score, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued')
-         ON CONFLICT(COALESCE(profile_type_id, ''), url_canonical) DO UPDATE SET
-           priority         = MAX(smart_frontier.priority, excluded.priority),
-           source_authority = excluded.source_authority,
-           novelty_score    = excluded.novelty_score,
-           discovered_at    = CURRENT_TIMESTAMP`,
+      const ins = await env.DB.prepare(
+        `INSERT OR IGNORE INTO smart_frontier (id, url, url_canonical, host, profile_type_id, discovery_reason,
+                                               priority, source_url, source_authority, novelty_score, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued')`,
       ).bind(
         crypto.randomUUID(), c.url, c.url_canonical, c.host, c.profile_type_id,
         c.discovery_reason, c.priority, c.source_url, c.source_authority, c.novelty_score,
       ).run();
-      if (r?.meta?.changes && r.meta.changes > 0) inserted++;
+      const insertedThisRow = !!(ins?.meta?.changes && ins.meta.changes > 0);
+      if (insertedThisRow) {
+        inserted++;
+      } else {
+        // Existing row — bump priority to MAX(old, new) and refresh the
+        // soft metadata. Failure here is a real error (not a dedup), so
+        // surface it instead of swallowing silently.
+        const upd = await env.DB.prepare(
+          `UPDATE smart_frontier
+              SET priority         = MAX(priority, ?),
+                  source_authority = ?,
+                  novelty_score    = ?,
+                  discovered_at    = CURRENT_TIMESTAMP
+            WHERE url_canonical = ?
+              AND profile_type_id IS ?`,
+        ).bind(c.priority, c.source_authority, c.novelty_score, c.url_canonical, c.profile_type_id).run();
+        if (!upd?.success) {
+          console.warn("expandFrontier update failed", c.url_canonical);
+        }
+      }
     } catch (e) {
-      console.warn("expandFrontier insert failed", c.url_canonical, (e as Error).message);
+      // No longer silently fatal — log with full context so an operator
+      // grepping for `smart_frontier_insert_failed` can see total
+      // expansion failure rather than mistaking it for "no candidates".
+      console.warn("smart_frontier_insert_failed", c.url_canonical, c.profile_type_id, (e as Error).message);
     }
   }
   return { inserted, candidates, capped };

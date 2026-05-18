@@ -20,6 +20,8 @@
     "src/types.ts",
     "src/discovery/canonical.ts",
     "src/services/crawlerSeeds/lookup.ts",
+    "src/services/frontier/expand.ts",
+    "src/news/reputability.ts",
     "src/agent/registry.ts",
     "src/agent/diff.ts",
     "src/agent/tools-validation.ts",
