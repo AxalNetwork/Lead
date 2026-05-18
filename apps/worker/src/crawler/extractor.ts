@@ -254,6 +254,26 @@ export async function extractCandidates(
         console.warn("lpDisclosure persist failed", url, (e as Error).message);
       }
     }
+
+    // Task #3: deal_announcement persist side-effect. Every deal feed
+    // adapter (techcrunch, prNewswire, businessWire, …) emits
+    // `profile_type === 'deal_announcement'` with a typed DealCandidate
+    // in `candidate.data`. Route each through the dedicated persist
+    // layer (deal_events + deal_participants + canonical fact writes,
+    // idempotent on UNIQUE(dedupe_key)). A persist failure must never
+    // block extraction.
+    for (const cand of adapterOutcome.result.candidates) {
+      if (cand.profile_type !== "deal_announcement") continue;
+      const payload = cand.data as unknown as
+        import("../services/deals/types").DealCandidate | undefined;
+      if (!payload || !payload.company_name_raw || !payload.source_url) continue;
+      try {
+        const { persistDeal } = await import("../services/deals/persist");
+        await persistDeal(env, payload, `deal_feed:${adapterOutcome.used_adapter_id}`);
+      } catch (e) {
+        console.warn("deal persist failed", url, (e as Error).message);
+      }
+    }
   }
 
   const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);

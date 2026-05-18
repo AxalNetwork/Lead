@@ -31,6 +31,7 @@ import { governmentRosters } from "./governmentRosters";
 import { venturePartnerListings } from "./venturePartnerListings";
 import { CONFERENCE_ADAPTERS } from "./conferenceAdapters";
 import { LP_DISCLOSURE_ADAPTERS } from "./lpDisclosures";
+import { DEAL_FEED_ADAPTERS } from "./deals";
 
 // Source-of-truth registry. Order is irrelevant — selection is by
 // (host match, url pattern match, then priority desc).
@@ -43,6 +44,7 @@ export const ADAPTERS: SiteAdapter[] = [
   thinkTankRosters, governmentRosters, venturePartnerListings,
   ...CONFERENCE_ADAPTERS,
   ...LP_DISCLOSURE_ADAPTERS,
+  ...DEAL_FEED_ADAPTERS,
 ];
 
 /** Returns the highest-priority adapter that claims the URL, or null. */

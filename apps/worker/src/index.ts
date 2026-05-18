@@ -52,6 +52,7 @@ import { crawlerRoute } from "./routes/crawler";
 import { crawlerSeedsRoute, crawlFrontierRoute } from "./routes/crawler_seeds";
 import { vcSourcesRoute } from "./routes/vc_sources";
 import { lpsRoute, fundsLpRoute, firmsLpRoute } from "./routes/lps";
+import { dealsRoute, companiesDealsRoute, investorsDealsRoute } from "./routes/deals";
 export { EntityLock } from "./do/EntityLock";
 export { HostThrottle } from "./do/HostThrottle";
 export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, PersonaEntityMatchWorkflow, PersonaMatchRefreshWorkflow, PersonaMatchEntityWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, AIProfileFillerWorkflow, AIProfileFillerBatchWorkflow, RefreshGovernmentWorkflow, DiscoverFromSeedWorkflow, CrawlFrontierWorkflow, MonitorEntityWorkflow, MonitorBatchWorkflow, DigestWorkflow, IndividualProfilerWorkflow } from "./ai/workflows";
@@ -158,6 +159,9 @@ api.route("/api/vc-sources", vcSourcesRoute);
 api.route("/api/lps", lpsRoute);
 api.route("/api/funds", fundsLpRoute);
 api.route("/api/firms", firmsLpRoute);
+api.route("/api/deals", dealsRoute);
+api.route("/api/companies", companiesDealsRoute);
+api.route("/api/investors", investorsDealsRoute);
 
 api.notFound((c) => c.json({ error: "not_found", request_id: c.var.request_id }, 404));
 api.onError((err, c) => {

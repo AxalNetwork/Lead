@@ -240,6 +240,17 @@ async function persistFormD(env: Env, h: FilingHeader, d: FormDPayload, source: 
   }
 
   await recordFilingHeader(env, h, xref.entity_id, d);
+  // Task #3: synthesize a deal_event row from the already-parsed Form D
+  // payload. The deal persist layer dedupes against any press-wire
+  // corroboration for the same (company, round, month) bucket and
+  // assigns SEC the highest source-authority rank. Best-effort: a
+  // failure here must never block the structured Form D row.
+  try {
+    const { synthesizeDealFromFormD } = await import("../deals/persist");
+    await synthesizeDealFromFormD(env, h, d);
+  } catch (e) {
+    console.warn("synthesizeDealFromFormD failed", h.accession_no, (e as Error).message);
+  }
   return { accession_no: h.accession_no, entity_id: xref.entity_id, facts_written: facts, rows_written: 1, skipped: false };
 }
 
@@ -445,6 +456,14 @@ async function persist8K(env: Env, h: FilingHeader, d: Form8KPayload, source: st
     facts++;
   }
   await recordFilingHeader(env, h, xref.entity_id, d);
+  // Task #3: synthesize deal_events from 8-K items that map to funding
+  // / acquisition events (Item 1.01, 2.01, 3.02, 8.01). Best-effort.
+  try {
+    const { synthesizeDealFromForm8K } = await import("../deals/persist");
+    await synthesizeDealFromForm8K(env, h, d);
+  } catch (e) {
+    console.warn("synthesizeDealFromForm8K failed", h.accession_no, (e as Error).message);
+  }
   return { accession_no: h.accession_no, entity_id: xref.entity_id, facts_written: facts, rows_written: 0, skipped: false };
 }
 
