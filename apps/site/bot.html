@@ -1,0 +1,51 @@
+---
+layout: default
+title: AxalVCBot
+permalink: /bot
+---
+
+<h1>AxalVCBot/1.0</h1>
+
+<p>
+  <code>AxalVCBot/1.0 (+https://axal.vc/bot)</code> is the public
+  web-crawler operated by Axal Network on behalf of the AI Data Signal
+  platform. It reads publicly available pages to keep our profile data
+  fresh — investors, lawyers, founders, journalists, public-sector
+  organizations, and similar professional profiles.
+</p>
+
+<h2>What we do</h2>
+<ul>
+  <li>Fetch only public pages over HTTPS, identifying ourselves with the User-Agent above.</li>
+  <li>Respect <code>robots.txt</code> for both <code>User-agent: *</code> and <code>User-agent: AxalVCBot</code> directives, including <code>Crawl-delay</code>.</li>
+  <li>Cap our request rate at roughly one request every two seconds per host by default.</li>
+  <li>On <code>429</code> or <code>503</code> we back off exponentially and quarantine the host for up to one hour.</li>
+  <li>Cache <code>robots.txt</code> for 24 hours.</li>
+</ul>
+
+<h2>What we don't do</h2>
+<ul>
+  <li>We do not log into any service, submit forms, or attempt to bypass paywalls or authentication.</li>
+  <li>We do not crawl content marked non-public, gated, or otherwise off-limits by your site.</li>
+  <li>We do not use commercial proxy services or rotate identities to defeat blocks.</li>
+  <li>We do not collect personal data beyond what is already public on a professional profile page.</li>
+</ul>
+
+<h2>How to block us</h2>
+<p>Add the following to <code>/robots.txt</code>:</p>
+<pre><code>User-agent: AxalVCBot
+Disallow: /</code></pre>
+
+<p>To restrict us to specific directories:</p>
+<pre><code>User-agent: AxalVCBot
+Disallow: /admin/
+Disallow: /private/
+Crawl-delay: 10</code></pre>
+
+<p>We honor these directives within 24 hours of the cache TTL expiring.</p>
+
+<h2>Contact</h2>
+<p>
+  Questions, removal requests, or rate-limit concerns:
+  <a href="mailto:guillaumelauzier@gmail.com">guillaumelauzier@gmail.com</a>.
+</p>
