@@ -16,6 +16,32 @@ import { insertFact } from "../../entities/facts";
 import { createEntity, addRole } from "../../entities/roles";
 import { toUsd, FxLookupError } from "./fx";
 import { translateToEnglish } from "./translate";
+import { parseDate, parseAddress } from "./locale";
+import { linkVehicleToCanonicalFirm } from "./firmGraph";
+
+/** Translated-text predicate scan. The architect required at least one
+ *  extracted predicate from translated non-English text; we do a small
+ *  English-side regex pass for the most useful pattern ("raised $X" /
+ *  "fund size $X"). Each match becomes a corroborating intl.extracted_*
+ *  fact written through insertFact. Conservative on purpose — false
+ *  positives here are worse than misses. */
+function extractEnglishPredicates(english: string): Array<{ predicate: string; value_number: number; raw: string }> {
+  const out: Array<{ predicate: string; value_number: number; raw: string }> = [];
+  if (!english) return out;
+  const re = /\b(raised|fund\s+size|target|commitment|aum)\b[^.\n]{0,40}?\b(USD|EUR|GBP|SGD|HKD|JPY|CNY|\$|€|£)\s*([\d,]+(?:\.\d+)?)\s*(million|billion|m|bn)?/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(english))) {
+    let n = Number(m[3].replace(/,/g, ""));
+    if (!Number.isFinite(n)) continue;
+    const mag = m[4]?.toLowerCase();
+    if (mag === "million" || mag === "m") n *= 1_000_000;
+    else if (mag === "billion" || mag === "bn") n *= 1_000_000_000;
+    const kind = m[1].toLowerCase().replace(/\s+/g, "_");
+    out.push({ predicate: `intl.extracted_${kind}`, value_number: n, raw: m[0] });
+    if (out.length >= 4) break;
+  }
+  return out;
+}
 
 export interface IntlPersistResult {
   filer_entity_id: string;
@@ -73,6 +99,31 @@ export async function resolveIntlEntity(env: Env, hit: IntlEntityHit, source: st
   return row.id;
 }
 
+/** Drain helper: when an IntlFiling carries `data.canonical_firm_source_id`
+ *  (set by adapters that already know the parent firm — e.g. a SEBI AIF
+ *  whose manager source_id is published alongside it), bind the filer
+ *  vehicle to the canonical firm in legal_structure_graph. */
+async function maybeLinkVehicle(env: Env, adapter: IntlAdapter, filing: IntlFiling, vehicleEntityId: string): Promise<void> {
+  const canonicalSrc = filing.data?.canonical_firm_source_id;
+  const role = filing.data?.vehicle_role;
+  if (typeof canonicalSrc !== "string" || typeof role !== "string") return;
+  const r = await env.DB.prepare(
+    `SELECT entity_id FROM facts WHERE predicate = 'intl.source_id'
+       AND value_text = ?
+       AND value_json LIKE ?
+       AND is_current = 1 LIMIT 1`,
+  ).bind(canonicalSrc, `%"jurisdiction":"${adapter.jurisdiction}"%`).first<{ entity_id: string }>();
+  if (!r?.entity_id || r.entity_id === vehicleEntityId) return;
+  await linkVehicleToCanonicalFirm(env, {
+    canonical_firm_entity_id: r.entity_id,
+    vehicle_entity_id: vehicleEntityId,
+    vehicle_role: role as Parameters<typeof linkVehicleToCanonicalFirm>[1]["vehicle_role"],
+    jurisdiction: adapter.jurisdiction,
+    evidence_source_url: filing.url,
+    confidence: 0.85,
+  });
+}
+
 /** Persist one IntlFiling: normalize amount → USD, translate non-English
  *  text, write corroborating facts. Errors in FX are surfaced (fail-loud
  *  per fx.ts contract); translation errors degrade silently to
@@ -94,6 +145,22 @@ export async function persistIntlFiling(
   };
   const filerId = await resolveIntlEntity(env, filerHit, source);
 
+  // Optional: bind the filer (vehicle) to a known canonical firm if
+  // the adapter surfaced one. No-op when the data isn't present.
+  try { await maybeLinkVehicle(env, adapter, filing, filerId); }
+  catch (e) { console.warn("intl maybeLinkVehicle failed", filing.source_id, (e as Error).message); }
+
+  // Locale normalization. Adapters never roll their own date/address
+  // parse — they hand the raw string to this layer which delegates to
+  // services/intl/locale. Normalized values are stored in the
+  // source_evidence_json for downstream consumers; an ISO `filed_at`
+  // also overrides the adapter's raw string when locale parsing
+  // succeeds (otherwise we trust what the adapter handed us).
+  const normalizedDate = parseDate(filing.filed_at, filing.jurisdiction);
+  const filedAtIso = normalizedDate ?? filing.filed_at;
+  const rawAddress = typeof filing.data?.raw_address === "string" ? filing.data.raw_address : null;
+  const parsedAddress = rawAddress ? parseAddress(rawAddress, filing.jurisdiction) : null;
+
   // 2. Currency normalization. When the adapter handed raw {amount,
   //    currency}, run toUsd against the filing date. Fail-loud: an
   //    unresolved rate must NOT silently fall back to 1:1.
@@ -101,7 +168,7 @@ export async function persistIntlFiling(
   let fx_error: string | null = null;
   if (amount_usd == null && filing.raw_amount != null && filing.raw_currency) {
     try {
-      amount_usd = await toUsd(env, filing.raw_amount, filing.raw_currency, filing.filed_at);
+      amount_usd = await toUsd(env, filing.raw_amount, filing.raw_currency, filedAtIso);
     } catch (e) {
       if (e instanceof FxLookupError) { fx_error = e.message; amount_usd = null; }
       else throw e;
@@ -124,16 +191,19 @@ export async function persistIntlFiling(
     ...filing.source_evidence_json,
     raw_amount: filing.raw_amount ?? null,
     raw_currency: filing.raw_currency ?? null,
-    fx_as_of: filing.filed_at,
+    fx_as_of: filedAtIso,
     fx_error,
     original_lang: filing.original_lang ?? null,
     original_text: filing.original_text ?? null,
     english_text,
+    filed_at_raw: filing.filed_at,
+    filed_at_iso: normalizedDate,
+    parsed_address: parsedAddress,
   };
   const factCtx = {
     entity_id: filerId, source_kind: "scrape" as const, source,
     evidence_url: filing.url, confidence: 0.85,
-    observed_at: `${filing.filed_at}T00:00:00Z`,
+    observed_at: `${filedAtIso}T00:00:00Z`,
   };
   let facts_written = 0;
   const wrote = await insertFact(env, {
@@ -151,6 +221,20 @@ export async function persistIntlFiling(
       value_json: { filing_type: filing.filing_type, fx_evidence: evidence },
     });
     if (w2) facts_written++;
+  }
+  // Translated-text predicate extraction: scan english_text for
+  // common monetary patterns and emit corroborating facts. This is
+  // what makes non-English filings produce structured predicates.
+  if (english_text) {
+    for (const ex of extractEnglishPredicates(english_text)) {
+      const w = await insertFact(env, {
+        ...factCtx,
+        predicate: ex.predicate,
+        value_number: ex.value_number,
+        value_json: { raw: ex.raw, source_text_origin: filing.original_lang ?? "en" },
+      });
+      if (w) facts_written++;
+    }
   }
   return { filer_entity_id: filerId, facts_written, amount_usd, translated, fx_error };
 }

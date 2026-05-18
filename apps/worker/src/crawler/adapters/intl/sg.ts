@@ -31,6 +31,22 @@ function parseCompany(html: string, url: string): IntlEntityHit | null {
   };
 }
 
+/** Pull a {raw_amount, raw_currency} from the local context around a
+ *  filing row. MAS notices often include the fund size or AUM as
+ *  "SGD 50 million" / "USD 1.2 billion" — adapters that surface those
+ *  let persistIntlFiling call toUsd. */
+function extractAmount(window: string): { raw_amount: number | null; raw_currency: string | null } {
+  const m = /\b(SGD|USD|EUR|HKD|CNY|JPY|GBP)\s*([\d,]+(?:\.\d+)?)\s*(million|billion|m|bn)?\b/i.exec(window);
+  if (!m) return { raw_amount: null, raw_currency: null };
+  const cur = m[1].toUpperCase();
+  let n = Number(m[2].replace(/,/g, ""));
+  if (!Number.isFinite(n)) return { raw_amount: null, raw_currency: null };
+  const mag = m[3]?.toLowerCase();
+  if (mag === "million" || mag === "m") n *= 1_000_000;
+  else if (mag === "billion" || mag === "bn") n *= 1_000_000_000;
+  return { raw_amount: n, raw_currency: cur };
+}
+
 function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   const out: IntlFiling[] = [];
   const text = safeText(html);
@@ -46,11 +62,16 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
     const mm = monthMap[parts[1].slice(0, 3).toLowerCase()];
     const yy = parts[2];
     if (!mm) continue;
+    // Pull a small context window for amount extraction.
+    const start = Math.max(0, m.index - 80);
+    const end = Math.min(text.length, m.index + m[0].length + 200);
+    const { raw_amount, raw_currency } = extractAmount(text.slice(start, end));
     out.push({
       jurisdiction: "SG", source_id: `mas:${yy}-${mm}-${dd}:${m[2].slice(0,40)}`,
       filer_name: m[2].trim(), filing_type: `mas-${m[3].toLowerCase()}`,
       filed_at: `${yy}-${mm}-${dd}`, url,
-      data: {}, source_evidence_json: { row: m[0] },
+      raw_amount, raw_currency,
+      data: {}, source_evidence_json: { row: m[0], window: text.slice(start, end) },
     });
     if (out.length >= 100) break;
   }

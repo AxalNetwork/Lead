@@ -162,17 +162,37 @@ export function pathAllowed(rules: RobotsRules, path: string): boolean {
 // `extraBackoffMs` (from the 429/503 ladder) is added on top of the
 // regular per-host minimum interval so a host that just rate-limited
 // us gets its mandatory cooldown before the next attempt.
-async function pacerDelay(env: Env, host: string, maxRps: number, crawlDelayMs: number, extraBackoffMs: number): Promise<number> {
+async function pacerDelay(env: Env, host: string, maxRps: number, crawlDelayMs: number, extraBackoffMs: number, burst: number): Promise<number> {
+  // Token-bucket pacing. The "minimum interval" is the steady-state
+  // gap between requests at maxRps. `burst` (>=1) allows that many
+  // requests back-to-back before the gap is enforced — implemented as
+  // a deficit counter stored alongside the timestamp.
+  const burstSize = Math.max(1, Math.floor(burst));
   const minIntervalMs = Math.max(Math.floor(1000 / Math.max(maxRps, 0.05)), crawlDelayMs) + Math.max(0, extraBackoffMs);
   if (!env.SCRAPE_CACHE) return Math.max(0, extraBackoffMs);
   const key = `crawler:pacer:${host}`;
   const raw = await env.SCRAPE_CACHE.get(key);
   const now = Date.now();
-  let last = 0;
-  if (raw) { const n = Number(raw); if (!Number.isNaN(n)) last = n; }
-  const wait = Math.max(0, last + minIntervalMs - now);
-  const nextStamp = (wait > 0 ? last + minIntervalMs : now);
-  try { await env.SCRAPE_CACHE.put(key, String(nextStamp), { expirationTtl: 3600 }); } catch {}
+  let last = 0; let tokens = burstSize;
+  if (raw) {
+    const parts = raw.split("|");
+    const t = Number(parts[0]); const k = Number(parts[1] ?? burstSize);
+    if (!Number.isNaN(t)) last = t;
+    if (!Number.isNaN(k)) tokens = Math.min(burstSize, k);
+  }
+  // Refill tokens proportionally to time elapsed.
+  if (last > 0 && minIntervalMs > 0) {
+    const refill = Math.floor((now - last) / minIntervalMs);
+    tokens = Math.min(burstSize, tokens + Math.max(0, refill));
+  }
+  let wait = 0;
+  if (tokens > 0) {
+    tokens -= 1;
+  } else {
+    wait = Math.max(0, last + minIntervalMs - now);
+  }
+  const nextStamp = wait > 0 ? last + minIntervalMs : now;
+  try { await env.SCRAPE_CACHE.put(key, `${nextStamp}|${tokens}`, { expirationTtl: 3600 }); } catch {}
   return wait;
 }
 
@@ -219,8 +239,9 @@ export async function acquire(env: Env, url: string): Promise<AcquireResult> {
   const intlThrottle = getThrottleFor(host);
   const rowRps = row?.max_rps && row.max_rps > 0 ? row.max_rps : DEFAULT_MAX_RPS;
   const maxRps = intlThrottle ? Math.min(rowRps, intlThrottle.rps) : rowRps;
+  const burst = intlThrottle?.burst ?? 1;
   const backoff = ladderDelayFor(row?.failure_count ?? 0);
-  const wait = await pacerDelay(env, host, maxRps, rules.crawlDelayMs, backoff);
+  const wait = await pacerDelay(env, host, maxRps, rules.crawlDelayMs, backoff, burst);
   // Cap the inline sleep at 30s — anything more should be deferred to
   // the queue's retry rather than burning Worker CPU time.
   if (wait > 0) await new Promise((r) => setTimeout(r, Math.min(wait, 30_000)));
