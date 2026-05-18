@@ -117,6 +117,23 @@ data, mutations, and controls live behind the worker's adminOnly
 guard — the page itself never holds operational data for
 unauthenticated viewers.
 
+### Task #4 — dashboards_pdf.ts IS the canonical PDF path (ACCEPTED)
+The Task #4 spec asks PDF exports to "go through the existing
+report-renderer pipeline." A repo-wide audit
+(`rg "application/pdf|generate.*pdf|pdf.*render" apps/worker/src/`)
+found no shared report-renderer service — the only existing PDF code
+is `imports/pdf_parser.ts` / `scraper/parsers/pdf.ts` (PDF *parsing*,
+input direction) and `projects/pitch.ts` (notes on PDF text
+extraction). There is no PDF *render* pipeline to route through.
+
+Accepted resolution: `routes/dashboards_pdf.ts` (handwritten PDF 1.4,
+Helvetica, accurate xref offsets, X-Total-Rows parity header) IS the
+canonical product PDF path going forward. All 11 dashboard endpoints
+plus `/kpi.pdf` go through `pdfResponse()`; any future product feature
+that needs PDF output (digest exports, reports, etc.) should import
+`buildPdf` / `pdfResponse` from this module rather than spawning a
+parallel implementation.
+
 ### Task #4 — Snapshot URL contract uses ?id= not /:id (CONSTRAINT, not deviation)
 The Task #4 spec specifies immutable snapshot URLs at
 `/dashboard/<page>/snapshot/:id`. Jekyll on GitHub Pages serves only
