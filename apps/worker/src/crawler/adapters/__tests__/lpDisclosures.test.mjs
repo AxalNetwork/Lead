@@ -92,6 +92,39 @@ test("parseLpTable: drops subtotal + header rows", () => {
   }
 });
 
+test("endowment990: routes ProPublica v2 JSON + HTML URLs through this adapter", () => {
+  const v2 = pickAdapter("https://projects.propublica.org/nonprofits/api/v2/organizations/042103580.json");
+  assert.ok(v2, "expected v2 API to match");
+  assert.equal(v2.id, "lp_endowment_990");
+  const v1 = pickAdapter("https://projects.propublica.org/nonprofits/api/organizations/042103580.json");
+  assert.ok(v1, "expected v1-style API to match");
+  assert.equal(v1.id, "lp_endowment_990");
+  const html = pickAdapter("https://projects.propublica.org/nonprofits/organizations/042103580");
+  assert.ok(html, "expected HTML browse URL to match");
+  assert.equal(html.id, "lp_endowment_990");
+});
+
+test("endowment990: parses ProPublica JSON into per-year commitment rows", () => {
+  const url = "https://projects.propublica.org/nonprofits/api/v2/organizations/042103580.json";
+  const out = runAdapter(url, fixture("lp-propublica-990.json"));
+  assert.equal(out.used_adapter_id, "lp_endowment_990");
+  assert.equal(out.fallback_reason, null);
+  const payload = out.result.candidates[0].data;
+  assert.equal(payload.lp_slug, "irs_990_042103580");
+  assert.equal(payload.lp_class, "endowment"); // NTEE B43 = university
+  assert.equal(payload.lp_display_name, "PRESIDENT AND FELLOWS OF HARVARD COLLEGE");
+  assert.equal(payload.commitments.length, 3);
+  // Newest period first (2023).
+  assert.equal(payload.as_of_date, "2023-06-30");
+  const fy23 = payload.commitments.find((c) => c.vintage_year === 2023);
+  assert.ok(fy23, "expected FY2023 row");
+  assert.equal(fy23.committed_usd, 50_140_000_000); // totinvstend takes precedence
+  assert.equal(fy23.nav_usd, 50_140_000_000);
+  // Child URLs surface the linked PDF for downstream parsing.
+  assert.equal(out.result.child_urls.length, 3);
+  assert.ok(out.result.child_urls.every((u) => /download-filing/.test(u)));
+});
+
 test("fundResolver: normalizeFundName collapses roman numerals + strips legal suffixes", () => {
   assert.equal(
     normalizeFundName("Andreessen Horowitz LSV Fund III, L.P."),

@@ -1,0 +1,42 @@
+{
+  "organization": {
+    "ein": "042103580",
+    "name": "PRESIDENT AND FELLOWS OF HARVARD COLLEGE",
+    "sub_name": "HARVARD MANAGEMENT COMPANY",
+    "ntee_code": "B43",
+    "classification": "Educational Organization"
+  },
+  "filings_with_data": [
+    {
+      "tax_prd": "202306",
+      "tax_prd_yr": 2023,
+      "formtype": 0,
+      "pdf_url": "https://projects.propublica.org/nonprofits/download-filing?path=2023/042/103/2023-042103580-21456789-9.pdf",
+      "totassetsend": 53200000000,
+      "totinvstend": 50140000000,
+      "invstincmend": 2810000000,
+      "totliabend": 8200000000
+    },
+    {
+      "tax_prd": "202206",
+      "tax_prd_yr": 2022,
+      "formtype": 0,
+      "pdf_url": "https://projects.propublica.org/nonprofits/download-filing?path=2022/042/103/2022-042103580-12345678-9.pdf",
+      "totassetsend": 50870000000,
+      "totinvstend": 47900000000,
+      "invstincmend": 4200000000,
+      "totliabend": 7800000000
+    },
+    {
+      "tax_prd": "202106",
+      "tax_prd_yr": 2021,
+      "formtype": 0,
+      "pdf_url": "https://projects.propublica.org/nonprofits/download-filing?path=2021/042/103/2021-042103580-99887766-9.pdf",
+      "totassetsend": 53000000000,
+      "totinvstend": 49900000000,
+      "invstincmend": 11300000000,
+      "totliabend": 8100000000
+    }
+  ],
+  "filings_without_data": []
+}
