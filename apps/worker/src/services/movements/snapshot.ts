@@ -224,25 +224,30 @@ export async function runWeeklySnapshotSweep(env: Env, limit = 25): Promise<{
   // one current `firm.team_url` fact, pick the most recently observed
   // (then created) row so the crawl target is stable across runs.
   const rows = await env.DB.prepare(
-    `SELECT picked.firm_entity_id, picked.team_url,
-            (SELECT MAX(snapshot_date) FROM firm_team_snapshots s
-              WHERE s.firm_entity_id = picked.firm_entity_id) AS last_date
-       FROM (
-         SELECT f.entity_id AS firm_entity_id, f.value_text AS team_url,
-                ROW_NUMBER() OVER (
-                  PARTITION BY f.entity_id
-                  ORDER BY f.observed_at DESC, f.created_at DESC, f.id ASC
-                ) AS rn
-           FROM facts f
-           JOIN entity_roles r ON r.entity_id = f.entity_id
-                              AND r.role = 'investor_firm'
-          WHERE f.predicate = 'firm.team_url'
-            AND f.is_current = 1
-            AND f.value_text IS NOT NULL
-            AND f.value_text <> ''
-       ) picked
-      WHERE picked.rn = 1
-      HAVING last_date IS NULL OR last_date < date('now','-7 days')
+    `WITH picked AS (
+       SELECT f.entity_id AS firm_entity_id, f.value_text AS team_url,
+              ROW_NUMBER() OVER (
+                PARTITION BY f.entity_id
+                ORDER BY f.observed_at DESC, f.created_at DESC, f.id ASC
+              ) AS rn
+         FROM facts f
+         JOIN entity_roles r ON r.entity_id = f.entity_id
+                            AND r.role = 'investor_firm'
+        WHERE f.predicate = 'firm.team_url'
+          AND f.is_current = 1
+          AND f.value_text IS NOT NULL
+          AND f.value_text <> ''
+     ),
+     dated AS (
+       SELECT p.firm_entity_id, p.team_url,
+              (SELECT MAX(snapshot_date) FROM firm_team_snapshots s
+                WHERE s.firm_entity_id = p.firm_entity_id) AS last_date
+         FROM picked p
+        WHERE p.rn = 1
+     )
+     SELECT firm_entity_id, team_url, last_date
+       FROM dated
+      WHERE last_date IS NULL OR last_date < date('now','-7 days')
       ORDER BY (last_date IS NULL) DESC, last_date ASC
       LIMIT ?`,
   ).bind(limit).all<{ firm_entity_id: string; team_url: string; last_date: string | null }>();
