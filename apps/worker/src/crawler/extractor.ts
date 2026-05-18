@@ -219,7 +219,14 @@ export async function extractCandidates(
       const cand = adapterOutcome.result.candidates[0];
       const parsed = (cand?.data as Record<string, unknown> | undefined)?.parsed as
         import("../services/secEdgar/persist").ParsedFiling | undefined;
-      if (parsed && parsed.kind !== "index") {
+      // Persist non-index parses AND any parse that was downgraded to
+      // `index` because the per-form parser threw (header.parser_error
+      // is set). The latter is essential: without it, malformed
+      // filings would slip past the `kind !== "index"` guard and
+      // never reach the persist layer's error-recording path,
+      // violating the spec contract that sec_filings.errors captures
+      // every malformed filing.
+      if (parsed && (parsed.kind !== "index" || parsed.header?.parser_error)) {
         try {
           const { persistParsedFiling } = await import("../services/secEdgar/persist");
           await persistParsedFiling(env, parsed, "edgar_crawler");
