@@ -25,7 +25,23 @@ export interface LpPersistResult {
   lp_entity_id: string;
   rows_written: number;
   rows_skipped: number;
+  rows_missing_as_of: number;
   facts_written: number;
+  as_of_used: string | null;
+}
+
+/**
+ * Deterministic as_of_date selection. CRITICAL for idempotency: the
+ * UNIQUE key (lp_entity_id, fund_name_raw, as_of_date) makes
+ * re-ingest a no-op ONLY when as_of_date is stable across re-fetches.
+ * Returns null when the disclosure carries no usable period stamp —
+ * the caller must then skip the row (we never fall back to "today",
+ * which would mint a new row on every refresh).
+ *
+ * Exported for test coverage.
+ */
+export function chooseAsOfDate(payload: LpDisclosurePayload): string | null {
+  return payload.as_of_date ?? payload.filing_date ?? null;
 }
 
 async function findLpEntityBySlug(env: Env, slug: string): Promise<string | null> {
@@ -68,10 +84,32 @@ export async function persistLpDisclosure(
   source: string = `lp_disclosure:${payload.lp_slug}`,
 ): Promise<LpPersistResult> {
   const lp_entity_id = await ensureLpEntity(env, payload, source);
-  const as_of = payload.as_of_date ?? new Date().toISOString().slice(0, 10);
+  const as_of = chooseAsOfDate(payload);
   let rows_written = 0;
   let rows_skipped = 0;
+  let rows_missing_as_of = 0;
   let facts_written = 0;
+
+  // Refuse to write rows without a deterministic period stamp — that
+  // would defeat the UNIQUE idempotency contract on every refresh.
+  if (!as_of) {
+    if (payload.commitments.length > 0) {
+      console.warn(
+        "lpDisclosure persist: skipped",
+        payload.commitments.length,
+        "rows — no as_of_date or filing_date on",
+        payload.source_url,
+      );
+    }
+    return {
+      lp_entity_id,
+      rows_written: 0,
+      rows_skipped: 0,
+      rows_missing_as_of: payload.commitments.length,
+      facts_written: 0,
+      as_of_used: null,
+    };
+  }
 
   for (const c of payload.commitments) {
     if (!c.fund_name_raw || c.fund_name_raw.length < 3) { rows_skipped++; continue; }
@@ -154,5 +192,8 @@ export async function persistLpDisclosure(
     }
   }
 
-  return { lp_entity_id, rows_written, rows_skipped, facts_written };
+  return {
+    lp_entity_id, rows_written, rows_skipped,
+    rows_missing_as_of, facts_written, as_of_used: as_of,
+  };
 }

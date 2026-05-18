@@ -14,6 +14,7 @@ const { calpers } = await import("../../../../test-dist/crawler/adapters/lpDiscl
 const { parseLpTable, detectUnitMultiplier, findAsOfDate, parseMoney, parsePercent }
   = await import("../../../../test-dist/crawler/adapters/lpDisclosures/_shared.js");
 const { normalizeFundName } = await import("../../../../test-dist/services/fundResolver.js");
+const { chooseAsOfDate } = await import("../../../../test-dist/services/lpDisclosures/persist.js");
 
 test("shared: detectUnitMultiplier reads $ in thousands/millions/billions", () => {
   assert.equal(detectUnitMultiplier("$ in thousands"), 1_000);
@@ -123,6 +124,29 @@ test("endowment990: parses ProPublica JSON into per-year commitment rows", () =>
   // Child URLs surface the linked PDF for downstream parsing.
   assert.equal(out.result.child_urls.length, 3);
   assert.ok(out.result.child_urls.every((u) => /download-filing/.test(u)));
+});
+
+test("persist.chooseAsOfDate: idempotency contract — never invents 'today'", () => {
+  // 1. as_of_date present → wins.
+  assert.equal(
+    chooseAsOfDate({ as_of_date: "2024-06-30", filing_date: "2024-09-01", commitments: [] }),
+    "2024-06-30",
+  );
+  // 2. filing_date is the only fallback (deterministic, source-supplied).
+  assert.equal(
+    chooseAsOfDate({ as_of_date: null, filing_date: "2024-09-01", commitments: [] }),
+    "2024-09-01",
+  );
+  // 3. Both null → null. The caller MUST skip the write; the persist
+  //    layer must never substitute "today" because that would mint a
+  //    new (lp, fund, as_of) row on every refresh.
+  assert.equal(
+    chooseAsOfDate({ as_of_date: null, filing_date: null, commitments: [] }),
+    null,
+  );
+  // 4. Determinism across repeated calls on the same payload.
+  const payload = { as_of_date: "2024-06-30", filing_date: null, commitments: [] };
+  assert.equal(chooseAsOfDate(payload), chooseAsOfDate(payload));
 });
 
 test("fundResolver: normalizeFundName collapses roman numerals + strips legal suffixes", () => {
