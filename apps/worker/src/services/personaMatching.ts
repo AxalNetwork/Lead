@@ -399,17 +399,33 @@ export async function scoreBatch(env: Env, personaId: string, opts: { batchSize?
       await recordMatchJob(env, "score_batch", "cancelled", { personaId, scored, errors, pages });
       break;
     }
-    const r = await env.DB.prepare(
-      `SELECT id FROM u_entities WHERE kind = 'person' AND status = 'active' ORDER BY id LIMIT ? OFFSET ?`,
-    ).bind(batchSize, offset).all<{ id: string }>();
+    // Task #3: dispatch through the kind plugin so each persona kind
+    // selects its own candidate pool (e.g. investor_person filters
+    // entity_roles.role IN ('investor','vc','gp','partner_at_firm')).
+    const { getPluginFor } = await import("./personas/kinds");
+    const plugin = getPluginFor(persona.kind);
+    const filter = plugin.defaultEntityFilter(persona, { limit: batchSize, offset });
+    const r = await env.DB.prepare(filter.sql).bind(...filter.binds).all<{ id: string }>();
     const ids = (r.results ?? []).map((x) => x.id);
     if (!ids.length) break;
     pages += 1;
     for (const id of ids) {
       try {
-        const entity = await loadPersonEntity(env, id);
-        if (!entity) continue;
-        const res = await scoreEntityForPersona(env, persona, entity);
+        // Task #3: delegate to the kind plugin so bespoke matchers
+        // (investor_firm structural, venture_partner subtype, etc.)
+        // get the chance to override scoring. The generic plugin's
+        // scoreEntity returns the person-graph score for person
+        // targets and null for fund/company targets — when null, we
+        // persist a deterministic structural-match row at score 50
+        // so non-person kinds still surface candidates in the UI.
+        let res = await plugin.scoreEntity(env, persona, id);
+        if (!res) {
+          res = {
+            score: 0.5,
+            components: { role_match: { value: 1, weight: 1, reason: plugin.explainMatch(id) } } as unknown as MatchResult["components"],
+            rationale: plugin.explainMatch(id),
+          } as MatchResult;
+        }
         await upsertMatch(env, personaId, id, res);
         scored += 1;
       } catch (e) {

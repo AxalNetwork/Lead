@@ -63,6 +63,97 @@
   }
 
   // ---- editor page ----
+  // Task #3: persona-kinds taxonomy fetched from the worker. Cached
+  // for the page lifetime — drives the grouped <select>, the
+  // conditional <fieldset data-section> visibility, and the per-kind
+  // hint inputs (subtype, aum_band, stage_focus, etc.).
+  var TAXONOMY = null;
+  function loadTaxonomy() {
+    if (TAXONOMY) return Promise.resolve(TAXONOMY);
+    return fetchJson("/api/personas/taxonomy").then(function (r) {
+      TAXONOMY = (r.ok && r.body) ? r.body : { groups: [], kinds: [], hints: {} };
+      return TAXONOMY;
+    });
+  }
+
+  function renderKindSelect(sel) {
+    if (!TAXONOMY || !TAXONOMY.groups) return;
+    var html = "";
+    TAXONOMY.groups.forEach(function (g) {
+      html += '<optgroup label="' + escHtml(g.group) + '">';
+      g.items.forEach(function (it) {
+        html += '<option value="' + escHtml(it.kind) + '">' + escHtml(it.label) + '</option>';
+      });
+      html += '</optgroup>';
+    });
+    sel.innerHTML = html;
+  }
+
+  function kindDef(kind) {
+    if (!TAXONOMY || !TAXONOMY.kinds) return null;
+    for (var i = 0; i < TAXONOMY.kinds.length; i++) {
+      if (TAXONOMY.kinds[i].kind === kind) return TAXONOMY.kinds[i];
+    }
+    return null;
+  }
+
+  function applyKindShape(form, kind) {
+    var def = kindDef(kind);
+    var allowed = def ? def.sections : [];
+    // Show/hide criteria fieldsets by data-section.
+    var fsets = form.querySelectorAll("fieldset[data-section]");
+    for (var i = 0; i < fsets.length; i++) {
+      var sec = fsets[i].getAttribute("data-section");
+      fsets[i].style.display = (allowed.indexOf(sec) >= 0) ? "" : "none";
+    }
+    // Render hint fields.
+    var hintsWrap = document.getElementById("ads-persona-hints");
+    var hintsBody = document.getElementById("ads-persona-hints-body");
+    if (!hintsWrap || !hintsBody) return;
+    var hints = (def && def.hints) || [];
+    if (!hints.length) { hintsWrap.style.display = "none"; hintsBody.innerHTML = ""; return; }
+    hintsWrap.style.display = "";
+    var html = "";
+    var meta = (TAXONOMY && TAXONOMY.hints) || {};
+    hints.forEach(function (h) {
+      var m = meta[h] || { label: h, type: "text" };
+      var inputName = "hint_" + h;
+      if (m.type === "select" && m.options) {
+        html += '<label class="ads-field"><span>' + escHtml(m.label) + '</span><select name="' + inputName + '"><option value="">—</option>';
+        m.options.forEach(function (o) { html += '<option value="' + escHtml(o) + '">' + escHtml(o) + '</option>'; });
+        html += '</select></label>';
+      } else {
+        var t = m.type === "number" ? "number" : "text";
+        var ph = m.placeholder ? ' placeholder="' + escHtml(m.placeholder) + '"' : "";
+        html += '<label class="ads-field"><span>' + escHtml(m.label) + '</span><input type="' + t + '" name="' + inputName + '"' + ph + '></label>';
+      }
+    });
+    hintsBody.innerHTML = html;
+  }
+
+  function readHintValues(form, kind) {
+    var def = kindDef(kind);
+    if (!def || !def.hints || !def.hints.length) return null;
+    var out = {};
+    var fd = new FormData(form);
+    def.hints.forEach(function (h) {
+      var v = fd.get("hint_" + h);
+      if (v != null && String(v) !== "") out[h] = String(v);
+    });
+    return Object.keys(out).length ? out : null;
+  }
+
+  function fillHintValues(form, kind, hardFiltersJson) {
+    var def = kindDef(kind);
+    if (!def || !def.hints) return;
+    var obj = {};
+    try { var parsed = typeof hardFiltersJson === "string" ? JSON.parse(hardFiltersJson) : (hardFiltersJson || {}); obj = (parsed && parsed.hints) || {}; } catch (e) {}
+    def.hints.forEach(function (h) {
+      var el = form.elements["hint_" + h];
+      if (el && obj[h] != null) el.value = String(obj[h]);
+    });
+  }
+
   function initEditor() {
     var form = $("#ads-persona-form");
     if (!form) return;
@@ -99,12 +190,25 @@
           try { b[k] = JSON.parse(v); } catch (e) { /* leave out — server will ignore unparseable */ }
         }
       });
+      // Task #3: merge per-kind hint inputs into hard_filters_json.hints.
+      var hints = readHintValues(form, b.kind);
+      if (hints) {
+        var hf = (b.hard_filters_json && typeof b.hard_filters_json === "object") ? b.hard_filters_json : {};
+        hf.hints = hints;
+        b.hard_filters_json = hf;
+      }
       return b;
     }
 
     function fillForm(p) {
       form.elements["name"].value = p.name || "";
-      form.elements["kind"].value = p.kind || "account";
+      // Task #3: legacy 'account'/'buyer' → resolve to new keys for the select.
+      var k = p.kind || "account_company";
+      if (k === "account") k = "account_company";
+      if (k === "buyer") k = "buyer_person";
+      form.elements["kind"].value = k;
+      applyKindShape(form, k);
+      fillHintValues(form, k, p.hard_filters_json);
       form.elements["thesis"].value = p.thesis || "";
       form.elements["size_min"].value = p.size_min == null ? "" : p.size_min;
       form.elements["size_max"].value = p.size_max == null ? "" : p.size_max;
@@ -221,18 +325,32 @@
         });
     });
 
-    if (id) {
-      fetchJson("/api/personas/" + encodeURIComponent(id)).then(function (r) {
-        if (!r.ok) { setMsg("not found", "#a33"); return; }
-        loaded = r.body;
-        fillForm(loaded);
+    // Task #3: load taxonomy, populate grouped select, then load
+    // persona (if editing) or initialize a blank form.
+    loadTaxonomy().then(function () {
+      var sel = document.getElementById("ads-persona-kind");
+      if (sel) {
+        renderKindSelect(sel);
+        sel.addEventListener("change", function () {
+          applyKindShape(form, sel.value);
+          schedulePreview();
+        });
+      }
+
+      if (id) {
+        fetchJson("/api/personas/" + encodeURIComponent(id)).then(function (r) {
+          if (!r.ok) { setMsg("not found", "#a33"); return; }
+          loaded = r.body;
+          fillForm(loaded);
+          refreshPreview();
+        });
+      } else {
+        form.elements["kind"].value = "account_company";
+        applyKindShape(form, "account_company");
+        titleEl.textContent = "New persona";
         refreshPreview();
-      });
-    } else {
-      form.elements["kind"].value = "account";
-      titleEl.textContent = "New persona";
-      refreshPreview();
-    }
+      }
+    });
   }
 
   if (location.pathname.replace(/\/$/, "") === "/dashboard/personas") initList();

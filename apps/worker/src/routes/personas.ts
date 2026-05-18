@@ -28,6 +28,22 @@ import { embedPersona, deletePersonaVector, topMatchesForPersona } from "../pers
 import { aiEmbed } from "../ai/extract";
 import { rescorePersonaFull, dispatchPersonaRescore } from "../personas/rescore";
 import { ensurePersonasSeeded } from "../personas/seed";
+import * as taxonomy from "../services/personas/kinds/taxonomy";
+import { resolveKind as resolveKindStatic, getPluginFor } from "../services/personas/kinds";
+
+// Task #3: bridge widened persona.kind (string, full taxonomy) into
+// the legacy listMatches/score signatures that still only know about
+// the original 'account'|'buyer' axis. New taxonomy kinds that map
+// onto company-like entities go to 'account'; everything else to
+// 'buyer' (the person-graph code path is owned by the kind dispatcher
+// in services/personas/kinds, not by listMatches).
+function legacyEntityKind(k: string | undefined | null): "account" | "buyer" {
+  if (!k) return "account";
+  if (k === "account" || k === "account_company") return "account";
+  if (k === "buyer" || k === "buyer_person") return "buyer";
+  const def = taxonomy.KINDS[k as taxonomy.PersonaKind];
+  return def?.targets === "company" || def?.targets === "fund" ? "account" : "buyer";
+}
 // Task #8: real persona matching against the unified u_entities graph.
 import {
   scoreEntity as scoreEntityForPersonaMatching,
@@ -116,8 +132,36 @@ function normalizeBody(body: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(body)) {
     if (!PATCHABLE_KEYS.has(k)) continue;
+    if (k === "kind") continue; // validated separately via resolveKind
     if (k.endsWith("_json") && (Array.isArray(v) || (v && typeof v === "object"))) out[k] = JSON.stringify(v);
     else out[k] = v;
+  }
+  return out;
+}
+
+// Task #3: server-side guard. The form should hide criteria sections
+// that don't apply to a kind, but the server still rejects writes
+// that fall outside the kind's allowlist so a hand-crafted request
+// can't sneak off-shape criteria into the row.
+function stripOffShapeSections(kind: string | undefined, fields: Record<string, unknown>): Record<string, unknown> {
+  if (!kind) return fields;
+  const def = taxonomy.KINDS[kind as taxonomy.PersonaKind];
+  if (!def) return fields;
+  const allowed = new Set(def.sections);
+  const sectionFor: Record<string, taxonomy.CriteriaSection> = {
+    size_min: "sizing", size_max: "sizing", size_bands_json: "sizing",
+    geos_json: "geography",
+    industries_json: "industry",
+    techs_required_json: "tech_stack", techs_preferred_json: "tech_stack", techs_excluded_json: "tech_stack",
+    signal_kinds_json: "signals",
+    buyer_titles_json: "buyer_profile", buyer_seniority_json: "buyer_profile", buyer_departments_json: "buyer_profile",
+    semantic_fit_threshold: "tuning", recency_boost: "tuning", weights_json: "tuning",
+  };
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(fields)) {
+    const sec = sectionFor[k];
+    if (sec && !allowed.has(sec)) continue;
+    out[k] = v;
   }
   return out;
 }
@@ -169,7 +213,7 @@ personasRoute.get("/", async (c) => {
   const out = [];
   for (const p of items) {
     const fitCount = await countMatches(c.env, p.id, 60);
-    const top5 = await listMatches(c.env, p.id, { kind: p.kind, minScore: 0, limit: 5 });
+    const top5 = await listMatches(c.env, p.id, { kind: legacyEntityKind(p.kind), minScore: 0, limit: 5 });
     out.push({ ...p, fit_count: fitCount, top5 });
   }
   return c.json({ items: out });
@@ -178,9 +222,20 @@ personasRoute.get("/", async (c) => {
 personasRoute.post("/", async (c) => {
   const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
   if (!body || typeof body.name !== "string" || !body.name.trim()) return c.json({ error: "bad_request", message: "name required" }, 400);
-  const fields = normalizeBody(body);
+  let fields = normalizeBody(body);
   fields.name = body.name;
-  if (body.kind === "account" || body.kind === "buyer") fields.kind = body.kind;
+  // Task #3: validate kind against the full taxonomy. Legacy values
+  // ('account'/'buyer') resolve to 'account_company'/'buyer_person'
+  // so existing callers keep working. Reject unknown kinds outright.
+  if (typeof body.kind === "string") {
+    const k = resolveKindStatic(body.kind);
+    if (!k) return c.json({ error: "bad_request", message: `unknown kind: ${body.kind}` }, 400);
+    fields.kind = k;
+  } else {
+    fields.kind = "account_company";
+  }
+  fields = stripOffShapeSections(fields.kind as string, fields);
+  fields.name = body.name;
   const row = await insertPersona(c.env, fields as Partial<PersonaRow> & { name: string }, c.get("email"));
   // Embed + full rescore in the background.
   c.executionCtx.waitUntil((async () => {
@@ -206,8 +261,21 @@ personasRoute.patch("/:id", async (c) => {
   const id = c.req.param("id");
   const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
   if (!body) return c.json({ error: "bad_request" }, 400);
-  const fields = normalizeBody(body);
+  let fields = normalizeBody(body);
   if (typeof body.name === "string") fields.name = body.name;
+  // Task #3: validate + resolve kind on PATCH too, then strip
+  // off-shape criteria so the row stays consistent with the kind.
+  let effectiveKind: string | undefined;
+  if (typeof body.kind === "string") {
+    const k = resolveKindStatic(body.kind);
+    if (!k) return c.json({ error: "bad_request", message: `unknown kind: ${body.kind}` }, 400);
+    fields.kind = k;
+    effectiveKind = k;
+  } else {
+    const existing = await getPersona(c.env, id);
+    effectiveKind = existing?.kind;
+  }
+  fields = stripOffShapeSections(effectiveKind, fields);
   const row = await updatePersona(c.env, id, fields as Partial<PersonaRow>, c.get("email"));
   if (!row) return c.json({ error: "not_found" }, 404);
   c.executionCtx.waitUntil((async () => {
@@ -307,7 +375,7 @@ personasRoute.get("/:id/matches", async (c) => {
   const limit = Math.min(500, Math.max(1, Number(c.req.query("limit")) || 50));
   const offset = Math.max(0, Number(c.req.query("offset")) || 0);
   const minScore = Math.max(0, Number(c.req.query("min_score")) || 0);
-  const items = await listMatches(c.env, row.id, { kind: row.kind, limit, offset, minScore });
+  const items = await listMatches(c.env, row.id, { kind: legacyEntityKind(row.kind), limit, offset, minScore });
   const total = await countMatches(c.env, row.id, minScore);
   return c.json({ items, total, nextOffset: items.length === limit ? offset + limit : null });
 });
@@ -392,12 +460,63 @@ personasRoute.post("/:id/score-entity-graph", async (c) => {
   return c.json({ persona_id: row.id, entity_id: body.entity_id, ...result });
 });
 
+// Task #3: expose the taxonomy to the form (single source of truth).
+personasRoute.get("/taxonomy", async (c) => {
+  return c.json({
+    groups: taxonomy.kindsGrouped(),
+    kinds: taxonomy.KINDS_LIST,
+    hints: taxonomy.HINTS,
+  });
+});
+
 // Debounced live-preview. Does NOT persist anything. Embeds the
 // preview persona, queries VEC_ACCOUNTS for top-K, then scores those K
 // candidates inline. Returns top 25.
 personasRoute.post("/preview", async (c) => {
   const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
   if (!body) return c.json({ error: "bad_request" }, 400);
+
+  // Task #3: dispatch non-legacy kinds through the kind plugin so the
+  // right-rail preview pulls candidates from u_entities + entity_roles
+  // (e.g. investor_person → role IN ('investor','vc','gp',
+  // 'partner_at_firm')) rather than the legacy accounts/buyers tables.
+  const rawKind = typeof body.kind === "string" ? body.kind : "account_company";
+  const resolved = resolveKindStatic(rawKind);
+  if (resolved && resolved !== "account_company" && resolved !== "buyer_person") {
+    const plugin = getPluginFor(resolved);
+    // Build a throw-away PersonaRow for the plugin filter (hints live
+    // under hard_filters_json.hints.<field>).
+    const previewPersona = {
+      id: "preview", name: typeof body.name === "string" ? body.name : "preview",
+      kind: resolved, status: "active",
+      hard_filters_json: body.hard_filters_json ? (typeof body.hard_filters_json === "string" ? body.hard_filters_json : JSON.stringify(body.hard_filters_json)) : null,
+    } as unknown as PersonaRow;
+    const filter = plugin.defaultEntityFilter(previewPersona, { limit: 25, offset: 0 });
+    const r = await c.env.DB.prepare(filter.sql).bind(...filter.binds).all<{ id: string }>();
+    const ids = (r.results ?? []).map((x) => x.id);
+    // Fetch display name for each candidate.
+    const items: Array<{ id: string; name: string; fit_score: number; components: Record<string, unknown>; reasons: string[] }> = [];
+    if (ids.length) {
+      const ph = ids.map(() => "?").join(",");
+      const ents = await c.env.DB.prepare(
+        `SELECT id, display_name FROM u_entities WHERE id IN (${ph})`,
+      ).bind(...ids).all<{ id: string; display_name: string | null }>();
+      const nameById = new Map((ents.results ?? []).map((e) => [e.id, e.display_name]));
+      for (const id of ids) {
+        items.push({
+          id, name: nameById.get(id) ?? id,
+          // Structural-only preview score: 0.5 placeholder. Real
+          // scores arrive once the persona is saved and the entity-
+          // matcher workflow has run.
+          fit_score: 50,
+          components: { role_match: { value: 1, weight: 1, reason: plugin.explainMatch(id) } },
+          reasons: [plugin.explainMatch(id)],
+        });
+      }
+    }
+    return c.json({ items, candidate_count: ids.length, kind: resolved, source: "kind_plugin_preview" });
+  }
+
   const spec = previewSpecFromBody(body);
   const text = buildEmbeddingText(spec);
   let semMap = new Map<string, number>();
@@ -443,7 +562,7 @@ personasRoute.post("/:id/analyze", async (c) => {
   const row = await getPersona(c.env, c.req.param("id"));
   if (!row) return c.json({ error: "not_found" }, 404);
   if (!c.env.AI) return c.json({ error: "ai_unavailable" }, 503);
-  const top = await listMatches(c.env, row.id, { kind: row.kind, limit: 50, minScore: 0 });
+  const top = await listMatches(c.env, row.id, { kind: legacyEntityKind(row.kind), limit: 50, minScore: 0 });
   const compact = top.map((t) => ({
     name: t.entity_name, score: t.fit_score, domain: t.entity_domain,
     industry: t.entity_industry, employees: t.entity_employees,

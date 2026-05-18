@@ -6,7 +6,11 @@ import type { AccountFacts, BuyerFacts, PersonaSpec, ScoreComponents, WeightKey 
 export interface PersonaRow {
   id: string;
   name: string;
-  kind: "account" | "buyer";
+  // Task #3: widened from "account"|"buyer" to the full taxonomy
+  // (see services/personas/kinds/taxonomy.ts). Kept as a free string
+  // here to avoid a wide-ripple type change — the application layer
+  // validates via resolveKind() and the kind dispatcher.
+  kind: string;
   status: "active" | "archived";
   thesis: string | null;
   hard_filters_json: string | null;
@@ -57,9 +61,14 @@ function parseJsonObj(s: string | null | undefined): Record<string, unknown> {
 
 export function rowToSpec(row: PersonaRow): PersonaSpec {
   const w = parseJsonObj(row.weights_json) as Partial<Record<WeightKey, number>>;
+  // Legacy scorer only understands account/buyer. New taxonomy kinds
+  // fall through to "buyer" for spec purposes (the kind dispatcher in
+  // services/personas/kinds owns real matching for new kinds; this
+  // spec is only used by the legacy persona_matches code path).
+  const legacyKind: "account" | "buyer" = row.kind === "account" || row.kind === "account_company" ? "account" : "buyer";
   return {
     id: row.id,
-    kind: row.kind,
+    kind: legacyKind,
     size_min: row.size_min,
     size_max: row.size_max,
     size_bands: parseJsonArr(row.size_bands_json),
@@ -98,7 +107,7 @@ export async function getPersonaIncludingDeleted(env: Env, id: string): Promise<
   return r ?? null;
 }
 
-export async function insertPersona(env: Env, body: Partial<PersonaRow> & { name: string; kind?: "account"|"buyer" }, by?: string, idOverride?: string): Promise<PersonaRow> {
+export async function insertPersona(env: Env, body: Partial<PersonaRow> & { name: string; kind?: string }, by?: string, idOverride?: string): Promise<PersonaRow> {
   const id = idOverride ?? crypto.randomUUID();
   const now = new Date().toISOString();
   const cols = ["id","created_by","created_at","updated_at","last_modified", ...PERSONA_FIELDS];

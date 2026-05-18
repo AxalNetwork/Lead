@@ -29,7 +29,13 @@ import { buildEmbeddingText } from "./score";
 // kind and upserts persona_matches rows.
 export async function rescoreEntity(env: Env, entityKind: "account" | "buyer", entityId: string): Promise<{ scored: number }> {
   const personas = await listPersonas(env, { status: "active" });
-  const targets = personas.filter((p) => p.kind === entityKind || (entityKind === "account" && p.kind === "account") || (entityKind === "buyer" && p.kind === "buyer"));
+  // Task #3: include canonical migrated kinds. After migration 336,
+  // 'account' rows are 'account_company' and 'buyer' rows are
+  // 'buyer_person'. Without this, incremental rescores skip every
+  // migrated persona.
+  const accountKinds = new Set(["account", "account_company"]);
+  const buyerKinds = new Set(["buyer", "buyer_person"]);
+  const targets = personas.filter((p) => (entityKind === "account" ? accountKinds.has(p.kind) : buyerKinds.has(p.kind)));
   if (!targets.length) return { scored: 0 };
 
   const facts = entityKind === "account" ? await loadAccountFacts(env, entityId) : await loadBuyerFacts(env, entityId);
@@ -130,6 +136,14 @@ export async function rescorePersonaFull(
 
   const row = await env.DB.prepare(`SELECT * FROM personas WHERE id = ? AND deleted_at IS NULL`).bind(personaId).first<import("./repo").PersonaRow>();
   if (!row) return { scored: 0, explained: 0 };
+  // Task #3: rescorePersonaFull only applies to the legacy accounts/
+  // buyers tables. New taxonomy kinds (investor_person, founder, etc.)
+  // are matched against u_entities by the kind dispatcher in
+  // services/personaMatching.scoreBatch — short-circuit here so we
+  // don't pointlessly scan empty legacy tables for those personas.
+  if (row.kind !== "account" && row.kind !== "buyer" && row.kind !== "account_company" && row.kind !== "buyer_person") {
+    return { scored: 0, explained: 0 };
+  }
   const spec = rowToSpec(row);
 
   // Compute the persona vector once; per-batch we'll fetch the entity
