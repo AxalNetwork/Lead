@@ -250,28 +250,28 @@ movementsRoute.post("/:id/verify", async (c) => {
   ).bind(id).first<{ id: string; status: string }>();
   if (!existing) return c.json({ error: "not_found" }, 404);
 
-  await c.env.DB.prepare(
-    `UPDATE partner_movements SET status = ?, updated_at = datetime('now') WHERE id = ?`,
-  ).bind(next, id).run();
-
-  // Audit the override. If the audit write fails we surface
-  // `audit_logged: false` on the response so the operator UI can
-  // alert; the state change itself has already committed.
-  let audit_logged = true;
-  let audit_error: string | null = null;
+  // Audit-first ordering: write the ops_audit row BEFORE mutating
+  // partner_movements. If audit logging fails, we abort the verify
+  // with 500 — strict auditability requires every operator override
+  // to leave a paper trail. The state change only commits when the
+  // audit row exists.
   try {
     await c.env.DB.prepare(
       `INSERT INTO ops_audit (actor_email, action, target_kind, target_id, payload_json)
        VALUES (?, 'movement.verify', 'partner_movement', ?, ?)`,
     ).bind(c.var.email, id, JSON.stringify({ from: existing.status, to: next })).run();
   } catch (e) {
-    audit_logged = false;
-    audit_error = (e as Error).message;
-    console.warn("ops_audit insert failed", audit_error);
+    const msg = (e as Error).message;
+    console.warn("ops_audit insert failed", msg);
+    return c.json({ error: "audit_failed", message: msg }, 500);
   }
+
+  await c.env.DB.prepare(
+    `UPDATE partner_movements SET status = ?, updated_at = datetime('now') WHERE id = ?`,
+  ).bind(next, id).run();
 
   return c.json({
     id, status: next, previous_status: existing.status,
-    audit_logged, audit_error,
+    audit_logged: true,
   });
 });

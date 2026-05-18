@@ -225,7 +225,7 @@ export async function runWeeklySnapshotSweep(env: Env, limit = 25): Promise<{
             (SELECT MAX(snapshot_date) FROM firm_team_snapshots s WHERE s.firm_entity_id = f.entity_id) AS last_date
        FROM facts f
        JOIN entity_roles r ON r.entity_id = f.entity_id
-                          AND r.role IN ('investor_firm','firm','vc','gp','investor')
+                          AND r.role = 'investor_firm'
       WHERE f.predicate = 'firm.team_url'
         AND f.is_current = 1
         AND f.value_text IS NOT NULL
