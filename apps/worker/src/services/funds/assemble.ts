@@ -356,11 +356,28 @@ export async function assembleFund(env: Env, input: AssembleInput): Promise<Asse
   // raising: most-recent Form D within 24 months AND no final-close
   // date observed. active: has Form D / LP data within 5y. harvesting:
   // last evidence 5–10y ago. wound_down: > 10y since last evidence.
+  // Press-release corroboration for "raising" status: at least one
+  // deal_event or fund-mentioning press URL whose source_type is
+  // press/blog/tech-press AND whose date is within 18 months of the
+  // most recent Form D. Form D alone is insufficient per spec.
+  const latestFormD = signals.form_d[0]?.date_of_first_sale ?? signals.form_d[0]?.filed_at ?? null;
+  const pressRecent = signals.deals.some((d) => {
+    const t = d.source_type ?? "";
+    const dt = d.announcement_date;
+    if (!dt) return false;
+    if (t !== "press_release" && t !== "tech_press" && t !== "company_blog") return false;
+    if (!latestFormD) return false;
+    const a = new Date(dt).getTime();
+    const b = new Date(latestFormD).getTime();
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+    return Math.abs(a - b) <= 1000 * 60 * 60 * 24 * 30 * 18;
+  });
   const status = deriveFundStatus({
     firstClose: firstClose.value,
     finalClose: finalClose.value,
-    latestFormD: signals.form_d[0]?.date_of_first_sale ?? signals.form_d[0]?.filed_at ?? null,
+    latestFormD,
     latestLp: signals.lp[0]?.as_of_date ?? null,
+    pressCorroboration: pressRecent,
   });
 
   // ---- Persist --------------------------------------------------------
@@ -448,10 +465,16 @@ export function deriveFundStatus(args: {
   finalClose: string | null;
   latestFormD: string | null;
   latestLp: string | null;
+  pressCorroboration?: boolean;
 }): FundStatus {
   const latestSignalDate = mostRecent([args.latestFormD, args.latestLp, args.firstClose]);
-  // Raising: recent Form D + no final close.
-  if (args.latestFormD && !args.finalClose && monthsSince(args.latestFormD) <= 24) return "raising";
+  // Raising: recent Form D + no final close + matching press release.
+  // Form D alone is insufficient — many shelf filings exist with no
+  // active fundraising campaign. Press/blog/tech-press within 18 months
+  // of the Form D acts as the corroborating signal.
+  if (args.latestFormD && !args.finalClose && monthsSince(args.latestFormD) <= 24 && args.pressCorroboration) {
+    return "raising";
+  }
   if (!latestSignalDate) return "active";
   const months = monthsSince(latestSignalDate);
   if (months <= 60) return "active";       // 5y
@@ -516,9 +539,21 @@ export async function runFundRefreshSweep(env: Env, limit = 50): Promise<{
        FROM src s
        LEFT JOIN funds fu
          ON fu.firm_entity_id = s.firm_entity_id AND fu.fund_name = s.fund_name
+      -- True upstream-change idempotency: reassemble only when a source
+      -- signal is newer than the existing funds row's updated_at. New
+      -- (never-assembled) pairs always qualify.
       WHERE fu.id IS NULL
          OR fu.updated_at IS NULL
-         OR fu.updated_at < datetime('now', '-7 day')
+         OR fu.updated_at < MAX(
+              COALESCE(s.latest_filed_at, ''),
+              COALESCE((SELECT MAX(r.date_of_first_sale) FROM sec_form_d_rounds r
+                         WHERE lower(r.issuer_name) LIKE lower('%' || substr(s.fund_name,1,60) || '%')), ''),
+              COALESCE((SELECT MAX(lp.as_of_date) FROM lp_fund_commitments lp
+                         WHERE lp.fund_entity_id = fu.fund_entity_id), ''),
+              COALESCE((SELECT MAX(de.announcement_date) FROM deal_events de
+                         JOIN deal_participants dp ON dp.deal_id = de.id
+                         WHERE dp.investor_entity_id = s.firm_entity_id), '')
+            )
       ORDER BY (fu.updated_at IS NULL) DESC, fu.updated_at ASC NULLS FIRST
       LIMIT ?`,
   ).bind(limit).all<{ firm_entity_id: string; fund_name: string; latest_signal_at: string | null; existing_updated_at: string | null }>();

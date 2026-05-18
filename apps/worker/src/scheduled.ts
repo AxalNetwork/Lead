@@ -376,15 +376,17 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const r = await runFundRefreshSweep(env, 50);
         console.log("fund refresh sweep done", JSON.stringify(r));
         const { computeStrategyDrift } = await import("./services/funds/strategyDrift");
-        const firms = await env.DB.prepare(
-          `SELECT DISTINCT firm_entity_id FROM funds
+        // Drift is per-fund per-month — recompute for every fund whose
+        // ledger row was refreshed in the last 2 days.
+        const fundsForDrift = await env.DB.prepare(
+          `SELECT id FROM funds
             WHERE updated_at >= datetime('now','-2 day')
-            LIMIT 100`,
-        ).all<{ firm_entity_id: string }>();
+            LIMIT 200`,
+        ).all<{ id: string }>();
         let drifts = 0;
-        for (const f of firms.results ?? []) {
-          try { await computeStrategyDrift(env, f.firm_entity_id); drifts++; }
-          catch (e) { console.warn("strategy drift failed", f.firm_entity_id, (e as Error).message); }
+        for (const f of fundsForDrift.results ?? []) {
+          try { await computeStrategyDrift(env, f.id); drifts++; }
+          catch (e) { console.warn("strategy drift failed", f.id, (e as Error).message); }
         }
         console.log("fund strategy drift done", drifts);
       } catch (e) {

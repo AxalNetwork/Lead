@@ -91,31 +91,6 @@ firmsFundsRoute.get("/:id/funds", async (c) => {
   });
 });
 
-// ---------------- GET /api/funds/:id ----------------
-fundsRoute.get("/:id", async (c) => {
-  const id = c.req.param("id");
-  const row = await c.env.DB.prepare(
-    `SELECT ${FUND_COLS} FROM funds WHERE id = ?`,
-  ).bind(id).first<FundRow>();
-  if (!row) return c.json({ error: "not_found" }, 404);
-  const [dryPowder, portfolio, percentile, cohort, perfQuartile] = await Promise.all([
-    computeDryPowder(c.env, id),
-    buildFundPortfolio(c.env, id),
-    percentileOfFund(c.env, row),
-    row.vintage_year ? computeVintageCohort(c.env, row.vintage_year, row.strategy) : Promise.resolve(null),
-    performanceQuartileOfFund(c.env, row),
-  ]);
-  return c.json({
-    fund: shape(row),
-    dry_powder: dryPowder,
-    portfolio: portfolio?.positions ?? [],
-    portfolio_summary: portfolio?.summary ?? null,
-    vintage_cohort: cohort,
-    size_percentile_within_cohort: percentile,
-    performance_quartile: perfQuartile,
-  });
-});
-
 // ---------------- GET /api/funds/raising-now ----------------
 fundsRoute.get("/raising-now", async (c) => {
   const strategy = c.req.query("strategy");
@@ -183,5 +158,33 @@ fundsRoute.get("/dry-powder-leaderboard", async (c) => {
     total: scored.length,
     limit,
     leaderboard: scored.slice(0, limit),
+  });
+});
+
+// ---------------- GET /api/funds/:id ----------------
+// MUST be declared AFTER all static /funds/* routes — Hono matches in
+// declaration order, and a leading param route would otherwise shadow
+// /raising-now and /dry-powder-leaderboard.
+fundsRoute.get("/:id", async (c) => {
+  const id = c.req.param("id");
+  const row = await c.env.DB.prepare(
+    `SELECT ${FUND_COLS} FROM funds WHERE id = ?`,
+  ).bind(id).first<FundRow>();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  const [dryPowder, portfolio, percentile, cohort, perfQuartile] = await Promise.all([
+    computeDryPowder(c.env, id),
+    buildFundPortfolio(c.env, id),
+    percentileOfFund(c.env, row),
+    row.vintage_year ? computeVintageCohort(c.env, row.vintage_year, row.strategy) : Promise.resolve(null),
+    performanceQuartileOfFund(c.env, row),
+  ]);
+  return c.json({
+    fund: shape(row),
+    dry_powder: dryPowder,
+    portfolio: portfolio?.positions ?? [],
+    portfolio_summary: portfolio?.summary ?? null,
+    vintage_cohort: cohort,
+    size_percentile_within_cohort: percentile,
+    performance_quartile: perfQuartile,
   });
 });
