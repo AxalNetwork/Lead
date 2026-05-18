@@ -51,10 +51,22 @@ function parseMembers(json: string): SnapshotMember[] {
   } catch { return []; }
 }
 
+function memberKey(x: SnapshotMember): string {
+  // Identity key: prefer the resolved entity_id when the snapshotter
+  // attached one (distinct same-name partners stay distinct across
+  // snapshots), fall back to normalized name only when no canonical
+  // person entity is bound. Each snapshot resolves the same physical
+  // person to the same entity_id via resolvePersonEntity, so keying on
+  // it is stable across current/prev/prevPrev.
+  if (x.entity_id) return `id:${x.entity_id}`;
+  const n = normName(x.name);
+  return n ? `n:${n}` : "";
+}
+
 function indexByName(members: SnapshotMember[]): Map<string, SnapshotMember> {
   const m = new Map<string, SnapshotMember>();
   for (const x of members) {
-    const k = normName(x.name);
+    const k = memberKey(x);
     if (k) m.set(k, x);
   }
   return m;
@@ -166,7 +178,7 @@ export async function diffFirm(env: Env, firmEntityId: string): Promise<DiffResu
     const inserted = await insertMovement(env, {
       person_entity_id: member.entity_id ?? null,
       person_name_raw: member.name,
-      person_norm: key,
+      person_norm: normName(member.name),
       from_firm_entity_id: null,
       to_firm_entity_id: firmEntityId,
       from_title: null,
@@ -217,7 +229,7 @@ export async function diffFirm(env: Env, firmEntityId: string): Promise<DiffResu
       const inserted = await insertMovement(env, {
         person_entity_id: member.entity_id ?? null,
         person_name_raw: member.name,
-        person_norm: key,
+        person_norm: normName(member.name),
         from_firm_entity_id: firmEntityId,
         to_firm_entity_id: null,
         from_title: member.role_title ?? null,
@@ -253,7 +265,7 @@ export async function diffFirm(env: Env, firmEntityId: string): Promise<DiffResu
     const inserted = await insertMovement(env, {
       person_entity_id: cur.entity_id ?? null,
       person_name_raw: cur.name,
-      person_norm: key,
+      person_norm: normName(cur.name),
       from_firm_entity_id: firmEntityId,
       to_firm_entity_id: firmEntityId,
       from_title: beforeTitle,

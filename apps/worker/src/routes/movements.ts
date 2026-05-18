@@ -70,7 +70,8 @@ movementsRoute.get("/", async (c) => {
   const status = c.req.query("status");
   const movement_type = c.req.query("movement_type");
   const limit = clampLimit(c.req.query("limit"));
-  const offset = Math.max(0, Number(c.req.query("offset") ?? 0));
+  const rawOffset = Number(c.req.query("offset") ?? 0);
+  const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.trunc(rawOffset)) : 0;
 
   const where: string[] = [];
   const binds: unknown[] = [];
