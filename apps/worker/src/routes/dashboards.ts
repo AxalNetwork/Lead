@@ -19,6 +19,7 @@
 import { Hono } from "hono";
 import type { Env } from "../types";
 import { computeDryPowder } from "../services/funds/dryPowder";
+import { pdfResponse } from "./dashboards_pdf";
 
 export const dashboards = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
@@ -50,6 +51,32 @@ function monthBucket(iso: string | null | undefined): string | null {
   if (!iso) return null;
   return iso.slice(0, 7); // YYYY-MM
 }
+
+// KPI PDF export: lets the landing strip be exported alongside the
+// charts, satisfying the "every dashboard endpoint supports PDF" rule.
+dashboards.get("/kpi.pdf", async (c) => {
+  const d7 = "datetime('now','-7 day')";
+  const d30 = "datetime('now','-30 day')";
+  const [deals7, deals30, raised30, moves7, fundsRaising, ipo30, ma30] = await Promise.all([
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM deal_events WHERE event_type='funding_round' AND datetime(announcement_date) >= ${d7}`).first<{ n: number }>(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM deal_events WHERE event_type='funding_round' AND datetime(announcement_date) >= ${d30}`).first<{ n: number }>(),
+    c.env.DB.prepare(`SELECT COALESCE(SUM(amount_usd),0) AS s FROM deal_events WHERE event_type='funding_round' AND datetime(announcement_date) >= ${d30}`).first<{ s: number }>(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM partner_movements WHERE datetime(observed_at) >= ${d7}`).first<{ n: number }>(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM funds WHERE fund_status='raising'`).first<{ n: number }>(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM deal_events WHERE event_type='ipo' AND datetime(announcement_date) >= ${d30}`).first<{ n: number }>(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS n FROM deal_events WHERE event_type IN ('acquisition','merger') AND datetime(announcement_date) >= ${d30}`).first<{ n: number }>(),
+  ]);
+  const rows: Record<string, unknown>[] = [
+    { metric: "Deals · 7d", value: deals7?.n ?? 0 },
+    { metric: "Deals · 30d", value: deals30?.n ?? 0 },
+    { metric: "$ raised · 30d", value: raised30?.s ?? 0 },
+    { metric: "Partner moves · 7d", value: moves7?.n ?? 0 },
+    { metric: "Funds raising", value: fundsRaising?.n ?? 0 },
+    { metric: "IPO filings · 30d", value: ipo30?.n ?? 0 },
+    { metric: "M&A · 30d", value: ma30?.n ?? 0 },
+  ];
+  return pdfResponse(rows, ["metric", "value"], "kpi", "Capital-markets KPIs", new Date().toISOString().slice(0, 10));
+});
 
 // ---------------- /kpi: landing KPI strip ----------------
 // Returns counts + totals for the last 7d / 30d windows. Used by the
@@ -97,11 +124,10 @@ dashboards.get("/feeds/deals", async (c) => {
   const items = (r.results ?? []).map((row) => ({
     ...row, sector_tags: safeJson<string[]>(row.sector_tags_json) ?? [],
   }));
-  if (c.req.query("format") === "csv") {
-    return csvResponse(items as unknown as Record<string, unknown>[],
-      ["announcement_date", "event_type", "company_name_raw", "round_name", "amount_usd", "geography", "source_url"],
-      "deals-feed");
-  }
+  const fmt = c.req.query("format");
+  const heads = ["announcement_date", "event_type", "company_name_raw", "round_name", "amount_usd", "geography", "source_url"];
+  if (fmt === "csv") return csvResponse(items as unknown as Record<string, unknown>[], heads, "deals-feed");
+  if (fmt === "pdf") return pdfResponse(items as unknown as Record<string, unknown>[], heads, "deals-feed", "Deal feed", `${items.length} rows`);
   return c.json({ items });
 });
 
@@ -114,13 +140,12 @@ dashboards.get("/feeds/movements", async (c) => {
        FROM partner_movements WHERE status != 'rejected'
        ORDER BY observed_at DESC LIMIT ?`,
   ).bind(limit).all<Record<string, unknown>>();
-  if (c.req.query("format") === "csv") {
-    const rows = (movements.results ?? []) as Record<string, unknown>[];
-    return csvResponse(rows,
-      ["observed_at", "person_name_raw", "movement_type", "from_firm_entity_id", "to_firm_entity_id", "to_title", "source_url"],
-      "movements-feed");
-  }
-  return c.json({ items: movements.results ?? [] });
+  const rows = (movements.results ?? []) as Record<string, unknown>[];
+  const fmt = c.req.query("format");
+  const heads = ["observed_at", "person_name_raw", "movement_type", "from_firm_entity_id", "to_firm_entity_id", "to_title", "source_url"];
+  if (fmt === "csv") return csvResponse(rows, heads, "movements-feed");
+  if (fmt === "pdf") return pdfResponse(rows, heads, "movements-feed", "Movement feed", `${rows.length} rows`);
+  return c.json({ items: rows });
 });
 
 // ---------------- /dry-powder-map: bubble per firm ----------------
@@ -160,11 +185,10 @@ dashboards.get("/dry-powder-map", async (c) => {
     perFirm.set(f.firm_entity_id, cur);
   }
   const items = [...perFirm.values()].sort((a, b) => b.dry_powder_usd - a.dry_powder_usd);
-  if (c.req.query("format") === "csv") {
-    return csvResponse(items as unknown as Record<string, unknown>[],
-      ["firm_entity_id", "firm_name", "dry_powder_usd", "fund_count", "strategy"],
-      "dry-powder-map");
-  }
+  const fmt = c.req.query("format");
+  const heads = ["firm_entity_id", "firm_name", "dry_powder_usd", "fund_count", "strategy"];
+  if (fmt === "csv") return csvResponse(items as unknown as Record<string, unknown>[], heads, "dry-powder-map");
+  if (fmt === "pdf") return pdfResponse(items as unknown as Record<string, unknown>[], heads, "dry-powder-map", "Dry powder map", `${items.length} firms`);
   return c.json({ items, total_firms: items.length });
 });
 
@@ -210,11 +234,10 @@ dashboards.get("/funds-raising", async (c) => {
       ? Math.min(100, Math.round((row.announced_raised_usd / row.target_size_usd) * 100))
       : null,
   }));
-  if (c.req.query("format") === "csv") {
-    return csvResponse(items as unknown as Record<string, unknown>[],
-      ["firm_name", "fund_name", "fund_number", "vintage_year", "target_size_usd", "announced_raised_usd", "pct_raised", "strategy"],
-      "funds-raising");
-  }
+  const fmt = c.req.query("format");
+  const heads = ["firm_name", "fund_name", "fund_number", "vintage_year", "target_size_usd", "announced_raised_usd", "pct_raised", "strategy"];
+  if (fmt === "csv") return csvResponse(items as unknown as Record<string, unknown>[], heads, "funds-raising");
+  if (fmt === "pdf") return pdfResponse(items as unknown as Record<string, unknown>[], heads, "funds-raising", "Funds raising", `${items.length} funds`);
   return c.json({ items, count: items.length });
 });
 
@@ -263,10 +286,10 @@ dashboards.get("/lp-network", async (c) => {
     f.total_committed_usd += e.committed_usd;
     funds.set(fk, f);
   }
-  if (c.req.query("format") === "csv") {
-    return csvResponse(edges as unknown as Record<string, unknown>[],
-      ["lp_name", "fund_name", "committed_usd", "vintage_year", "as_of_date"], "lp-network");
-  }
+  const fmt = c.req.query("format");
+  const heads = ["lp_name", "fund_name", "committed_usd", "vintage_year", "as_of_date"];
+  if (fmt === "csv") return csvResponse(edges as unknown as Record<string, unknown>[], heads, "lp-network");
+  if (fmt === "pdf") return pdfResponse(edges as unknown as Record<string, unknown>[], heads, "lp-network", "LP network", `${edges.length} commitments`);
   return c.json({ lps: [...lps.values()], funds: [...funds.values()], edges });
 });
 
@@ -298,11 +321,10 @@ dashboards.get("/partner-moves", async (c) => {
     if (e.people.length < 8) e.people.push(m.person_name_raw);
     links.set(k, e);
   }
-  if (c.req.query("format") === "csv") {
-    return csvResponse(items as unknown as Record<string, unknown>[],
-      ["observed_at", "person_name_raw", "movement_type", "from_firm_entity_id", "to_firm_entity_id", "to_title"],
-      "partner-moves");
-  }
+  const fmt = c.req.query("format");
+  const heads = ["observed_at", "person_name_raw", "movement_type", "from_firm_entity_id", "to_firm_entity_id", "to_title"];
+  if (fmt === "csv") return csvResponse(items as unknown as Record<string, unknown>[], heads, "partner-moves");
+  if (fmt === "pdf") return pdfResponse(items as unknown as Record<string, unknown>[], heads, "partner-moves", "Partner moves", `${items.length} movements`);
   return c.json({ items, links: [...links.values()] });
 });
 
@@ -336,11 +358,10 @@ dashboards.get("/vintage-benchmarks", async (c) => {
     const [vy, strat] = k.split("|");
     return { vintage_year: Number(vy), strategy: strat, ...quantiles(xs) };
   });
-  if (c.req.query("format") === "csv") {
-    return csvResponse(items as unknown as Record<string, unknown>[],
-      ["vintage_year", "strategy", "n", "min", "q1", "median", "q3", "max"],
-      `vintage-${metric}`);
-  }
+  const fmt = c.req.query("format");
+  const heads = ["vintage_year", "strategy", "n", "min", "q1", "median", "q3", "max"];
+  if (fmt === "csv") return csvResponse(items as unknown as Record<string, unknown>[], heads, `vintage-${metric}`);
+  if (fmt === "pdf") return pdfResponse(items as unknown as Record<string, unknown>[], heads, `vintage-${metric}`, `Vintage benchmarks — ${metric}`, `${items.length} buckets`);
   return c.json({ metric, items });
 });
 
@@ -369,10 +390,10 @@ dashboards.get("/sector-momentum", async (c) => {
     }
   }
   const items = [...cells.values()].sort((a, b) => a.sector.localeCompare(b.sector) || a.month.localeCompare(b.month));
-  if (c.req.query("format") === "csv") {
-    return csvResponse(items as unknown as Record<string, unknown>[],
-      ["sector", "month", "deal_count", "total_usd"], "sector-momentum");
-  }
+  const fmt = c.req.query("format");
+  const heads = ["sector", "month", "deal_count", "total_usd"];
+  if (fmt === "csv") return csvResponse(items as unknown as Record<string, unknown>[], heads, "sector-momentum");
+  if (fmt === "pdf") return pdfResponse(items as unknown as Record<string, unknown>[], heads, "sector-momentum", "Sector momentum", `${items.length} cells`);
   return c.json({ items });
 });
 
@@ -401,10 +422,10 @@ dashboards.get("/geographic-flow", async (c) => {
     arcs.set(k, cur);
   }
   const items = [...arcs.values()].sort((a, b) => b.total_usd - a.total_usd);
-  if (c.req.query("format") === "csv") {
-    return csvResponse(items as unknown as Record<string, unknown>[],
-      ["from", "to", "deal_count", "total_usd"], "geo-flow");
-  }
+  const fmt = c.req.query("format");
+  const heads = ["from", "to", "deal_count", "total_usd"];
+  if (fmt === "csv") return csvResponse(items as unknown as Record<string, unknown>[], heads, "geo-flow");
+  if (fmt === "pdf") return pdfResponse(items as unknown as Record<string, unknown>[], heads, "geo-flow", "Geographic flow", `${items.length} arcs`);
   return c.json({ items });
 });
 
@@ -451,12 +472,12 @@ dashboards.get("/angel-finder", async (c) => {
     preferred_sectors: safeJson<string[]>(row.preferred_sectors_json as string | null) ?? [],
     preferred_geos: safeJson<string[]>(row.preferred_geos_json as string | null) ?? [],
   }));
-  if (c.req.query("format") === "csv") {
-    return csvResponse(items as Record<string, unknown>[],
-      ["person_name", "angel_type", "day_job_firm_name", "day_job_role",
-        "typical_check_min_usd", "typical_check_max_usd", "portfolio_count",
-        "syndicate_handle", "open_to_warm_intros", "last_investment_at"], "angels");
-  }
+  const fmt = c.req.query("format");
+  const heads = ["person_name", "angel_type", "day_job_firm_name", "day_job_role",
+    "typical_check_min_usd", "typical_check_max_usd", "portfolio_count",
+    "syndicate_handle", "open_to_warm_intros", "last_investment_at"];
+  if (fmt === "csv") return csvResponse(items as Record<string, unknown>[], heads, "angels");
+  if (fmt === "pdf") return pdfResponse(items as Record<string, unknown>[], heads, "angels", "Angel finder", `${items.length} angels`);
   return c.json({ items, count: items.length });
 });
 

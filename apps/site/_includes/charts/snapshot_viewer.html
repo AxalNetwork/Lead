@@ -1,0 +1,29 @@
+{%- comment -%}
+Task #4: snapshot viewer wrapper.
+Each /dashboard/<page>/snapshot/ page includes this. Hydration is
+STRICT — payload comes only from /api/dashboards/snapshots/:id; no
+re-query to the underlying ledger tables (acceptance probe #6).
+{%- endcomment -%}
+<div id="snap-auth" class="ads-card"><strong>Loading snapshot…</strong></div>
+<div id="snap-forbidden" hidden class="ads-card ads-card--err"><strong>403 Forbidden.</strong> Sign in via Cloudflare Access.</div>
+<div id="snap-missing" hidden class="ads-card ads-card--err">
+  <strong>Snapshot not found.</strong>
+  Either the link is wrong or you don't own this snapshot.
+</div>
+<div id="snap-content" hidden>
+  <div class="ads-card">
+    <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+      <strong id="snap-page-label"></strong>
+      <span class="ads-mono" id="snap-meta"></span>
+      <span style="flex:1"></span>
+      <span class="ads-mono" style="color:#23d6a4">IMMUTABLE — served from payload, no live re-query</span>
+    </div>
+  </div>
+  <div class="ads-card" style="margin-top:1rem">
+    <div id="snap-render">Rendering…</div>
+  </div>
+  <div class="ads-card" style="margin-top:1rem">
+    <h3>Filters at time of snapshot</h3>
+    <pre id="snap-filters" class="ads-mono" style="overflow:auto;font-size:11px"></pre>
+  </div>
+</div>
