@@ -235,6 +235,25 @@ export async function extractCandidates(
         }
       }
     }
+
+    // Task #2: LP-disclosure persist side-effect. Every LP adapter
+    // emits `profile_type === 'lp_disclosure'` with a typed
+    // LpDisclosurePayload in `candidate.data`. Route each through the
+    // dedicated persist layer (lp_fund_commitments + canonical fact
+    // writes, idempotent on UNIQUE(lp_entity_id, fund_name_raw,
+    // as_of_date)). A persist failure must never block extraction.
+    for (const cand of adapterOutcome.result.candidates) {
+      if (cand.profile_type !== "lp_disclosure") continue;
+      const payload = cand.data as unknown as
+        import("../crawler/adapters/lpDisclosures/types").LpDisclosurePayload | undefined;
+      if (!payload || !Array.isArray(payload.commitments)) continue;
+      try {
+        const { persistLpDisclosure } = await import("../services/lpDisclosures/persist");
+        await persistLpDisclosure(env, payload, `lp_disclosure:${payload.lp_slug}`);
+      } catch (e) {
+        console.warn("lpDisclosure persist failed", url, (e as Error).message);
+      }
+    }
   }
 
   const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);

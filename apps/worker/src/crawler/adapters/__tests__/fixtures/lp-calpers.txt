@@ -1,0 +1,17 @@
+CalPERS Private Equity Program Fund Performance Review
+as of June 30, 2024
+$ in thousands
+
+Fund Name                                  Vintage   Commitment   Cash In    Cash Out   Reported Value   Net IRR
+ACME Buyout Fund I, L.P.                   2014      250,000      220,500    310,420    180,000          14.2%
+ACME Buyout Fund II, L.P.                  2018      400,000      280,000    120,500    310,000          19.8%
+Andreessen Horowitz LSV Fund III, L.P.     2021      150,000      90,000     5,200      170,500          22.5%
+Blackstone Capital Partners VIII, L.P.     2019      500,000      410,000    180,000    420,000          11.6%
+KKR North America Fund XIII, L.P.          2020      350,000      245,000    60,000     320,500          15.4%
+Silver Lake Partners VI, L.P.              2020      300,000      210,000    45,000     280,000          12.8%
+Sequoia Capital Growth IX, L.P.            2022      100,000      55,000     0          108,200          17.1%
+Bain Capital Fund XIV, L.P.                2023      275,000      85,000     0          92,500          (4.2)%
+TPG Partners IX, L.P.                      2023      225,000      72,000     0          78,400          N/A
+General Catalyst Group XII, L.P.           2024      125,000      18,500     0          19,200          NM
+
+Total                                                2,675,000    1,686,000  721,120    1,978,300

@@ -67,6 +67,24 @@ Status mapping (`smart_frontier.status` → `crawl_frontier`):
 Operators inspect the per-type funnel in `smart_frontier`; the crawler
 still pulls work from the single Task #2 queue.
 
+### Task #2 — LP disclosure crawler: lp_slug → entity registry (ACCEPTED)
+The spec says "every adapter calls fundResolver.ts" but is silent on how
+adapters bind to LP entities. Each adapter is bound to one LP (CalPERS,
+Harvard, ADIA, …) by a stable `lp_slug` string; the persist layer
+(`services/lpDisclosures/persist.ts`) maps slug → `u_entities.id` via a
+`lp.slug` fact lookup, minting the LP entity through the canonical
+`createEntity` + `addRole('lp')` path on first encounter. All
+identifier facts (`lp.slug`, `lp.class`, `lp.display_name`) and
+corroborating facts (`fund.lp_commitment_usd`,
+`firm.lp_committed_usd`) flow through `insertFact` per the Task #1
+canonical write decision. Adapters never INSERT into `u_entities`,
+`facts`, or `lp_fund_commitments` directly.
+
+Idempotency lives in the migration: `UNIQUE(lp_entity_id,
+fund_name_raw, as_of_date)` + `INSERT OR REPLACE` semantics in the
+persist `ON CONFLICT` clause. Re-running the same disclosure overwrites
+the same rows.
+
 ### Task #2 — /ops/crawler/ page-level gating (CONSTRAINT, not a deviation)
 The Jekyll site is statically hosted on GitHub Pages; there is no
 edge function or origin worker on aidatasignal.com to intercept page
