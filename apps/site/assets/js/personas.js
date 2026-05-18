@@ -41,7 +41,7 @@
             + escHtml(m.entity_name || m.entity_id) + ' <b>' + Math.round(m.fit_score) + '</b></span>';
         }).join("");
         return '<tr>'
-          + '<td style="padding:8px"><a href="/dashboard/personas/edit/?id=' + encodeURIComponent(p.id) + '" style="color:#234">' + escHtml(p.name) + '</a><div class="ads-muted" style="font-size:11px">' + escHtml(p.thesis || "") + '</div></td>'
+          + '<td style="padding:8px"><a href="/dashboard/personas/edit/?id=' + encodeURIComponent(p.id) + '" style="color:#fff">' + escHtml(p.name) + '</a><div class="ads-muted" style="font-size:11px">' + escHtml(p.thesis || "") + '</div></td>'
           + '<td style="padding:8px;font-size:12px">' + escHtml(p.kind) + '</td>'
           + '<td style="padding:8px;text-align:right;font-weight:600">' + (p.fit_count || 0) + '</td>'
           + '<td style="padding:8px">' + (top || '<span class="ads-muted">—</span>') + '</td>'
