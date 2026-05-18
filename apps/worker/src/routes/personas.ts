@@ -493,13 +493,49 @@ personasRoute.post("/preview", async (c) => {
   const resolved = resolveKindStatic(rawKind);
   if (resolved && resolved !== "account_company" && resolved !== "buyer_person") {
     const plugin = getPluginFor(resolved);
-    // Build a throw-away PersonaRow for the plugin filter (hints live
-    // under hard_filters_json.hints.<field>).
-    const previewPersona = {
-      id: "preview", name: typeof body.name === "string" ? body.name : "preview",
-      kind: resolved, status: "active",
-      hard_filters_json: body.hard_filters_json ? (typeof body.hard_filters_json === "string" ? body.hard_filters_json : JSON.stringify(body.hard_filters_json)) : null,
-    } as unknown as PersonaRow;
+    // Build a full throw-away PersonaRow from the body so plugin
+    // scoring sees all criteria (industries_json, geos_json, size_*,
+    // tech stack, signals, buyer_*, weights, hints) — not just the
+    // kind+hard_filters_json subset.
+    const norm = normalizeBody(body);
+    const nowIso = new Date().toISOString();
+    const strOrNull = (k: string): string | null => {
+      const v = norm[k];
+      return typeof v === "string" ? v : (v == null ? null : String(v));
+    };
+    const numOrNull = (k: string): number | null => {
+      const v = norm[k];
+      if (typeof v === "number") return v;
+      if (typeof v === "string" && v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
+      return null;
+    };
+    const previewPersona: PersonaRow = {
+      id: "preview",
+      name: typeof body.name === "string" ? body.name : "preview",
+      kind: resolved,
+      status: "active",
+      thesis: typeof body.thesis === "string" ? body.thesis : null,
+      hard_filters_json: strOrNull("hard_filters_json"),
+      size_min: numOrNull("size_min"),
+      size_max: numOrNull("size_max"),
+      size_bands_json: strOrNull("size_bands_json"),
+      geos_json: strOrNull("geos_json"),
+      industries_json: strOrNull("industries_json"),
+      techs_required_json: strOrNull("techs_required_json"),
+      techs_preferred_json: strOrNull("techs_preferred_json"),
+      techs_excluded_json: strOrNull("techs_excluded_json"),
+      signal_kinds_json: strOrNull("signal_kinds_json"),
+      buyer_titles_json: strOrNull("buyer_titles_json"),
+      buyer_seniority_json: strOrNull("buyer_seniority_json"),
+      buyer_departments_json: strOrNull("buyer_departments_json"),
+      weights_json: strOrNull("weights_json"),
+      semantic_fit_threshold: numOrNull("semantic_fit_threshold"),
+      recency_boost: numOrNull("recency_boost"),
+      embedding_dim: null, embedded_at: null, embedding_text: null,
+      persona_notes: null, notes_generated_at: null,
+      last_modified: nowIso, created_by: null, created_at: nowIso, updated_at: nowIso,
+      deleted_at: null,
+    };
     // Pull a wider candidate pool than 25 so the real scorer has
     // something to rank; then take the top 25 after scoring.
     const filter = plugin.defaultEntityFilter(previewPersona, { limit: 200, offset: 0 });

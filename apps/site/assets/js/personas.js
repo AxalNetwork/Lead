@@ -100,11 +100,23 @@
   function applyKindShape(form, kind) {
     var def = kindDef(kind);
     var allowed = def ? def.sections : [];
-    // Show/hide criteria fieldsets by data-section.
+    // Show/hide criteria fieldsets by data-section AND clear inputs
+    // in hidden sections so stale values from a previous kind don't
+    // leak through readForm() and trigger the server's off-shape
+    // validation when the user saves.
     var fsets = form.querySelectorAll("fieldset[data-section]");
     for (var i = 0; i < fsets.length; i++) {
       var sec = fsets[i].getAttribute("data-section");
-      fsets[i].style.display = (allowed.indexOf(sec) >= 0) ? "" : "none";
+      var visible = allowed.indexOf(sec) >= 0;
+      fsets[i].style.display = visible ? "" : "none";
+      if (!visible) {
+        var inputs = fsets[i].querySelectorAll("input, select, textarea");
+        for (var j = 0; j < inputs.length; j++) {
+          var el = inputs[j];
+          if (el.type === "checkbox" || el.type === "radio") el.checked = false;
+          else el.value = "";
+        }
+      }
     }
     // Render hint fields.
     var hintsWrap = document.getElementById("ads-persona-hints");
