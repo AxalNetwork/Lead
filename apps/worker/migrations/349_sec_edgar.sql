@@ -161,6 +161,13 @@ CREATE TABLE IF NOT EXISTS sec_insider_trades (
 CREATE INDEX IF NOT EXISTS idx_insider_issuer ON sec_insider_trades(issuer_cik, transaction_date DESC);
 CREATE INDEX IF NOT EXISTS idx_insider_owner  ON sec_insider_trades(reporting_owner_cik, transaction_date DESC);
 CREATE INDEX IF NOT EXISTS idx_insider_form   ON sec_insider_trades(form_type, transaction_date DESC);
+-- Entity-id query path (spec asks for an index keyed by the resolved
+-- reporter entity + txn date). Our column is owner_entity_id /
+-- issuer_entity_id (set post-xref); index both so the persona-match
+-- and entity-page queries can scan recent trades for a person/org
+-- without falling back to the CIK indexes above.
+CREATE INDEX IF NOT EXISTS idx_insider_owner_entity ON sec_insider_trades(owner_entity_id, transaction_date DESC) WHERE owner_entity_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_insider_issuer_entity ON sec_insider_trades(issuer_entity_id, transaction_date DESC) WHERE issuer_entity_id IS NOT NULL;
 
 -- ============================================================
 -- Predicate registry rows for new SEC-EDGAR-emitted facts. Mirrors the
