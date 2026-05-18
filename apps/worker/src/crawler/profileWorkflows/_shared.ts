@@ -351,8 +351,13 @@ export async function runStandardWorkflow(
   const observedAt = opts.observedAt ?? new Date().toISOString();
   const errors: WorkflowError[] = [];
 
+  // The id the operator dashboard / per-type spend ledger should
+  // attribute this run to. Falls back to the workflow's own id when
+  // the dispatcher did not supply a requested type.
+  const requestedTypeId = opts.requestedTypeId ?? def.profile_type_id;
+
   // Resolve entity id up-front so failure paths can still record one.
-  const entityId = await resolveEntityId(def.profile_type_id, ctx);
+  const entityId = await resolveEntityId(requestedTypeId, ctx);
 
   // Step 1: build source plan. The candidate page itself is always the
   // first bucket — its HTML was fetched upstream and lives in ctx.
@@ -457,7 +462,10 @@ export async function runStandardWorkflow(
 
   const result: WorkflowResult = {
     workflow_id: def.id,
-    profile_type_id: def.profile_type_id,
+    // Attribute the run to the *requested* type (what the classifier
+    // asked for) so operator roll-ups stay consistent with preflight.
+    // The actual executing workflow remains visible via `workflow_id`.
+    profile_type_id: requestedTypeId,
     entity_id: entityId,
     status,
     sources_planned: sources.length,
@@ -473,9 +481,12 @@ export async function runStandardWorkflow(
     duration_ms: Date.now() - t0,
   };
   await recordRun(env, { runId, workflow: def, ctx, entityId, result });
-  // Charge the per-type daily spend ledger so the next dispatch can
-  // gate on remaining daily budget for THIS profile type.
-  await addTypeDailySpend(env, def.profile_type_id, result.actual_cost_usd);
+  // Charge the per-type daily spend ledger using the *requested* type
+  // (same key the dispatch-site preflight uses). When the registry
+  // falls back to _default for an unknown type, this keeps preflight
+  // and accrued spend consistent so a single type cannot escape its
+  // cap by being routed to the generic fallback.
+  await addTypeDailySpend(env, requestedTypeId, result.actual_cost_usd);
   return result;
 }
 

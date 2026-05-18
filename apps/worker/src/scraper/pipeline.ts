@@ -635,12 +635,17 @@ async function processSingleUrl(
         if (!budget.ok) {
           console.log("profile_workflow skipped:type_daily_cap", { type: chosenTypeId, spend: budget.spend, projected, cap: budget.cap });
         } else {
+          // The dispatcher tells the runner which profile_type id to
+          // attribute this run to so the spend ledger + run record
+          // key off the requested type (matches preflight). When the
+          // registry returns _default for an unknown type, the
+          // requested id stays visible to operators.
           const out = await wf.run(env, {
             candidateUrl: fetched.url || url,
             candidateHtml: fetched.html,
             candidateHost: safeHost(fetched.url || url),
             jobId,
-          }, { budgetUsdCap: 0.05 });
+          }, { budgetUsdCap: 0.05, requestedTypeId: chosenTypeId });
           console.log("profile_workflow", { type: chosenTypeId, matched: !!best, status: out.status, facts: out.facts_written, verified: out.facts_verified });
         }
       } catch (e) {

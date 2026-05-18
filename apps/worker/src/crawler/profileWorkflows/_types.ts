@@ -34,6 +34,17 @@ export interface WorkflowRunOpts {
   disableAi?: boolean;
   /** Override the default observed_at timestamp. */
   observedAt?: string;
+  /**
+   * The profile_type_id the dispatcher *requested* (e.g. the typed id
+   * detected by the classifier). When the registry routes to the
+   * generic `_default` workflow because no typed module is registered
+   * for the detected type, the runner still keys the daily-spend
+   * ledger and the run-log row under this requested id — so the
+   * operator dashboard's per-type spend stays consistent with the
+   * preflight check at the dispatch site. Falls back to
+   * `def.profile_type_id` when not provided.
+   */
+  requestedTypeId?: string;
 }
 
 export interface PlannedSource {
