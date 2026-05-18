@@ -143,12 +143,6 @@ index_name = "axal-personas-768"  # dim=768 metric=cosine
 binding = "VEC_PROJECTS"
 index_name = "axal-projects-768"  # dim=768 metric=cosine
 
-# Task #2 bug-triage: unified entity-graph vector index referenced by
-# Tasks #7 / #8 / #9 persona ↔ entity matching.
-[[vectorize]]
-binding = "VECTORIZE_ENTITIES"
-index_name = "axal-entities-768"  # dim=768 metric=cosine
-
 # Task #25: Durable Object for serialized merge locks (per-entity).
 [[durable_objects.bindings]]
 name = "ENTITY_LOCK"
