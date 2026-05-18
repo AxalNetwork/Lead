@@ -41,7 +41,11 @@ const pauseKeyType = (t: string) => `ops:crawler:paused:type:${t}`;
 const THROUGHPUT_CACHE_KEY = "ops:throughput:v2";
 const THROUGHPUT_TTL_S = 10;
 
-/** Insert an ops_audit row. Best-effort — never blocks the response. */
+// Fail-closed: callers invoke audit() BEFORE performing the mutating
+// side-effect. If the audit row cannot be persisted we throw so the
+// route returns 500 and the mutation is aborted — the
+// "every mutation writes ops_audit" invariant is enforced even under
+// DB failure.
 async function audit(
   env: Env,
   actor: string,
@@ -59,7 +63,8 @@ async function audit(
       payload === undefined ? null : JSON.stringify(payload),
     ).run();
   } catch (e) {
-    console.warn("ops_audit insert failed", (e as Error).message);
+    console.error("ops_audit insert failed", (e as Error).message);
+    throw new Error("audit_failed: " + (e as Error).message);
   }
 }
 
