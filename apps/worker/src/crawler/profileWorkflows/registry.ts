@@ -34,11 +34,12 @@ import { TEMPLATED_WORKFLOWS }            from "./templated";
 
 import type { ProfileWorkflow } from "./_types";
 
-// Dedicated typed workflows are listed first; the templated registry
-// then fills coverage for every remaining seeded e_types id (see
-// `templated.ts`). Dedicated entries always win because the templated
-// roster is spread *after* — JS object-literal semantics keep the
-// earlier value when the same key is overwritten.
+// Dedicated typed workflows always win over templated entries because
+// `DEDICATED` is spread *after* `TEMPLATED_WORKFLOWS` in the merged
+// `WORKFLOWS` map below — JS object-literal semantics overwrite
+// earlier values when the same key reappears. To "thicken" a templated
+// type later, add the dedicated module here and its key will displace
+// the templated entry without touching templated.ts.
 const DEDICATED: Record<string, ProfileWorkflow> = {
   investor_vc:           investorVcWorkflow,
   investor_pe:           investorPeWorkflow,
