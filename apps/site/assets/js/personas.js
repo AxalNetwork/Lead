@@ -108,7 +108,10 @@
     for (var i = 0; i < fsets.length; i++) {
       var sec = fsets[i].getAttribute("data-section");
       var visible = allowed.indexOf(sec) >= 0;
-      fsets[i].style.display = visible ? "" : "none";
+      // Task #3: explicit "block" (not "") because the edit.html
+      // stylesheet hides fieldset[data-section] by default to avoid
+      // flashing every section before applyKindShape() runs.
+      fsets[i].style.display = visible ? "block" : "none";
       if (!visible) {
         var inputs = fsets[i].querySelectorAll("input, select, textarea");
         for (var j = 0; j < inputs.length; j++) {

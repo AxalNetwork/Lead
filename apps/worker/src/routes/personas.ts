@@ -311,6 +311,19 @@ personasRoute.post("/", async (c) => {
   return c.json(row, 201);
 });
 
+// Task #3: expose the taxonomy to the form (single source of truth).
+// MUST be registered BEFORE GET /:id, otherwise Hono matches /:id with
+// id="taxonomy" first and returns 404 — which silently empties the form
+// (kind dropdown blank, all data-section fieldsets hidden because
+// kindDef() returns null).
+personasRoute.get("/taxonomy", async (c) => {
+  return c.json({
+    groups: taxonomy.kindsGrouped(),
+    kinds: taxonomy.KINDS_LIST,
+    hints: taxonomy.HINTS,
+  });
+});
+
 personasRoute.get("/:id", async (c) => {
   const row = await getPersona(c.env, c.req.param("id"));
   if (!row) return c.json({ error: "not_found" }, 404);
@@ -533,15 +546,6 @@ personasRoute.post("/:id/score-entity-graph", async (c) => {
   const result = await scoreEntityForPersonaMatching(c.env, row.id, body.entity_id);
   if (!result) return c.json({ error: "entity_not_found_or_not_person" }, 404);
   return c.json({ persona_id: row.id, entity_id: body.entity_id, ...result });
-});
-
-// Task #3: expose the taxonomy to the form (single source of truth).
-personasRoute.get("/taxonomy", async (c) => {
-  return c.json({
-    groups: taxonomy.kindsGrouped(),
-    kinds: taxonomy.KINDS_LIST,
-    hints: taxonomy.HINTS,
-  });
 });
 
 // Debounced live-preview. Does NOT persist anything. Embeds the

@@ -4,6 +4,13 @@ title: Edit persona
 permalink: /dashboard/personas/edit/
 ---
 
+<style>
+  /* Task #3: hide kind-shaped fieldsets until personas.js calls
+     applyKindShape() — eliminates the FOUC where every section
+     flashes visible before the kind-specific shape is applied. */
+  #ads-persona-form fieldset[data-section] { display: none; }
+</style>
+
 <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
   <h1 class="ads-page-title" style="margin:0">
     <a href="/dashboard/personas/" style="color:inherit;text-decoration:none">Personas</a>
