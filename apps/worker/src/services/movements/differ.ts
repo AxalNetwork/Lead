@@ -140,9 +140,25 @@ export async function diffFirm(env: Env, firmEntityId: string): Promise<DiffResu
   const [current, prev, prevPrev] = rows;
   out.compared = [prev.snapshot_date, current.snapshot_date];
 
+  // Snapshot-quality gate: a snapshot with members_count=0 is almost
+  // always a fetch/parse failure (the team page broke, returned 4xx,
+  // or the adapter could not match). Diffing against it would emit
+  // bulk false-positive `left` events for everyone on the real team.
+  // Skip diffing entirely when current OR prev returned zero members
+  // while the comparison anchor (prev/prevPrev) was non-empty. We
+  // still recorded an append-only row in firm_team_snapshots for
+  // observability, but it is NOT a basis for movement inference.
+  if (current.members_count === 0 || prev.members_count === 0) {
+    out.compared = null;
+    out.skipped_flicker += 1;
+    return out;
+  }
+
   const currentMembers = indexByName(parseMembers(current.members_json));
   const prevMembers    = indexByName(parseMembers(prev.members_json));
-  const prevPrevMembers = prevPrev ? indexByName(parseMembers(prevPrev.members_json)) : null;
+  const prevPrevMembers = prevPrev && prevPrev.members_count > 0
+    ? indexByName(parseMembers(prevPrev.members_json))
+    : null;
 
   // joined: in current, not in prev.
   for (const [key, member] of currentMembers) {
