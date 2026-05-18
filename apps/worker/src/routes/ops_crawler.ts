@@ -29,6 +29,7 @@ import { Hono } from "hono";
 import type { Env } from "../types";
 import { fetchPage } from "../scraper/fetcher";
 import { classifyPage } from "../services/pageClassifier";
+import { extractCandidates } from "../crawler/extractor";
 
 type Vars = { email: string; is_admin: boolean };
 
@@ -702,6 +703,7 @@ opsCrawlerRoute.post("/test-url", async (c) => {
   const t0 = Date.now();
   let fetched: Record<string, unknown> | null = null;
   let classification: unknown = null;
+  let extraction: Record<string, unknown> | null = null;
   let error: string | null = null;
   try {
     const r = await fetchPage(c.env, url, { jobId: `ops-test-${crypto.randomUUID()}` });
@@ -713,6 +715,22 @@ opsCrawlerRoute.post("/test-url", async (c) => {
     };
     if (r.status >= 200 && r.status < 300 && typeof r.html === "string" && r.html.length > 0) {
       classification = await classifyPage(c.env, url, r.html);
+      // Full extractor: adapter run + JSON-LD/OG/Readability/classifier
+      // chain. No-commit — this endpoint only returns the result for
+      // operator inspection; nothing is written to facts.
+      const ext = await extractCandidates(c.env, url, r.html);
+      extraction = {
+        url: ext.url,
+        route: ext.route,
+        adapter_used: ext.adapter_used,
+        adapter_fallback: ext.adapter_fallback,
+        adapter_error: ext.adapter_error,
+        used_ai: ext.used_ai,
+        ai_error: ext.ai_error,
+        matched_types: ext.matched_types,
+        candidates: ext.candidates,
+        child_urls: ext.child_urls,
+      };
     }
     try {
       const host = new URL(url).hostname.toLowerCase();
@@ -726,5 +744,5 @@ opsCrawlerRoute.post("/test-url", async (c) => {
   } catch (e) {
     error = (e as Error).message;
   }
-  return c.json({ ok: error === null, url, fetched, classification, error, duration_ms: Date.now() - t0 });
+  return c.json({ ok: error === null, url, fetched, classification, extraction, error, duration_ms: Date.now() - t0 });
 });

@@ -42,11 +42,19 @@
   }
 
   function showForbidden() {
+    var chk = document.getElementById("ops-auth-check");
+    if (chk) chk.hidden = true;
+    var content = document.getElementById("ops-content");
+    if (content) { content.hidden = true; content.innerHTML = ""; }
     var f = document.getElementById("ops-forbidden");
-    if (f) f.style.display = "block";
-    var sections = document.querySelectorAll("#ops-root > .ads-card:not(#ops-forbidden), #ops-root > h2, #ops-root > .ads-grid");
-    sections.forEach(function (el) { el.style.display = "none"; });
+    if (f) f.hidden = false;
     stop();
+  }
+  function revealContent() {
+    var chk = document.getElementById("ops-auth-check");
+    if (chk) chk.hidden = true;
+    var content = document.getElementById("ops-content");
+    if (content) content.hidden = false;
   }
 
   // ---- chart helpers -----------------------------------------------------
@@ -438,11 +446,54 @@
       e.preventDefault();
       var url = testForm.elements.url.value.trim();
       if (!url) return;
-      var out = $("#ops-test-url-result");
-      out.textContent = "Fetching…";
+      var summary = $("#ops-test-url-summary");
+      var raw = $("#ops-test-url-raw");
+      var tbl = $("#ops-test-url-candidates");
+      var tbody = tbl.querySelector("tbody");
+      summary.textContent = "Fetching + classifying + running adapter…";
+      raw.textContent = ""; tbody.innerHTML = ""; tbl.hidden = true;
       try {
         var r = await post("/test-url", { url: url });
-        out.textContent = JSON.stringify(r, null, 2);
+        var f = r.fetched || {};
+        var ex = r.extraction || {};
+        summary.textContent =
+          "status=" + (f.status || "-") + " tier=" + (f.tier == null ? "-" : f.tier)
+          + " html=" + (f.html_length || 0) + "B"
+          + " adapter=" + (ex.adapter_used || "(none)")
+          + (ex.adapter_fallback ? " fallback=" + ex.adapter_fallback : "")
+          + " candidates=" + ((ex.candidates || []).length)
+          + " child_urls=" + ((ex.child_urls || []).length)
+          + " duration=" + (r.duration_ms || 0) + "ms"
+          + " (no commit)";
+        var cands = ex.candidates || [];
+        if (cands.length) {
+          tbl.hidden = false;
+          tbody.innerHTML = cands.map(function (c) {
+            return "<tr><td>" + esc(c.profile_type || "-") + "</td><td>" + (c.confidence == null ? "-" : (+c.confidence).toFixed(2))
+              + "</td><td>" + esc(c.source || "-") + "</td><td>" + esc(c.name || "-")
+              + "</td><td class=\"ads-mono\" style=\"max-width:340px;overflow:hidden;text-overflow:ellipsis\">" + esc(c.url || "-") + "</td></tr>";
+          }).join("");
+        }
+        raw.textContent = JSON.stringify(r, null, 2);
+        loadAudit();
+      } catch (err) { summary.textContent = "Error: " + err.message; }
+    });
+  }
+
+  var recrawlForm = document.getElementById("ops-recrawl-form");
+  if (recrawlForm) {
+    recrawlForm.addEventListener("submit", async function (e) {
+      e.preventDefault();
+      var entity_id = recrawlForm.elements.entity_id.value.trim();
+      if (!entity_id) return;
+      var out = $("#ops-recrawl-result");
+      out.textContent = "Queueing…";
+      try {
+        var r = await post("/recrawl-entity", { entity_id: entity_id });
+        var workflows = Object.keys(r.dispatched || {});
+        out.textContent = "OK — dispatched " + workflows.length + " workflow(s) for " + entity_id
+          + (workflows.length ? " [" + workflows.join(", ") + "]" : "");
+        recrawlForm.reset();
         loadAudit();
       } catch (err) { out.textContent = "Error: " + err.message; }
     });
@@ -484,7 +535,8 @@
   (async function init() {
     try {
       await api("/");
+      revealContent();
       start();
-    } catch (e) { /* showForbidden already invoked on 403 */ }
+    } catch (e) { /* showForbidden already invoked on 403; content stays hidden */ }
   })();
 })();

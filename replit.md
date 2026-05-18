@@ -67,5 +67,20 @@ Status mapping (`smart_frontier.status` → `crawl_frontier`):
 Operators inspect the per-type funnel in `smart_frontier`; the crawler
 still pulls work from the single Task #2 queue.
 
+### Task #2 — /ops/crawler/ page-level gating (CONSTRAINT, not a deviation)
+The Jekyll site is statically hosted on GitHub Pages; there is no
+edge function or origin worker on aidatasignal.com to intercept page
+routes. True server-side 403 for `/ops/crawler/` is therefore not
+possible at the page-route layer.
+
+Implemented gate: the rendered HTML contains an `#ops-content`
+wrapper that is `hidden` by default. `ops-crawler.js` pre-flights
+`GET /api/ops/crawler/` (gated by accessGuard + adminOnly on the
+worker) before revealing or polling anything; on 403 the content
+wrapper is wiped and a forbidden card is shown. All operational
+data, mutations, and controls live behind the worker's adminOnly
+guard — the page itself never holds operational data for
+unauthenticated viewers.
+
 ## User preferences
 - (none recorded yet)

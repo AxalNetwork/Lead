@@ -6,15 +6,22 @@ permalink: /ops/crawler/
 
 <section class="ads-section" id="ops-root">
   <h1 class="ads-h1">Crawler Operator Console</h1>
+
+  <div id="ops-auth-check" class="ads-card">
+    <strong>Verifying admin access…</strong>
+  </div>
+
+  <div id="ops-forbidden" hidden class="ads-card ads-card--err">
+    <strong>403 Forbidden.</strong> You are not on the ops admin allowlist.
+    Operational data is not loaded.
+  </div>
+
+  <div id="ops-content" hidden>
   <p class="ads-sub">
     Live throughput, host health, frontier depth, AI spend, and the
     compliance feed for the in-house crawler. Admin-only; every action
     is audited.
   </p>
-
-  <div id="ops-forbidden" style="display:none" class="ads-card ads-card--err">
-    <strong>403 Forbidden.</strong> You are not on the ops admin allowlist.
-  </div>
 
   <div id="ops-drift-banner"></div>
 
@@ -156,13 +163,33 @@ permalink: /ops/crawler/
    </div>
   </div>
 
+  <h2 class="ads-h2">Force re-crawl entity</h2>
+  <div class="ads-card">
+    <form id="ops-recrawl-form" style="display:flex;gap:.5rem;flex-wrap:wrap">
+      <input class="ads-input" name="entity_id" placeholder="entity_id (e.g. ent_…)" required style="flex:1;min-width:280px">
+      <button class="ads-btn" type="submit">Force re-crawl</button>
+    </form>
+    <div id="ops-recrawl-result" class="ads-mono" style="margin-top:.5rem"></div>
+  </div>
+
   <h2 class="ads-h2">Test a URL</h2>
   <div class="ads-card">
     <form id="ops-test-url-form" style="display:flex;gap:.5rem;flex-wrap:wrap">
       <input type="url" name="url" placeholder="https://example.com/team/jane" required style="flex:1;min-width:280px" class="ads-input">
-      <button class="ads-btn" type="submit">Fetch + classify</button>
+      <button class="ads-btn" type="submit">Fetch + classify + extract (no commit)</button>
     </form>
-    <pre id="ops-test-url-result" class="ads-mono" style="margin-top:.75rem;white-space:pre-wrap;max-height:240px;overflow:auto"></pre>
+    <div id="ops-test-url-result" style="margin-top:.75rem">
+      <div id="ops-test-url-summary" class="ads-mono" style="margin-bottom:.5rem"></div>
+      <div class="ads-table-wrap">
+        <table class="ads-table" id="ops-test-url-candidates" hidden>
+          <thead><tr>
+            <th>Profile type</th><th>Confidence</th><th>Source</th><th>Name</th><th>URL</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <pre id="ops-test-url-raw" class="ads-mono" style="margin-top:.5rem;white-space:pre-wrap;max-height:240px;overflow:auto"></pre>
+    </div>
   </div>
 
   <h2 class="ads-h2">Recent ops audit</h2>
@@ -174,6 +201,7 @@ permalink: /ops/crawler/
     </table>
    </div>
   </div>
+  </div><!-- /ops-content -->
 </section>
 
 <script src="/assets/js/ops-crawler.js"></script>
