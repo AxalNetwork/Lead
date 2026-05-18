@@ -9,6 +9,7 @@
 
 import type { Env } from "../types";
 import { loadRegistry, testPage, type ProfileType } from "../services/profileTypes";
+import { classifyPage, isNewsLike, type PageClassification } from "../services/pageClassifier";
 
 export interface ExtractedCandidate {
   profile_type: string | null;
@@ -25,6 +26,12 @@ export interface ExtractionResult {
   candidates: ExtractedCandidate[];
   used_ai: boolean;
   ai_error: string | null;
+  // Task #1 step 5: classifier decides whether the persister should
+  // commit an entity, a news item, or skip. The crawler preview surface
+  // returns this verbatim; the PredicateRouter consumes `route` to
+  // pick the right table downstream.
+  classification: PageClassification | null;
+  route: "entity" | "news_item" | "skip";
 }
 
 function parseJsonLd(html: string): Array<Record<string, unknown>> {
@@ -152,7 +159,10 @@ export async function extractCandidates(
   html: string,
   opts: { profileTypeHint?: string } = {},
 ): Promise<ExtractionResult> {
-  const result: ExtractionResult = { url, matched_types: [], candidates: [], used_ai: false, ai_error: null };
+  const result: ExtractionResult = {
+    url, matched_types: [], candidates: [], used_ai: false, ai_error: null,
+    classification: null, route: "skip",
+  };
   if (!html) return result;
 
   const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
@@ -248,6 +258,27 @@ export async function extractCandidates(
         data: ai.data,
       });
     }
+  }
+
+  // Step 7: Page classification — decides downstream routing. News /
+  // blog / press-release pages go to `news_items` (+ entity mentions);
+  // company/team/profile pages flow to the entity persister via the
+  // PredicateRouter. `skip` is reserved for directory hubs and unknown
+  // pages with no usable signals.
+  try {
+    const classification = await classifyPage(env, url, html);
+    result.classification = classification;
+    if (isNewsLike(classification.page_type)) {
+      result.route = "news_item";
+    } else if (matched.length > 0 || classification.page_type === "profile" || classification.page_type === "team_page" || classification.page_type === "company_home") {
+      result.route = "entity";
+    } else {
+      result.route = "skip";
+    }
+  } catch (e) {
+    // Never let classification failure abort extraction — preview will
+    // still surface candidates and matched_types.
+    console.warn("crawler.classifyPage failed", (e as Error).message);
   }
 
   return result;

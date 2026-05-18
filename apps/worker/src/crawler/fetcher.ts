@@ -8,6 +8,46 @@
 import type { Env } from "../types";
 import { acquire, recordOutcome, type AcquireResult } from "./hostThrottle";
 
+// Task #1: per-host politeness goes through the HOST_THROTTLE Durable
+// Object when bound, so concurrent fetches of the same host see a
+// consistent token bucket / backoff counter. Falls back to the direct
+// helpers in dev / test where the DO binding is absent.
+function safeHostFromUrl(url: string): string {
+  try { return new URL(url).hostname.toLowerCase(); } catch { return ""; }
+}
+
+async function acquireViaThrottle(env: Env, url: string): Promise<AcquireResult> {
+  const host = safeHostFromUrl(url);
+  if (!env.HOST_THROTTLE || !host) return acquire(env, url);
+  try {
+    const stub = env.HOST_THROTTLE.get(env.HOST_THROTTLE.idFromName(host));
+    const r = await stub.fetch("https://throttle/acquire", {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    });
+    if (!r.ok) return acquire(env, url);
+    return (await r.json()) as AcquireResult;
+  } catch {
+    return acquire(env, url);
+  }
+}
+
+async function recordOutcomeViaThrottle(
+  env: Env, host: string, outcome: { ok: boolean; status: number; tierUsed: number },
+): Promise<void> {
+  if (!env.HOST_THROTTLE || !host) { await recordOutcome(env, host, outcome); return; }
+  try {
+    const stub = env.HOST_THROTTLE.get(env.HOST_THROTTLE.idFromName(host));
+    const r = await stub.fetch("https://throttle/record_outcome", {
+      method: "POST",
+      body: JSON.stringify({ host, ok: outcome.ok, status: outcome.status, tier_used: outcome.tierUsed }),
+    });
+    if (!r.ok) await recordOutcome(env, host, outcome);
+  } catch {
+    await recordOutcome(env, host, outcome);
+  }
+}
+
 export const CRAWLER_UA = "AxalVCBot/1.0 (+https://axal.vc/bot)";
 
 export type CrawlerTier = 0 | 1 | 2 | 3;
@@ -217,7 +257,7 @@ export interface FetchOptions {
 export async function crawlerFetch(env: Env, url: string, opts: FetchOptions = {}): Promise<FetcherResult> {
   let acq: AcquireResult | null = null;
   if (!opts.skipPolicy) {
-    acq = await acquire(env, url);
+    acq = await acquireViaThrottle(env, url);
     if (!acq.ok) {
       const failed: FetcherResult = {
         ok: false, url, finalUrl: url, status: 0, html: "", bytes: 0,
@@ -242,10 +282,10 @@ export async function crawlerFetch(env: Env, url: string, opts: FetchOptions = {
     await logAttempt(env, r);
     last = r;
     if (r.ok) {
-      await recordOutcome(env, r.host, { ok: true, status: r.status, tierUsed: tier });
+      await recordOutcomeViaThrottle(env, r.host, { ok: true, status: r.status, tierUsed: tier });
       return r;
     }
-    await recordOutcome(env, r.host, { ok: false, status: r.status, tierUsed: tier });
+    await recordOutcomeViaThrottle(env, r.host, { ok: false, status: r.status, tierUsed: tier });
     if (!shouldEscalate(r)) break;
   }
   return last ?? { ok: false, url, finalUrl: url, status: 0, html: "", bytes: 0,

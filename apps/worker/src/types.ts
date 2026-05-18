@@ -53,6 +53,8 @@ export interface Env {
   // Tasks #7 / #8 / #9 persona ↔ entity matching.
   VECTORIZE_ENTITIES?: VectorizeIndex;
   ENTITY_LOCK?: DurableObjectNamespace;
+  // Task #1: per-host politeness controller (one DO per domain).
+  HOST_THROTTLE?: DurableObjectNamespace;
   ANALYTICS?: AnalyticsEngineDataset;
   RL_HOST?: RateLimiter;
   RL_AI?: RateLimiter;

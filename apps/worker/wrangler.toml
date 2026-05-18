@@ -154,9 +154,20 @@ index_name = "axal-entities-768"  # dim=768 metric=cosine
 name = "ENTITY_LOCK"
 class_name = "EntityLock"
 
+# Task #1: per-host politeness controller (one DO per registered domain).
+# Serializes acquire / recordOutcome / recentLog / getHostState so token
+# bucket + backoff state can't race between concurrent fetches.
+[[durable_objects.bindings]]
+name = "HOST_THROTTLE"
+class_name = "HostThrottle"
+
 [[migrations]]
 tag = "v1-task25"
 new_sqlite_classes = ["EntityLock"]
+
+[[migrations]]
+tag = "v2-task1-host-throttle"
+new_sqlite_classes = ["HostThrottle"]
 
 # Task #25: Analytics Engine high-volume metrics dataset.
 [[analytics_engine_datasets]]
