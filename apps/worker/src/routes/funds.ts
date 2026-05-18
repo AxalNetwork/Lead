@@ -128,20 +128,22 @@ fundsRoute.get("/dry-powder-leaderboard", async (c) => {
   const geo = c.req.query("geo");
   const sector = c.req.query("sector");
   const limit = clampLimit(c.req.query("limit"), 25, 100);
-  const where: string[] = [
-    "fund_status IN ('raising', 'active')",
-    "announced_raised_usd IS NOT NULL", "announced_raised_usd > 0",
-  ];
+  // No announced_raised_usd prefilter — computeDryPowder already
+  // falls back to ΣForm D amount_sold and ΣLP committed when
+  // announced_raised_usd is NULL, so prefiltering would silently
+  // drop valid large funds whose raised capital is only inferable
+  // from filings/disclosures.
+  const where: string[] = ["fund_status IN ('raising', 'active')"];
   const binds: unknown[] = [];
   if (strategy) { where.push("strategy = ?"); binds.push(strategy); }
   if (geo)    { where.push("lower(COALESCE(geos_json, '')) LIKE ?");    binds.push(`%${geo.toLowerCase()}%`); }
   if (sector) { where.push("lower(COALESCE(sectors_json, '')) LIKE ?"); binds.push(`%${sector.toLowerCase()}%`); }
   // Pull a wider candidate set, score in JS via computeDryPowder, then
-  // slice. We cap candidates so a global ranking stays bounded.
+  // slice. Cap candidates so a global ranking stays bounded.
   const rows = await c.env.DB.prepare(
     `SELECT ${FUND_COLS} FROM funds
       WHERE ${where.join(" AND ")}
-      ORDER BY announced_raised_usd DESC
+      ORDER BY COALESCE(announced_raised_usd, 0) DESC, updated_at DESC
       LIMIT 200`,
   ).bind(...binds).all<FundRow>();
   const candidates = rows.results ?? [];

@@ -8,10 +8,11 @@
 -- only.
 --
 -- Idempotency: UNIQUE(firm_entity_id, fund_name) — the assembler
--- INSERT-OR-UPDATEs the same row on every refresh. fund_id_807 is a
--- second discriminator when the SEC-issued fund identifier is known
--- (assembler stamps it as a fact + uses it for resolver hits) but the
--- UNIQUE key stays (firm, name) because not every fund has an 807.
+-- INSERT-OR-UPDATEs the same row on every refresh. SEC-issued
+-- fund identifiers (Form ADV Section 7.B.1 item 805-numbers) are
+-- carried by the upstream sec_form_adv_funds.fund_id_807 column,
+-- not duplicated here — the (firm, name) key stays canonical
+-- because not every fund has an 807 number.
 
 CREATE TABLE IF NOT EXISTS funds (
   id                       TEXT PRIMARY KEY,         -- uuid v4

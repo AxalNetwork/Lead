@@ -164,16 +164,22 @@ export async function computeStrategyDrift(env: Env, fundId: string): Promise<Mo
     };
     reports.push(report);
 
-    if (driftScore >= 0.4 && fund.fund_entity_id) {
-      await insertFact(env, {
-        entity_id: fund.fund_entity_id,
-        predicate: "fund.strategy_drift",
-        source_kind: "scrape",
-        source: "fund_strategy_drift",
-        value_json: { ...report },
-        confidence: 0.7,
-        evidence_url: null,
-      });
+    if (driftScore >= 0.4) {
+      // Prefer the fund entity; fall back to the GP firm entity so
+      // drift facts are still emitted for legacy funds rows that
+      // pre-date the fund_entity_id link.
+      const target = fund.fund_entity_id ?? fund.firm_entity_id;
+      if (target) {
+        await insertFact(env, {
+          entity_id: target,
+          predicate: fund.fund_entity_id ? "fund.strategy_drift" : "firm.strategy_drift",
+          source_kind: "scrape",
+          source: "fund_strategy_drift",
+          value_json: { ...report, fallback_to_firm: !fund.fund_entity_id },
+          confidence: 0.7,
+          evidence_url: null,
+        });
+      }
     }
     prevModal = stageNow ?? prevModal;
   }
