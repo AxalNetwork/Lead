@@ -204,7 +204,12 @@ export async function buildCandidates(env: Env, input: ExpandInput): Promise<Fro
 // the smart_frontier inserts. Reused across calls in the same cycle.
 export type CycleCounters = Map<string, number>;
 
-const GLOBAL_PER_TYPE_PER_CYCLE = 5000;
+// Architecture guardrail: per the Task #3 spec, the per-profile-type
+// fanout cap is 500/cycle. This is the GLOBAL cap shared across every
+// expandFrontier call within one runCrawlFrontier invocation; the
+// per-call MAX_PER_TYPE_PER_CYCLE above is the matching ceiling applied
+// to a single source page so the numbers line up either way.
+const GLOBAL_PER_TYPE_PER_CYCLE = 500;
 
 // expandFrontier — buildCandidates + persist. Returns the number of rows
 // inserted (existing canonical URLs for the same profile_type are left
