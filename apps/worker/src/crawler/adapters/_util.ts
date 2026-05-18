@@ -88,6 +88,21 @@ export function digFor<T>(obj: unknown, pred: (n: Record<string, unknown>) => bo
   return null;
 }
 
+/** Like digFor, but collects every match (deduped by reference). */
+export function digAll<T>(obj: unknown, pred: (n: Record<string, unknown>) => boolean, depth = 0, out: T[] = []): T[] {
+  if (!obj || typeof obj !== "object" || depth > 10) return out;
+  const o = obj as Record<string, unknown>;
+  if (pred(o)) out.push(o as unknown as T);
+  for (const v of Object.values(o)) {
+    if (Array.isArray(v)) {
+      for (const item of v) digAll<T>(item, pred, depth + 1, out);
+    } else if (v && typeof v === "object") {
+      digAll<T>(v, pred, depth + 1, out);
+    }
+  }
+  return out;
+}
+
 export function safeHost(url: string): string {
   try { return new URL(url).hostname.toLowerCase(); } catch { return ""; }
 }

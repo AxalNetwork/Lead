@@ -98,6 +98,16 @@
     "src/crawler/adapters/venturePartnerListings.ts",
     "src/crawler/adapters/conferenceAdapters/index.ts",
     "src/crawler/adapters/conferenceAdapters/_conferenceShared.ts",
-    "src/crawler/archive.ts"
+    "src/crawler/adapters/conferenceAdapters/ted.ts",
+    "src/crawler/adapters/conferenceAdapters/ycombinator.ts",
+    "src/crawler/adapters/conferenceAdapters/saastr.ts",
+    "src/crawler/adapters/conferenceAdapters/awsReInvent.ts",
+    "src/crawler/adapters/conferenceAdapters/consensusInvest.ts",
+    "src/crawler/adapters/conferenceAdapters/slush.ts",
+    "src/crawler/adapters/conferenceAdapters/webSummit.ts",
+    "src/crawler/adapters/conferenceAdapters/nrfBigShow.ts",
+    "src/crawler/adapters/conferenceAdapters/jpmHealthcare.ts",
+    "src/crawler/archive.ts",
+    "src/crawler/replay.ts"
   ]
 }

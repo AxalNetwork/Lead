@@ -9,7 +9,7 @@
     "typecheck:strict": "tsc --noEmit -p tsconfig.strict.json",
     "lint": "eslint 'src/**/*.ts'",
     "lint:fix": "eslint 'src/**/*.ts' --fix",
-    "test": "tsc -p tsconfig.test.json && node --test test/profile.test.mjs test/agent.test.mjs test/monitoring.test.mjs test/osint.test.mjs test/profile-helpers.test.mjs test/profile-db.test.mjs test/profilers.test.mjs test/access_guard.test.mjs test/crawler-adapters.test.mjs"
+    "test": "tsc -p tsconfig.test.json && node --test test/profile.test.mjs test/agent.test.mjs test/monitoring.test.mjs test/osint.test.mjs test/profile-helpers.test.mjs test/profile-db.test.mjs test/profilers.test.mjs test/access_guard.test.mjs src/crawler/adapters/__tests__/linkedinPublic.test.mjs src/crawler/adapters/__tests__/crunchbasePublic.test.mjs src/crawler/adapters/__tests__/secEdgar.test.mjs src/crawler/adapters/__tests__/venturePartnerListings.test.mjs src/crawler/adapters/__tests__/misc.test.mjs"
   },
   "dependencies": {
     "fflate": "^0.8.2",
