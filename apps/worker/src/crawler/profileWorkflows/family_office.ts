@@ -1,7 +1,7 @@
 // Task #1: family_office workflow. Firm shape + family_principal name.
 
 import { makeWorkflow, sameOrigin } from "./_shared";
-import { FIRM_SCHEMA, type FirmExtract, mapFirm, searchUrls, namedQuery } from "./_commonSchemas";
+import { FIRM_SCHEMA, type FirmExtract, mapFirm, wikipediaUrl, secEdgarAdvUrl, linkedinCompanyUrl } from "./_commonSchemas";
 import type { FactCandidate, WorkflowDef } from "./_types";
 
 const FO_SCHEMA = {
@@ -17,7 +17,9 @@ const def: WorkflowDef = {
   estimated_cost_per_run: { sources: 4, ai_neurons: 0.4 },
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/about", "/family-office", "/investments"]),
-    ...searchUrls(namedQuery(ctx, "family office direct investment")).slice(0, 1),
+    wikipediaUrl(ctx),
+    secEdgarAdvUrl(ctx),
+    linkedinCompanyUrl(ctx),
   ],
   extractionSchema: FO_SCHEMA as unknown as Record<string, unknown>,
   systemPrompt:

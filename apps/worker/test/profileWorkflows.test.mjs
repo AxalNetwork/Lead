@@ -21,7 +21,7 @@ const ROOT = "../test-dist";
 
 const { getWorkflowForType, hasDedicatedWorkflow, listWorkflows } =
   await import(`${ROOT}/crawler/profileWorkflows/registry.js`);
-const { crossRef, runStandardWorkflow, resolveEntityId, checkTypeDailyBudget } =
+const { crossRef, runStandardWorkflow, resolveEntityId, checkTypeDailyBudget, projectedRunCostUsd } =
   await import(`${ROOT}/crawler/profileWorkflows/_shared.js`);
 const { investorVcWorkflow } = await import(`${ROOT}/crawler/profileWorkflows/investor_vc.js`);
 
@@ -253,6 +253,24 @@ test("checkTypeDailyBudget: cap blocks dispatch after spend exceeds cap", async 
   const r = await checkTypeDailyBudget(env, "investor_vc");
   assert.equal(r.ok, false);
   assert.ok(r.spend >= r.cap, `expected spend ≥ cap, got ${r.spend} / ${r.cap}`);
+});
+
+test("checkTypeDailyBudget: PREFLIGHT — projected cost that crosses cap is refused before run", async () => {
+  const env = makeEnv();
+  // Cap defaults to 0.50 USD/type/day. Pre-load spend at 0.49 so a
+  // tiny accrued amount is fine BUT a projected run-cost that crosses
+  // the cap must be refused.
+  const day = new Date().toISOString().slice(0, 10);
+  await env.SCRAPE_CACHE.put(`pwf:spend:investor_vc:${day}`, "0.49");
+  const projected = projectedRunCostUsd(investorVcWorkflow);
+  assert.ok(projected > 0, "projected cost must be > 0");
+  // Without preflight (post-fact check): under cap → ok.
+  const postOnly = await checkTypeDailyBudget(env, "investor_vc");
+  assert.equal(postOnly.ok, true);
+  // With preflight: 0.49 + projected (≥0.014) ≥ 0.50 → must refuse.
+  const pre = await checkTypeDailyBudget(env, "investor_vc", projected);
+  assert.equal(pre.ok, false, `expected preflight refusal at spend=${pre.spend}, projected=${pre.projected}, cap=${pre.cap}`);
+  assert.equal(pre.projected, projected);
 });
 
 test("checkTypeDailyBudget: empty ledger allows dispatch", async () => {

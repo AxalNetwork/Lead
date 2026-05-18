@@ -4,7 +4,7 @@
 // and congressional testimony pages. All free official endpoints.
 
 import { makeWorkflow, sameOrigin } from "./_shared";
-import { PERSON_SCHEMA, type PersonExtract, mapPerson, searchUrls, namedQuery } from "./_commonSchemas";
+import { PERSON_SCHEMA, type PersonExtract, mapPerson, secGovBioUrl, wikipediaUrl } from "./_commonSchemas";
 import type { FactCandidate, WorkflowDef } from "./_types";
 
 const REG_SCHEMA = {
@@ -33,8 +33,8 @@ const def: WorkflowDef = {
   estimated_cost_per_run: { sources: 4, ai_neurons: 0.4 },
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/about/biography", "/news/speech"]),
-    ...searchUrls(namedQuery(ctx, "site:sec.gov speech")).slice(0, 1),
-    ...searchUrls(namedQuery(ctx, "SEC enforcement action")).slice(0, 1),
+    secGovBioUrl(ctx),
+    wikipediaUrl(ctx),
   ],
   extractionSchema: REG_SCHEMA as unknown as Record<string, unknown>,
   systemPrompt:

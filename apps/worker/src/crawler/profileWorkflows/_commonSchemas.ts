@@ -173,3 +173,142 @@ export function namedQuery(ctx: WorkflowContext, qualifier: string): string {
   const base = ctx.displayName ?? ctx.candidateHost;
   return `${base} ${qualifier}`.trim();
 }
+
+// ---- Concrete public-source builders ------------------------------------
+//
+// Each helper derives a deterministic public-endpoint URL from the
+// candidate's displayName / host slug. These are the *direct* sources
+// the task spec calls for (Wikipedia entity, SEC EDGAR adviser search,
+// LinkedIn / Crunchbase / GitHub / Twitter public, congress.gov,
+// FEC, Google Scholar HTML, arXiv, Semantic Scholar, Muck Rack,
+// SEC.gov bios). Workflows compose these into their `plan` so the
+// crossRef verifier sees genuinely distinct buckets — not three
+// search-engine result pages that all paraphrase the same source.
+//
+// Slug derivation: prefer displayName; fall back to the candidate host
+// minus its TLD. Normalization strips punctuation so the slugs match
+// what Wikipedia / Crunchbase / LinkedIn use in URLs in the common case.
+
+function pickSlugBase(ctx: WorkflowContext): string {
+  const dn = (ctx.displayName ?? "").trim();
+  if (dn) return dn;
+  const host = (ctx.candidateHost ?? "").replace(/\.[a-z]{2,}$/i, "");
+  return host;
+}
+
+/** Slug for URL path: lowercase, hyphenated, alphanumeric. */
+export function urlSlug(ctx: WorkflowContext): string {
+  return pickSlugBase(ctx)
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/** Slug for Wikipedia: Title_Case_With_Underscores. */
+export function wikiSlug(ctx: WorkflowContext): string {
+  const base = pickSlugBase(ctx).replace(/\s+/g, " ").trim();
+  return base.split(" ").filter(Boolean).map((w) => w.length ? w[0].toUpperCase() + w.slice(1) : "").join("_");
+}
+
+/** Public Wikipedia entity URL (best-effort). */
+export function wikipediaUrl(ctx: WorkflowContext): { tag: string; url: string; optional: true } {
+  return { tag: "wikipedia", url: `https://en.wikipedia.org/wiki/${wikiSlug(ctx)}`, optional: true };
+}
+
+/** LinkedIn public company page. */
+export function linkedinCompanyUrl(ctx: WorkflowContext): { tag: string; url: string; optional: true } {
+  return { tag: "linkedin_company", url: `https://www.linkedin.com/company/${urlSlug(ctx)}`, optional: true };
+}
+
+/** LinkedIn public person page. */
+export function linkedinPersonUrl(ctx: WorkflowContext): { tag: string; url: string; optional: true } {
+  return { tag: "linkedin_in", url: `https://www.linkedin.com/in/${urlSlug(ctx)}`, optional: true };
+}
+
+/** Crunchbase organization page. */
+export function crunchbaseOrgUrl(ctx: WorkflowContext): { tag: string; url: string; optional: true } {
+  return { tag: "crunchbase_org", url: `https://www.crunchbase.com/organization/${urlSlug(ctx)}`, optional: true };
+}
+
+/** Crunchbase person page. */
+export function crunchbasePersonUrl(ctx: WorkflowContext): { tag: string; url: string; optional: true } {
+  return { tag: "crunchbase_person", url: `https://www.crunchbase.com/person/${urlSlug(ctx)}`, optional: true };
+}
+
+/** GitHub public user. */
+export function githubUserUrl(ctx: WorkflowContext): { tag: string; url: string; optional: true } {
+  const slug = urlSlug(ctx).replace(/-/g, "");
+  return { tag: "github", url: `https://github.com/${slug}`, optional: true };
+}
+
+/** Twitter/X public profile. */
+export function twitterUrl(ctx: WorkflowContext): { tag: string; url: string; optional: true } {
+  const slug = urlSlug(ctx).replace(/-/g, "");
+  return { tag: "twitter", url: `https://twitter.com/${slug}`, optional: true };
+}
+
+/** SEC EDGAR Investment Adviser Public Disclosure search by firm name. */
+export function secEdgarAdvUrl(ctx: WorkflowContext): { tag: string; url: string; optional: true } {
+  const q = encodeURIComponent(pickSlugBase(ctx));
+  return { tag: "sec_edgar_adv", url: `https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&company=${q}&type=ADV&dateb=&owner=include&count=40`, optional: true };
+}
+
+/** SEC.gov bio search (regulators/commissioners). */
+export function secGovBioUrl(ctx: WorkflowContext): { tag: string; url: string; optional: true } {
+  const q = encodeURIComponent(pickSlugBase(ctx));
+  return { tag: "sec_gov_bio", url: `https://www.sec.gov/cgi-bin/srqsb?text=${q}`, optional: true };
+}
+
+/** congress.gov member search. */
+export function congressGovUrl(ctx: WorkflowContext): { tag: string; url: string; optional: true } {
+  const q = encodeURIComponent(pickSlugBase(ctx));
+  return { tag: "congress_gov", url: `https://www.congress.gov/members?q={"search":"${q}"}`, optional: true };
+}
+
+/** FEC committee search by candidate / committee name. */
+export function fecUrl(ctx: WorkflowContext): { tag: string; url: string; optional: true } {
+  const q = encodeURIComponent(pickSlugBase(ctx));
+  return { tag: "fec", url: `https://www.fec.gov/data/candidates/?q=${q}`, optional: true };
+}
+
+/** Google Scholar (HTML, no API) — author search. */
+export function googleScholarUrl(ctx: WorkflowContext): { tag: string; url: string; optional: true } {
+  const q = encodeURIComponent(pickSlugBase(ctx));
+  return { tag: "google_scholar", url: `https://scholar.google.com/scholar?q=author:%22${q}%22`, optional: true };
+}
+
+/** arXiv author search. */
+export function arxivUrl(ctx: WorkflowContext): { tag: string; url: string; optional: true } {
+  const q = encodeURIComponent(pickSlugBase(ctx));
+  return { tag: "arxiv", url: `https://arxiv.org/a/${q}`, optional: true };
+}
+
+/** Semantic Scholar author search. */
+export function semanticScholarUrl(ctx: WorkflowContext): { tag: string; url: string; optional: true } {
+  const q = encodeURIComponent(pickSlugBase(ctx));
+  return { tag: "semantic_scholar", url: `https://www.semanticscholar.org/search?q=${q}&sort=relevance`, optional: true };
+}
+
+/** Muck Rack public profile (journalists). */
+export function muckRackUrl(ctx: WorkflowContext): { tag: string; url: string; optional: true } {
+  return { tag: "muckrack", url: `https://muckrack.com/${urlSlug(ctx)}`, optional: true };
+}
+
+/** FINRA BrokerCheck firm search (bankers). */
+export function finraBrokerCheckUrl(ctx: WorkflowContext): { tag: string; url: string; optional: true } {
+  const q = encodeURIComponent(pickSlugBase(ctx));
+  return { tag: "finra_brokercheck", url: `https://brokercheck.finra.org/search/genericsearch/grid?query=${q}`, optional: true };
+}
+
+/** Martindale-Hubbell attorney lookup. */
+export function martindaleUrl(ctx: WorkflowContext): { tag: string; url: string; optional: true } {
+  const q = encodeURIComponent(pickSlugBase(ctx));
+  return { tag: "martindale", url: `https://www.martindale.com/find-attorneys/?term=${q}`, optional: true };
+}
+
+/** CourtListener party search (securities attorneys). */
+export function courtListenerUrl(ctx: WorkflowContext): { tag: string; url: string; optional: true } {
+  const q = encodeURIComponent(pickSlugBase(ctx));
+  return { tag: "courtlistener", url: `https://www.courtlistener.com/?q=${q}&type=r`, optional: true };
+}

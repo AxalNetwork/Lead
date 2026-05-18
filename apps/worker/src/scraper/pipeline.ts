@@ -22,7 +22,7 @@ import { extractPeopleFromPage, nameKeyOf, type ExtractedPerson } from "./firmcr
 // the page classifier when env.PROFILE_WORKFLOWS_ENABLED is set; otherwise
 // inert (and the registry lookup short-circuits).
 import { getWorkflowForType } from "../crawler/profileWorkflows/registry";
-import { checkTypeDailyBudget } from "../crawler/profileWorkflows/_shared";
+import { checkTypeDailyBudget, projectedRunCostUsd } from "../crawler/profileWorkflows/_shared";
 import { loadRegistry, testPage as testProfileType } from "../services/profileTypes";
 import { aiExtractPeople } from "../ai/extract";
 import { guessEmails } from "./firmcrawl/emailGuess";
@@ -625,11 +625,16 @@ async function processSingleUrl(
         // top-3 result extraction) so we still capture facts for
         // unknown / unimplemented types.
         const chosenTypeId = best?.id ?? "_default";
-        const budget = await checkTypeDailyBudget(env, chosenTypeId);
+        const wf = getWorkflowForType(chosenTypeId);
+        // Preflight: refuse runs whose projected cost would breach the
+        // per-profile-type daily cap, not merely after the cap is
+        // already over (task contract: "refuses to start a run that
+        // would breach the per-type daily cap").
+        const projected = projectedRunCostUsd(wf);
+        const budget = await checkTypeDailyBudget(env, chosenTypeId, projected);
         if (!budget.ok) {
-          console.log("profile_workflow skipped:type_daily_cap", { type: chosenTypeId, spend: budget.spend, cap: budget.cap });
+          console.log("profile_workflow skipped:type_daily_cap", { type: chosenTypeId, spend: budget.spend, projected, cap: budget.cap });
         } else {
-          const wf = getWorkflowForType(chosenTypeId);
           const out = await wf.run(env, {
             candidateUrl: fetched.url || url,
             candidateHtml: fetched.html,

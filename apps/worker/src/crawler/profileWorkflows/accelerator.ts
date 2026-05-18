@@ -2,7 +2,7 @@
 // emits program_duration_weeks, cohort_size, equity_taken.
 
 import { makeWorkflow, sameOrigin } from "./_shared";
-import { FIRM_SCHEMA, type FirmExtract, mapFirm, searchUrls, namedQuery } from "./_commonSchemas";
+import { FIRM_SCHEMA, type FirmExtract, mapFirm, wikipediaUrl, crunchbaseOrgUrl, linkedinCompanyUrl } from "./_commonSchemas";
 import type { FactCandidate, WorkflowDef } from "./_types";
 
 const ACCEL_SCHEMA = {
@@ -29,7 +29,9 @@ const def: WorkflowDef = {
   estimated_cost_per_run: { sources: 6, ai_neurons: 0.6 },
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/about", "/program", "/apply", "/batch", "/cohort", "/companies"]),
-    ...searchUrls(namedQuery(ctx, "accelerator program demo day")).slice(0, 1),
+    wikipediaUrl(ctx),
+    crunchbaseOrgUrl(ctx),
+    linkedinCompanyUrl(ctx),
   ],
   extractionSchema: ACCEL_SCHEMA as unknown as Record<string, unknown>,
   systemPrompt:

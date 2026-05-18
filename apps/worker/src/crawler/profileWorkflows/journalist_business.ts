@@ -4,7 +4,7 @@
 // Twitter public, and a byline-history search.
 
 import { makeWorkflow, sameOrigin } from "./_shared";
-import { PERSON_SCHEMA, type PersonExtract, mapPerson, searchUrls, namedQuery } from "./_commonSchemas";
+import { PERSON_SCHEMA, type PersonExtract, mapPerson, muckRackUrl, linkedinPersonUrl, twitterUrl } from "./_commonSchemas";
 import type { FactCandidate, WorkflowDef } from "./_types";
 
 const JOURN_SCHEMA = {
@@ -33,8 +33,9 @@ const def: WorkflowDef = {
   estimated_cost_per_run: { sources: 4, ai_neurons: 0.4 },
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/author", "/staff", "/team"]),
-    ...searchUrls(namedQuery(ctx, "muckrack journalist profile")).slice(0, 1),
-    ...searchUrls(namedQuery(ctx, "byline business reporter")).slice(0, 1),
+    muckRackUrl(ctx),
+    linkedinPersonUrl(ctx),
+    twitterUrl(ctx),
   ],
   extractionSchema: JOURN_SCHEMA as unknown as Record<string, unknown>,
   systemPrompt:

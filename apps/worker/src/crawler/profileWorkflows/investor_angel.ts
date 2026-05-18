@@ -4,7 +4,7 @@
 // search bootstrap.
 
 import { makeWorkflow, sameOrigin } from "./_shared";
-import { PERSON_SCHEMA, type PersonExtract, mapPerson, searchUrls, namedQuery } from "./_commonSchemas";
+import { PERSON_SCHEMA, type PersonExtract, mapPerson, linkedinPersonUrl, crunchbasePersonUrl, twitterUrl, wikipediaUrl } from "./_commonSchemas";
 import type { FactCandidate, WorkflowDef } from "./_types";
 
 const ANGEL_SCHEMA = {
@@ -32,8 +32,11 @@ const def: WorkflowDef = {
   profile_type_id: "investor_angel",
   estimated_cost_per_run: { sources: 4, ai_neurons: 0.4 },
   plan: (ctx) => [
-    ...sameOrigin(ctx.candidateUrl, ["/about", "/portfolio"]),
-    ...searchUrls(namedQuery(ctx, "angel investor portfolio")).slice(0, 2),
+    ...sameOrigin(ctx.candidateUrl, ["/about", "/portfolio", "/investments"]),
+    linkedinPersonUrl(ctx),
+    crunchbasePersonUrl(ctx),
+    twitterUrl(ctx),
+    wikipediaUrl(ctx),
   ],
   extractionSchema: ANGEL_SCHEMA as unknown as Record<string, unknown>,
   systemPrompt:

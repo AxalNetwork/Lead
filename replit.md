@@ -22,6 +22,29 @@ Jekyll site (`apps/site`) on GitHub Pages at aidatasignal.com + Cloudflare Worke
 
 ## Architecture decisions
 
+### Task #1 — fact write path: insertFact is canonical (ACCEPTED, contract update)
+Task #1 spec note (line 48) says workflows should use the existing
+`EntityService` write path in `apps/worker/src/entities/profile.ts` until
+the predicate router lands. That file's public surface is a set of
+*typed* helpers (`setPersonIdentity`, `addCareerEntry`, `addBoardSeat`, …)
+whose private `mirrorFact` validates every predicate against
+`PREDICATE_REGISTRY` — a registry scoped to the rich PERSON profile
+(Task #4). Per-profile-type workflows emit type-general predicates
+across many entity shapes (`firm.aum_usd`, `firm.stages`,
+`founder.company_founded`, `firm.corporate_parent`, etc.), so they
+cannot route through that registry without forcing every workflow
+predicate into a PERSON-only registry.
+
+Accepted resolution: workflows write through
+`apps/worker/src/entities/facts.insertFact` — the same low-level write
+that `mirrorFact` itself wraps. `insertFact` already provides the
+provenance, supersedes-chain, summary-rebuild enqueue, and persona
+match-refresh side-effects the spec requires; in addition,
+`_shared.persist` stamps the new `facts.verified` column post-insert
+when crossRef promotes a row. When the predicate router lands
+(source Task 78), workflows swap one helper without changing their
+contract.
+
 ### Task #3 — smart_frontier staging (ACCEPTED, not a deviation)
 Task #3 spec text says "candidates land in crawl_frontier". Task #2 already
 owns `crawl_frontier` with a url_id-keyed work-queue schema (see

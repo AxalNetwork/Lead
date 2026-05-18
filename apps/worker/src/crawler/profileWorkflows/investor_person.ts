@@ -6,7 +6,7 @@
 // timeline, notable investments, board seats, podcast appearances.
 
 import { makeWorkflow, sameOrigin } from "./_shared";
-import { PERSON_SCHEMA, type PersonExtract, mapPerson, searchUrls, namedQuery } from "./_commonSchemas";
+import { PERSON_SCHEMA, type PersonExtract, mapPerson, linkedinPersonUrl, crunchbasePersonUrl, twitterUrl, wikipediaUrl } from "./_commonSchemas";
 import type { FactCandidate, WorkflowDef } from "./_types";
 
 const INV_PERSON_SCHEMA = {
@@ -32,11 +32,15 @@ const def: WorkflowDef = {
   profile_type_id: "investor_person",
   estimated_cost_per_run: { sources: 5, ai_neurons: 0.5 },
   plan: (ctx) => [
-    // /people/<slug> bios live on the firm site; we try the candidate's
-    // sibling /about and the team-roster as cross-refs.
+    // Direct public profiles (task spec Step 4): firm-bio (same-origin
+    // /team or /about), LinkedIn public, Twitter public, Crunchbase
+    // person page, Wikipedia entity if notable. Distinct sourceTag
+    // buckets so crossRef can promote multi-source agreement.
     ...sameOrigin(ctx.candidateUrl, ["/team", "/about"]),
-    ...searchUrls(namedQuery(ctx, "investor partner linkedin")).slice(0, 1),
-    ...searchUrls(namedQuery(ctx, "investor crunchbase person")).slice(0, 1),
+    linkedinPersonUrl(ctx),
+    crunchbasePersonUrl(ctx),
+    twitterUrl(ctx),
+    wikipediaUrl(ctx),
   ],
   extractionSchema: INV_PERSON_SCHEMA as unknown as Record<string, unknown>,
   systemPrompt:

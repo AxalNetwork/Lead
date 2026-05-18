@@ -532,10 +532,35 @@ async function addTypeDailySpend(env: Env, typeId: string, deltaUsd: number): Pr
  * before invoking a workflow so we don't pay AI/fetch costs we cannot
  * record. Exposed at module scope so the cron driver (follow-up #14)
  * can use the same gate.
+ *
+ * When `projectedCostUsd` is supplied, the check is a *preflight* —
+ * the run is refused if today's spend PLUS the projected cost of the
+ * upcoming run would breach the cap. This is what the task spec
+ * mandates ("orchestrator refuses to start a run that would breach
+ * the per-type daily cap"). Without `projectedCostUsd` the check is
+ * a simple post-fact gate against accrued spend.
  */
-export async function checkTypeDailyBudget(env: Env, typeId: string): Promise<{ ok: boolean; spend: number; cap: number; day: string }> {
+export async function checkTypeDailyBudget(
+  env: Env,
+  typeId: string,
+  projectedCostUsd = 0,
+): Promise<{ ok: boolean; spend: number; cap: number; day: string; projected: number }> {
   const s = await getTypeDailySpend(env, typeId);
-  return { ok: s.spend < s.cap, ...s };
+  const projected = Number.isFinite(projectedCostUsd) && projectedCostUsd > 0 ? projectedCostUsd : 0;
+  const ok = s.spend + projected < s.cap;
+  return { ok, projected, ...s };
+}
+
+/**
+ * Convert a workflow's declared `estimated_cost_per_run` into a USD
+ * figure for preflight budgeting. Uses the median fetch tier (tier 2,
+ * $0.0015/source) as the per-source cost — this matches what the
+ * crawler actually pays for most live-browser fetches and gives the
+ * cap-enforcement a conservative-but-real ceiling.
+ */
+export function projectedRunCostUsd(def: { estimated_cost_per_run: { sources: number; ai_neurons: number } }): number {
+  return def.estimated_cost_per_run.sources * TIER_COST_USD[2]
+       + def.estimated_cost_per_run.ai_neurons * AI_NEURON_COST_USD;
 }
 
 /** Build a `ProfileWorkflow` from a `WorkflowDef`. */

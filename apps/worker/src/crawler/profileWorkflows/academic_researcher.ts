@@ -4,7 +4,7 @@
 // page, Semantic Scholar, lab page, and startup-involvement search.
 
 import { makeWorkflow, sameOrigin } from "./_shared";
-import { PERSON_SCHEMA, type PersonExtract, mapPerson, searchUrls, namedQuery } from "./_commonSchemas";
+import { PERSON_SCHEMA, type PersonExtract, mapPerson, googleScholarUrl, arxivUrl, semanticScholarUrl } from "./_commonSchemas";
 import type { FactCandidate, WorkflowDef } from "./_types";
 
 const ACAD_SCHEMA = {
@@ -41,9 +41,9 @@ const def: WorkflowDef = {
   estimated_cost_per_run: { sources: 5, ai_neurons: 0.5 },
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/people", "/faculty", "/research"]),
-    ...searchUrls(namedQuery(ctx, "scholar.google.com profile")).slice(0, 1),
-    ...searchUrls(namedQuery(ctx, "arxiv author")).slice(0, 1),
-    ...searchUrls(namedQuery(ctx, "semantic scholar author")).slice(0, 1),
+    googleScholarUrl(ctx),
+    arxivUrl(ctx),
+    semanticScholarUrl(ctx),
   ],
   extractionSchema: ACAD_SCHEMA as unknown as Record<string, unknown>,
   systemPrompt:

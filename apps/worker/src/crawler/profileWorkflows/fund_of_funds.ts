@@ -2,7 +2,7 @@
 // (the number of underlying GP funds the FoF has backed).
 
 import { makeWorkflow, sameOrigin } from "./_shared";
-import { FIRM_SCHEMA, type FirmExtract, mapFirm, searchUrls, namedQuery } from "./_commonSchemas";
+import { FIRM_SCHEMA, type FirmExtract, mapFirm, wikipediaUrl, secEdgarAdvUrl, crunchbaseOrgUrl, linkedinCompanyUrl } from "./_commonSchemas";
 import type { FactCandidate, WorkflowDef } from "./_types";
 
 const FOF_SCHEMA = {
@@ -18,7 +18,10 @@ const def: WorkflowDef = {
   estimated_cost_per_run: { sources: 5, ai_neurons: 0.5 },
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/about", "/team", "/portfolio", "/managers"]),
-    ...searchUrls(namedQuery(ctx, "fund of funds LP commitments")).slice(0, 1),
+    wikipediaUrl(ctx),
+    secEdgarAdvUrl(ctx),
+    crunchbaseOrgUrl(ctx),
+    linkedinCompanyUrl(ctx),
   ],
   extractionSchema: FOF_SCHEMA as unknown as Record<string, unknown>,
   systemPrompt:

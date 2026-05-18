@@ -2,7 +2,7 @@
 // extracted `corporate_parent` field that the CVC always carries.
 
 import { makeWorkflow, sameOrigin } from "./_shared";
-import { FIRM_SCHEMA, type FirmExtract, mapFirm, searchUrls, namedQuery } from "./_commonSchemas";
+import { FIRM_SCHEMA, type FirmExtract, mapFirm, wikipediaUrl, crunchbaseOrgUrl, linkedinCompanyUrl } from "./_commonSchemas";
 import type { FactCandidate, WorkflowDef } from "./_types";
 
 const CVC_SCHEMA = {
@@ -18,7 +18,9 @@ const def: WorkflowDef = {
   estimated_cost_per_run: { sources: 6, ai_neurons: 0.6 },
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/about", "/team", "/portfolio", "/news", "/ventures"]),
-    ...searchUrls(namedQuery(ctx, "corporate venture capital arm wikipedia")).slice(0, 1),
+    wikipediaUrl(ctx),
+    crunchbaseOrgUrl(ctx),
+    linkedinCompanyUrl(ctx),
   ],
   extractionSchema: CVC_SCHEMA as unknown as Record<string, unknown>,
   systemPrompt:

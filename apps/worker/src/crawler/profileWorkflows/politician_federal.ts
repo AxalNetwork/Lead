@@ -4,7 +4,7 @@
 // committee memberships, and Wikipedia. Free official endpoints only.
 
 import { makeWorkflow, sameOrigin } from "./_shared";
-import { PERSON_SCHEMA, type PersonExtract, mapPerson, searchUrls, namedQuery } from "./_commonSchemas";
+import { PERSON_SCHEMA, type PersonExtract, mapPerson, congressGovUrl, fecUrl, wikipediaUrl } from "./_commonSchemas";
 import type { FactCandidate, WorkflowDef } from "./_types";
 
 const POL_SCHEMA = {
@@ -37,8 +37,9 @@ const def: WorkflowDef = {
   estimated_cost_per_run: { sources: 4, ai_neurons: 0.4 },
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/about", "/biography"]),
-    ...searchUrls(namedQuery(ctx, "site:congress.gov member")).slice(0, 1),
-    ...searchUrls(namedQuery(ctx, "site:en.wikipedia.org")).slice(0, 1),
+    congressGovUrl(ctx),
+    fecUrl(ctx),
+    wikipediaUrl(ctx),
   ],
   extractionSchema: POL_SCHEMA as unknown as Record<string, unknown>,
   systemPrompt:

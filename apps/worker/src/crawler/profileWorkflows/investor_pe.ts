@@ -3,7 +3,7 @@
 // sibling pages (/funds, /strategies).
 
 import { makeWorkflow, sameOrigin } from "./_shared";
-import { FIRM_SCHEMA, type FirmExtract, mapFirm, searchUrls, namedQuery } from "./_commonSchemas";
+import { FIRM_SCHEMA, type FirmExtract, mapFirm, wikipediaUrl, secEdgarAdvUrl, crunchbaseOrgUrl, linkedinCompanyUrl } from "./_commonSchemas";
 import type { WorkflowDef } from "./_types";
 
 const def: WorkflowDef = {
@@ -12,7 +12,10 @@ const def: WorkflowDef = {
   estimated_cost_per_run: { sources: 7, ai_neurons: 0.7 },
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/about", "/team", "/portfolio", "/funds", "/strategies", "/news"]),
-    ...searchUrls(namedQuery(ctx, "private equity firm wikipedia")).slice(0, 1),
+    wikipediaUrl(ctx),
+    secEdgarAdvUrl(ctx),
+    crunchbaseOrgUrl(ctx),
+    linkedinCompanyUrl(ctx),
   ],
   extractionSchema: FIRM_SCHEMA as unknown as Record<string, unknown>,
   systemPrompt:

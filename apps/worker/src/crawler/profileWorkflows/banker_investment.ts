@@ -5,7 +5,7 @@
 // title, FINRA CRD if disclosed, and notable transactions.
 
 import { makeWorkflow, sameOrigin } from "./_shared";
-import { PERSON_SCHEMA, type PersonExtract, mapPerson, searchUrls, namedQuery } from "./_commonSchemas";
+import { PERSON_SCHEMA, type PersonExtract, mapPerson, finraBrokerCheckUrl, secEdgarAdvUrl, linkedinPersonUrl } from "./_commonSchemas";
 import type { FactCandidate, WorkflowDef } from "./_types";
 
 const BANK_SCHEMA = {
@@ -32,8 +32,9 @@ const def: WorkflowDef = {
   estimated_cost_per_run: { sources: 4, ai_neurons: 0.4 },
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/about", "/professionals"]),
-    ...searchUrls(namedQuery(ctx, "investment banker SEC S-1 underwriter")).slice(0, 1),
-    ...searchUrls(namedQuery(ctx, "investment banker league table")).slice(0, 1),
+    finraBrokerCheckUrl(ctx),
+    secEdgarAdvUrl(ctx),
+    linkedinPersonUrl(ctx),
   ],
   extractionSchema: BANK_SCHEMA as unknown as Record<string, unknown>,
   systemPrompt:

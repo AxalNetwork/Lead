@@ -6,16 +6,27 @@
 // a fact to verified=1 when ≥2 of the source buckets agree.
 
 import { makeWorkflow, sameOrigin, hostOf } from "./_shared";
-import { FIRM_SCHEMA, type FirmExtract, mapFirm, searchUrls, namedQuery } from "./_commonSchemas";
+import {
+  FIRM_SCHEMA, type FirmExtract, mapFirm,
+  wikipediaUrl, secEdgarAdvUrl, crunchbaseOrgUrl, linkedinCompanyUrl,
+} from "./_commonSchemas";
 import type { WorkflowDef } from "./_types";
 
 const def: WorkflowDef = {
   id: "investor_vc.v1",
   profile_type_id: "investor_vc",
-  estimated_cost_per_run: { sources: 7, ai_neurons: 0.7 },
+  estimated_cost_per_run: { sources: 9, ai_neurons: 0.9 },
+  // Concrete public-source plan (task spec Step 3): firm origin pages
+  // for portfolio / team / news + four cross-reference sources
+  // (Wikipedia entity, SEC EDGAR ADV adviser-search, Crunchbase
+  // organization, LinkedIn public company page). Each lands in its
+  // own sourceTag bucket so crossRef can promote multi-source facts.
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/about", "/team", "/portfolio", "/investments", "/news"]),
-    ...searchUrls(namedQuery(ctx, "venture capital firm wikipedia")).slice(0, 1),
+    wikipediaUrl(ctx),
+    secEdgarAdvUrl(ctx),
+    crunchbaseOrgUrl(ctx),
+    linkedinCompanyUrl(ctx),
   ],
   extractionSchema: FIRM_SCHEMA as unknown as Record<string, unknown>,
   systemPrompt:

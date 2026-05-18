@@ -5,7 +5,7 @@
 // JD school, notable engagements, practice areas.
 
 import { makeWorkflow, sameOrigin } from "./_shared";
-import { PERSON_SCHEMA, type PersonExtract, mapPerson, searchUrls, namedQuery } from "./_commonSchemas";
+import { PERSON_SCHEMA, type PersonExtract, mapPerson, martindaleUrl, courtListenerUrl, linkedinPersonUrl } from "./_commonSchemas";
 import type { FactCandidate, WorkflowDef } from "./_types";
 
 const LAW_SCHEMA = {
@@ -32,8 +32,9 @@ const def: WorkflowDef = {
   estimated_cost_per_run: { sources: 4, ai_neurons: 0.4 },
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/professionals", "/people"]),
-    ...searchUrls(namedQuery(ctx, "state bar attorney profile")).slice(0, 1),
-    ...searchUrls(namedQuery(ctx, "martindale hubbell attorney")).slice(0, 1),
+    martindaleUrl(ctx),
+    courtListenerUrl(ctx),
+    linkedinPersonUrl(ctx),
   ],
   extractionSchema: LAW_SCHEMA as unknown as Record<string, unknown>,
   systemPrompt:

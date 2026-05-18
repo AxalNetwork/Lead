@@ -6,7 +6,7 @@
 // router can fan a single team-page hit into per-role records.
 
 import { makeWorkflow, sameOrigin } from "./_shared";
-import { PERSON_SCHEMA, type PersonExtract, mapPerson, searchUrls, namedQuery } from "./_commonSchemas";
+import { PERSON_SCHEMA, type PersonExtract, mapPerson, linkedinPersonUrl, crunchbasePersonUrl, githubUserUrl, twitterUrl } from "./_commonSchemas";
 import type { FactCandidate, WorkflowDef } from "./_types";
 
 const FOUNDER_SCHEMA = {
@@ -34,10 +34,14 @@ function makeFounderDef(typeId: string, variantLabel: string): WorkflowDef {
     id: `${typeId}.v1`,
     profile_type_id: typeId,
     estimated_cost_per_run: { sources: 5, ai_neurons: 0.5 },
+    // Direct public profiles per task spec Step 6: founded-company
+    // About + LinkedIn public + Crunchbase founder + GitHub + Twitter.
     plan: (ctx) => [
       ...sameOrigin(ctx.candidateUrl, ["/about", "/team"]),
-      ...searchUrls(namedQuery(ctx, "founder linkedin crunchbase")).slice(0, 2),
-      ...searchUrls(namedQuery(ctx, "founder github")).slice(0, 1),
+      linkedinPersonUrl(ctx),
+      crunchbasePersonUrl(ctx),
+      githubUserUrl(ctx),
+      twitterUrl(ctx),
     ],
     extractionSchema: FOUNDER_SCHEMA as unknown as Record<string, unknown>,
     systemPrompt:
