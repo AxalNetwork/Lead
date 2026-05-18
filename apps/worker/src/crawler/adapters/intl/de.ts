@@ -39,12 +39,26 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
     const [dd, mm, yy] = m[1].split(".");
+    // BaFin prospectuses commonly disclose the management company as
+    // "Kapitalverwaltungsgesellschaft: <NAME> (BaFin-ID: NNNNNN)".
+    // When present, emit the canonical-firm linkage so the same
+    // canonical_firm_entity_id collects every German vehicle.
+    const start = Math.max(0, m.index - 80);
+    const end = Math.min(text.length, m.index + m[0].length + 240);
+    const win = text.slice(start, end);
+    const kvg = /Kapitalverwaltungsgesellschaft[:\s]+([A-Z][A-Za-zÀ-ÿ0-9 &.,'-]{2,120}?)\s*\(?BaFin[\s-]*ID[:\s]+(\d{6,12})\)?/i.exec(win);
+    const data: Record<string, unknown> = {};
+    if (kvg) {
+      data.canonical_firm_source_id = kvg[2];
+      data.canonical_firm_display_name = kvg[1].trim();
+      data.vehicle_role = "management_company";
+    }
     out.push({
       jurisdiction: "DE", source_id: `bafin:${yy}-${mm}-${dd}:${m[2].slice(0, 40)}`,
       filer_name: m[2].trim(), filing_type: `bafin-${m[3].toLowerCase()}`,
       filed_at: `${yy}-${mm}-${dd}`, url,
       original_lang: "de", original_text: m[0], english_text: null,
-      data: {}, source_evidence_json: { row: m[0] },
+      data, source_evidence_json: { row: m[0] },
     });
     if (out.length >= 100) break;
   }

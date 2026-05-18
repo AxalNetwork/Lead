@@ -49,10 +49,23 @@ function parseFilings(html: string, url: string, since: string): IntlFiling[] {
   const rowRe = /(\d{4}-\d{2}-\d{2})\s+([A-Z0-9-]+)\s+([A-Z][A-Za-z0-9 &.,'-]{2,120})/g;
   let m: RegExpExecArray | null;
   while ((m = rowRe.exec(text))) {
+    // FCA notices frequently include "principal: FRN 123456" or
+    // "part of <FRN>" — when present, surface the canonical FCA
+    // firm so persist's maybeLinkVehicle can bind the appointed
+    // representative vehicle to its principal in legal_structure_graph.
+    const start = Math.max(0, m.index - 60);
+    const end = Math.min(text.length, m.index + m[0].length + 200);
+    const win = text.slice(start, end);
+    const principal = /(?:principal|part\s+of)\s*[:\s]*FRN[:\s]*([0-9]{5,8})/i.exec(win);
+    const data: Record<string, unknown> = {};
+    if (principal) {
+      data.canonical_firm_source_id = principal[1];
+      data.vehicle_role = "adviser";
+    }
     out.push({
       jurisdiction: "UK", source_id: m[2], filer_name: m[3].trim(),
       filing_type: "fca-register-update", filed_at: m[1], url,
-      data: {}, source_evidence_json: { row: m[0] },
+      data, source_evidence_json: { row: m[0] },
     });
     if (out.length >= 100) break;
   }

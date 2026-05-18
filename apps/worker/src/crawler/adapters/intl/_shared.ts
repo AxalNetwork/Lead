@@ -92,10 +92,12 @@ export function defineIntlAdapter(spec: IntlAdapterSpec): IntlAdapter {
 
     parsePage(html, url) {
       // Engine integration entry — try parseCompany first, then fall
-      // back to parseFund. Returns null on no-match so the extractor's
-      // generic chain can still fire.
-      try { return parsers.parseCompany?.(html, url) ?? parsers.parseFund?.(html, url) ?? null; }
-      catch { return null; }
+      // back to parseFund. Parser exceptions are intentionally NOT
+      // caught here: the extractor wraps this call and records a
+      // structured intl_parse error on result.errors, so swallowing
+      // here would defeat that surfacing. Returns null only on a
+      // genuine no-match (both parsers returned null).
+      return parsers.parseCompany?.(html, url) ?? parsers.parseFund?.(html, url) ?? null;
     },
   };
 }
