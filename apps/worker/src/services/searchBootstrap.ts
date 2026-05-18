@@ -3,10 +3,9 @@
 // Given `{ name, profile_type_id }`, returns candidate URLs (official site,
 // LinkedIn, Crunchbase, Wikipedia) discovered via free-tier web search.
 //
-// Provider order:
-//   1. Brave Search free tier (if BRAVE_API_KEY is set in env).
-//   2. DuckDuckGo HTML (scraped, no auth).
-//   3. Mojeek HTML (scraped, no auth).
+// Provider order (Task #5: Brave Search was removed):
+//   1. DuckDuckGo HTML (scraped, no auth).
+//   2. Mojeek HTML (scraped, no auth).
 //
 // Per-provider quotas tracked in SCRAPE_CACHE KV. Back off on HTTP 429.
 // No commercial APIs are ever called.
@@ -18,7 +17,7 @@ export interface BootstrapCandidate {
   host: string;
   title: string;
   confidence: number;                              // 0..1
-  source_provider: "brave" | "duckduckgo" | "mojeek";
+  source_provider: "duckduckgo" | "mojeek";
   kind: "official" | "linkedin" | "crunchbase" | "wikipedia" | "other";
 }
 
@@ -28,8 +27,6 @@ export interface BootstrapInput {
   limit?: number;                                   // default 8
 }
 
-const BRAVE_DAILY_KEY = "search:brave:daily";
-const BRAVE_DAILY_CAP = 1800;                       // free tier ~2000/day, keep margin
 const DDG_HOURLY_KEY = "search:ddg:hourly";
 const DDG_HOURLY_CAP = 60;
 const MOJEEK_HOURLY_KEY = "search:mojeek:hourly";
@@ -69,26 +66,6 @@ async function incrementQuota(env: Env, key: string, cap: number, ttlSec: number
 
 function hostOf(url: string): string {
   try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ""); } catch { return ""; }
-}
-
-async function searchBrave(env: Env, q: string, limit: number): Promise<BootstrapCandidate[]> {
-  const key = env.BRAVE_API_KEY;
-  if (!key) return [];
-  if (!(await incrementQuota(env, BRAVE_DAILY_KEY, BRAVE_DAILY_CAP, 86400))) return [];
-  try {
-    const res = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(q)}&count=${limit}`, {
-      headers: { "X-Subscription-Token": key, "Accept": "application/json", "User-Agent": UA },
-    });
-    if (res.status === 429) return [];
-    if (!res.ok) return [];
-    const data = (await res.json()) as { web?: { results?: Array<{ url: string; title: string }> } };
-    const hits = data.web?.results ?? [];
-    return hits.slice(0, limit).map((h, i) => {
-      const host = hostOf(h.url);
-      const kind = classifyHit(h.url, host, h.title ?? "");
-      return { url: h.url, host, title: h.title ?? "", confidence: confidenceFor(kind, i), source_provider: "brave", kind };
-    });
-  } catch { return []; }
 }
 
 async function searchDuckDuckGo(env: Env, q: string, limit: number): Promise<BootstrapCandidate[]> {
@@ -157,13 +134,7 @@ export async function bootstrapEntity(env: Env, input: BootstrapInput): Promise<
   const typeHint = input.profile_type_id ? ` ${input.profile_type_id.replace(/_/g, " ")}` : "";
   const q = `${name}${typeHint}`;
 
-  let hits = await searchBrave(env, q, limit);
-  if (hits.length < 3) {
-    const ddg = await searchDuckDuckGo(env, q, limit);
-    // Dedupe by URL.
-    const seen = new Set(hits.map((h) => h.url));
-    for (const h of ddg) if (!seen.has(h.url)) { hits.push(h); seen.add(h.url); }
-  }
+  const hits: BootstrapCandidate[] = await searchDuckDuckGo(env, q, limit);
   if (hits.length < 3) {
     const mj = await searchMojeek(env, q, limit);
     const seen = new Set(hits.map((h) => h.url));

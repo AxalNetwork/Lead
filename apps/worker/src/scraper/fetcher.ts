@@ -3,7 +3,9 @@ import { checkRobots } from "./robots";
 import { tosBlockedReason } from "./tos";
 import { isCircuitOpen, recordFetchOutcome } from "./circuit_breaker";
 import { fetchWaybackHtml } from "./fallbacks/wayback";
-import { fetchBraveCache } from "./fallbacks/brave";
+// Task #5: Brave Search cache (tier 5) and paid Scraping API (tier 3) were
+// removed. The fetcher now escalates Direct → Browser → Proxy → Wayback,
+// which is the supported in-house path.
 
 const USER_AGENTS = [
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
@@ -27,8 +29,11 @@ const MIN_HTML_BYTES = 2048;
 const MIN_VISIBLE_TEXT_CHARS = 400;
 
 // Per-tier cost approximations in USD per request. Browser Rendering is billed
-// by request; proxy/scraping API are rough averages used for the health roll-up.
-const TIER_COST_USD = { 0: 0, 1: 0.0009, 2: 0.0015, 3: 0.005, 4: 0, 5: 0 } as const;
+// by request; proxy is a rough average used for the health roll-up. Tier 3
+// (paid Scraping API) and tier 5 (Brave Search cache) were removed in Task #5
+// but the literal slots are retained so persisted fetch_log rows continue to
+// typecheck.
+const TIER_COST_USD = { 0: 0, 1: 0.0009, 2: 0.0015, 3: 0, 4: 0, 5: 0 } as const;
 
 export type FetchTier = 0 | 1 | 2 | 3 | 4 | 5;
 
@@ -44,10 +49,10 @@ export interface FetchOptions {
   skipPolicy?: boolean;
   /**
    * When true, fetchPage returns the last live tier result without
-   * escalating to Brave Search cache (tier 5) or Wayback (tier 4).
-   * Used by team-path probes which require a verified live response —
-   * a missing /team page must NOT be satisfied from an archived
-   * snapshot, since that would feed stale people into the crawl.
+   * escalating to Wayback (tier 4). Used by team-path probes which
+   * require a verified live response — a missing /team page must NOT
+   * be satisfied from an archived snapshot, since that would feed
+   * stale people into the crawl.
    */
   liveOnly?: boolean;
 }
@@ -391,59 +396,8 @@ async function tier2Proxy(env: Env, url: string, opts: FetchOptions): Promise<Fe
   }
 }
 
-async function tier3ScrapingApi(env: Env, url: string, opts: FetchOptions): Promise<FetchResult> {
-  const start = Date.now();
-  if (!env.SCRAPER_API_KEY) return blockResult(url, 3, "scraping_api_not_configured");
-  const provider = (env.SCRAPER_API_PROVIDER ?? "scraperapi").toLowerCase();
-  let endpoint = "";
-  switch (provider) {
-    case "scrapingbee":
-      endpoint = `https://app.scrapingbee.com/api/v1/?api_key=${env.SCRAPER_API_KEY}&url=${encodeURIComponent(url)}&render_js=true`;
-      break;
-    case "zenrows":
-      endpoint = `https://api.zenrows.com/v1/?apikey=${env.SCRAPER_API_KEY}&url=${encodeURIComponent(url)}&js_render=true&premium_proxy=true`;
-      break;
-    case "scraperapi":
-    default:
-      endpoint = `https://api.scraperapi.com/?api_key=${env.SCRAPER_API_KEY}&url=${encodeURIComponent(url)}&render=true`;
-      break;
-  }
-  const ctl = new AbortController();
-  // Task #2: 20s fetch ceiling per spec policy (scraper APIs were 60s).
-  const tm = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 20_000);
-  try {
-    const res = await fetch(endpoint, { method: "GET", signal: ctl.signal });
-    const html = await res.text();
-    const blockReason = detectBlockReason(res.status, html);
-    return {
-      ok: res.ok && !blockReason,
-      status: res.status,
-      url,
-      html,
-      bytes: html.length,
-      durationMs: Date.now() - start,
-      tier: 3,
-      blockReason,
-      fetched_from: "live",
-    };
-  } catch (e) {
-    return {
-      ok: false,
-      status: 0,
-      url,
-      html: "",
-      bytes: 0,
-      durationMs: Date.now() - start,
-      tier: 3,
-      blockReason: (e as Error).name === "AbortError"
-        ? `fetch_timeout:scraping_api:${(e as Error).message}`
-        : `scraping_api_error:${(e as Error).message}`,
-      fetched_from: "live",
-    };
-  } finally {
-    clearTimeout(tm);
-  }
-}
+// Task #5: tier 3 (paid Scraping API) was removed. The fetcher now
+// escalates Direct → Browser → Proxy → Wayback.
 
 function blockResult(url: string, tier: FetchTier, reason: string): FetchResult {
   return {
@@ -466,8 +420,7 @@ function shouldEscalate(reason: string | null): boolean {
   if (
     reason === "browser_binding_unavailable" ||
     reason === "puppeteer_module_missing" ||
-    reason === "proxy_not_configured" ||
-    reason === "scraping_api_not_configured"
+    reason === "proxy_not_configured"
   ) {
     return true;
   }
@@ -485,14 +438,13 @@ function shouldEscalate(reason: string | null): boolean {
     reason.startsWith("fetch_error") ||
     reason.startsWith("fetch_timeout") ||
     reason.startsWith("proxy_error") ||
-    reason.startsWith("scraping_api_error") ||
     reason.startsWith("browser_error")
   );
 }
 
 /**
- * Fetch a page with tiered escalation. Direct → Browser → Proxy → Scraping API,
- * then Wayback as a final fallback. Each attempt is logged to `fetch_log`.
+ * Fetch a page with tiered escalation. Direct → Browser → Proxy, then
+ * Wayback as a final fallback. Each attempt is logged to `fetch_log`.
  *
  * Policy:
  *   - robots.txt disallow ⇒ refuse (returns blockReason='robots_disallow').
@@ -536,8 +488,8 @@ export async function fetchPage(env: Env, url: string, opts: FetchOptions = {}):
   }
 
   const tiers: Array<(env: Env, url: string, opts: FetchOptions) => Promise<FetchResult>> = opts.forceBrowser
-    ? [tier1Browser, tier2Proxy, tier3ScrapingApi]
-    : [tier0Direct, tier1Browser, tier2Proxy, tier3ScrapingApi];
+    ? [tier1Browser, tier2Proxy]
+    : [tier0Direct, tier1Browser, tier2Proxy];
 
   let last: FetchResult | null = null;
   for (const fn of tiers) {
@@ -566,33 +518,7 @@ export async function fetchPage(env: Env, url: string, opts: FetchOptions = {}):
     return last ?? blockResult(url, 0, "no_tiers_available");
   }
 
-  // Penultimate fallback: Brave Search cache (only when BRAVE_API_KEY is
-  // configured). Logged either way under tier 5.
-  const braveStart = Date.now();
-  const brave = await fetchBraveCache(env, url).catch(() => null);
-  if (brave) {
-    const braveResult: FetchResult = {
-      ok: true,
-      status: 200,
-      url: brave.url,
-      html: brave.html,
-      bytes: brave.html.length,
-      durationMs: Date.now() - braveStart,
-      tier: 5,
-      blockReason: null,
-      fetched_from: "live",
-    };
-    await logAttempt(env, opts.jobId, host, url, braveResult);
-    await cacheHtmlForReplay(env, url, braveResult.html).catch(() => undefined);
-    return braveResult;
-  }
-  await logAttempt(env, opts.jobId, host, url, {
-    tier: 5,
-    status: 0,
-    bytes: 0,
-    blockReason: env.BRAVE_API_KEY ? "brave_no_result" : "brave_not_configured",
-    durationMs: Date.now() - braveStart,
-  });
+  // Task #5: Brave Search cache fallback (tier 5) was removed.
 
   // Final fallback: Wayback Machine. Logged whether or not a snapshot exists
   // so /api/scrapers/health reflects the true attempt count.

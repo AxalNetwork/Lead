@@ -25,17 +25,12 @@ AI_EMBED_MODEL = "@cf/baai/bge-base-en-v1.5"
 AI_OCR_MODEL = "@cf/unum/uform-gen2-qwen-500m"
 
 # Per-provider daily budget caps (USD). 0 disables, blank uses the conservative default.
-HUNTER_DAILY_USD = "5"
-APOLLO_DAILY_USD = "5"
-ROCKETREACH_DAILY_USD = "5"
-PEOPLEDATALABS_DAILY_USD = "5"
-PROXYCURL_DAILY_USD = "5"
-CRUNCHBASE_DAILY_USD = "5"
+# Task #5: paid 3rd-party API caps (HUNTER, APOLLO, ROCKETREACH,
+# PEOPLEDATALABS, PROXYCURL, CRUNCHBASE, OPENCORPORATES, UK_CH,
+# FORBES_SIGNALS, WHOISXML) were removed when those providers were
+# ripped out. Only the in-house SEC EDGAR + Twitter OSS scrapers
+# remain on the enrichment ALL_PROVIDERS list.
 SEC_EDGAR_DAILY_USD = "0"
-OPENCORPORATES_DAILY_USD = "2"
-UK_CH_DAILY_USD = "0"
-FORBES_SIGNALS_DAILY_USD = "1"
-WHOISXML_DAILY_USD = "1"
 TWITTER_OSS_DAILY_USD = "0"
 ENRICHMENT_KV_TTL_DAYS = "14"
 NITTER_BASE = "https://nitter.net"

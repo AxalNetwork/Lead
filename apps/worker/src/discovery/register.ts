@@ -46,11 +46,11 @@ export async function probeSecEdgar(env: Env, firm: string): Promise<RegistryHit
   return out.slice(0, 5);
 }
 
-export async function probeOpenCorporates(env: Env, firm: string): Promise<RegistryHit[]> {
+export async function probeOpenCorporates(_env: Env, firm: string): Promise<RegistryHit[]> {
+  // Task #5: keyless anonymous OpenCorporates v0.4 (rate-limited).
   type Resp = { results?: { companies?: Array<{ company: { name: string; jurisdiction_code: string; opencorporates_url: string } }> } };
-  const key = env.OPENCORPORATES_API_KEY ? `&api_token=${env.OPENCORPORATES_API_KEY}` : "";
   const data = await safeJson<Resp>(
-    fetch(`https://api.opencorporates.com/v0.4/companies/search?q=${encodeURIComponent(firm)}${key}`),
+    fetch(`https://api.opencorporates.com/v0.4/companies/search?q=${encodeURIComponent(firm)}`),
   );
   const out: RegistryHit[] = [];
   for (const c of data?.results?.companies ?? []) {
@@ -65,25 +65,19 @@ export async function probeOpenCorporates(env: Env, firm: string): Promise<Regis
   return out.slice(0, 5);
 }
 
-export async function probeUkCompaniesHouse(env: Env, firm: string): Promise<RegistryHit[]> {
-  if (!env.UK_CH_API_KEY) return [];
-  type Resp = { items?: Array<{ title: string; company_number: string; address_snippet?: string }> };
-  const data = await safeJson<Resp>(
-    fetch(`https://api.company-information.service.gov.uk/search/companies?q=${encodeURIComponent(firm)}`, {
-      headers: { Authorization: "Basic " + btoa(env.UK_CH_API_KEY + ":") },
-    }),
-  );
-  const out: RegistryHit[] = [];
-  for (const it of data?.items ?? []) {
-    out.push({
-      url: `https://find-and-update.company-information.service.gov.uk/company/${it.company_number}`,
-      title: it.title,
-      snippet: it.address_snippet ?? "",
+export async function probeUkCompaniesHouse(_env: Env, firm: string): Promise<RegistryHit[]> {
+  // Task #5: the key-gated UK_CH API was removed. We now point at the
+  // public find-and-update search page as a discovery breadcrumb,
+  // matching the probeEuTransparency pattern.
+  return [
+    {
+      url: `https://find-and-update.company-information.service.gov.uk/search/companies?q=${encodeURIComponent(firm)}`,
+      title: `UK Companies House search: ${firm}`,
+      snippet: "Open in browser to view registrations",
       source: "uk_companies_house",
-      org: it.title,
-    });
-  }
-  return out.slice(0, 5);
+      org: firm,
+    },
+  ];
 }
 
 export async function probeBodacc(_env: Env, firm: string): Promise<RegistryHit[]> {

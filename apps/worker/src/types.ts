@@ -94,37 +94,16 @@ export interface Env {
   // Fetcher tier secrets (all optional; absent ⇒ tier is skipped).
   PROXY_URL?: string;
   PROXY_AUTH?: string;
-  SCRAPER_API_KEY?: string;
-  SCRAPER_API_PROVIDER?: string;
-  BRAVE_API_KEY?: string;
-  BRAVE_SEARCH_KEY?: string;
+  // Task #5: SCRAPER_API_*, BRAVE_*, HUNTER_*, APOLLO_*, ROCKETREACH_*,
+  // PEOPLEDATALABS_*, PROXYCURL_*, CRUNCHBASE_*, OPENCORPORATES_*,
+  // UK_CH_*, WHOISXML_*, FORBES_SIGNALS_*, BUILTWITH_* env keys were
+  // removed when the 13 paid third-party APIs were ripped out.
 
   // ---- Enrichment providers (each missing key disables that provider) ----
-  HUNTER_API_KEY?: string;
-  APOLLO_API_KEY?: string;
-  ROCKETREACH_API_KEY?: string;
-  PEOPLEDATALABS_API_KEY?: string;
-  PROXYCURL_API_KEY?: string;
-  CRUNCHBASE_API_KEY?: string;
-  OPENCORPORATES_API_KEY?: string;
-  UK_CH_API_KEY?: string;
-  WHOISXML_API_KEY?: string;
-  FORBES_SIGNALS_KEY?: string;
-  BUILTWITH_API_KEY?: string;
   SEC_EDGAR_UA?: string;     // SEC requires a User-Agent
 
   // ---- Per-provider daily USD caps (strings parsed at read time) ----
-  HUNTER_DAILY_USD?: string;
-  APOLLO_DAILY_USD?: string;
-  ROCKETREACH_DAILY_USD?: string;
-  PEOPLEDATALABS_DAILY_USD?: string;
-  PROXYCURL_DAILY_USD?: string;
-  CRUNCHBASE_DAILY_USD?: string;
   SEC_EDGAR_DAILY_USD?: string;
-  OPENCORPORATES_DAILY_USD?: string;
-  UK_CH_DAILY_USD?: string;
-  FORBES_SIGNALS_DAILY_USD?: string;
-  WHOISXML_DAILY_USD?: string;
   TWITTER_OSS_DAILY_USD?: string;
 
   // ---- Misc enrichment ----
@@ -133,8 +112,9 @@ export interface Env {
 
   // ---- Task #3: Due-diligence providers ----
   // Most DD providers are public/free (OpenSanctions, GDELT, SEC EDGAR,
-  // CourtListener). UK Companies House reuses UK_CH_API_KEY above.
-  // NEWSAPI_KEY is optional and used to augment adverse-media scans.
+  // CourtListener). UK Companies House now uses a keyless public-HTML
+  // path (Task #5). NEWSAPI_KEY is optional and used to augment
+  // adverse-media scans.
   NEWSAPI_KEY?: string;
 
   // ---- Task #2: News ingestion ----

@@ -394,7 +394,9 @@ export async function runAgentLoop(env: Env, question: string, opts: LoopOptions
       // Auto web fallback: if every tool we called returned zero rows AND no
       // web search was attempted yet, and the optional fallback is on, try
       // one webSearch round so we don't return a hollow answer.
-      if (opts.autoWebFallback && reg.size() === 0 && env.BRAVE_API_KEY) {
+      // Task #5: BRAVE_API_KEY gate removed; webSearch now uses the
+      // in-house DuckDuckGo/Mojeek path, which is always available.
+      if (opts.autoWebFallback && reg.size() === 0) {
         const ws = getTool("webSearch");
         if (ws && toolCallsUsed < MAX_TOOL_CALLS) {
           const t0 = Date.now();

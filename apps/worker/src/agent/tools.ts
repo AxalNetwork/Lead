@@ -634,32 +634,27 @@ const findIntros: Tool = {
   },
 };
 
-// ---------- webSearch (Brave fallback) ---------------------------------------
+// ---------- webSearch (in-house fallback) ------------------------------------
+//
+// Task #5: routed through services/searchBootstrap (DuckDuckGo/Mojeek HTML
+// scraping via the in-house fetcher) — the paid Brave Search API was
+// removed.
 
 const webSearch: Tool = {
   name: "webSearch",
-  description: "Fallback web search via Brave when the database plausibly lacks coverage. Each hit gets a distinct [W:idx] citation. Web hits are enqueued for ingestion so future asks of the same question hit the DB.",
+  description: "Fallback web search via DuckDuckGo/Mojeek HTML when the database plausibly lacks coverage. Each hit gets a distinct [W:idx] citation. Web hits are enqueued for ingestion so future asks of the same question hit the DB.",
   schema: {
     type: "object",
     properties: { q: { type: "string" }, count: { type: "number" } },
     required: ["q"],
   },
   handler: async (env, args, reg) => {
-    if (!env.BRAVE_API_KEY) return { rows: [], citations: [], note: "web search not configured (no BRAVE_API_KEY)" };
     const q = s(args.q);
     const count = Math.min(Math.max(1, n(args.count, 5)), 10);
     try {
-      const res = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(q)}&count=${count}`, {
-        headers: {
-          "X-Subscription-Token": env.BRAVE_API_KEY,
-          Accept: "application/json",
-          "User-Agent": "AIDataSignalBot/1.0 (+https://aidatasignal.com)",
-        },
-      });
-      if (!res.ok) return { rows: [], citations: [], note: `Brave returned ${res.status}` };
-      type BR = { web?: { results?: Array<{ url?: string; title?: string; description?: string }> } };
-      const json = (await res.json()) as BR;
-      const hits = (json.web?.results ?? []).slice(0, count);
+      const { bootstrapEntity } = await import("../services/searchBootstrap");
+      const hits = (await bootstrapEntity(env, { name: q, limit: count })).slice(0, count);
+      if (!hits.length) return { rows: [], citations: [], note: "no web hits" };
       // Fire-and-forget enqueue for future ingestion. Skip if the LEAD_QUEUE
       // binding is in a weird state; this MUST NOT block the agent.
       try {
@@ -668,21 +663,15 @@ const webSearch: Tool = {
           await env.LEAD_QUEUE.send({ jobId: crypto.randomUUID(), kind: "url", target: h.url, config: { discovery: true, agent_web_search: true } });
         }
       } catch { /* never fail the tool on enqueue failure */ }
-      // Allocate the W markers UP FRONT against the shared registry so the
-      // ref_id we hand to the model in `rows.idx` is exactly what's stored
-      // in the registry. This is essential when webSearch is called more
-      // than once in a single loop — webIndex keeps incrementing, so the
-      // second call's "idx 0" would otherwise collide with the first call's
-      // [W:0] marker.
       const citations: CitationPayload[] = [];
       const rows = hits.map((h) => {
         const payload: CitationPayload = {
           kind: "W", ref_id: "",
-          title: h.title ?? h.url ?? "Web result",
-          snippet: clip(h.description ?? ""),
-          url: h.url ?? "",
+          title: h.title || h.url || "Web result",
+          snippet: clip(`${h.kind} (${h.source_provider})`),
+          url: h.url,
         };
-        const marker = reg.registerWeb(payload);   // returns "W:<n>"
+        const marker = reg.registerWeb(payload);
         const refId = marker.split(":")[1];
         payload.ref_id = refId;
         citations.push(payload);

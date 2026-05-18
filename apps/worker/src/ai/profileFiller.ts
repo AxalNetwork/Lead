@@ -614,16 +614,13 @@ export async function stampCooldown(env: Env, entityId: string): Promise<void> {
 
 // ---- Step F: search-engine corroboration (lightweight) -----------------
 
+// Task #5: routed through the in-house searchBootstrap (DuckDuckGo/Mojeek)
+// instead of the paid Brave Search API.
 async function braveSearch(env: Env, query: string): Promise<Array<{ title: string; description: string; url: string }>> {
-  const key = env.BRAVE_SEARCH_KEY ?? env.BRAVE_API_KEY;
-  if (!key) return [];
   try {
-    const r = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`, {
-      headers: { "X-Subscription-Token": key, "Accept": "application/json" },
-    });
-    if (!r.ok) return [];
-    const j = await r.json() as { web?: { results?: Array<{ title?: string; description?: string; url?: string }> } };
-    return (j.web?.results ?? []).slice(0, 5).map((x) => ({ title: x.title ?? "", description: x.description ?? "", url: x.url ?? "" }));
+    const { bootstrapEntity } = await import("../services/searchBootstrap");
+    const hits = await bootstrapEntity(env, { name: query, limit: 5 });
+    return hits.slice(0, 5).map((h) => ({ title: h.title, description: `${h.kind} (${h.source_provider})`, url: h.url }));
   } catch { return []; }
 }
 

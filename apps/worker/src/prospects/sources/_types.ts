@@ -84,7 +84,11 @@ export interface SourceModule {
   enabledByDefault: boolean;
   /** Env key whose absence disables the source at runtime. */
   requiresEnv?: keyof Env;
-  /** True when the module relies on Brave-cached snippets only (LinkedIn/FB). */
+  /**
+   * @deprecated Task #5 removed paid Brave Search. Retained on the
+   * interface so persisted admin payloads continue to typecheck; new
+   * modules should not set this.
+   */
   bravePoweredOnly?: boolean;
   /** Documentation URL surfaced in the admin UI. */
   docsUrl?: string;

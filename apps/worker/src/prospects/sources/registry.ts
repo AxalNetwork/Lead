@@ -24,19 +24,21 @@ import googleNews from "./googleNews";
 import productHunt from "./productHunt";
 import githubOrg from "./githubOrg";
 import dnsTech from "./dnsTech";
-import builtwith from "./builtwith";
 import wappalyzer from "./wappalyzer";
 import gdelt from "./gdelt";
 import g2 from "./g2";
 import capterra from "./capterra";
-import linkedinJobsBrave from "./linkedinJobsBrave";
-import linkedinAnnounceBrave from "./linkedinAnnounceBrave";
+
+// Task #5: the brave-only modules (linkedinJobsBrave,
+// linkedinAnnounceBrave, builtwith) were dropped from MODULES when paid
+// 3rd-party APIs were ripped out. Their files remain as deprecated stubs
+// so any external slug references still resolve to an empty crawl rather
+// than an import error.
 
 export const MODULES: SourceModule[] = [
   greenhouse, lever, ashby, workable, recruitee, personio, smartrecruiters,
   hnAlgolia, ycCompanies, crunchbaseNews, secFormD, techcrunch, googleNews,
-  productHunt, githubOrg, dnsTech, builtwith, wappalyzer, gdelt, g2, capterra,
-  linkedinJobsBrave, linkedinAnnounceBrave,
+  productHunt, githubOrg, dnsTech, wappalyzer, gdelt, g2, capterra,
 ];
 
 export function getModule(slug: string): SourceModule | undefined {

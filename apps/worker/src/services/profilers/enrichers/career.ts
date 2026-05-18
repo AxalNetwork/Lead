@@ -50,11 +50,11 @@ export const careerProfiler: Enricher = {
   name: "careerProfiler",
   category: "career",
   respectsPrivacy: false,        // employment history is public-record signal
-  estCostUsd: (env) => {
-    // Optional external keys: estimate cost when present, else 0. The Env
-    // type is the static shape — we read these as opaque optionals.
-    const e = env as unknown as Record<string, string | undefined>;
-    return e.LINKEDIN_API_KEY || e.CRUNCHBASE_API_KEY ? 0.003 : 0;
+  estCostUsd: (_env) => {
+    // Task #5: paid LinkedIn/Crunchbase enrichment APIs were removed.
+    // Career history is now derived from in-house-scraped facts only,
+    // so this enricher carries no per-call USD cost.
+    return 0;
   },
   async run(env, entityId, _ctx): Promise<EnricherResult> {
     const t0 = Date.now();
