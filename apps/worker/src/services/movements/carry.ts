@@ -123,12 +123,24 @@ export async function computeCarryBreadth(env: Env, firmEntityId: string): Promi
 }
 
 export async function runCarrySweep(env: Env, limit = 50): Promise<{ firms: number }> {
+  // Anti-starvation: order by the AGE of the firm's last
+  // `firm.carry_breadth` fact, oldest (or never-stamped) first.
+  // Firms with no carry_breadth fact yet sort to the top via the
+  // COALESCE to '0000-01-01'. Round-robin coverage across all firms
+  // emerges naturally as recently-stamped firms drop to the bottom
+  // of the queue for ~24h.
   const rows = await env.DB.prepare(
-    `SELECT DISTINCT firm_entity_id
-       FROM firm_team_snapshots
-      ORDER BY firm_entity_id
+    `SELECT s.firm_entity_id,
+            COALESCE(MAX(f.observed_at), '0000-01-01') AS last_stamp
+       FROM firm_team_snapshots s
+       LEFT JOIN facts f
+              ON f.entity_id = s.firm_entity_id
+             AND f.predicate = 'firm.carry_breadth'
+             AND f.is_current = 1
+      GROUP BY s.firm_entity_id
+      ORDER BY last_stamp ASC, s.firm_entity_id ASC
       LIMIT ?`,
-  ).bind(limit).all<{ firm_entity_id: string }>();
+  ).bind(limit).all<{ firm_entity_id: string; last_stamp: string }>();
   let firms = 0;
   for (const r of rows.results ?? []) {
     try {

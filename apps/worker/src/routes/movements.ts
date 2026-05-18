@@ -226,7 +226,13 @@ firmsMovementsRoute.get("/:entity_id/team-history", async (c) => {
 });
 
 // ---------------- POST /api/movements/:id/verify ----------------
+// Admin-only: operator overrides are auditable mutations and should
+// never be writable by non-admin viewers, even when the access guard
+// has admitted them to the read API.
 movementsRoute.post("/:id/verify", async (c) => {
+  if (c.var.is_admin !== true) {
+    return c.json({ error: "forbidden", reason: "admin_required" }, 403);
+  }
   const id = c.req.param("id");
   let body: { status?: string } = {};
   try { body = await c.req.json(); } catch { /* empty body */ }
@@ -242,13 +248,24 @@ movementsRoute.post("/:id/verify", async (c) => {
     `UPDATE partner_movements SET status = ?, updated_at = datetime('now') WHERE id = ?`,
   ).bind(next, id).run();
 
-  // Audit the override.
+  // Audit the override. If the audit write fails we surface
+  // `audit_logged: false` on the response so the operator UI can
+  // alert; the state change itself has already committed.
+  let audit_logged = true;
+  let audit_error: string | null = null;
   try {
     await c.env.DB.prepare(
       `INSERT INTO ops_audit (actor_email, action, target_kind, target_id, payload_json)
        VALUES (?, 'movement.verify', 'partner_movement', ?, ?)`,
     ).bind(c.var.email, id, JSON.stringify({ from: existing.status, to: next })).run();
-  } catch (e) { console.warn("ops_audit insert failed", (e as Error).message); }
+  } catch (e) {
+    audit_logged = false;
+    audit_error = (e as Error).message;
+    console.warn("ops_audit insert failed", audit_error);
+  }
 
-  return c.json({ id, status: next, previous_status: existing.status });
+  return c.json({
+    id, status: next, previous_status: existing.status,
+    audit_logged, audit_error,
+  });
 });
