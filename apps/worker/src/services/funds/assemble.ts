@@ -151,12 +151,25 @@ interface LpCommitRow {
   source_url: string | null;
 }
 
+interface FundPressRow {
+  id: string;
+  url: string;
+  host: string;
+  title: string | null;
+  headline: string | null;
+  summary: string | null;
+  body_excerpt: string | null;
+  published_at: string | null;
+  source_reputability: number;
+}
+
 /** Load every signal for one firm's fund name. Bounded queries — each
  *  capped at 100 rows; assembly is per-fund, not per-firm. */
 async function loadSignals(
   env: Env, firmEntityId: string, fundName: string, fundEntityId: string | null,
 ): Promise<{
   adv: AdvFundRow[]; form_d: FormDRow[]; deals: DealEventRow[]; lp: LpCommitRow[];
+  press: FundPressRow[];
 }> {
   const normalized = normalizeFundName(fundName);
   const advRes = await env.DB.prepare(
@@ -224,7 +237,91 @@ async function loadSignals(
     lp = lpRes.results ?? [];
   }
 
-  return { adv, form_d, deals, lp };
+  // Fund-specific press: news_items mentioning this firm (via
+  // news_entity_mentions) whose title / headline / summary / excerpt
+  // contains the fund name. This is the dedicated press/blog/fund-page
+  // signal channel — distinct from generic firm deal-flow press.
+  const fundNameL = fundName.toLowerCase();
+  const press: FundPressRow[] = [];
+  if (fundNameL.length >= 4) {
+    const pressRes = await env.DB.prepare(
+      `SELECT n.id, n.url, n.host, n.title, n.headline, n.summary,
+              n.body_excerpt, n.published_at, n.source_reputability
+         FROM news_items n
+         JOIN news_entity_mentions m ON m.news_item_id = n.id
+        WHERE m.entity_id = ?
+          AND (lower(COALESCE(n.title, '')) LIKE ?
+               OR lower(COALESCE(n.headline, '')) LIKE ?
+               OR lower(COALESCE(n.summary, '')) LIKE ?
+               OR lower(COALESCE(n.body_excerpt, '')) LIKE ?)
+        ORDER BY n.published_at DESC NULLS LAST
+        LIMIT 50`,
+    ).bind(
+      firmEntityId,
+      `%${fundNameL}%`, `%${fundNameL}%`, `%${fundNameL}%`, `%${fundNameL}%`,
+    ).all<FundPressRow>();
+    press.push(...(pressRes.results ?? []));
+  }
+
+  return { adv, form_d, deals, lp, press };
+}
+
+/** Source-type classification for a press host. Tech press sites get a
+ *  lower authority than blogs/PR; firm sites get the firm_site bucket. */
+function pressSourceType(host: string, firmName: string): FundSourceType {
+  const h = host.toLowerCase();
+  if (firmName && h.includes(firmName.toLowerCase().split(/\s+/)[0])) return "firm_site";
+  if (h.includes("prnewswire") || h.includes("businesswire") || h.includes("globenewswire")) return "press_release";
+  if (h.includes("techcrunch") || h.includes("axios") || h.includes("bloomberg") ||
+      h.includes("ft.com") || h.includes("wsj.com") || h.includes("reuters")) return "tech_press";
+  return "company_blog";
+}
+
+const MONTHS: Record<string, number> = {
+  january:1, february:2, march:3, april:4, may:5, june:6,
+  july:7, august:8, september:9, october:10, november:11, december:12,
+  jan:1, feb:2, mar:3, apr:4, jun:6, jul:7, aug:8, sep:9, sept:9, oct:10, nov:11, dec:12,
+};
+
+/** Extract a final-close ISO date from press text. Looks for phrases
+ *  like "closed Fund III at $500M on March 15, 2024" or "final close
+ *  of $1.2B". Returns null when nothing parseable. */
+export function extractFinalCloseDate(text: string, publishedAt: string | null): string | null {
+  if (!text) return null;
+  const t = text.toLowerCase();
+  if (!/\b(final close|closed (its|the)|closes? .{0,30}fund)\b/.test(t)) return null;
+  // Try "Month DD, YYYY"
+  const m1 = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\.?\s+(\d{1,2}),\s*(\d{4})\b/i.exec(text);
+  if (m1) {
+    const mo = MONTHS[m1[1].toLowerCase()];
+    if (mo) return `${m1[3]}-${String(mo).padStart(2,"0")}-${String(Number(m1[2])).padStart(2,"0")}`;
+  }
+  // Fall back to publish date (best signal when the article ANNOUNCES the close)
+  return publishedAt ? publishedAt.slice(0, 10) : null;
+}
+
+/** Extract a USD amount from press text. Returns whole USD or null. */
+export function extractUsdAmount(text: string): number | null {
+  if (!text) return null;
+  // Matches "$1.2 billion", "$500 million", "$500m", "$1.2bn"
+  const m = /\$\s*(\d+(?:\.\d+)?)\s*(billion|bn|b|million|mn|m)\b/i.exec(text);
+  if (!m) return null;
+  const num = Number(m[1]);
+  if (!Number.isFinite(num)) return null;
+  const unit = m[2].toLowerCase();
+  const mult = unit.startsWith("b") ? 1_000_000_000 : 1_000_000;
+  return Math.round(num * mult);
+}
+
+/** Extract a 4-digit vintage year from press text. */
+export function extractVintageYear(text: string): number | null {
+  if (!text) return null;
+  const m = /\b(?:vintage|inception)\s*(?:of\s*)?(\d{4})\b/i.exec(text);
+  if (m) {
+    const y = Number(m[1]);
+    if (y >= 1980 && y <= 2100) return y;
+  }
+  return null;
 }
 
 export interface AssembleInput {
@@ -338,10 +435,45 @@ export async function assembleFund(env: Env, input: AssembleInput): Promise<Asse
     }, evidence, "announced_raised_usd");
   }
 
-  // 4. Deal-flow press — corroborating evidence (lowest authority for
-  //    fund-level fields; primarily informs portfolio + dry-powder, but
-  //    we still log each deal in source_evidence_json so the UI can
-  //    render the full citation trail).
+  // 4. Fund-specific press / blog / firm-page (news_items mentioning
+  //    the firm whose text contains the fund name). These contribute
+  //    canonically to final_close_date, vintage_year, and
+  //    announced_raised_usd at their declared authority tier (firm_site
+  //    > press_release > tech_press > company_blog).
+  const firmDisplay = (await env.DB.prepare(
+    `SELECT display_name FROM u_entities WHERE id = ?`,
+  ).bind(firmEntityId).first<{ display_name: string | null }>())?.display_name ?? "";
+  for (const p of signals.press) {
+    const text = `${p.title ?? ""}\n${p.headline ?? ""}\n${p.summary ?? ""}\n${p.body_excerpt ?? ""}`;
+    const stype = pressSourceType(p.host, firmDisplay);
+    const observedAt = p.published_at ?? now;
+    // final_close_date
+    const fc = extractFinalCloseDate(text, p.published_at);
+    if (fc) {
+      finalClose = pickByAuthority(finalClose, {
+        value: fc, source_type: stype, source_url: p.url, observed_at: observedAt,
+      }, evidence, "final_close_date");
+    }
+    // announced_raised_usd (from "$X billion" mentions in close articles)
+    if (/\b(final close|closed|closes)\b/i.test(text)) {
+      const amt = extractUsdAmount(text);
+      if (amt && amt >= 5_000_000) {
+        raised = pickByAuthority(raised, {
+          value: amt, source_type: stype, source_url: p.url, observed_at: observedAt,
+        }, evidence, "announced_raised_usd");
+      }
+    }
+    // vintage_year
+    const vy = extractVintageYear(text) ?? (p.published_at ? Number(p.published_at.slice(0, 4)) : null);
+    if (vy && vy >= 1980 && vy <= 2100 && /\b(launches?|launched|raises?|raised|closed|final close)\b/i.test(text)) {
+      vintage = pickByAuthority(vintage, {
+        value: vy, source_type: stype, source_url: p.url, observed_at: observedAt,
+      }, evidence, "vintage_year");
+    }
+  }
+
+  // 4b. Deal-flow press — corroborating evidence (logged for citation
+  //     trail only; does not arbitrate fund-level fields).
   for (const d of signals.deals.slice(0, 25)) {
     if (!d.amount_usd || !d.announcement_date) continue;
     const st = (d.source_type === "sec_filing" || d.source_type === "company_blog" ||
@@ -367,18 +499,20 @@ export async function assembleFund(env: Env, input: AssembleInput): Promise<Asse
   // raising: most-recent Form D within 24 months AND no final-close
   // date observed. active: has Form D / LP data within 5y. harvesting:
   // last evidence 5–10y ago. wound_down: > 10y since last evidence.
-  // Press-release corroboration for "raising" status: at least one
-  // deal_event or fund-mentioning press URL whose source_type is
-  // press/blog/tech-press AND whose date is within 18 months of the
-  // most recent Form D. Form D alone is insufficient per spec.
+  // Press-release corroboration for "raising" status: a fund-NAME-
+  // matched press article (from signals.press, which already filters
+  // news_items to those mentioning the firm AND containing the fund
+  // name) within 18 months of the most-recent Form D, whose text
+  // signals an active fundraise (raise/launch/closes-on/target). Form
+  // D alone is insufficient per spec; a generic firm deal press is
+  // also insufficient — must mention this specific fund.
   const latestFormD = signals.form_d[0]?.date_of_first_sale ?? signals.form_d[0]?.filed_at ?? null;
-  const pressRecent = signals.deals.some((d) => {
-    const t = d.source_type ?? "";
-    const dt = d.announcement_date;
-    if (!dt) return false;
-    if (t !== "press_release" && t !== "tech_press" && t !== "company_blog") return false;
-    if (!latestFormD) return false;
-    const a = new Date(dt).getTime();
+  const pressRecent = signals.press.some((p) => {
+    if (!p.published_at || !latestFormD) return false;
+    const txt = `${p.title ?? ""}\n${p.headline ?? ""}\n${p.summary ?? ""}\n${p.body_excerpt ?? ""}`.toLowerCase();
+    const isFundraiseSignal = /\b(raises?|raising|launch(es|ed)?|target(ing|ed)?|first close|interim close|seeking commitments?|new fund)\b/.test(txt);
+    if (!isFundraiseSignal) return false;
+    const a = new Date(p.published_at).getTime();
     const b = new Date(latestFormD).getTime();
     if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
     return Math.abs(a - b) <= 1000 * 60 * 60 * 24 * 30 * 18;
