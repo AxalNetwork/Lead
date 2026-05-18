@@ -76,9 +76,16 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       }
       // Task #3: hourly seed sweep. Idempotent — touches last_crawled_at
       // before enqueue so a re-tick within the same hour is a no-op.
+      // Task #2: short-circuit if the operator has paused the crawler
+      // globally (seed sweep is the primary enqueue source).
       try {
+        const { isGlobalPaused } = await import("./services/ops/pause");
+        if (await isGlobalPaused(env)) {
+          console.log("hourly seed sweep skipped: crawler paused");
+        } else {
         const seedRes = await runSeedSweep(env, 100);
         if (seedRes.picked > 0) console.log("hourly seed sweep", JSON.stringify(seedRes));
+        }
       } catch (e) {
         console.error("hourly seed sweep failed", (e as Error).message);
       }

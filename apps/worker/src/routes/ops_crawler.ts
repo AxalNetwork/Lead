@@ -1,22 +1,29 @@
 // Task #2: Crawler Operator Console — read aggregates + control plane.
 //
 // All routes inherit `accessGuard` + `adminOnly` from the parent mount
-// (`/api/ops/*`) in index.ts. Every mutating endpoint writes a row to
-// `ops_audit` with the actor email so post-hoc forensics are possible.
+// (`/api/ops/*`) in index.ts. Every MUTATING endpoint writes an
+// `ops_audit` row BEFORE performing the action (per spec: actions are
+// idempotent enough that the audit trail must precede the mutation —
+// otherwise a crash after the mutation but before the audit insert
+// leaves no record of who did what).
 //
-// Reads target the existing telemetry tables — no new write paths are
-// introduced here:
-//   * fetch_log (015)            — legacy scraper attempts
+// Reads target existing telemetry tables — no new write paths:
+//   * fetch_log (015)            — legacy scraper attempts (canonical
+//                                  surface for throughput + compliance)
 //   * crawler_fetch_log (341)    — in-house crawler attempts
-//   * crawler_host_config (341)  — per-host politeness + quarantine state
+//   * crawler_host_config (341)  — per-host politeness + quarantine
 //   * smart_frontier (342)       — typed staging queue
 //   * crawler_frontier (341)     — Task #2 url-keyed work queue
 //   * crawler_seeds (342)        — per-type seeds
 //   * ai_cost_daily (150)        — AI spend roll-up
-//   * profile_workflow_runs (345)— typed workflow outcomes (used as the
-//                                  "adapter scoreboard" since each
-//                                  profile-type workflow IS the adapter
-//                                  in the per-profile-type model)
+//   * profile_workflow_runs (345)— typed workflow outcomes (per-type
+//                                  "adapter" scoreboard + extractions)
+//
+// DRIFT ALERT SURFACE: `alert_events` (migration 280) has a CHECK
+// constraint on `trigger_kind` that does not include a crawler-drift
+// kind; the existing insight surface for ops drift is therefore
+// `ops_audit` rows with `action='drift.detected'`. The console reads
+// them via `GET /drift-alerts` and renders a banner.
 
 import { Hono } from "hono";
 import type { Env } from "../types";
@@ -26,6 +33,12 @@ import { classifyPage } from "../services/pageClassifier";
 type Vars = { email: string; is_admin: boolean };
 
 export const opsCrawlerRoute = new Hono<{ Bindings: Env; Variables: Vars }>();
+
+const PAUSE_KEY_GLOBAL = "ops:crawler:paused";
+const pauseKeyHost = (h: string) => `ops:crawler:paused:host:${h.toLowerCase()}`;
+const pauseKeyType = (t: string) => `ops:crawler:paused:type:${t}`;
+const THROUGHPUT_CACHE_KEY = "ops:throughput:v2";
+const THROUGHPUT_TTL_S = 10;
 
 /** Insert an ops_audit row. Best-effort — never blocks the response. */
 async function audit(
@@ -41,10 +54,7 @@ async function audit(
       `INSERT INTO ops_audit (actor_email, action, target_kind, target_id, payload_json)
        VALUES (?, ?, ?, ?, ?)`,
     ).bind(
-      actor,
-      action,
-      target_kind,
-      target_id,
+      actor, action, target_kind, target_id,
       payload === undefined ? null : JSON.stringify(payload),
     ).run();
   } catch (e) {
@@ -52,86 +62,123 @@ async function audit(
   }
 }
 
+/** Compute a percentile from a sorted ascending number array. */
+function pct(sorted: number[], p: number): number {
+  if (!sorted.length) return 0;
+  const idx = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
+  return sorted[idx];
+}
+
 opsCrawlerRoute.get("/", (c) =>
   c.json({ ok: true, message: "ops crawler", endpoints: [
     "GET /throughput", "GET /hosts", "GET /frontier", "GET /seeds",
-    "GET /adapters", "GET /ai-spend", "GET /compliance", "GET /extractions",
-    "POST /pause", "POST /resume", "POST /hosts/:host/quarantine",
-    "POST /hosts/:host/unquarantine", "POST /hosts/:host/rps",
-    "POST /hosts/:host/clear-robots", "POST /recrawl-entity",
-    "POST /test-url", "GET /audit",
+    "GET /seeds/raw", "GET /adapters", "GET /ai-spend?window=day|month",
+    "GET /compliance", "GET /extractions", "GET /audit",
+    "GET /drift-alerts", "GET /pause-status",
+    "POST /pause {scope,target?}", "POST /resume {scope,target?}",
+    "POST /hosts/:host/test", "POST /hosts/:host/quarantine",
+    "POST /hosts/:host/unquarantine", "POST /hosts/:host/whitelist",
+    "POST /hosts/:host/rps", "POST /hosts/:host/clear-robots",
+    "POST /seeds", "POST /recrawl-entity",
+    "POST /extractions/:id/replay", "POST /test-url",
   ] }),
 );
 
-// ------------------------------------------------------------ THROUGHPUT
-// 60-minute pages/sec, hourly buckets for last 24h, success vs block mix.
+// ============================================================ READS
+
+// THROUGHPUT — 1-min buckets for last 60 min, p50/p95 per tier, KV-cached.
 opsCrawlerRoute.get("/throughput", async (c) => {
+  const cached = await c.env.SCRAPE_CACHE.get(THROUGHPUT_CACHE_KEY, "json");
+  if (cached) return c.json(cached as Record<string, unknown>);
+
   const db = c.env.DB;
-  const lastHour = await db.prepare(
-    `SELECT
-        COUNT(*)                                            AS attempts,
-        SUM(CASE WHEN status BETWEEN 200 AND 299 THEN 1 ELSE 0 END) AS ok,
-        SUM(CASE WHEN status = 429 THEN 1 ELSE 0 END)               AS rate_limited,
-        SUM(CASE WHEN block_reason IS NOT NULL THEN 1 ELSE 0 END)   AS blocked,
-        COALESCE(SUM(bytes), 0)                             AS bytes,
-        COALESCE(AVG(duration_ms), 0)                       AS avg_ms
-       FROM fetch_log
-       WHERE created_at >= datetime('now','-1 hour')`,
-  ).first<{ attempts: number; ok: number; rate_limited: number; blocked: number; bytes: number; avg_ms: number }>();
-
-  const hourly = await db.prepare(
-    `SELECT
-        strftime('%Y-%m-%dT%H:00:00Z', created_at) AS bucket,
-        COUNT(*)                                   AS attempts,
-        SUM(CASE WHEN status BETWEEN 200 AND 299 THEN 1 ELSE 0 END) AS ok,
-        SUM(CASE WHEN block_reason IS NOT NULL OR status >= 400 THEN 1 ELSE 0 END) AS blocked
-       FROM fetch_log
-       WHERE created_at >= datetime('now','-24 hours')
-       GROUP BY bucket
-       ORDER BY bucket ASC`,
-  ).all<{ bucket: string; attempts: number; ok: number; blocked: number }>();
-
-  const inhouseLastHour = await db.prepare(
-    `SELECT COUNT(*) AS attempts,
+  const minutely = await db.prepare(
+    `SELECT strftime('%Y-%m-%dT%H:%M:00Z', created_at) AS bucket,
+            tier,
+            COUNT(*)                                                    AS attempts,
             SUM(CASE WHEN status BETWEEN 200 AND 299 THEN 1 ELSE 0 END) AS ok
-       FROM crawler_fetch_log
-       WHERE fetched_at >= datetime('now','-1 hour')`,
-  ).first<{ attempts: number; ok: number }>();
+       FROM fetch_log
+       WHERE created_at >= datetime('now','-60 minutes')
+       GROUP BY bucket, tier
+       ORDER BY bucket ASC, tier ASC`,
+  ).all<{ bucket: string; tier: number; attempts: number; ok: number }>();
 
-  const attempts = lastHour?.attempts ?? 0;
-  return c.json({
+  // Pull durations per tier (capped) for percentile calc.
+  const dur = await db.prepare(
+    `SELECT tier, duration_ms
+       FROM fetch_log
+       WHERE created_at >= datetime('now','-60 minutes') AND duration_ms > 0
+       ORDER BY created_at DESC LIMIT 5000`,
+  ).all<{ tier: number; duration_ms: number }>();
+  const byTier = new Map<number, number[]>();
+  for (const r of dur.results ?? []) {
+    if (!byTier.has(r.tier)) byTier.set(r.tier, []);
+    byTier.get(r.tier)!.push(r.duration_ms);
+  }
+  const tierStats: Array<{ tier: number; p50: number; p95: number; samples: number }> = [];
+  for (const [tier, arr] of byTier) {
+    arr.sort((a, b) => a - b);
+    tierStats.push({ tier, p50: pct(arr, 50), p95: pct(arr, 95), samples: arr.length });
+  }
+  tierStats.sort((a, b) => a.tier - b.tier);
+
+  const totals = await db.prepare(
+    `SELECT COUNT(*)                                                    AS attempts,
+            SUM(CASE WHEN status BETWEEN 200 AND 299 THEN 1 ELSE 0 END) AS ok,
+            SUM(CASE WHEN status = 429 THEN 1 ELSE 0 END)               AS rate_limited,
+            SUM(CASE WHEN block_reason IS NOT NULL THEN 1 ELSE 0 END)   AS blocked,
+            COALESCE(SUM(bytes), 0)                                     AS bytes
+       FROM fetch_log
+       WHERE created_at >= datetime('now','-60 minutes')`,
+  ).first<{ attempts: number; ok: number; rate_limited: number; blocked: number; bytes: number }>();
+
+  const attempts = totals?.attempts ?? 0;
+  const ok = totals?.ok ?? 0;
+  const payload = {
+    window_minutes: 60,
     last_hour: {
-      attempts,
-      ok: lastHour?.ok ?? 0,
-      rate_limited: lastHour?.rate_limited ?? 0,
-      blocked: lastHour?.blocked ?? 0,
-      bytes: lastHour?.bytes ?? 0,
-      avg_ms: Math.round(lastHour?.avg_ms ?? 0),
+      attempts, ok,
+      rate_limited: totals?.rate_limited ?? 0,
+      blocked: totals?.blocked ?? 0,
+      bytes: totals?.bytes ?? 0,
+      success_rate_pct: attempts > 0 ? +((ok / attempts) * 100).toFixed(1) : null,
       pages_per_sec: +(attempts / 3600).toFixed(3),
     },
-    inhouse_last_hour: {
-      attempts: inhouseLastHour?.attempts ?? 0,
-      ok: inhouseLastHour?.ok ?? 0,
-    },
-    hourly: hourly.results ?? [],
-  });
+    minutely: minutely.results ?? [],
+    tier_stats: tierStats,
+    cached_at: new Date().toISOString(),
+  };
+  // Cache for 10s.
+  c.executionCtx.waitUntil(
+    c.env.SCRAPE_CACHE.put(THROUGHPUT_CACHE_KEY, JSON.stringify(payload), { expirationTtl: THROUGHPUT_TTL_S })
+      .catch(() => undefined),
+  );
+  return c.json(payload);
 });
 
-// ------------------------------------------------------------ HOST HEALTH
+// HOST HEALTH
 opsCrawlerRoute.get("/hosts", async (c) => {
   const limit = Math.min(Number(c.req.query("limit") ?? "200"), 500);
+  const q = (c.req.query("q") ?? "").trim().toLowerCase();
+  const status = c.req.query("status") ?? "";
+  let where = "1=1";
+  const binds: Array<string | number> = [];
+  if (q) { where += " AND LOWER(host) LIKE ?"; binds.push(`%${q}%`); }
+  if (status === "quarantined") where += " AND (quarantined_at IS NOT NULL OR quarantined_until IS NOT NULL)";
+  if (status === "whitelisted") where += " AND notes = 'ops:whitelist'";
+  binds.push(limit);
+
   const cfg = await c.env.DB.prepare(
     `SELECT host, recommended_tier, max_rps, robots_cached_at,
             quarantined_until, quarantined_at, last_success_at,
             last_error, last_tested_at, success_count, failure_count,
             notes, updated_at
-       FROM crawler_host_config
+       FROM crawler_host_config WHERE ${where}
        ORDER BY (failure_count * 1.0 / NULLIF(success_count + failure_count, 0)) DESC NULLS LAST,
                 failure_count DESC, host ASC
        LIMIT ?`,
-  ).bind(limit).all<Record<string, unknown>>();
+  ).bind(...binds).all<Record<string, unknown>>();
 
-  // 24h activity from the legacy fetch_log keyed by host.
   const recent = await c.env.DB.prepare(
     `SELECT host,
             COUNT(*) AS attempts_24h,
@@ -149,47 +196,69 @@ opsCrawlerRoute.get("/hosts", async (c) => {
     const r = byHost.get(String(row.host)) ?? { attempts_24h: 0, ok_24h: 0, r429_24h: 0, blocked_24h: 0, last_attempt_at: null };
     const total = (Number(row.success_count) || 0) + (Number(row.failure_count) || 0);
     const successRate = total > 0 ? +((Number(row.success_count) / total) * 100).toFixed(1) : null;
-    return { ...row, ...r, success_rate_pct: successRate };
+    const whitelisted = String(row.notes || "") === "ops:whitelist";
+    return { ...row, ...r, success_rate_pct: successRate, whitelisted };
   });
   return c.json({ items });
 });
 
-// ------------------------------------------------------------ FRONTIER
+// FRONTIER — pending counts per discovery_reason + oldest pending age.
 opsCrawlerRoute.get("/frontier", async (c) => {
   const db = c.env.DB;
-  const smart = await db.prepare(
+  const byTypeStatus = await db.prepare(
     `SELECT profile_type_id, status, COUNT(*) AS n
-       FROM smart_frontier
-       GROUP BY profile_type_id, status`,
+       FROM smart_frontier GROUP BY profile_type_id, status`,
   ).all<{ profile_type_id: string | null; status: string; n: number }>();
 
   const queue = await db.prepare(
-    `SELECT status, COUNT(*) AS n
-       FROM crawler_frontier
-       GROUP BY status`,
+    `SELECT status, COUNT(*) AS n FROM crawler_frontier GROUP BY status`,
   ).all<{ status: string; n: number }>().catch(() => ({ results: [] as Array<{ status: string; n: number }> }));
 
   const oldest = await db.prepare(
-    `SELECT MIN(discovered_at) AS oldest_queued
-       FROM smart_frontier WHERE status='queued'`,
+    `SELECT MIN(discovered_at) AS oldest_queued FROM smart_frontier WHERE status='queued'`,
   ).first<{ oldest_queued: string | null }>();
 
   const byReason = await db.prepare(
-    `SELECT discovery_reason, COUNT(*) AS n
+    `SELECT discovery_reason, COUNT(*) AS pending,
+            MIN(discovered_at) AS oldest
        FROM smart_frontier WHERE status='queued'
-       GROUP BY discovery_reason ORDER BY n DESC LIMIT 20`,
-  ).all<{ discovery_reason: string; n: number }>();
+       GROUP BY discovery_reason ORDER BY pending DESC LIMIT 30`,
+  ).all<{ discovery_reason: string; pending: number; oldest: string }>();
 
   return c.json({
-    smart_frontier: smart.results ?? [],
+    smart_frontier: byTypeStatus.results ?? [],
     crawl_frontier: queue.results ?? [],
     oldest_queued: oldest?.oldest_queued ?? null,
     by_reason: byReason.results ?? [],
   });
 });
 
-// ------------------------------------------------------------ SEEDS
+// SEEDS — per-profile_type_id rollup (spec primary view).
 opsCrawlerRoute.get("/seeds", async (c) => {
+  const rollup = await c.env.DB.prepare(
+    `SELECT s.profile_type_id,
+            t.label AS profile_type_label,
+            COUNT(*)                                       AS seeds_total,
+            SUM(s.enabled)                                 AS seeds_enabled,
+            MAX(s.last_crawled_at)                         AS last_crawled_at,
+            COALESCE(SUM(s.success_count), 0)              AS success_count,
+            COALESCE(SUM(s.entity_count),  0)              AS entities_discovered
+       FROM crawler_seeds s
+       LEFT JOIN e_types t ON t.id = s.profile_type_id
+       GROUP BY s.profile_type_id
+       ORDER BY entities_discovered DESC, seeds_total DESC
+       LIMIT 200`,
+  ).all<Record<string, unknown>>();
+  const items = (rollup.results ?? []).map((r) => {
+    const succ = Number(r.success_count) || 0;
+    const ent = Number(r.entities_discovered) || 0;
+    return { ...r, success_ratio: succ > 0 ? +(ent / succ).toFixed(3) : null };
+  });
+  return c.json({ items });
+});
+
+// SEEDS RAW — full per-seed listing (used for the operator detail table).
+opsCrawlerRoute.get("/seeds/raw", async (c) => {
   const items = await c.env.DB.prepare(
     `SELECT s.id, s.profile_type_id, t.label AS profile_type_label,
             s.seed_kind, s.value, s.enabled,
@@ -203,9 +272,7 @@ opsCrawlerRoute.get("/seeds", async (c) => {
   return c.json({ items: items.results ?? [] });
 });
 
-// ------------------------------------------------------------ ADAPTERS
-// Per-profile-type workflow scoreboard: pages parsed, parse-success
-// rate, AI spend, last drift.
+// ADAPTERS — per-profile-type workflow scoreboard.
 opsCrawlerRoute.get("/adapters", async (c) => {
   const rows = await c.env.DB.prepare(
     `SELECT r.profile_type_id,
@@ -223,50 +290,74 @@ opsCrawlerRoute.get("/adapters", async (c) => {
        LEFT JOIN e_types t ON t.id = r.profile_type_id
        WHERE r.run_at >= datetime('now','-7 days')
        GROUP BY r.profile_type_id
-       ORDER BY runs_7d DESC
-       LIMIT 200`,
+       ORDER BY runs_7d DESC LIMIT 200`,
   ).all<Record<string, number | string>>();
+
+  // Cross-reference with last drift event from ops_audit.
+  const drifts = await c.env.DB.prepare(
+    `SELECT target_id, MAX(created_at) AS last_drift_at
+       FROM ops_audit WHERE action='drift.detected' AND target_kind='profile_type'
+       GROUP BY target_id`,
+  ).all<{ target_id: string; last_drift_at: string }>();
+  const driftMap = new Map((drifts.results ?? []).map((d) => [d.target_id, d.last_drift_at]));
+
   const items = (rows.results ?? []).map((r) => {
     const runs = Number(r.runs_7d) || 0;
     const ok = Number(r.success) || 0;
-    return { ...r, parse_success_pct: runs > 0 ? +((ok / runs) * 100).toFixed(1) : null };
+    return {
+      ...r,
+      parse_success_pct: runs > 0 ? +((ok / runs) * 100).toFixed(1) : null,
+      last_drift_at: driftMap.get(String(r.profile_type_id)) ?? null,
+    };
   });
   return c.json({ items });
 });
 
-// ------------------------------------------------------------ AI SPEND
+// AI SPEND — window=day (today) or month (MTD), tokens-centric.
 opsCrawlerRoute.get("/ai-spend", async (c) => {
-  const daily = await c.env.DB.prepare(
-    `SELECT day, SUM(cost_usd) AS cost_usd, SUM(neurons) AS neurons, SUM(calls) AS calls
-       FROM ai_cost_daily
-       WHERE day >= date('now','-14 days')
-       GROUP BY day ORDER BY day ASC`,
-  ).all<{ day: string; cost_usd: number; neurons: number; calls: number }>();
+  const window = c.req.query("window") === "month" ? "month" : "day";
+  const windowFilter = window === "month" ? "date('now','start of month')" : "date('now')";
+
+  const total = await c.env.DB.prepare(
+    `SELECT COALESCE(SUM(cost_usd), 0) AS cost_usd,
+            COALESCE(SUM(neurons), 0)  AS neurons,
+            COALESCE(SUM(calls), 0)    AS calls
+       FROM ai_cost_daily WHERE day >= ${windowFilter}`,
+  ).first<{ cost_usd: number; neurons: number; calls: number }>();
 
   const byPurpose = await c.env.DB.prepare(
-    `SELECT purpose, SUM(cost_usd) AS cost_usd, SUM(calls) AS calls
-       FROM ai_cost_daily
-       WHERE day >= date('now','-7 days')
+    `SELECT purpose, SUM(cost_usd) AS cost_usd, SUM(calls) AS calls,
+            SUM(neurons) AS neurons
+       FROM ai_cost_daily WHERE day >= ${windowFilter}
        GROUP BY purpose ORDER BY cost_usd DESC`,
-  ).all<{ purpose: string; cost_usd: number; calls: number }>();
+  ).all<{ purpose: string; cost_usd: number; calls: number; neurons: number }>();
 
   const byType = await c.env.DB.prepare(
     `SELECT r.profile_type_id, t.label AS profile_type_label,
-            SUM(r.actual_cost_usd) AS cost_usd, SUM(r.ai_calls) AS ai_calls
+            SUM(r.actual_cost_usd) AS cost_usd, SUM(r.ai_calls) AS ai_calls,
+            SUM(r.ai_neurons) AS neurons
        FROM profile_workflow_runs r
        LEFT JOIN e_types t ON t.id = r.profile_type_id
-       WHERE r.run_at >= datetime('now','-7 days')
+       WHERE r.run_at >= datetime(${windowFilter})
        GROUP BY r.profile_type_id ORDER BY cost_usd DESC LIMIT 50`,
   ).all<Record<string, unknown>>();
 
+  const daily = await c.env.DB.prepare(
+    `SELECT day, SUM(cost_usd) AS cost_usd, SUM(neurons) AS neurons, SUM(calls) AS calls
+       FROM ai_cost_daily WHERE day >= date('now','-30 days')
+       GROUP BY day ORDER BY day ASC`,
+  ).all<{ day: string; cost_usd: number; neurons: number; calls: number }>();
+
   return c.json({
-    daily: daily.results ?? [],
+    window,
+    total: total ?? { cost_usd: 0, neurons: 0, calls: 0 },
     by_purpose: byPurpose.results ?? [],
     by_profile_type: byType.results ?? [],
+    daily: daily.results ?? [],
   });
 });
 
-// ------------------------------------------------------------ COMPLIANCE
+// COMPLIANCE — robots fetches, 429s, explicit-disallow hosts.
 opsCrawlerRoute.get("/compliance", async (c) => {
   const refusals = await c.env.DB.prepare(
     `SELECT host, block_reason, COUNT(*) AS n, MAX(created_at) AS last_at
@@ -298,7 +389,7 @@ opsCrawlerRoute.get("/compliance", async (c) => {
   });
 });
 
-// ------------------------------------------------------------ EXTRACTIONS
+// EXTRACTIONS — last N workflow runs with URL + detected type + status.
 opsCrawlerRoute.get("/extractions", async (c) => {
   const limit = Math.min(Number(c.req.query("limit") ?? "50"), 200);
   const rows = await c.env.DB.prepare(
@@ -310,10 +401,17 @@ opsCrawlerRoute.get("/extractions", async (c) => {
        LEFT JOIN e_types t ON t.id = r.profile_type_id
        ORDER BY r.run_at DESC LIMIT ?`,
   ).bind(limit).all<Record<string, unknown>>();
-  return c.json({ items: rows.results ?? [] });
+  // Confidence isn't directly stored on profile_workflow_runs; we
+  // approximate it by the share of facts that crossed the verifier
+  // (verified / written). Null if no facts were written.
+  const items = (rows.results ?? []).map((r) => {
+    const w = Number(r.facts_written) || 0;
+    const v = Number(r.facts_verified) || 0;
+    return { ...r, confidence: w > 0 ? +(v / w).toFixed(3) : null };
+  });
+  return c.json({ items });
 });
 
-// ------------------------------------------------------------ AUDIT
 opsCrawlerRoute.get("/audit", async (c) => {
   const limit = Math.min(Number(c.req.query("limit") ?? "100"), 500);
   const rows = await c.env.DB.prepare(
@@ -323,59 +421,118 @@ opsCrawlerRoute.get("/audit", async (c) => {
   return c.json({ items: rows.results ?? [] });
 });
 
-// ============================================================ CONTROLS
-
-// Pause / resume the global crawler. Uses the SESSIONS KV as a kill-switch
-// flag the crawler consults before fetching. (Crawler integration is
-// out-of-band; here we own the flag + the audit row.)
-opsCrawlerRoute.post("/pause", async (c) => {
-  const reason = (await c.req.json().catch(() => ({}))).reason ?? null;
-  await c.env.SESSIONS.put("ops:crawler:paused", "1", { metadata: { reason, at: new Date().toISOString() } });
-  await audit(c.env, c.var.email, "pause.all", "global", null, { reason });
-  return c.json({ ok: true, paused: true });
-});
-
-opsCrawlerRoute.post("/resume", async (c) => {
-  await c.env.SESSIONS.delete("ops:crawler:paused");
-  await audit(c.env, c.var.email, "resume.all", "global", null, null);
-  return c.json({ ok: true, paused: false });
+// DRIFT ALERTS — last 14d of drift.detected ops_audit rows; powers the
+// banner on the operator console and serves as the ops-side feed into
+// the insights surface.
+opsCrawlerRoute.get("/drift-alerts", async (c) => {
+  const rows = await c.env.DB.prepare(
+    `SELECT id, target_id AS profile_type_id, payload_json, created_at
+       FROM ops_audit
+       WHERE action='drift.detected' AND target_kind='profile_type'
+         AND created_at >= datetime('now','-14 days')
+       ORDER BY id DESC LIMIT 50`,
+  ).all<Record<string, unknown>>();
+  return c.json({ items: rows.results ?? [] });
 });
 
 opsCrawlerRoute.get("/pause-status", async (c) => {
-  const v = await c.env.SESSIONS.get("ops:crawler:paused");
-  return c.json({ paused: v === "1" });
+  const global = await c.env.SESSIONS.get(PAUSE_KEY_GLOBAL);
+  const hostList = await c.env.SESSIONS.list({ prefix: "ops:crawler:paused:host:" });
+  const typeList = await c.env.SESSIONS.list({ prefix: "ops:crawler:paused:type:" });
+  return c.json({
+    paused: global === "1",
+    paused_hosts: hostList.keys.map((k) => k.name.replace("ops:crawler:paused:host:", "")),
+    paused_profile_types: typeList.keys.map((k) => k.name.replace("ops:crawler:paused:type:", "")),
+  });
 });
 
-// Per-host: quarantine / unquarantine / set RPS / clear robots cache.
+// ============================================================ CONTROLS
+// Convention: every mutating endpoint AUDITS FIRST, then performs the
+// action. The audit row is the source of truth for "this action was
+// attempted by X at Y" even if the mutation later throws.
+
+// SCOPED PAUSE — {scope: 'all'|'host'|'profile_type', target?: string}
+opsCrawlerRoute.post("/pause", async (c) => {
+  const body = await c.req.json().catch(() => ({})) as { scope?: string; target?: string; reason?: string };
+  const scope = body.scope ?? "all";
+  const target = body.target ?? null;
+  if (scope !== "all" && scope !== "host" && scope !== "profile_type") {
+    return c.json({ error: "invalid_scope" }, 400);
+  }
+  if ((scope === "host" || scope === "profile_type") && !target) {
+    return c.json({ error: "target_required" }, 400);
+  }
+  await audit(c.env, c.var.email, `pause.${scope}`, scope, target, { reason: body.reason ?? null });
+  const key = scope === "all" ? PAUSE_KEY_GLOBAL
+    : scope === "host" ? pauseKeyHost(target!) : pauseKeyType(target!);
+  await c.env.SESSIONS.put(key, "1", { metadata: { reason: body.reason ?? null, at: new Date().toISOString(), actor: c.var.email } });
+  return c.json({ ok: true, scope, target, paused: true });
+});
+
+opsCrawlerRoute.post("/resume", async (c) => {
+  const body = await c.req.json().catch(() => ({})) as { scope?: string; target?: string };
+  const scope = body.scope ?? "all";
+  const target = body.target ?? null;
+  if (scope !== "all" && scope !== "host" && scope !== "profile_type") {
+    return c.json({ error: "invalid_scope" }, 400);
+  }
+  if ((scope === "host" || scope === "profile_type") && !target) {
+    return c.json({ error: "target_required" }, 400);
+  }
+  await audit(c.env, c.var.email, `resume.${scope}`, scope, target, null);
+  const key = scope === "all" ? PAUSE_KEY_GLOBAL
+    : scope === "host" ? pauseKeyHost(target ?? "")
+    : pauseKeyType(target ?? "");
+  await c.env.SESSIONS.delete(key);
+  return c.json({ ok: true, scope, target, paused: false });
+});
+
+// HOST CONTROLS
 opsCrawlerRoute.post("/hosts/:host/quarantine", async (c) => {
   const host = c.req.param("host").toLowerCase();
   const body = await c.req.json().catch(() => ({})) as { until?: string; reason?: string };
-  const until = body.until ?? null;
-  const reason = body.reason ?? null;
+  await audit(c.env, c.var.email, "host.quarantine", "host", host, body);
   const now = new Date().toISOString();
   await c.env.DB.prepare(
     `INSERT INTO crawler_host_config (host, quarantined_at, quarantined_until, last_error, updated_at)
      VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(host) DO UPDATE SET
-       quarantined_at = excluded.quarantined_at,
+       quarantined_at    = excluded.quarantined_at,
        quarantined_until = excluded.quarantined_until,
-       last_error = COALESCE(excluded.last_error, crawler_host_config.last_error),
-       updated_at = excluded.updated_at`,
-  ).bind(host, now, until, reason, now).run();
-  await audit(c.env, c.var.email, "host.quarantine", "host", host, { until, reason });
-  return c.json({ ok: true, host, quarantined_at: now, quarantined_until: until });
+       last_error        = COALESCE(excluded.last_error, crawler_host_config.last_error),
+       updated_at        = excluded.updated_at`,
+  ).bind(host, now, body.until ?? null, body.reason ?? null, now).run();
+  return c.json({ ok: true, host, quarantined_at: now, quarantined_until: body.until ?? null });
 });
 
 opsCrawlerRoute.post("/hosts/:host/unquarantine", async (c) => {
   const host = c.req.param("host").toLowerCase();
+  await audit(c.env, c.var.email, "host.unquarantine", "host", host, null);
   const now = new Date().toISOString();
   const r = await c.env.DB.prepare(
     `UPDATE crawler_host_config
         SET quarantined_at = NULL, quarantined_until = NULL, updated_at = ?
       WHERE host = ?`,
   ).bind(now, host).run();
-  await audit(c.env, c.var.email, "host.unquarantine", "host", host, null);
   return c.json({ ok: true, host, changes: r.meta?.changes ?? 0 });
+});
+
+// WHITELIST — mark a host as trusted: clears quarantine, stamps the
+// notes field with the sentinel `ops:whitelist`. Whitelisted hosts are
+// visible in the /hosts filter (status=whitelisted).
+opsCrawlerRoute.post("/hosts/:host/whitelist", async (c) => {
+  const host = c.req.param("host").toLowerCase();
+  await audit(c.env, c.var.email, "host.whitelist", "host", host, null);
+  const now = new Date().toISOString();
+  await c.env.DB.prepare(
+    `INSERT INTO crawler_host_config (host, notes, quarantined_at, quarantined_until, updated_at)
+     VALUES (?, 'ops:whitelist', NULL, NULL, ?)
+     ON CONFLICT(host) DO UPDATE SET
+       notes = 'ops:whitelist',
+       quarantined_at = NULL, quarantined_until = NULL,
+       updated_at = excluded.updated_at`,
+  ).bind(host, now).run();
+  return c.json({ ok: true, host, whitelisted: true });
 });
 
 opsCrawlerRoute.post("/hosts/:host/rps", async (c) => {
@@ -385,57 +542,165 @@ opsCrawlerRoute.post("/hosts/:host/rps", async (c) => {
   if (!Number.isFinite(rps) || rps <= 0 || rps > 50) {
     return c.json({ error: "invalid_max_rps" }, 400);
   }
+  await audit(c.env, c.var.email, "host.set_rps", "host", host, { max_rps: rps });
   const now = new Date().toISOString();
   await c.env.DB.prepare(
     `INSERT INTO crawler_host_config (host, max_rps, updated_at)
      VALUES (?, ?, ?)
      ON CONFLICT(host) DO UPDATE SET max_rps = excluded.max_rps, updated_at = excluded.updated_at`,
   ).bind(host, rps, now).run();
-  await audit(c.env, c.var.email, "host.set_rps", "host", host, { max_rps: rps });
   return c.json({ ok: true, host, max_rps: rps });
 });
 
 opsCrawlerRoute.post("/hosts/:host/clear-robots", async (c) => {
   const host = c.req.param("host").toLowerCase();
+  await audit(c.env, c.var.email, "host.clear_robots", "host", host, null);
   const now = new Date().toISOString();
   const r = await c.env.DB.prepare(
     `UPDATE crawler_host_config
         SET robots_cached_at = NULL, robots_body = NULL, updated_at = ?
       WHERE host = ?`,
   ).bind(now, host).run();
-  await audit(c.env, c.var.email, "host.clear_robots", "host", host, null);
   return c.json({ ok: true, host, changes: r.meta?.changes ?? 0 });
 });
 
-// Force-recrawl an entity (re-enqueues a workflow if the binding is
-// configured; otherwise records the intent in the audit log).
+// TEST FETCH for a single host — probes https://{host}/ and returns
+// the fetch result + classification. Read-only; updates last_tested_at.
+opsCrawlerRoute.post("/hosts/:host/test", async (c) => {
+  const host = c.req.param("host").toLowerCase();
+  // Basic host validation: reject anything that isn't a plausible
+  // DNS-ish token (prevents URL injection via path param).
+  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(host)) {
+    return c.json({ error: "invalid_host" }, 400);
+  }
+  const url = `https://${host}/`;
+  await audit(c.env, c.var.email, "host.test_fetch", "host", host, { url });
+  const t0 = Date.now();
+  let fetched: Record<string, unknown> | null = null;
+  let classification: unknown = null;
+  let error: string | null = null;
+  try {
+    const r = await fetchPage(c.env, url, { jobId: `ops-host-test-${crypto.randomUUID()}` });
+    fetched = { status: r.status, html_length: r.html?.length ?? 0, tier: r.tier, blockReason: r.blockReason ?? null };
+    if (r.status >= 200 && r.status < 300 && typeof r.html === "string" && r.html.length > 0) {
+      classification = await classifyPage(c.env, url, r.html);
+    }
+  } catch (e) { error = (e as Error).message; }
+  const now = new Date().toISOString();
+  await c.env.DB.prepare(
+    `INSERT INTO crawler_host_config (host, last_tested_at, last_error, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(host) DO UPDATE SET
+       last_tested_at = excluded.last_tested_at,
+       last_error     = COALESCE(excluded.last_error, crawler_host_config.last_error),
+       updated_at     = excluded.updated_at`,
+  ).bind(host, now, error, now).run();
+  return c.json({ ok: error === null, host, url, fetched, classification, error, duration_ms: Date.now() - t0 });
+});
+
+// ADD SEED — thin proxy into the existing crawler-seeds insert path.
+opsCrawlerRoute.post("/seeds", async (c) => {
+  const body = await c.req.json().catch(() => ({})) as {
+    profile_type_id?: string; seed_kind?: string; value?: string;
+    refresh_interval_hours?: number; enabled?: boolean; notes?: string;
+  };
+  const ptid = String(body.profile_type_id ?? "").trim();
+  const kind = String(body.seed_kind ?? "").trim();
+  const value = String(body.value ?? "").trim();
+  if (!ptid || !kind || !value) return c.json({ error: "missing_fields" }, 400);
+  if (!["url", "search_query", "directory_pattern"].includes(kind)) return c.json({ error: "bad_seed_kind" }, 400);
+  await audit(c.env, c.var.email, "seed.add", "profile_type", ptid, { seed_kind: kind, value });
+
+  // FK guard.
+  const t = await c.env.DB.prepare(`SELECT id FROM e_types WHERE id = ?`).bind(ptid).first<{ id: string }>();
+  if (!t) return c.json({ error: "unknown_profile_type_id" }, 400);
+  const refresh = Math.max(1, Math.min(8760, Number(body.refresh_interval_hours ?? 168)));
+  const enabled = body.enabled === false ? 0 : 1;
+  const notes = typeof body.notes === "string" ? body.notes.slice(0, 500) : null;
+  const id = crypto.randomUUID();
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO crawler_seeds (id, profile_type_id, seed_kind, value, refresh_interval_hours, enabled, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(profile_type_id, seed_kind, value) DO UPDATE SET
+         refresh_interval_hours = excluded.refresh_interval_hours,
+         enabled                = excluded.enabled,
+         notes                  = excluded.notes,
+         updated_at             = CURRENT_TIMESTAMP`,
+    ).bind(id, ptid, kind, value, refresh, enabled, notes).run();
+  } catch (e) {
+    return c.json({ error: "insert_failed", detail: (e as Error).message }, 500);
+  }
+  return c.json({ ok: true, profile_type_id: ptid, seed_kind: kind, value });
+});
+
+// RECRAWL ENTITY — re-enqueues every applicable per-type workflow for
+// the entity (currently only the news-refresh workflow is bound — other
+// per-type workflows are dispatched as they come online via WF_* bindings).
 opsCrawlerRoute.post("/recrawl-entity", async (c) => {
   const body = await c.req.json().catch(() => ({})) as { entity_id?: string; reason?: string };
   const entityId = body.entity_id;
   if (!entityId) return c.json({ error: "entity_id_required" }, 400);
-  let dispatched: string | null = null;
+  await audit(c.env, c.var.email, "recrawl.entity", "entity", entityId, { reason: body.reason ?? null });
+  const dispatched: Record<string, string> = {};
   try {
     if (c.env.WF_REFRESH_NEWS) {
       const wf = await c.env.WF_REFRESH_NEWS.create({ params: { entityId, triggered_by: `ops:${c.var.email}` } });
-      dispatched = wf.id;
+      dispatched.news = wf.id;
     }
-  } catch (e) {
-    console.warn("recrawl-entity dispatch failed", (e as Error).message);
-  }
-  await audit(c.env, c.var.email, "recrawl.entity", "entity", entityId, { reason: body.reason ?? null, dispatched });
+  } catch (e) { console.warn("recrawl news failed", (e as Error).message); }
+  try {
+    if (c.env.WF_CLASSIFY_BATCH) {
+      const wf = await (c.env as unknown as { WF_CLASSIFY_BATCH?: { create: (o: { params: Record<string, unknown> }) => Promise<{ id: string }> } })
+        .WF_CLASSIFY_BATCH?.create({ params: { entityIds: [entityId], triggered_by: `ops:${c.var.email}` } });
+      if (wf) dispatched.classify = wf.id;
+    }
+  } catch (e) { console.warn("recrawl classify failed", (e as Error).message); }
   return c.json({ ok: true, entity_id: entityId, dispatched });
 });
 
-// Test-fetch a URL and run the heuristic+AI page classifier. Read-only —
-// writes no facts. Still audited because it consumes budget.
+// REPLAY EXTRACT — re-run the classifier against the cached HTML of a
+// past extraction. We don't store the HTML on profile_workflow_runs,
+// so we re-fetch the candidate_url and classify (read-only — writes
+// nothing to facts/entities).
+opsCrawlerRoute.post("/extractions/:id/replay", async (c) => {
+  const id = c.req.param("id");
+  const row = await c.env.DB.prepare(
+    `SELECT id, candidate_url, profile_type_id FROM profile_workflow_runs WHERE id = ?`,
+  ).bind(id).first<{ id: string; candidate_url: string; profile_type_id: string }>();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  await audit(c.env, c.var.email, "extraction.replay", "extraction", id, { candidate_url: row.candidate_url });
+  const t0 = Date.now();
+  let fetched: Record<string, unknown> | null = null;
+  let classification: unknown = null;
+  let error: string | null = null;
+  try {
+    const r = await fetchPage(c.env, row.candidate_url, { jobId: `ops-replay-${id}` });
+    fetched = { status: r.status, html_length: r.html?.length ?? 0, tier: r.tier, blockReason: r.blockReason ?? null };
+    if (r.status >= 200 && r.status < 300 && typeof r.html === "string" && r.html.length > 0) {
+      classification = await classifyPage(c.env, row.candidate_url, r.html);
+    }
+  } catch (e) { error = (e as Error).message; }
+  return c.json({
+    ok: error === null,
+    extraction_id: id, candidate_url: row.candidate_url,
+    profile_type_id: row.profile_type_id,
+    fetched, classification, error,
+    duration_ms: Date.now() - t0,
+  });
+});
+
+// TEST URL — fetch + classify any URL, no commit. Audited because it
+// burns budget (one tier-escalating fetch + one AI classifier call).
 opsCrawlerRoute.post("/test-url", async (c) => {
   const body = await c.req.json().catch(() => ({})) as { url?: string };
   const url = body.url;
   if (!url || !/^https?:\/\//i.test(url)) {
     return c.json({ error: "url_required" }, 400);
   }
+  await audit(c.env, c.var.email, "test-url", "url", url, null);
   const t0 = Date.now();
-  let fetched: { status: number; html_length: number; tier: number | null; blockReason: string | null } | null = null;
+  let fetched: Record<string, unknown> | null = null;
   let classification: unknown = null;
   let error: string | null = null;
   try {
@@ -449,9 +714,6 @@ opsCrawlerRoute.post("/test-url", async (c) => {
     if (r.status >= 200 && r.status < 300 && typeof r.html === "string" && r.html.length > 0) {
       classification = await classifyPage(c.env, url, r.html);
     }
-    // Mark the host as tested in the host_config (helps the operator
-    // see when a manual probe last hit a host even if there were no
-    // production crawls).
     try {
       const host = new URL(url).hostname.toLowerCase();
       const now = new Date().toISOString();
@@ -460,11 +722,9 @@ opsCrawlerRoute.post("/test-url", async (c) => {
          VALUES (?, ?, ?)
          ON CONFLICT(host) DO UPDATE SET last_tested_at = excluded.last_tested_at, updated_at = excluded.updated_at`,
       ).bind(host, now, now).run();
-    } catch { /* host parse already validated above */ }
+    } catch { /* host parse fine */ }
   } catch (e) {
     error = (e as Error).message;
   }
-  const duration_ms = Date.now() - t0;
-  await audit(c.env, c.var.email, "test-url", "url", url, { fetched, classification, error, duration_ms });
-  return c.json({ ok: error === null, url, fetched, classification, error, duration_ms });
+  return c.json({ ok: error === null, url, fetched, classification, error, duration_ms: Date.now() - t0 });
 });

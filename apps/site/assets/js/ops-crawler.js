@@ -1,9 +1,13 @@
 // Task #2: Crawler Operator Console front-end. Polls /api/ops/crawler/*
-// every 10s while the tab is visible; pauses polling when hidden.
+// every 10s while the tab is visible; pauses when hidden. Performs a
+// pre-flight against /api/ops/crawler/ on load and replaces the page
+// with a 403 message if the caller is not on the ops admin allowlist.
 (function () {
   var API = "https://api.aidatasignal.com/api/ops/crawler";
   var REFRESH_MS = 10000;
   var timer = null;
+  var hostFilter = { q: "", status: "" };
+  var aiSpendWindow = "day";
 
   function $(sel) { return document.querySelector(sel); }
   function esc(s) {
@@ -25,6 +29,7 @@
 
   async function api(path, opts) {
     var r = await fetch(API + path, Object.assign({ credentials: "include" }, opts || {}));
+    if (r.status === 403) { showForbidden(); throw new Error("forbidden"); }
     if (!r.ok) throw new Error("HTTP " + r.status);
     return r.json();
   }
@@ -36,23 +41,77 @@
     });
   }
 
-  // ---- renderers ---------------------------------------------------------
-  function sparkline(points, key) {
-    if (!points || !points.length) return '<div class="ads-empty">No data</div>';
-    var W = 720, H = 80, PAD = 4;
-    var maxY = 1;
-    points.forEach(function (p) { if (num(p[key]) > maxY) maxY = num(p[key]); });
-    var dx = (W - PAD * 2) / Math.max(1, points.length - 1);
-    var path = "";
-    points.forEach(function (p, i) {
-      var x = PAD + i * dx;
-      var y = H - PAD - (num(p[key]) / maxY) * (H - PAD * 2);
-      path += (i === 0 ? "M" : "L") + x.toFixed(1) + "," + y.toFixed(1);
+  function showForbidden() {
+    var f = document.getElementById("ops-forbidden");
+    if (f) f.style.display = "block";
+    var sections = document.querySelectorAll("#ops-root > .ads-card:not(#ops-forbidden), #ops-root > h2, #ops-root > .ads-grid");
+    sections.forEach(function (el) { el.style.display = "none"; });
+    stop();
+  }
+
+  // ---- chart helpers -----------------------------------------------------
+  function stackedAreaByTier(buckets) {
+    if (!buckets || !buckets.length) return '<div class="ads-empty">No data</div>';
+    var bucketSet = {}, tierSet = {};
+    buckets.forEach(function (b) {
+      bucketSet[b.bucket] = true; tierSet[b.tier] = true;
     });
-    return '<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg" '
-      + 'style="width:100%;height:auto;display:block">'
-      + '<path d="' + path + '" fill="none" stroke="#5b8cff" stroke-width="2"/>'
-      + '</svg>';
+    var bucketList = Object.keys(bucketSet).sort();
+    var tierList = Object.keys(tierSet).sort();
+    var key = function (b, t) { return b + "|" + t; };
+    var data = {};
+    buckets.forEach(function (b) { data[key(b.bucket, b.tier)] = num(b.attempts); });
+    var W = 720, H = 140, PAD = 24;
+    var maxY = 1;
+    bucketList.forEach(function (b) {
+      var s = 0; tierList.forEach(function (t) { s += data[key(b, t)] || 0; });
+      if (s > maxY) maxY = s;
+    });
+    var colors = ["#5b8cff", "#23d6a4", "#f0b400", "#e36a6a", "#a06bff", "#888"];
+    var dx = (W - PAD * 2) / Math.max(1, bucketList.length - 1);
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;display:block">';
+    svg += '<line x1="' + PAD + '" y1="' + (H - PAD) + '" x2="' + (W - PAD) + '" y2="' + (H - PAD) + '" stroke="#243066"/>';
+    var prev = bucketList.map(function () { return H - PAD; });
+    tierList.forEach(function (t, ti) {
+      var pts = [];
+      var bottom = prev.slice();
+      bucketList.forEach(function (b, i) {
+        var v = data[key(b, t)] || 0;
+        var x = PAD + i * dx;
+        var y = bottom[i] - (v / maxY) * (H - PAD * 2);
+        pts.push([x, y]);
+        prev[i] = y;
+      });
+      var path = pts.map(function (p, i) { return (i === 0 ? "M" : "L") + p[0].toFixed(1) + "," + p[1].toFixed(1); }).join("");
+      for (var i = bucketList.length - 1; i >= 0; i--) {
+        path += "L" + (PAD + i * dx).toFixed(1) + "," + bottom[i].toFixed(1);
+      }
+      path += "Z";
+      svg += '<path d="' + path + '" fill="' + colors[ti % colors.length] + '" fill-opacity=".75" stroke="none"><title>tier ' + t + '</title></path>';
+    });
+    svg += '</svg>';
+    var legend = tierList.map(function (t, ti) {
+      return '<span style="display:inline-block;width:10px;height:10px;background:' + colors[ti % colors.length] + ';margin-right:.25rem"></span>tier ' + esc(t);
+    }).join(" &nbsp; ");
+    return svg + '<p class="ads-sub" style="margin:.25rem 0">' + legend + '</p>';
+  }
+
+  // ---- renderers ---------------------------------------------------------
+  async function loadDriftBanner() {
+    try {
+      var r = await api("/drift-alerts");
+      var el = $("#ops-drift-banner");
+      if (!r.items || !r.items.length) { el.innerHTML = ""; return; }
+      el.innerHTML = '<div class="ads-card ads-card--warn" style="margin-bottom:.75rem"><strong>⚠ Drift detected.</strong> '
+        + r.items.length + ' profile type(s) had a >=30pp parse-success drop in the last 14 days. '
+        + '<details style="display:inline"><summary>Details</summary><ul>'
+        + r.items.slice(0, 10).map(function (a) {
+            var p = {}; try { p = JSON.parse(a.payload_json || "{}"); } catch (e) {}
+            return '<li><code>' + esc(a.profile_type_id) + '</code> — drop ' + esc(p.drop_pp) + 'pp ('
+              + esc(p.prior_success_rate) + ' → ' + esc(p.recent_success_rate) + ') at ' + fmt(a.created_at) + '</li>';
+          }).join("")
+        + '</ul></details></div>';
+    } catch (e) { /* ignore */ }
   }
 
   async function loadThroughput() {
@@ -60,23 +119,36 @@
     var h = t.last_hour || {};
     $("#ops-kpi-pps").textContent = (h.pages_per_sec || 0).toFixed(3);
     $("#ops-kpi-att").textContent = num(h.attempts).toLocaleString();
-    $("#ops-kpi-ok").textContent = num(h.ok).toLocaleString();
+    $("#ops-kpi-sr").textContent = h.success_rate_pct == null ? "—" : h.success_rate_pct + "%";
     $("#ops-kpi-blk").textContent = num(h.blocked) + " / " + num(h.rate_limited);
-    $("#ops-throughput-chart").innerHTML = sparkline(t.hourly || [], "attempts");
+    $("#ops-throughput-chart").innerHTML = stackedAreaByTier(t.minutely || []);
+    var tbody = $("#ops-tier-stats tbody");
+    if (!t.tier_stats || !t.tier_stats.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="ads-empty">No fetches in the last hour.</td></tr>';
+    } else {
+      tbody.innerHTML = t.tier_stats.map(function (s) {
+        return '<tr><td>' + s.tier + '</td><td>' + s.samples + '</td><td>' + s.p50 + '</td><td>' + s.p95 + '</td></tr>';
+      }).join("");
+    }
   }
 
   async function loadHosts() {
-    var r = await api("/hosts");
+    var qs = [];
+    if (hostFilter.q) qs.push("q=" + encodeURIComponent(hostFilter.q));
+    if (hostFilter.status) qs.push("status=" + encodeURIComponent(hostFilter.status));
+    var r = await api("/hosts" + (qs.length ? "?" + qs.join("&") : ""));
     var tbody = $("#ops-hosts tbody");
     if (!r.items || !r.items.length) {
-      tbody.innerHTML = '<tr><td colspan="10" class="ads-empty">No hosts configured yet.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="10" class="ads-empty">No hosts match.</td></tr>';
       return;
     }
     tbody.innerHTML = r.items.map(function (h) {
       var quarantined = h.quarantined_at || h.quarantined_until;
-      var qPill = quarantined
+      var statePill = h.whitelisted
+        ? '<span class="ads-pill ads-pill--ok">whitelisted</span>'
+        : quarantined
         ? '<span class="ads-pill ads-pill--warn">quarantined' + (h.quarantined_until ? ' until ' + esc(h.quarantined_until) : '') + '</span>'
-        : '<span class="ads-pill ads-pill--ok">ok</span>';
+        : '<span class="ads-pill">normal</span>';
       return '<tr>'
         + '<td><code class="ads-mono">' + esc(h.host) + '</code></td>'
         + '<td>' + esc(h.recommended_tier) + '</td>'
@@ -85,18 +157,36 @@
         + '<td>' + num(h.attempts_24h) + '</td>'
         + '<td>' + num(h.r429_24h) + ' / ' + num(h.blocked_24h) + '</td>'
         + '<td>' + (h.robots_cached_at ? ago(h.robots_cached_at) : '—') + '</td>'
-        + '<td>' + qPill + '</td>'
+        + '<td>' + statePill + '</td>'
         + '<td>' + esc(h.last_error || '') + '</td>'
         + '<td>'
+        + '<button class="ads-btn" data-host-action="test" data-host="' + esc(h.host) + '">Test fetch</button> '
+        + '<button class="ads-btn" data-host-action="set-rps" data-host="' + esc(h.host) + '">Lower RPS</button> '
         + '<button class="ads-btn" data-host-action="' + (quarantined ? 'unquarantine' : 'quarantine') + '" data-host="' + esc(h.host) + '">' + (quarantined ? 'Unquarantine' : 'Quarantine') + '</button> '
-        + '<button class="ads-btn" data-host-action="set-rps" data-host="' + esc(h.host) + '">Set RPS</button> '
-        + '<button class="ads-btn" data-host-action="clear-robots" data-host="' + esc(h.host) + '">Clear robots</button>'
+        + '<button class="ads-btn" data-host-action="whitelist" data-host="' + esc(h.host) + '">Whitelist</button> '
+        + '<button class="ads-btn" data-host-action="clear-robots" data-host="' + esc(h.host) + '">Clear robots</button> '
+        + '<button class="ads-btn" data-host-action="pause-host" data-host="' + esc(h.host) + '">Pause host</button>'
         + '</td></tr>';
     }).join("");
   }
 
   async function loadFrontier() {
     var f = await api("/frontier");
+    // By reason — bar chart-ish table
+    var rmax = 1;
+    (f.by_reason || []).forEach(function (r) { if (num(r.pending) > rmax) rmax = num(r.pending); });
+    var reasons = (f.by_reason || []).map(function (r) {
+      var pctW = Math.round((num(r.pending) / rmax) * 100);
+      return '<tr><td><code class="ads-mono">' + esc(r.discovery_reason) + '</code></td>'
+        + '<td>' + num(r.pending) + '</td>'
+        + '<td>' + (r.oldest ? ago(r.oldest) : '—') + '</td>'
+        + '<td><div style="background:#5b8cff;height:8px;width:' + pctW + '%"></div></td></tr>';
+    }).join("");
+    $("#ops-frontier-reasons").innerHTML =
+      '<table class="ads-table"><thead><tr><th>Reason</th><th>Pending</th><th>Oldest</th><th>Bar</th></tr></thead>'
+      + '<tbody>' + (reasons || '<tr><td colspan="4" class="ads-empty">Frontier empty</td></tr>') + '</tbody></table>'
+      + '<p class="ads-sub" style="margin-top:.5rem">Oldest queued overall: ' + esc(f.oldest_queued || '—') + '</p>';
+
     var byType = {};
     (f.smart_frontier || []).forEach(function (r) {
       var k = r.profile_type_id || "(none)";
@@ -105,42 +195,52 @@
     });
     var rows = Object.keys(byType).sort().map(function (k) {
       var v = byType[k];
-      return '<tr><td><code class="ads-mono">' + esc(k) + '</code></td>'
+      return '<tr><td><code class="ads-mono">' + esc(k) + '</code> '
+        + '<button class="ads-btn" data-action="pause-type" data-type="' + esc(k) + '" style="font-size:.7em">Pause</button></td>'
         + '<td>' + v.queued + '</td><td>' + v.enqueued + '</td>'
         + '<td>' + v.rejected + '</td><td>' + v.crawled + '</td></tr>';
     }).join("");
-    var reasons = (f.by_reason || []).map(function (r) {
-      return '<li><code class="ads-mono">' + esc(r.discovery_reason) + '</code> — ' + num(r.n) + '</li>';
-    }).join("");
-    $("#ops-frontier").innerHTML =
+    $("#ops-frontier-types").innerHTML =
       '<table class="ads-table"><thead><tr><th>Profile type</th><th>queued</th><th>enqueued</th><th>rejected</th><th>crawled</th></tr></thead>'
-      + '<tbody>' + (rows || '<tr><td colspan="5" class="ads-empty">Empty</td></tr>') + '</tbody></table>'
-      + '<p class="ads-sub" style="margin-top:.5rem">Oldest queued: ' + esc(f.oldest_queued || '—') + '</p>'
-      + (reasons ? '<p class="ads-sub" style="margin-top:.5rem"><strong>Top discovery reasons:</strong></p><ul>' + reasons + '</ul>' : '');
+      + '<tbody>' + (rows || '<tr><td colspan="5" class="ads-empty">Empty</td></tr>') + '</tbody></table>';
   }
 
   async function loadAiSpend() {
-    var s = await api("/ai-spend");
+    var s = await api("/ai-spend?window=" + encodeURIComponent(aiSpendWindow));
+    var tot = s.total || {};
+    $("#ops-aispend-total").textContent = "Total: " + dollars(tot.cost_usd)
+      + " · " + num(tot.calls).toLocaleString() + " calls · "
+      + num(tot.neurons).toLocaleString() + " neurons";
+    var purpose = (s.by_purpose || []).map(function (d) {
+      return '<tr><td>' + esc(d.purpose) + '</td><td>' + dollars(d.cost_usd) + '</td><td>' + num(d.calls) + '</td><td>' + num(d.neurons) + '</td></tr>';
+    }).join("");
+    var byType = (s.by_profile_type || []).map(function (d) {
+      return '<tr><td><code class="ads-mono">' + esc(d.profile_type_id) + '</code>'
+        + (d.profile_type_label ? ' <span class="ads-sub">' + esc(d.profile_type_label) + '</span>' : '') + '</td>'
+        + '<td>' + dollars(d.cost_usd) + '</td><td>' + num(d.ai_calls) + '</td><td>' + num(d.neurons) + '</td></tr>';
+    }).join("");
     var daily = (s.daily || []).map(function (d) {
       return '<tr><td>' + esc(d.day) + '</td><td>' + dollars(d.cost_usd) + '</td><td>' + num(d.calls) + '</td></tr>';
     }).join("");
-    var purpose = (s.by_purpose || []).map(function (d) {
-      return '<tr><td>' + esc(d.purpose) + '</td><td>' + dollars(d.cost_usd) + '</td><td>' + num(d.calls) + '</td></tr>';
-    }).join("");
     $("#ops-aispend").innerHTML =
-      '<h4 style="margin:.25rem 0">Daily</h4>'
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">'
+      + '<div><h4 style="margin:.25rem 0">By purpose</h4>'
+      + '<table class="ads-table"><thead><tr><th>Purpose</th><th>Cost</th><th>Calls</th><th>Neurons</th></tr></thead>'
+      + '<tbody>' + (purpose || '<tr><td colspan="4" class="ads-empty">—</td></tr>') + '</tbody></table></div>'
+      + '<div><h4 style="margin:.25rem 0">By per-type workflow</h4>'
+      + '<table class="ads-table"><thead><tr><th>Type</th><th>Cost</th><th>Calls</th><th>Neurons</th></tr></thead>'
+      + '<tbody>' + (byType || '<tr><td colspan="4" class="ads-empty">No per-type workflow runs in this window</td></tr>') + '</tbody></table></div>'
+      + '</div>'
+      + '<h4 style="margin-top:1rem">Daily (30d)</h4>'
       + '<table class="ads-table"><thead><tr><th>Day</th><th>Cost</th><th>Calls</th></tr></thead>'
-      + '<tbody>' + (daily || '<tr><td colspan="3" class="ads-empty">No spend yet</td></tr>') + '</tbody></table>'
-      + '<h4 style="margin:.5rem 0 .25rem">By purpose (7d)</h4>'
-      + '<table class="ads-table"><thead><tr><th>Purpose</th><th>Cost</th><th>Calls</th></tr></thead>'
-      + '<tbody>' + (purpose || '<tr><td colspan="3" class="ads-empty">—</td></tr>') + '</tbody></table>';
+      + '<tbody>' + (daily || '<tr><td colspan="3" class="ads-empty">No spend yet</td></tr>') + '</tbody></table>';
   }
 
   async function loadAdapters() {
     var r = await api("/adapters");
     var tbody = $("#ops-adapters tbody");
     if (!r.items || !r.items.length) {
-      tbody.innerHTML = '<tr><td colspan="7" class="ads-empty">No workflow runs in the last 7 days.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="ads-empty">No workflow runs in the last 7 days.</td></tr>';
       return;
     }
     tbody.innerHTML = r.items.map(function (a) {
@@ -155,6 +255,7 @@
         + '<td>' + num(a.facts_written) + ' / ' + num(a.facts_verified) + '</td>'
         + '<td>' + num(a.ai_calls) + '</td>'
         + '<td>' + dollars(a.cost_usd) + '</td>'
+        + '<td>' + (a.last_drift_at ? '<span class="ads-pill ads-pill--warn">' + ago(a.last_drift_at) + '</span>' : '—') + '</td>'
         + '<td>' + ago(a.last_run_at) + '</td>'
         + '</tr>';
     }).join("");
@@ -180,19 +281,17 @@
     var r = await api("/seeds");
     var tbody = $("#ops-seeds tbody");
     if (!r.items || !r.items.length) {
-      tbody.innerHTML = '<tr><td colspan="7" class="ads-empty">No seeds configured.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="5" class="ads-empty">No seeds configured.</td></tr>';
       return;
     }
     tbody.innerHTML = r.items.map(function (s) {
       return '<tr>'
         + '<td><code class="ads-mono">' + esc(s.profile_type_id) + '</code>'
         + (s.profile_type_label ? ' <span class="ads-sub">' + esc(s.profile_type_label) + '</span>' : '') + '</td>'
-        + '<td>' + esc(s.seed_kind) + '</td>'
-        + '<td><code class="ads-mono" style="word-break:break-all">' + esc(s.value) + '</code></td>'
-        + '<td>' + (s.enabled ? '✓' : '—') + '</td>'
+        + '<td>' + num(s.seeds_enabled) + ' / ' + num(s.seeds_total) + '</td>'
         + '<td>' + ago(s.last_crawled_at) + '</td>'
-        + '<td>' + num(s.success_count) + '</td>'
-        + '<td>' + num(s.entity_count) + '</td>'
+        + '<td>' + num(s.entities_discovered) + '</td>'
+        + '<td>' + (s.success_ratio == null ? '—' : s.success_ratio) + '</td>'
         + '</tr>';
     }).join("");
   }
@@ -209,12 +308,14 @@
         + '<td>' + ago(e.run_at) + '</td>'
         + '<td><a href="' + esc(e.candidate_url) + '" target="_blank" rel="noopener"><code class="ads-mono" style="word-break:break-all">' + esc(e.candidate_url) + '</code></a></td>'
         + '<td>' + esc(e.profile_type_label || e.profile_type_id || '') + '</td>'
+        + '<td>' + (e.confidence == null ? '—' : e.confidence) + '</td>'
         + '<td><span class="ads-pill ads-pill--' + (e.status === 'success' ? 'ok' : e.status === 'failed' ? 'err' : 'warn') + '">' + esc(e.status) + '</span></td>'
         + '<td>' + num(e.facts_written) + '/' + num(e.facts_verified) + '</td>'
         + '<td>' + dollars(e.actual_cost_usd) + '</td>'
-        + '<td>' + num(e.duration_ms) + 'ms</td>'
-        + '<td>' + (e.entity_id ? '<button class="ads-btn" data-recrawl="' + esc(e.entity_id) + '">Recrawl</button>' : '') + '</td>'
-        + '</tr>';
+        + '<td>'
+        + '<button class="ads-btn" data-replay="' + esc(e.id) + '">Replay extract</button> '
+        + (e.entity_id ? '<button class="ads-btn" data-recrawl="' + esc(e.entity_id) + '">Recrawl entity</button>' : '')
+        + '</td></tr>';
     }).join("");
   }
 
@@ -242,15 +343,19 @@
       var el = $("#ops-pause-state");
       el.textContent = r.paused ? "PAUSED" : "running";
       el.className = "ads-pill " + (r.paused ? "ads-pill--err" : "ads-pill--ok");
+      var scopes = [];
+      (r.paused_hosts || []).forEach(function (h) { scopes.push("host:" + h); });
+      (r.paused_profile_types || []).forEach(function (t) { scopes.push("type:" + t); });
+      $("#ops-paused-scopes").textContent = scopes.length ? "(" + scopes.join(", ") + ")" : "";
     } catch (e) { /* ignore */ }
   }
 
   async function refreshAll() {
     var stamp = new Date().toLocaleTimeString();
     $("#ops-last-refresh").textContent = "last refresh " + stamp;
-    var jobs = [loadPauseState(), loadThroughput(), loadHosts(), loadFrontier(),
-                loadAiSpend(), loadAdapters(), loadCompliance(), loadSeeds(),
-                loadExtractions(), loadAudit()];
+    var jobs = [loadDriftBanner(), loadPauseState(), loadThroughput(), loadHosts(),
+                loadFrontier(), loadAiSpend(), loadAdapters(), loadCompliance(),
+                loadSeeds(), loadExtractions(), loadAudit()];
     await Promise.allSettled(jobs);
   }
 
@@ -259,35 +364,73 @@
     var t = e.target;
     if (!t || t.tagName !== "BUTTON") return;
     try {
-      if (t.dataset.action === "refresh")  { await refreshAll(); return; }
-      if (t.dataset.action === "pause")    {
+      if (t.dataset.action === "refresh")        { await refreshAll(); return; }
+      if (t.dataset.action === "pause-global")   {
         var reason = prompt("Reason for pausing the crawler? (optional)") || "";
-        await post("/pause", { reason: reason }); await refreshAll(); return;
+        await post("/pause", { scope: "all", reason: reason }); await refreshAll(); return;
       }
-      if (t.dataset.action === "resume")   { await post("/resume", {}); await refreshAll(); return; }
+      if (t.dataset.action === "resume-global")  { await post("/resume", { scope: "all" }); await refreshAll(); return; }
+      if (t.dataset.action === "pause-type")     {
+        var ptid = t.dataset.type;
+        if (!confirm("Pause profile type '" + ptid + "'?")) return;
+        await post("/pause", { scope: "profile_type", target: ptid });
+        await refreshAll(); return;
+      }
+      if (t.dataset.replay) {
+        t.disabled = true; t.textContent = "running…";
+        var rep = await post("/extractions/" + encodeURIComponent(t.dataset.replay) + "/replay", {});
+        alert("Replay complete:\n" + JSON.stringify(rep, null, 2));
+        t.disabled = false; t.textContent = "Replay extract";
+        loadAudit(); return;
+      }
       if (t.dataset.recrawl) {
         await post("/recrawl-entity", { entity_id: t.dataset.recrawl, reason: "operator console" });
-        t.textContent = "queued"; t.disabled = true; return;
+        t.textContent = "queued"; t.disabled = true; loadAudit(); return;
       }
       if (t.dataset.hostAction) {
         var host = t.dataset.host;
-        if (t.dataset.hostAction === "quarantine") {
+        var act = t.dataset.hostAction;
+        if (act === "test") {
+          t.disabled = true; t.textContent = "fetching…";
+          var rt = await post("/hosts/" + encodeURIComponent(host) + "/test", {});
+          alert("Test fetch for " + host + ":\n" + JSON.stringify(rt, null, 2));
+          t.disabled = false; t.textContent = "Test fetch";
+        } else if (act === "quarantine") {
           var until = prompt("Quarantine until (ISO timestamp, blank = indefinite):", "") || null;
           var reason2 = prompt("Reason?", "") || null;
           await post("/hosts/" + encodeURIComponent(host) + "/quarantine", { until: until, reason: reason2 });
-        } else if (t.dataset.hostAction === "unquarantine") {
+        } else if (act === "unquarantine") {
           await post("/hosts/" + encodeURIComponent(host) + "/unquarantine", {});
-        } else if (t.dataset.hostAction === "set-rps") {
+        } else if (act === "whitelist") {
+          if (!confirm("Whitelist " + host + "? (clears quarantine)")) return;
+          await post("/hosts/" + encodeURIComponent(host) + "/whitelist", {});
+        } else if (act === "set-rps") {
           var rpsStr = prompt("Max requests per second for " + host + ":", "0.5");
           if (rpsStr == null) return;
           await post("/hosts/" + encodeURIComponent(host) + "/rps", { max_rps: Number(rpsStr) });
-        } else if (t.dataset.hostAction === "clear-robots") {
+        } else if (act === "clear-robots") {
           await post("/hosts/" + encodeURIComponent(host) + "/clear-robots", {});
+        } else if (act === "pause-host") {
+          if (!confirm("Pause all fetches for " + host + "?")) return;
+          await post("/pause", { scope: "host", target: host });
         }
-        await loadHosts(); await loadAudit();
+        await loadHosts(); await loadAudit(); await loadPauseState();
       }
-    } catch (err) { alert("Action failed: " + err.message); }
+    } catch (err) { if (err.message !== "forbidden") alert("Action failed: " + err.message); }
   });
+
+  var hostFilterForm = document.getElementById("ops-host-filter");
+  if (hostFilterForm) {
+    hostFilterForm.addEventListener("submit", function (e) {
+      e.preventDefault();
+      hostFilter.q = hostFilterForm.elements.q.value.trim();
+      hostFilter.status = hostFilterForm.elements.status.value;
+      loadHosts();
+    });
+  }
+
+  var spendSel = document.getElementById("ops-aispend-window");
+  if (spendSel) spendSel.addEventListener("change", function () { aiSpendWindow = spendSel.value; loadAiSpend(); });
 
   var testForm = document.getElementById("ops-test-url-form");
   if (testForm) {
@@ -305,6 +448,23 @@
     });
   }
 
+  var seedForm = document.getElementById("ops-add-seed");
+  if (seedForm) {
+    seedForm.addEventListener("submit", async function (e) {
+      e.preventDefault();
+      var body = {
+        profile_type_id: seedForm.elements.profile_type_id.value.trim(),
+        seed_kind: seedForm.elements.seed_kind.value,
+        value: seedForm.elements.value.value.trim(),
+      };
+      try {
+        await post("/seeds", body);
+        seedForm.reset();
+        await loadSeeds(); await loadAudit();
+      } catch (err) { alert("Add seed failed: " + err.message); }
+    });
+  }
+
   function start() {
     if (timer) return;
     refreshAll();
@@ -315,5 +475,16 @@
   document.addEventListener("visibilitychange", function () {
     if (document.hidden) stop(); else start();
   });
-  start();
+
+  // Pre-flight admin check: ping /api/ops/crawler/ root, which is
+  // already gated by accessGuard+adminOnly. A 403 swaps the page to
+  // a forbidden state and halts polling. This is the page-level
+  // admin gate spec'd in Task #2 step 9 (Jekyll renders the HTML
+  // statically; gating is enforced at load time by the API.)
+  (async function init() {
+    try {
+      await api("/");
+      start();
+    } catch (e) { /* showForbidden already invoked on 403 */ }
+  })();
 })();

@@ -12,6 +12,7 @@
 
 import type { Env } from "../../types";
 import { upsertDiscoveredUrl, enqueueFrontier } from "../../discovery/store.discovery";
+import { isGlobalPaused, isHostPaused, isProfileTypePaused } from "../ops/pause";
 
 interface SmartRow {
   id: string;
@@ -33,6 +34,9 @@ export interface DrainResult {
 
 export async function drainSmartFrontier(env: Env, limit = 200): Promise<DrainResult> {
   const out: DrainResult = { picked: 0, enqueued: 0, rejected: 0, errors: 0 };
+  // Task #2 (ops console): respect global pause. Host- and type-scoped
+  // pauses are enforced per-row below.
+  if (await isGlobalPaused(env)) return out;
   const rows = await env.DB.prepare(
     `SELECT id, url, url_canonical, host, profile_type_id, discovery_reason, priority, source_url
        FROM smart_frontier
@@ -45,6 +49,10 @@ export async function drainSmartFrontier(env: Env, limit = 200): Promise<DrainRe
 
   for (const row of list) {
     try {
+      // Skip rows whose host or profile_type is paused. We leave them
+      // in 'queued' state so a `resume` re-admits them on the next tick.
+      if (await isHostPaused(env, row.host)) continue;
+      if (await isProfileTypePaused(env, row.profile_type_id)) continue;
       const up = await upsertDiscoveredUrl(env, {
         url: row.url,
         discoveredFromUrl: row.source_url ?? null,

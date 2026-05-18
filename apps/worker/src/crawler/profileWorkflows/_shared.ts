@@ -33,6 +33,7 @@ import { limitAi } from "../../scraper/rateLimit";
 import { trackAi } from "../../analytics/events";
 import { sha256 } from "../../entities/normalize";
 import { insertFact } from "../../entities/facts";
+import { pauseScopeFor } from "../../services/ops/pause";
 import type {
   FactCandidate, PlannedSource, ProfileWorkflow, WorkflowContext,
   WorkflowDef, WorkflowError, WorkflowResult, WorkflowRunOpts,
@@ -373,6 +374,22 @@ export async function runStandardWorkflow(
   // attribute this run to. Falls back to the workflow's own id when
   // the dispatcher did not supply a requested type.
   const requestedTypeId = opts.requestedTypeId ?? def.profile_type_id;
+
+  // Task #2 (ops console pause enforcement): short-circuit before any
+  // fetch or AI call if the operator has paused this scope. Returns a
+  // 'skipped' WorkflowResult so the dispatcher's accounting still
+  // sees the run.
+  const paused = await pauseScopeFor(env, { host: hostOf(ctx.candidateUrl), profileTypeId: requestedTypeId });
+  if (paused) {
+    return {
+      workflow_id: runId, profile_type_id: requestedTypeId, entity_id: null,
+      status: "skipped", sources_planned: 0, sources_fetched: 0, sources_failed: 0,
+      facts_written: 0, facts_verified: 0, ai_calls: 0, ai_neurons: 0,
+      estimated_cost_usd: 0, actual_cost_usd: 0,
+      errors: [{ tag: "_pause", message: `paused_scope:${paused}` }],
+      duration_ms: Date.now() - t0,
+    };
+  }
 
   // Resolve entity id up-front so failure paths can still record one.
   const entityId = await resolveEntityId(requestedTypeId, ctx);

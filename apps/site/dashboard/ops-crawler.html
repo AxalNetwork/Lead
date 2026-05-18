@@ -4,57 +4,96 @@ title: Crawler Operator Console
 permalink: /ops/crawler/
 ---
 
-<section class="ads-section">
+<section class="ads-section" id="ops-root">
   <h1 class="ads-h1">Crawler Operator Console</h1>
   <p class="ads-sub">
-    Live throughput, host health, frontier depth, AI spend and the
-    compliance feed for the in-house crawler. All actions are admin-only
-    and audited.
+    Live throughput, host health, frontier depth, AI spend, and the
+    compliance feed for the in-house crawler. Admin-only; every action
+    is audited.
   </p>
+
+  <div id="ops-forbidden" style="display:none" class="ads-card ads-card--err">
+    <strong>403 Forbidden.</strong> You are not on the ops admin allowlist.
+  </div>
+
+  <div id="ops-drift-banner"></div>
 
   <div class="ads-card" id="ops-global-controls" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
     <strong>Global:</strong>
     <span id="ops-pause-state" class="ads-pill">…</span>
-    <button class="ads-btn" data-action="pause">Pause crawler</button>
-    <button class="ads-btn" data-action="resume">Resume</button>
+    <button class="ads-btn" data-action="pause-global">Pause crawler</button>
+    <button class="ads-btn" data-action="resume-global">Resume</button>
+    <span class="ads-mono" id="ops-paused-scopes" style="font-size:.85em"></span>
     <span style="flex:1"></span>
     <span class="ads-mono" id="ops-last-refresh"></span>
     <button class="ads-btn" data-action="refresh">Refresh now</button>
   </div>
 
-  <div class="ads-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem;margin-top:1rem">
-    <div class="ads-card"><h3>Pages / sec (1h)</h3><div id="ops-kpi-pps" class="ads-kpi">…</div></div>
-    <div class="ads-card"><h3>Attempts (1h)</h3><div id="ops-kpi-att" class="ads-kpi">…</div></div>
-    <div class="ads-card"><h3>Success (1h)</h3><div id="ops-kpi-ok" class="ads-kpi">…</div></div>
-    <div class="ads-card"><h3>Blocked / 429 (1h)</h3><div id="ops-kpi-blk" class="ads-kpi">…</div></div>
+  <div class="ads-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem;margin-top:1rem">
+    <div class="ads-card"><h3>Pages / sec (60m)</h3><div id="ops-kpi-pps" class="ads-kpi">…</div></div>
+    <div class="ads-card"><h3>Attempts (60m)</h3><div id="ops-kpi-att" class="ads-kpi">…</div></div>
+    <div class="ads-card"><h3>Success rate</h3><div id="ops-kpi-sr" class="ads-kpi">…</div></div>
+    <div class="ads-card"><h3>Blocked / 429</h3><div id="ops-kpi-blk" class="ads-kpi">…</div></div>
   </div>
 
-  <h2 class="ads-h2">Throughput (last 24h)</h2>
-  <div class="ads-card"><div id="ops-throughput-chart">Loading…</div></div>
+  <h2 class="ads-h2">Throughput — 60-min buckets, by tier</h2>
+  <div class="ads-card">
+    <div id="ops-throughput-chart">Loading…</div>
+    <h4 style="margin-top:.75rem">Per-tier latency</h4>
+    <div class="ads-table-wrap">
+      <table class="ads-table" id="ops-tier-stats">
+        <thead><tr><th>Tier</th><th>Samples</th><th>p50 ms</th><th>p95 ms</th></tr></thead>
+        <tbody><tr><td colspan="4">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
 
   <h2 class="ads-h2">Host health</h2>
   <div class="ads-card">
-   <div class="ads-table-wrap">
-    <table class="ads-table" id="ops-hosts">
-      <thead><tr>
-        <th>Host</th><th>Tier</th><th>RPS</th>
-        <th>Success rate</th><th>Attempts 24h</th><th>429 / blocked 24h</th>
-        <th>Robots cached</th><th>Quarantine</th><th>Last error</th><th>Actions</th>
-      </tr></thead>
-      <tbody><tr><td colspan="10">Loading…</td></tr></tbody>
-    </table>
-   </div>
+    <form id="ops-host-filter" style="display:flex;gap:.5rem;margin-bottom:.5rem;flex-wrap:wrap">
+      <input class="ads-input" name="q" placeholder="filter host…">
+      <select class="ads-input" name="status">
+        <option value="">all</option>
+        <option value="quarantined">quarantined</option>
+        <option value="whitelisted">whitelisted</option>
+      </select>
+      <button class="ads-btn" type="submit">Apply</button>
+    </form>
+    <div class="ads-table-wrap">
+      <table class="ads-table" id="ops-hosts">
+        <thead><tr>
+          <th>Host</th><th>Tier</th><th>RPS</th>
+          <th>Success rate</th><th>Attempts 24h</th><th>429 / blocked 24h</th>
+          <th>Robots cached</th><th>State</th><th>Last error</th><th>Actions</th>
+        </tr></thead>
+        <tbody><tr><td colspan="10">Loading…</td></tr></tbody>
+      </table>
+    </div>
   </div>
 
   <div class="ads-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem">
     <div class="ads-card">
-      <h3>Frontier depth (smart_frontier)</h3>
-      <div id="ops-frontier"></div>
+      <h3>Frontier — pending by discovery reason</h3>
+      <div id="ops-frontier-reasons"></div>
     </div>
     <div class="ads-card">
-      <h3>AI spend (last 14d)</h3>
-      <div id="ops-aispend"></div>
+      <h3>Frontier — by profile type</h3>
+      <div id="ops-frontier-types"></div>
     </div>
+  </div>
+
+  <h2 class="ads-h2">AI spend</h2>
+  <div class="ads-card">
+    <div style="display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem">
+      <label>Window:
+        <select id="ops-aispend-window" class="ads-input">
+          <option value="day">today</option>
+          <option value="month">month-to-date</option>
+        </select>
+      </label>
+      <span id="ops-aispend-total" class="ads-mono"></span>
+    </div>
+    <div id="ops-aispend">Loading…</div>
   </div>
 
   <h2 class="ads-h2">Adapter scoreboard (per-profile-type, 7d)</h2>
@@ -63,9 +102,10 @@ permalink: /ops/crawler/
     <table class="ads-table" id="ops-adapters">
       <thead><tr>
         <th>Profile type</th><th>Runs</th><th>Parse success</th>
-        <th>Facts written / verified</th><th>AI calls</th><th>Cost (USD)</th><th>Last run</th>
+        <th>Facts written / verified</th><th>AI calls</th><th>Cost</th>
+        <th>Last drift</th><th>Last run</th>
       </tr></thead>
-      <tbody><tr><td colspan="7">Loading…</td></tr></tbody>
+      <tbody><tr><td colspan="8">Loading…</td></tr></tbody>
     </table>
    </div>
   </div>
@@ -80,17 +120,27 @@ permalink: /ops/crawler/
    </div>
   </div>
 
-  <h2 class="ads-h2">Seeds</h2>
+  <h2 class="ads-h2">Seeds — per profile type</h2>
   <div class="ads-card">
-   <div class="ads-table-wrap">
-    <table class="ads-table" id="ops-seeds">
-      <thead><tr>
-        <th>Type</th><th>Kind</th><th>Value</th><th>Enabled</th>
-        <th>Last crawled</th><th>Success</th><th>Entities</th>
-      </tr></thead>
-      <tbody><tr><td colspan="7">Loading…</td></tr></tbody>
-    </table>
-   </div>
+    <form id="ops-add-seed" style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.75rem">
+      <input class="ads-input" name="profile_type_id" placeholder="profile_type_id (e.g. person)" required>
+      <select class="ads-input" name="seed_kind" required>
+        <option value="url">url</option>
+        <option value="search_query">search_query</option>
+        <option value="directory_pattern">directory_pattern</option>
+      </select>
+      <input class="ads-input" name="value" placeholder="value" required style="flex:1;min-width:240px">
+      <button class="ads-btn" type="submit">Add seed</button>
+    </form>
+    <div class="ads-table-wrap">
+      <table class="ads-table" id="ops-seeds">
+        <thead><tr>
+          <th>Profile type</th><th>Seeds (active/total)</th>
+          <th>Last crawled</th><th>Entities discovered</th><th>Success ratio</th>
+        </tr></thead>
+        <tbody><tr><td colspan="5">Loading…</td></tr></tbody>
+      </table>
+    </div>
   </div>
 
   <h2 class="ads-h2">Recent extractions</h2>
@@ -98,8 +148,8 @@ permalink: /ops/crawler/
    <div class="ads-table-wrap">
     <table class="ads-table" id="ops-extractions">
       <thead><tr>
-        <th>When</th><th>URL</th><th>Profile type</th><th>Status</th>
-        <th>Facts</th><th>Cost</th><th>Duration</th><th></th>
+        <th>When</th><th>URL</th><th>Detected profile type</th><th>Confidence</th>
+        <th>Status</th><th>Facts</th><th>Cost</th><th></th>
       </tr></thead>
       <tbody><tr><td colspan="8">Loading…</td></tr></tbody>
     </table>

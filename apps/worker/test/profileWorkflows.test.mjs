@@ -247,6 +247,15 @@ function makeEnv() {
     })(),
     AI_RL: null,
     AI_DAILY_NEURONS_CAP: "1000000",
+    SESSIONS: (() => {
+      const m = new Map();
+      return {
+        get: async (k) => m.get(k) ?? null,
+        put: async (k, v) => { m.set(k, v); },
+        delete: async (k) => { m.delete(k); },
+        _map: m,
+      };
+    })(),
   };
 }
 
@@ -280,6 +289,35 @@ test("runStandardWorkflow: skipping fetch (disableAi=false) still runs on candid
   assert.equal(rows.length, 1);
   assert.equal(rows[0].profile_type_id, "investor_vc");
   assert.equal(rows[0].workflow_id, "investor_vc.v1");
+});
+
+test("runStandardWorkflow: respects ops pause flag (skipped status, no fetch/AI)", async () => {
+  const env = makeEnv();
+  // Global pause
+  await env.SESSIONS.put("ops:crawler:paused", "1");
+  const ctx = {
+    candidateUrl: "https://acme.invalid/",
+    candidateHtml: "<html><title>x</title></html>",
+    candidateHost: "acme.invalid",
+    jobId: "test-pause-1",
+  };
+  const out = await investorVcWorkflow.run(env, ctx, { budgetUsdCap: 0.05, aiCallCap: 1 });
+  assert.equal(out.status, "skipped");
+  assert.equal(out.facts_written, 0);
+  assert.equal(out.ai_calls, 0);
+  assert.ok(out.errors.some((e) => e.message.startsWith("paused_scope:all")));
+  // Resume + run host-scoped pause
+  await env.SESSIONS.delete("ops:crawler:paused");
+  await env.SESSIONS.put("ops:crawler:paused:host:acme.invalid", "1");
+  const out2 = await investorVcWorkflow.run(env, ctx, { budgetUsdCap: 0.05, aiCallCap: 1 });
+  assert.equal(out2.status, "skipped");
+  assert.ok(out2.errors.some((e) => e.message.startsWith("paused_scope:host")));
+  // Profile-type scope
+  await env.SESSIONS.delete("ops:crawler:paused:host:acme.invalid");
+  await env.SESSIONS.put("ops:crawler:paused:type:investor_vc", "1");
+  const out3 = await investorVcWorkflow.run(env, ctx, { budgetUsdCap: 0.05, aiCallCap: 1 });
+  assert.equal(out3.status, "skipped");
+  assert.ok(out3.errors.some((e) => e.message.startsWith("paused_scope:profile_type")));
 });
 
 test("writeFact: facts persist via insertFact path with verified flag set", async () => {
