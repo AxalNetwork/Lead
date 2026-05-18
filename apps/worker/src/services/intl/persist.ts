@@ -25,9 +25,10 @@ import { linkVehicleToCanonicalFirm } from "./firmGraph";
  *  "fund size $X"). Each match becomes a corroborating intl.extracted_*
  *  fact written through insertFact. Conservative on purpose — false
  *  positives here are worse than misses. */
-function extractEnglishPredicates(english: string): Array<{ predicate: string; value_number: number; raw: string }> {
-  const out: Array<{ predicate: string; value_number: number; raw: string }> = [];
+function extractEnglishPredicates(english: string): Array<{ predicate: string; raw_amount: number; raw_currency: string; raw: string }> {
+  const out: Array<{ predicate: string; raw_amount: number; raw_currency: string; raw: string }> = [];
   if (!english) return out;
+  const symbolToCur: Record<string, string> = { "$": "USD", "€": "EUR", "£": "GBP" };
   const re = /\b(raised|fund\s+size|target|commitment|aum)\b[^.\n]{0,40}?\b(USD|EUR|GBP|SGD|HKD|JPY|CNY|\$|€|£)\s*([\d,]+(?:\.\d+)?)\s*(million|billion|m|bn)?/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(english))) {
@@ -36,8 +37,10 @@ function extractEnglishPredicates(english: string): Array<{ predicate: string; v
     const mag = m[4]?.toLowerCase();
     if (mag === "million" || mag === "m") n *= 1_000_000;
     else if (mag === "billion" || mag === "bn") n *= 1_000_000_000;
+    const sym = m[2].toUpperCase();
+    const cur = symbolToCur[sym] ?? sym;
     const kind = m[1].toLowerCase().replace(/\s+/g, "_");
-    out.push({ predicate: `intl.extracted_${kind}`, value_number: n, raw: m[0] });
+    out.push({ predicate: `intl.extracted_${kind}_usd`, raw_amount: n, raw_currency: cur, raw: m[0] });
     if (out.length >= 4) break;
   }
   return out;
@@ -103,24 +106,56 @@ export async function resolveIntlEntity(env: Env, hit: IntlEntityHit, source: st
  *  (set by adapters that already know the parent firm — e.g. a SEBI AIF
  *  whose manager source_id is published alongside it), bind the filer
  *  vehicle to the canonical firm in legal_structure_graph. */
+/** Normalize a firm display name for cross-jurisdiction canonical
+ *  matching. Strips legal suffixes ("GP, LP, LLC, Ltd, GmbH, KGaA,
+ *  S.A., S.p.A., Pte, Holdings, Capital Management, …") and casing
+ *  noise so "Index Ventures Management S.A.", "Index Ventures GP LLC",
+ *  and "Index Ventures Holdings Ltd" collapse to one canonical key. */
+function canonicalNameKey(name: string): string {
+  const stripped = name
+    .normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[.,()'"&]/g, " ")
+    .replace(/\b(gp|lp|llc|llp|inc|ltd|limited|gmbh|kgaa|ag|sa|s\s*a|spa|s\s*p\s*a|bv|nv|oy|ab|plc|pte|pty|holdings?|capital|management|managers?|advisers?|advisors?|partners?|ventures?|fund|funds|asset|investments?)\b/g, " ")
+    .replace(/\s+/g, " ").trim();
+  return stripped;
+}
+
 async function maybeLinkVehicle(env: Env, adapter: IntlAdapter, filing: IntlFiling, vehicleEntityId: string): Promise<void> {
   const canonicalSrc = filing.data?.canonical_firm_source_id;
   const role = filing.data?.vehicle_role;
+  const canonicalName = typeof filing.data?.canonical_firm_display_name === "string"
+    ? filing.data.canonical_firm_display_name : null;
   if (typeof canonicalSrc !== "string" || typeof role !== "string") return;
-  // 1. Look up an existing canonical firm by its intl.source_id fact.
+  // 1. Exact source_id match in this jurisdiction (cheap, deterministic).
   let r = await env.DB.prepare(
     `SELECT entity_id FROM facts WHERE predicate = 'intl.source_id'
        AND value_text = ?
        AND value_json LIKE ?
        AND is_current = 1 LIMIT 1`,
   ).bind(canonicalSrc, `%"jurisdiction":"${adapter.jurisdiction}"%`).first<{ entity_id: string }>();
-  // 2. If the canonical firm isn't on file yet, mint it through the
-  //    canonical resolveIntlEntity path so the linker has a real
-  //    target. This is what makes auto-linking end-to-end on the
-  //    first sighting of "<vehicle> managed by <canonical>".
+  // 2. Cross-jurisdiction canonical consolidation: if the same firm
+  //    already exists in u_entities under a different jurisdiction
+  //    (matched by normalized legal name), bind THIS vehicle to that
+  //    existing canonical. This is what makes one canonical_firm_entity_id
+  //    collect US/Cayman/UK/LU vehicles for a global VC.
+  if (!r?.entity_id && canonicalName) {
+    const key = canonicalNameKey(canonicalName);
+    if (key && key.length >= 3) {
+      const candidates = await env.DB.prepare(
+        `SELECT id, display_name FROM u_entities
+           WHERE LOWER(display_name) LIKE ? LIMIT 25`,
+      ).bind(`%${key.split(" ")[0]}%`).all<{ id: string; display_name: string }>();
+      for (const c of candidates.results ?? []) {
+        if (canonicalNameKey(c.display_name) === key) { r = { entity_id: c.id }; break; }
+      }
+    }
+  }
+  // 3. Still nothing → mint a new canonical in the adapter's
+  //    jurisdiction. Future sightings from other jurisdictions will
+  //    collapse onto this one via the name-key path above.
   if (!r?.entity_id) {
-    const displayName = typeof filing.data?.canonical_firm_display_name === "string"
-      ? filing.data.canonical_firm_display_name : canonicalSrc;
+    const displayName = canonicalName ?? canonicalSrc;
     const canonId = await resolveIntlEntity(env, {
       jurisdiction: adapter.jurisdiction,
       source_id: canonicalSrc,
@@ -245,11 +280,30 @@ export async function persistIntlFiling(
   // what makes non-English filings produce structured predicates.
   if (english_text) {
     for (const ex of extractEnglishPredicates(english_text)) {
+      // USD normalization is non-negotiable for persisted monetary
+      // facts — convert via toUsd, retain raw amount/currency in
+      // source_evidence_json. Fail-loud: a missing FX rate skips the
+      // predicate write rather than silently storing a non-USD number.
+      let usd: number | null = null; let predFxError: string | null = null;
+      try {
+        usd = await toUsd(env, ex.raw_amount, ex.raw_currency, filedAtIso);
+      } catch (e) {
+        if (e instanceof FxLookupError) { predFxError = e.message; }
+        else throw e;
+      }
+      if (usd == null) continue;
       const w = await insertFact(env, {
         ...factCtx,
         predicate: ex.predicate,
-        value_number: ex.value_number,
-        value_json: { raw: ex.raw, source_text_origin: filing.original_lang ?? "en" },
+        value_number: usd,
+        value_json: {
+          raw: ex.raw,
+          raw_amount: ex.raw_amount,
+          raw_currency: ex.raw_currency,
+          fx_as_of: filedAtIso,
+          fx_error: predFxError,
+          source_text_origin: filing.original_lang ?? "en",
+        },
       });
       if (w) facts_written++;
     }
