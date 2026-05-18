@@ -18,6 +18,11 @@ import type { Taxonomy } from "../entities/model";
 import { withEntityLock } from "../do/EntityLock";
 import { buildSeedUrls, type FetchedPage } from "./firmcrawl/pathProbes";
 import { extractPeopleFromPage, nameKeyOf, type ExtractedPerson } from "./firmcrawl/personExtract";
+// Task #1: per-profile-type workflows. Dispatched opportunistically after
+// the page classifier when env.PROFILE_WORKFLOWS_ENABLED is set; otherwise
+// inert (and the registry lookup short-circuits).
+import { getWorkflowForType } from "../crawler/profileWorkflows/registry";
+import { loadRegistry, testPage as testProfileType } from "../services/profileTypes";
 import { aiExtractPeople } from "../ai/extract";
 import { guessEmails } from "./firmcrawl/emailGuess";
 import { enqueueLinkedinDiscovery, enqueueCrunchbaseUrl } from "./firmcrawl/profileFollow";
@@ -597,6 +602,35 @@ async function processSingleUrl(
         console.warn("page_classifier log failed", (e as Error).message);
       }
       return { leadsFound, pagesFetched, pagesBlocked, captchaHits, costMs };
+    }
+
+    // Task #1: opportunistic per-profile-type workflow dispatch.
+    // Only fires when (a) the env flag is set, (b) the classifier saw a
+    // profile-shaped page, and (c) a registered e_types entry tests
+    // positive at ≥0.5 confidence. Runs synchronously inside the job
+    // budget so its cost / facts are attributed to this scrape.
+    if (env.PROFILE_WORKFLOWS_ENABLED === "1" &&
+        (cls.page_type === "profile" || cls.page_type === "team_page" || cls.page_type === "company_home")) {
+      try {
+        const registry = await loadRegistry(env);
+        let best: { id: string; conf: number } | null = null;
+        for (const t of registry) {
+          const r = testProfileType(t, { url: fetched.url || url, html: fetched.html });
+          if (r.matched && r.confidence >= (best?.conf ?? 0.5)) best = { id: t.id, conf: r.confidence };
+        }
+        if (best) {
+          const wf = getWorkflowForType(best.id);
+          const out = await wf.run(env, {
+            candidateUrl: fetched.url || url,
+            candidateHtml: fetched.html,
+            candidateHost: safeHost(fetched.url || url),
+            jobId,
+          }, { budgetUsdCap: 0.05 });
+          console.log("profile_workflow", { type: best.id, status: out.status, facts: out.facts_written, verified: out.facts_verified });
+        }
+      } catch (e) {
+        console.warn("profile_workflow dispatch failed", (e as Error).message);
+      }
     }
   } catch (e) {
     console.warn("classifyPage failed", (e as Error).message);

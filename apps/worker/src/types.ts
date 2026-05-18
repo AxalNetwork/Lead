@@ -77,6 +77,10 @@ export interface Env {
   VECTORIZE_DAILY_QUERIES_CAP?: string;
   AI_SEARCH_NAMESPACE?: string;
   AI_EXTRACT_MODEL?: string;
+  // Task #1: feature flag gating per-profile-type workflow dispatch in
+  // the URL pipeline. "1" = enabled. Off by default so the change is
+  // strictly additive until an operator opts in.
+  PROFILE_WORKFLOWS_ENABLED?: string;
   AI_VISION_MODEL?: string;
   PERSONA_RESCORE_SECRET?: string;
   AI_EMBED_MODEL?: string;

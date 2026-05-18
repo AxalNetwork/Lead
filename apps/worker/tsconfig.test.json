@@ -112,6 +112,26 @@
     "src/crawler/adapters/conferenceAdapters/nrfBigShow.ts",
     "src/crawler/adapters/conferenceAdapters/jpmHealthcare.ts",
     "src/crawler/archive.ts",
-    "src/crawler/replay.ts"
+    "src/crawler/replay.ts",
+    "src/crawler/profileWorkflows/_types.ts",
+    "src/crawler/profileWorkflows/_shared.ts",
+    "src/crawler/profileWorkflows/_commonSchemas.ts",
+    "src/crawler/profileWorkflows/_default.ts",
+    "src/crawler/profileWorkflows/registry.ts",
+    "src/crawler/profileWorkflows/investor_vc.ts",
+    "src/crawler/profileWorkflows/investor_pe.ts",
+    "src/crawler/profileWorkflows/investor_angel.ts",
+    "src/crawler/profileWorkflows/investor_corporate_vc.ts",
+    "src/crawler/profileWorkflows/accelerator.ts",
+    "src/crawler/profileWorkflows/fund_of_funds.ts",
+    "src/crawler/profileWorkflows/family_office.ts",
+    "src/crawler/profileWorkflows/investor_person.ts",
+    "src/crawler/profileWorkflows/lawyer_securities.ts",
+    "src/crawler/profileWorkflows/banker_investment.ts",
+    "src/crawler/profileWorkflows/founder.ts",
+    "src/crawler/profileWorkflows/politician_federal.ts",
+    "src/crawler/profileWorkflows/regulator_sec.ts",
+    "src/crawler/profileWorkflows/academic_researcher.ts",
+    "src/crawler/profileWorkflows/journalist_business.ts"
   ]
 }
