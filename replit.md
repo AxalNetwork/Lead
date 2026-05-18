@@ -20,5 +20,29 @@ Jekyll site (`apps/site`) on GitHub Pages at aidatasignal.com + Cloudflare Worke
   main agent cannot run destructive git commands (push/rebase/reset/merge)
   and must delegate to a background project task.
 
+## Architecture decisions
+
+### Task #3 — smart_frontier staging (ACCEPTED, not a deviation)
+Task #3 spec text says "candidates land in crawl_frontier". Task #2 already
+owns `crawl_frontier` with a url_id-keyed work-queue schema (see
+`migrations/250_link_discovery.sql`). Re-shaping that table to also carry
+discovery_reason / priority / profile_type_id would mutate Task #2's
+contract.
+
+Accepted resolution: `smart_frontier` is a typed, priority-ranked STAGING
+area introduced in migration 342. The hourly cron drains it into Task #2's
+`crawl_frontier` queue via `services/frontier/drain.ts`
+(`upsertDiscoveredUrl` + `enqueueFrontier`).
+
+Status mapping (`smart_frontier.status` → `crawl_frontier`):
+- `queued`    — emitted by `expandFrontier`, not yet drained.
+- `enqueued`  — drained; corresponding row exists in `crawl_frontier`
+                (keyed by `discovered_urls.id`) for the crawler to pop.
+- `rejected`  — drain rejected by canonical/obvious-reject filters; no
+                `crawl_frontier` row, will not be retried.
+
+Operators inspect the per-type funnel in `smart_frontier`; the crawler
+still pulls work from the single Task #2 queue.
+
 ## User preferences
 - (none recorded yet)
