@@ -12,6 +12,18 @@
 --                       + discovery_reason + priority so operators can
 --                       inspect the per-type funnel.
 --
+-- DESIGN NOTE — staging vs. direct write to crawl_frontier:
+--   The Task #3 spec text says "candidates land in crawl_frontier".
+--   Task #2 already owns that table name with a different schema
+--   (url_id PK, no discovery_reason / priority / per-type tagging).
+--   Rather than re-shape Task #2's queue, smart_frontier acts as a
+--   typed, priority-ranked STAGING area. An hourly drainer
+--   (services/frontier/drain.ts) pops top-priority rows and bridges
+--   them into the Task #2 crawl_frontier work queue via
+--   upsertDiscoveredUrl + enqueueFrontier. Operators inspect the
+--   per-type funnel here; the crawler still pulls work from the
+--   single Task #2 queue.
+--
 -- Unique (profile_type_id, seed_kind, value) lets the seed migration
 -- re-run idempotently via INSERT OR REPLACE.
 

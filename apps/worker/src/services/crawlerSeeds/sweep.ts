@@ -134,14 +134,24 @@ async function enqueueUrl(env: Env, url: string): Promise<boolean> {
 }
 
 // Run a single seed by its row. Shared by both the bulk sweep and the
-// manual `POST /api/crawler-seeds/:id/run` endpoint so the contract is
-// identical: touch last_crawled_at up-front, then process by kind.
+// manual `POST /api/crawler-seeds/:id/run` endpoint.
+//
+// touchSeed (last_crawled_at = now) is deferred until AFTER a successful
+// enqueue so a transient enqueue failure leaves the row eligible for
+// re-pick on the next sweep tick rather than silently waiting for the
+// next refresh interval. directory_pattern is the exception (no enqueue
+// work yet) — it is touched up-front so a thousand of them can't keep
+// re-appearing as stale.
 async function runOneSeed(env: Env, seed: SeedRow, out: SweepResult): Promise<void> {
-  await touchSeed(env, seed.id);
   if (seed.seed_kind === "url") {
     const ok = await enqueueUrl(env, seed.value);
-    if (ok) { out.enqueued++; await bumpCounters(env, seed.id, { success: 1 }); }
-    else { out.errors++; }
+    if (ok) {
+      out.enqueued++;
+      await touchSeed(env, seed.id);
+      await bumpCounters(env, seed.id, { success: 1 });
+    } else {
+      out.errors++;
+    }
   } else if (seed.seed_kind === "search_query") {
     const candidates = await bootstrapEntity(env, { name: seed.value, profile_type_id: seed.profile_type_id, limit: 8 });
     out.bootstrapped += candidates.length;
@@ -155,12 +165,20 @@ async function runOneSeed(env: Env, seed: SeedRow, out: SweepResult): Promise<vo
       // are the canonical pages the downstream extractor will harvest.
       if (c.kind !== "other") entities++;
     }
-    if (success > 0 || entities > 0) await bumpCounters(env, seed.id, { success, entities });
+    if (success > 0) {
+      await touchSeed(env, seed.id);
+      await bumpCounters(env, seed.id, { success, entities });
+    } else if (candidates.length === 0) {
+      // All providers exhausted with no candidates — still touch so we
+      // don't hammer the same dead query every tick.
+      await touchSeed(env, seed.id);
+    }
     out.enqueued += success;
   } else if (seed.seed_kind === "directory_pattern") {
     // Marker only — adapter is a follow-up. Touch keeps the sweep
     // moving so a thousand directory_pattern rows do not block real
     // url-kind seeds.
+    await touchSeed(env, seed.id);
   } else {
     console.warn("unknown seed_kind", seed.seed_kind, seed.id);
     out.errors++;

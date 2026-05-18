@@ -197,14 +197,34 @@ export async function buildCandidates(env: Env, input: ExpandInput): Promise<Fro
   return out;
 }
 
+// Optional global per-profile-type cap shared across an entire sweep
+// cycle. The per-call MAX_PER_TYPE_PER_CYCLE caps fanout from a single
+// crawled page; this caller-supplied counter caps fanout across every
+// expand invocation in one cron tick so one hot type can't monopolize
+// the smart_frontier inserts. Reused across calls in the same cycle.
+export type CycleCounters = Map<string, number>;
+
+const GLOBAL_PER_TYPE_PER_CYCLE = 5000;
+
 // expandFrontier — buildCandidates + persist. Returns the number of rows
 // inserted (existing canonical URLs for the same profile_type are left
 // alone via the UNIQUE constraint; re-discovery counts as 0 inserted).
-export async function expandFrontier(env: Env, input: ExpandInput): Promise<{ inserted: number; candidates: FrontierCandidate[] }> {
+export async function expandFrontier(
+  env: Env,
+  input: ExpandInput,
+  cycleCounters?: CycleCounters,
+): Promise<{ inserted: number; candidates: FrontierCandidate[]; capped?: number }> {
   const candidates = await buildCandidates(env, input);
   if (candidates.length === 0) return { inserted: 0, candidates };
   let inserted = 0;
+  let capped = 0;
   for (const c of candidates) {
+    if (cycleCounters) {
+      const key = c.profile_type_id ?? "__untyped__";
+      const used = cycleCounters.get(key) ?? 0;
+      if (used >= GLOBAL_PER_TYPE_PER_CYCLE) { capped++; continue; }
+      cycleCounters.set(key, used + 1);
+    }
     try {
       const r = await env.DB.prepare(
         `INSERT INTO smart_frontier (id, url, url_canonical, host, profile_type_id, discovery_reason,
@@ -224,5 +244,5 @@ export async function expandFrontier(env: Env, input: ExpandInput): Promise<{ in
       console.warn("expandFrontier insert failed", c.url_canonical, (e as Error).message);
     }
   }
-  return { inserted, candidates };
+  return { inserted, candidates, capped };
 }

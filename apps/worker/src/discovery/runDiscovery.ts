@@ -209,6 +209,10 @@ export async function runCrawlFrontier(env: Env, opts: FrontierOpts = {}): Promi
   const limit = opts.limit ?? 25;
   const items = await popFrontier(env, limit, opts.runId ?? null);
   let fetched = 0, recursed = 0, entities = 0, errors = 0;
+  // Task #3: per-cycle smart_frontier fanout counters. Shared across
+  // every expandFrontier call in this invocation so no single profile
+  // type can monopolize the staging area within one cron tick.
+  const cycleCounters: Map<string, number> = new Map();
   // Per-run accumulators so progress is attributed correctly even when
   // the caller doesn't pin opts.runId (e.g. a cron crawl that drains
   // a mixed-run frontier).
@@ -283,7 +287,7 @@ export async function runCrawlFrontier(env: Env, opts: FrontierOpts = {}): Promi
             sourceHost: it.host,
             profileTypeId: ptid,
             links,
-          });
+          }, cycleCounters);
         }
       } catch (e) {
         console.warn("smart_frontier_expand_failed", (e as Error).message);
