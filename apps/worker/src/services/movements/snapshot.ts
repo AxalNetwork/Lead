@@ -8,7 +8,9 @@
 
 import type { Env } from "../../types";
 import { crawlerFetch } from "../../crawler/fetcher";
+import { pickAdapter } from "../../crawler/adapters";
 import { venturePartnerListings } from "../../crawler/adapters/venturePartnerListings";
+import type { AdapterResult } from "../../crawler/adapters/types";
 
 export interface SnapshotMember {
   entity_id?: string | null;
@@ -55,32 +57,58 @@ export async function snapshotFirm(
   }
 
   const fetched = await crawlerFetch(env, teamUrl);
-  if (!fetched.ok || !fetched.html) {
-    return { firm_entity_id: firmEntityId, snapshot_date, inserted: false, members_count: 0, reason: `fetch_failed:${fetched.error ?? fetched.status}` };
-  }
-
-  const parsed = venturePartnerListings.extract(fetched.html, fetched.finalUrl || teamUrl);
   const members: SnapshotMember[] = [];
-  const seen = new Set<string>();
-  for (const cand of parsed.candidates ?? []) {
-    const name = (cand.name ?? "").trim();
-    if (!name) continue;
-    const key = normName(name);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    const data = (cand.data ?? {}) as { role?: string | null; profile_url?: string | null };
-    members.push({
-      name,
-      role_title: data.role ?? null,
-      profile_url: cand.url ?? data.profile_url ?? null,
-      slug: slugFromUrl(cand.url ?? null),
-    });
+  let reason: string | null = null;
+  let parsedAdapterId: string | null = null;
+
+  if (!fetched.ok || !fetched.html) {
+    reason = `fetch_failed:${fetched.error ?? fetched.status}`;
+  } else {
+    // Adapter selection: try firm-specific adapter via pickAdapter first
+    // (e.g. linkedinPublic, governmentRosters, …); fall back to the
+    // generic venturePartnerListings team-page parser.
+    const finalUrl = fetched.finalUrl || teamUrl;
+    let parsed: AdapterResult | null = null;
+    const specific = pickAdapter(finalUrl);
+    if (specific && specific.id !== "venture_partner_listings") {
+      try { parsed = specific.extract(fetched.html, finalUrl, {}); parsedAdapterId = specific.id; }
+      catch (e) { console.warn("firm adapter failed", specific.id, (e as Error).message); }
+    }
+    if (!parsed || (parsed.candidates ?? []).length === 0) {
+      try { parsed = venturePartnerListings.extract(fetched.html, finalUrl); parsedAdapterId = "venture_partner_listings"; }
+      catch (e) { console.warn("venturePartnerListings failed", (e as Error).message); }
+    }
+
+    const seen = new Set<string>();
+    for (const cand of parsed?.candidates ?? []) {
+      const name = (cand.name ?? "").trim();
+      if (!name) continue;
+      const key = normName(name);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      const data = (cand.data ?? {}) as { role?: string | null; profile_url?: string | null };
+      members.push({
+        name,
+        role_title: data.role ?? null,
+        profile_url: cand.url ?? data.profile_url ?? null,
+        slug: slugFromUrl(cand.url ?? null),
+      });
+    }
+    if (!members.length) reason = "no_members_parsed";
   }
 
+  // Append-only contract: ALWAYS write a row per eligible firm per
+  // sweep, even when parse yields zero members. That keeps the
+  // diffability invariant (every weekly cadence has a row) and lets
+  // ops surface "team page broke" via members_count=0. members_json
+  // stays a flat array (consumers depend on that shape); the parser
+  // diagnostic is logged but not persisted to that column.
   if (!members.length) {
-    return { firm_entity_id: firmEntityId, snapshot_date, inserted: false, members_count: 0, reason: "no_members_parsed" };
+    console.warn("firm_team_snapshot empty", JSON.stringify({
+      firm_entity_id: firmEntityId, snapshot_date, reason,
+      parsed_with: parsedAdapterId, source_url: teamUrl,
+    }));
   }
-
   try {
     await env.DB.prepare(
       `INSERT INTO firm_team_snapshots
@@ -98,7 +126,11 @@ export async function snapshotFirm(
     throw e;
   }
 
-  return { firm_entity_id: firmEntityId, snapshot_date, inserted: true, members_count: members.length };
+  return {
+    firm_entity_id: firmEntityId, snapshot_date,
+    inserted: true, members_count: members.length,
+    reason: reason ?? undefined,
+  };
 }
 
 /**

@@ -49,73 +49,123 @@ function parseSources(json: string | null): CorroborationSignal[] {
   } catch { return []; }
 }
 
+async function getFirmName(env: Env, firmId: string | null): Promise<string | null> {
+  if (!firmId) return null;
+  const r = await env.DB.prepare(
+    `SELECT display_name FROM u_entities WHERE id = ?`,
+  ).bind(firmId).first<{ display_name: string | null }>();
+  return r?.display_name ?? null;
+}
+
+function normFirmName(s: string | null | undefined): string {
+  return (s ?? "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * LinkedIn signal must support the SPECIFIC transition: a
+ * `person.current_firm` (or career) fact on the person whose
+ * `value_entity_id` resolves to the move's destination firm AND
+ * whose evidence is a LinkedIn URL. Mere existence of an old profile
+ * URL does not count.
+ */
 async function findLinkedInSignal(env: Env, m: MovementRow): Promise<CorroborationSignal | null> {
-  if (!m.person_entity_id) return null;
+  if (!m.person_entity_id || !m.to_firm_entity_id) return null;
   const r = await env.DB.prepare(
     `SELECT evidence_url, observed_at
        FROM facts
       WHERE entity_id = ?
-        AND predicate IN ('person.linkedin_url','linkedin_url','person.linkedin_slug')
-        AND observed_at >= date(?, '-60 day')
-        AND observed_at <= date(?, '+60 day')
+        AND predicate IN ('person.current_firm','person.career','person.past_role')
+        AND value_entity_id = ?
+        AND evidence_url LIKE '%linkedin.com%'
+        AND observed_at >= date(?, '-90 day')
+        AND observed_at <= date(?, '+90 day')
       ORDER BY observed_at DESC LIMIT 1`,
-  ).bind(m.person_entity_id, m.observed_at, m.observed_at)
+  ).bind(m.person_entity_id, m.to_firm_entity_id, m.observed_at, m.observed_at)
     .first<{ evidence_url: string | null; observed_at: string }>();
   if (!r || !r.evidence_url) return null;
   return { source_kind: "linkedin", url: r.evidence_url, observed_at: r.observed_at };
 }
 
+/**
+ * Twitter signal must come from a fact whose source/evidence is a
+ * Twitter URL AND that names the destination firm in value_text or
+ * value_entity_id. Bare twitter_handle facts don't count.
+ */
 async function findTwitterSignal(env: Env, m: MovementRow): Promise<CorroborationSignal | null> {
-  if (!m.person_entity_id) return null;
+  if (!m.person_entity_id || !m.to_firm_entity_id) return null;
+  const toName = normFirmName(await getFirmName(env, m.to_firm_entity_id));
   const r = await env.DB.prepare(
     `SELECT evidence_url, observed_at
        FROM facts
       WHERE entity_id = ?
-        AND predicate IN ('person.twitter_handle','twitter_handle')
-        AND observed_at >= date(?, '-60 day')
+        AND (evidence_url LIKE '%twitter.com%' OR evidence_url LIKE '%x.com/%' OR source LIKE '%twitter%')
+        AND (
+              value_entity_id = ?
+           OR (? <> '' AND lower(COALESCE(value_text,'')) LIKE ?)
+        )
+        AND observed_at >= date(?, '-90 day')
+        AND observed_at <= date(?, '+90 day')
       ORDER BY observed_at DESC LIMIT 1`,
-  ).bind(m.person_entity_id, m.observed_at)
-    .first<{ evidence_url: string | null; observed_at: string }>();
+  ).bind(
+    m.person_entity_id, m.to_firm_entity_id,
+    toName, `%${toName}%`,
+    m.observed_at, m.observed_at,
+  ).first<{ evidence_url: string | null; observed_at: string }>();
   if (!r || !r.evidence_url) return null;
   return { source_kind: "twitter", url: r.evidence_url, observed_at: r.observed_at };
 }
 
+/**
+ * Tech-press signal must reference BOTH the person's normalized name
+ * AND one of the involved firms (from OR to) in the same row within
+ * ±60d. Same-month-only person mentions are too weak.
+ */
 async function findTechPressSignal(env: Env, m: MovementRow): Promise<CorroborationSignal | null> {
-  // Look for any tech-press deal_event within ±30 days that mentions
-  // the person's name or the destination firm in use_of_proceeds.
-  const monthBucket = m.observed_at.slice(0, 7);
+  const fromName = normFirmName(await getFirmName(env, m.from_firm_entity_id));
+  const toName = normFirmName(await getFirmName(env, m.to_firm_entity_id));
+  if (!fromName && !toName) return null;
+  const firmClauses: string[] = [];
+  const firmBinds: string[] = [];
+  if (fromName) { firmClauses.push("lower(COALESCE(use_of_proceeds,'')) LIKE ? OR lower(COALESCE(company_name_raw,'')) LIKE ?"); firmBinds.push(`%${fromName}%`, `%${fromName}%`); }
+  if (toName)   { firmClauses.push("lower(COALESCE(use_of_proceeds,'')) LIKE ? OR lower(COALESCE(company_name_raw,'')) LIKE ?"); firmBinds.push(`%${toName}%`,   `%${toName}%`); }
   const r = await env.DB.prepare(
     `SELECT source_url, COALESCE(announcement_date, closing_date, created_at) AS at
        FROM deal_events
       WHERE source_type IN ('tech_press','press_release','company_blog')
-        AND substr(COALESCE(announcement_date, closing_date), 1, 7) = ?
-        AND (
-              lower(COALESCE(use_of_proceeds,'')) LIKE ?
-           OR lower(COALESCE(company_name_raw,'')) LIKE ?
-        )
+        AND COALESCE(announcement_date, closing_date) >= date(?, '-60 day')
+        AND COALESCE(announcement_date, closing_date) <= date(?, '+60 day')
+        AND (lower(COALESCE(use_of_proceeds,'')) LIKE ? OR lower(COALESCE(company_name_raw,'')) LIKE ?)
+        AND (${firmClauses.join(" OR ")})
       ORDER BY at DESC LIMIT 1`,
   ).bind(
-    monthBucket,
-    `%${m.person_name_normalized}%`,
-    `%${m.person_name_normalized}%`,
+    m.observed_at, m.observed_at,
+    `%${m.person_name_normalized}%`, `%${m.person_name_normalized}%`,
+    ...firmBinds,
   ).first<{ source_url: string | null; at: string }>();
   if (!r || !r.source_url) return null;
   return { source_kind: "tech_press", url: r.source_url, observed_at: r.at };
 }
 
+/**
+ * Alumni signal: the FROM firm's alumni page must list this specific
+ * person. We require both a `firm.alumni_url` fact AND a
+ * `firm.alumni_member` (or similar) fact whose value_text references
+ * the person's normalized name. URL existence alone isn't evidence.
+ */
 async function findAlumniSignal(env: Env, m: MovementRow): Promise<CorroborationSignal | null> {
   if (!m.from_firm_entity_id) return null;
   const r = await env.DB.prepare(
-    `SELECT value_text AS url, observed_at
+    `SELECT evidence_url, observed_at
        FROM facts
       WHERE entity_id = ?
-        AND predicate IN ('firm.alumni_url','alumni_url')
+        AND predicate IN ('firm.alumni_member','firm.alumni')
+        AND lower(COALESCE(value_text,'')) LIKE ?
         AND is_current = 1
       ORDER BY observed_at DESC LIMIT 1`,
-  ).bind(m.from_firm_entity_id)
-    .first<{ url: string | null; observed_at: string }>();
-  if (!r || !r.url) return null;
-  return { source_kind: "alumni", url: r.url, observed_at: r.observed_at };
+  ).bind(m.from_firm_entity_id, `%${m.person_name_normalized}%`)
+    .first<{ evidence_url: string | null; observed_at: string }>();
+  if (!r || !r.evidence_url) return null;
+  return { source_kind: "alumni", url: r.evidence_url, observed_at: r.observed_at };
 }
 
 async function findSecAdvSignal(env: Env, m: MovementRow): Promise<CorroborationSignal | null> {

@@ -124,8 +124,13 @@ export async function detectSpinoutsForFirm(env: Env, parentFirmEntityId: string
     const personNames = window.people.map((p) => p.person_name_normalized).filter(Boolean);
     if (personNames.length < 2) continue;
 
-    // Scan recent snapshots for a different firm whose member list
-    // intersects with our departing-people set by ≥2.
+    // Scan recent snapshots for a NEWLY EMERGED firm whose member list
+    // intersects with our departing-people set by ≥2. "Newly emerged"
+    // = u_entities.created_at within the departure window's
+    // [window_start - 30d, window_end + 180d] envelope. This rejects
+    // normal multi-person lateral moves to long-established firms.
+    const earliest = window.window_start;
+    const latest = window.window_end;
     const otherFirms = await env.DB.prepare(
       `SELECT s.firm_entity_id, s.source_url AS team_url, s.snapshot_date, s.members_json
          FROM firm_team_snapshots s
@@ -134,9 +139,14 @@ export async function detectSpinoutsForFirm(env: Env, parentFirmEntityId: string
              FROM firm_team_snapshots
             GROUP BY firm_entity_id
          ) latest ON latest.firm_entity_id = s.firm_entity_id AND latest.max_date = s.snapshot_date
+         JOIN u_entities e ON e.id = s.firm_entity_id
+         JOIN entity_roles r ON r.entity_id = s.firm_entity_id
+                            AND r.role IN ('investor_firm','firm','vc','gp','investor')
         WHERE s.firm_entity_id <> ?
-          AND s.snapshot_date >= ?`,
-    ).bind(parentFirmEntityId, window.window_end).all<CandidateFirm>();
+          AND s.snapshot_date >= ?
+          AND date(e.created_at) >= date(?, '-30 day')
+          AND date(e.created_at) <= date(?, '+180 day')`,
+    ).bind(parentFirmEntityId, latest, earliest, latest).all<CandidateFirm>();
 
     let chosen: CandidateFirm | null = null;
     let chosenIntersection: string[] = [];
