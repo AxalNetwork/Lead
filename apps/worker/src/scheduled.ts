@@ -485,6 +485,71 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         console.error("nightly verification sweep failed", (e as Error).message);
       }
 
+      // Task #18: nightly leak harvester + Delaware COI sweep. Both
+      // fast-return as `unconfigured` when their env vars are absent
+      // (PACER-honesty pattern from Task #14), so this block is safe
+      // to enable unconditionally. Bounded at 25 Delaware fetches per
+      // tick when configured. Leak candidates are NOT auto-persisted —
+      // operators promote via the admin endpoint.
+      try {
+        const { harvestRecentLeaks } = await import("./services/termSheets/leakHarvester");
+        const leaks = await harvestRecentLeaks(env);
+        console.log("nightly leak harvest", JSON.stringify({ status: leaks.status, candidates: leaks.candidates.length, reason: leaks.reason }));
+      } catch (e) {
+        console.error("nightly leak harvest failed", (e as Error).message);
+      }
+      try {
+        const { fetchDelawareCoi } = await import("./services/termSheets/delawareCoi");
+        const { upsertPreferredSeries } = await import("./services/termSheets/persist");
+        // Pick up to 25 recently-active companies that have NO current
+        // preferred_series row yet. The fetcher will fast-return
+        // `unconfigured` if env is missing; in that case this loop
+        // exits after the first probe.
+        const rows = await env.DB.prepare(`
+          SELECT e.id, e.display_name
+            FROM u_entities e
+            LEFT JOIN preferred_series ps
+              ON ps.company_entity_id = e.id AND ps.is_current = 1
+           WHERE ps.id IS NULL AND e.display_name IS NOT NULL
+           ORDER BY e.updated_at DESC
+           LIMIT 25
+        `).all<{ id: string; display_name: string }>();
+        let probed = 0; let extracted = 0; let unconfigured = false;
+        for (const r of rows.results ?? []) {
+          const res = await fetchDelawareCoi(env, r.display_name);
+          probed++;
+          if (res.status === "unconfigured") { unconfigured = true; break; }
+          if (res.status === "extracted" && res.extraction) {
+            for (const series of res.extraction.series) {
+              try {
+                await upsertPreferredSeries(env, {
+                  company_entity_id: r.id, series,
+                  source: "delaware_coi", source_kind: "import",
+                  source_url: res.source_url ?? null, source_accession_no: null,
+                });
+                extracted++;
+              } catch (e) { console.warn("delaware_coi upsert failed", r.id, (e as Error).message); }
+            }
+          }
+        }
+        console.log("nightly delaware coi sweep", JSON.stringify({ probed, extracted, unconfigured }));
+      } catch (e) {
+        console.error("nightly delaware coi sweep failed", (e as Error).message);
+      }
+
+      // Task #18: nightly term-benchmarks rebuild. Re-buckets every
+      // current preferred_series row by (stage, sector, year) and
+      // upserts term_benchmarks. Cheap (single SELECT + N upserts);
+      // piggybacks the consolidated nightly slot. Per the Task #4
+      // operational note Free plan caps crons at 5/5.
+      try {
+        const { rebuildTermBenchmarks } = await import("./services/termSheets/benchmarks");
+        const r = await rebuildTermBenchmarks(env);
+        console.log("term benchmarks rebuild done", JSON.stringify(r));
+      } catch (e) {
+        console.error("nightly term-benchmarks rebuild failed", (e as Error).message);
+      }
+
       // 5. Project match refresh
       try {
         const r = await env.DB.prepare(`SELECT id FROM projects WHERE deleted_at IS NULL AND status = 'active' ORDER BY last_modified DESC LIMIT 200`).all<{ id: string }>();

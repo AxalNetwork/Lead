@@ -21,6 +21,13 @@ export interface TermSheetExtraction {
   option_pool_target_pct: number | null;
   pro_rata: boolean;
   warnings: string[];
+  /** Task #18: raw extracted text retained on the payload so the
+   *  document-persist fanout (services/documents/persist.ts) can run
+   *  the per-series preferred-stack parser against the same source
+   *  text that produced the headline NVCA fields. Capped at 200kB to
+   *  bound JSON envelope size; the per-series parser internally caps
+   *  its working window at 60kB. */
+  raw_text: string;
 }
 
 function parseUsd(raw: string | null): number | null {
@@ -86,5 +93,6 @@ export function extractTermSheet(text: string): TermSheetExtraction {
     security_type, liquidation_preference_x, liquidation_participating,
     anti_dilution, board_investor_seats, board_founder_seats,
     board_independent_seats, option_pool_target_pct, pro_rata, warnings,
+    raw_text: text.slice(0, 200_000),
   };
 }

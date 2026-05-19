@@ -181,6 +181,10 @@
     "src/services/documents/extractors/nda.ts",
     "src/services/documents/extractors/pitchDeck.ts",
     "src/services/documents/extractors/financialModel.ts",
-    "src/services/verification/**/*.ts"
+    "src/services/verification/**/*.ts",
+    "src/services/termSheets/preferredSeriesParser.ts",
+    "src/services/termSheets/benchmarks.ts",
+    "src/services/termSheets/aggressiveness.ts",
+    "src/services/termSheets/leakHarvester.ts"
   ]
 }

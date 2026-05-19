@@ -28,6 +28,10 @@
 
 import type { SiteAdapter, AdapterResult, AdapterCandidate } from "./types";
 import { stripTags, pickTitle, collectLinks } from "./_util";
+// Task #18: preferred-stock extractor is a pure-text helper with no
+// imports of its own beyond TS types, so a static import here is
+// cycle-free and works under Workers' ESM module loader.
+import { extractPreferredStack } from "../../services/termSheets/preferredSeriesParser";
 
 // ----------------------------------------------------------------------
 // Shared helpers
@@ -230,6 +234,11 @@ export interface FormS1Payload {
   underwriters: string[];
   proposed_max_offering_usd: number | null;
   ticker_symbol: string | null;
+  // Task #18: preferred-stock series parsed from the
+  // "Description of Capital Stock" section. Optional — present only
+  // when the parser identifies at least one series. persistS1 fans
+  // these out to `preferred_series` via upsertPreferredSeries.
+  preferred_series_extracted?: import("../../services/termSheets/preferredSeriesParser").ParsedSeries[];
 }
 
 export interface Form8KItem {
@@ -243,6 +252,12 @@ export interface Form8KPayload {
   issuer_cik: string | null;
   items: Form8KItem[];
   event_date: string | null;
+  // Task #18: Item 3.03 "Material Modification to Rights of Security
+  // Holders" frequently carries an inline charter amendment. When the
+  // parser detects Item 3.03 it runs the preferred-stack extractor on
+  // the surrounding body and appends a superseding series row via
+  // persist8K → upsertPreferredSeries.
+  preferred_series_extracted?: import("../../services/termSheets/preferredSeriesParser").ParsedSeries[];
 }
 
 export interface Form10KExecutive {
@@ -615,7 +630,14 @@ export function parseFormS1(html: string, _url: string, header: FilingHeader): F
     text.match(/Proposed\s*Maximum\s*Aggregate\s*Offering\s*Price[^$0-9]{0,40}\$?([\d,]+)/i)?.[1] ?? null,
   );
   const ticker_symbol = text.match(/(?:Trading\s*Symbol|Ticker)[:\s]+([A-Z]{1,5})\b/)?.[1] ?? null;
-  return { issuer_name, issuer_cik: header.cik, underwriters, proposed_max_offering_usd, ticker_symbol };
+  // Task #18: preferred-stack extraction is best-effort and isolated:
+  // a parser miss must not abort the S-1 fact write path.
+  let preferred_series_extracted: FormS1Payload["preferred_series_extracted"] = undefined;
+  try {
+    const ex = extractPreferredStack(html, { closingDate: header.filed_at, companyName: issuer_name });
+    if (ex.series.length) preferred_series_extracted = ex.series;
+  } catch { /* ignore — best-effort */ }
+  return { issuer_name, issuer_cik: header.cik, underwriters, proposed_max_offering_usd, ticker_symbol, preferred_series_extracted };
 }
 
 const FORM_8K_ITEMS: Record<string, string> = {
@@ -648,10 +670,21 @@ export function parseForm8K(html: string, _url: string, header: FilingHeader): F
     });
     if (items.length >= 15) break;
   }
+  // Task #18: when this 8-K carries Item 3.03 (Material Modification
+  // to Rights of Security Holders), run the preferred-stack extractor
+  // on the full body. Best-effort: a parser miss is silent.
+  let preferred_series_extracted: Form8KPayload["preferred_series_extracted"] = undefined;
+  if (items.some((it) => it.item_number === "3.03")) {
+    try {
+      const ex = extractPreferredStack(html, { closingDate: header.filed_at });
+      if (ex.series.length) preferred_series_extracted = ex.series;
+    } catch { /* ignore */ }
+  }
   return {
     issuer_name: header.filer_name ?? "Unknown",
     issuer_cik: header.cik,
     items,
+    preferred_series_extracted,
     event_date: header.period_of_report ?? header.filed_at,
   };
 }

@@ -39,6 +39,12 @@ import { projectsRoute } from "./routes/projects";
 import { ddRoute } from "./routes/dd";
 import { newsRoute, factsCitationsRoute } from "./routes/news";
 import { profileRoute } from "./routes/profile";
+import {
+  companiesPreferredStackRoute,
+  investorsTermAggressivenessRoute,
+  termBenchmarksRoute,
+  termLeaksRoute,
+} from "./routes/preferred_stack";
 import { agent as agentRoute } from "./routes/agent";
 import { watchlists as watchlistsRoute } from "./routes/watchlists";
 import { alerts as alertsRoute } from "./routes/alerts";
@@ -185,6 +191,12 @@ api.route("/api/comp-panels", compPanelsRoute);
 api.route("/api/documents", documentsRoute);
 api.route("/api/data-rooms", dataRoomsRoute);
 api.route("/api/persons", personsVerificationRoute);
+// Task #18: Term-Sheet Intelligence — preferred-stack panel,
+// per-investor term aggressiveness, and term benchmark distributions.
+api.route("/api/companies", companiesPreferredStackRoute);
+api.route("/api/investors", investorsTermAggressivenessRoute);
+api.route("/api/term-benchmarks", termBenchmarksRoute);
+api.route("/api/term-leaks", termLeaksRoute);
 
 api.notFound((c) => c.json({ error: "not_found", request_id: c.var.request_id }, 404));
 api.onError((err, c) => {

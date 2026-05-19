@@ -450,6 +450,26 @@ async function persistS1(env: Env, h: FilingHeader, d: FormS1Payload, source: st
       console.warn("inferCapTableFromS1 failed", h.accession_no, (e as Error).message);
     }
   }
+  // Task #18: fan out preferred-stack series into preferred_series.
+  // Best-effort: a persist miss must not abort the S-1 fact write path.
+  if (d.preferred_series_extracted?.length) {
+    try {
+      const { upsertPreferredSeries } = await import("../termSheets/persist");
+      for (const series of d.preferred_series_extracted) {
+        await upsertPreferredSeries(env, {
+          company_entity_id: xref.entity_id,
+          series,
+          source: "sec:s1",
+          source_kind: "scrape",
+          source_url: h.filing_url,
+          source_accession_no: h.accession_no,
+          closing_date: h.filed_at,
+        });
+      }
+    } catch (e) {
+      console.warn("upsertPreferredSeries (S-1) failed", h.accession_no, (e as Error).message);
+    }
+  }
   return { accession_no: h.accession_no, entity_id: xref.entity_id, facts_written: facts, rows_written: 0, skipped: false };
 }
 
@@ -476,6 +496,27 @@ async function persist8K(env: Env, h: FilingHeader, d: Form8KPayload, source: st
     await synthesizeDealFromForm8K(env, h, d);
   } catch (e) {
     console.warn("synthesizeDealFromForm8K failed", h.accession_no, (e as Error).message);
+  }
+  // Task #18: Item 3.03 charter amendments supersede the current
+  // preferred_series rows for this company. upsertPreferredSeries
+  // owns the supersedes-chain.
+  if (d.preferred_series_extracted?.length) {
+    try {
+      const { upsertPreferredSeries } = await import("../termSheets/persist");
+      for (const series of d.preferred_series_extracted) {
+        await upsertPreferredSeries(env, {
+          company_entity_id: xref.entity_id,
+          series,
+          source: "sec:8k_3.03",
+          source_kind: "scrape",
+          source_url: h.filing_url,
+          source_accession_no: h.accession_no,
+          closing_date: d.event_date ?? h.filed_at,
+        });
+      }
+    } catch (e) {
+      console.warn("upsertPreferredSeries (8-K) failed", h.accession_no, (e as Error).message);
+    }
   }
   return { accession_no: h.accession_no, entity_id: xref.entity_id, facts_written: facts, rows_written: 0, skipped: false };
 }

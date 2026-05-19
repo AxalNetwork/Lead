@@ -244,5 +244,61 @@ Per the Task #4 static-routing constraint, the Profile verification
 tab lives at `/dashboard/verification/?id=<entity_id>` (query string,
 not path segment).
 
+### Task #18 — Term-sheet intelligence: migration 365 + source_kind="filing"/"import" for preferred-series facts (ACCEPTED)
+Spec said the schema lands at migration 351, but 351-364 are all
+taken (per Task #13/#14 contract-update notes above). The
+preferred-stack schema lands at `apps/worker/migrations/365_preferred_stack.sql`
+(`preferred_series`, `preferred_series_investors`, `term_benchmarks`).
+Future migrations should number from 366.
+
+Per the Task #1 canonical write contract, every derived per-term fact
+(`preferred.<series>.lp_x`, `preferred.<series>.participating`,
+`preferred.<series>.anti_dilution`, …) flows through `insertFact`
+with `source_kind` set to the existing enum value that best matches
+the origin: `"filing"` for SEC S-1 / 8-K Item 3.03 extractions and
+`"import"` for operator-uploaded term sheets / Delaware COI fetches.
+There is no dedicated `"charter"` or `"term_sheet"` source_kind —
+the existing enum already covers the provenance distinction and
+adding new values would force a registry change in the rich PERSON
+profile path.
+
+`preferred_series` is append-only with a Task #14-style supersedes
+chain: re-extraction (or 8-K Item 3.03 charter amendment) that
+changes material terms inserts a new `is_current=1` row and marks
+the prior one `is_current=0, superseded_by=<new_id>`. Re-runs with
+identical terms are no-ops — the prior row's `created_at` is the
+durable "first observed" timestamp.
+
+Investor attribution into `preferred_series_investors` uses
+`resolveSecEntity({ createIfMissing: false })` — raw investor strings
+scraped from charter sections must NOT mint fresh `u_entities` rows
+(name regex on legal-prose carries too many false positives).
+Unresolved raw names are preserved on the parent series row's
+`payload_json` for forensic review and lift into the relational
+table only after they're cross-referenced via SEC ADV / Form D /
+the operator-assisted entity merger.
+
+Delaware COI fetcher (`services/termSheets/delawareCoi.ts`) and
+press/Twitter leak harvester (`services/termSheets/leakHarvester.ts`)
+follow the Task #14 PACER honesty pattern: when the required env
+vars (`DELAWARE_COI_API_URL` / `DELAWARE_COI_API_KEY`, or
+`TWITTER_BEARER` / `PRESS_LEAK_FEED_URL`) are absent they return
+a documented `unconfigured` status — never a silent fallthrough or
+a fake `confirmed`. Leak rows carry `source='press_leak'` and
+parser-clamped `confidence≤0.5` so operators can filter them out of
+benchmark inputs until promoted.
+
+Nightly `rebuildTermBenchmarks` piggybacks the consolidated
+`15 3 * * *` slot (Free plan caps crons at 5/5 — same constraint as
+Task #4 angel sweep and Task #14 verification sweep). Buckets with
+fewer than 5 rows still get a `term_benchmarks` row but with
+`payload_json.low_sample=true` so the route handler can surface the
+low-confidence flag in the UI.
+
+Per the Task #4 static-routing constraint, the preferred-stack
+panel hydrates from `/dashboard/companies/detail/?id=<entity_id>`
+(query string, not path segment) and the term-aggressiveness widget
+from `/dashboard/investors/detail/?id=<entity_id>`.
+
 ## User preferences
 - (none recorded yet)

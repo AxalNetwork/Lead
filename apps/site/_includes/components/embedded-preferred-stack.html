@@ -1,0 +1,8 @@
+<!-- Task #18: Preferred-stock panel for company-detail page.
+     Hydrates from GET /api/companies/:id/preferred-stack (?id= URL
+     contract per Task #4 static-routing constraint). -->
+<section id="ads-preferred-stack" class="ads-card" style="margin-top:1rem;">
+  <h3>Preferred stock</h3>
+  <div id="ads-preferred-stack-body"><div class="ads-loading">Loading…</div></div>
+</section>
+<script src="/assets/js/preferred-stack.js?v={{ site.time | date: '%s' }}" defer></script>

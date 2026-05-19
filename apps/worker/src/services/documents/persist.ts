@@ -101,6 +101,30 @@ async function mirrorDerivedFacts(
       if (p.liquidation_preference_x != null) await insertFact(env, { ...ctx, predicate: "deal_terms.liquidation_preference_x", value_number: p.liquidation_preference_x });
       if (p.anti_dilution) await insertFact(env, { ...ctx, predicate: "deal_terms.anti_dilution", value_text: p.anti_dilution });
       if (p.option_pool_target_pct != null) await insertFact(env, { ...ctx, predicate: "deal_terms.option_pool_target_pct", value_number: p.option_pool_target_pct });
+      // Task #18: also fan out into preferred_series so the document
+      // contributes to term benchmarks + investor aggressiveness.
+      // Only runs when (a) a target company is bound to the upload and
+      // (b) the extractor's raw_text is available on the envelope.
+      const rawText = (env_.payload as { raw_text?: string }).raw_text ?? null;
+      if (rawText) {
+        try {
+          const { extractPreferredStack } = await import("../termSheets/preferredSeriesParser.js");
+          const { upsertPreferredSeries } = await import("../termSheets/persist.js");
+          const ex = extractPreferredStack(rawText);
+          for (const series of ex.series) {
+            await upsertPreferredSeries(env, {
+              company_entity_id: entityId,
+              series,
+              source: "document:termSheetParser",
+              source_kind: "import",
+              source_url: evidenceUrl,
+              source_accession_no: null,
+            });
+          }
+        } catch (e) {
+          console.warn("term_sheet preferred-stack persist failed", (e as Error).message);
+        }
+      }
       break;
     }
     case "shareholder_agreement": {
