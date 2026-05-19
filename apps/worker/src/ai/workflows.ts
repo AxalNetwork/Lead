@@ -72,7 +72,7 @@ export class EnrichAccountWorkflow {
     const ran: string[] = [];
     // Per-account scoped sources: each module honours ctx.accountId and
     // restricts its DB query / API call to that single account.
-    const perAccount = MODULES.filter((m) => ["builtwith", "github_org", "google_news"].includes(m.slug));
+    const perAccount = MODULES.filter((m) => ["github_org", "google_news"].includes(m.slug));
     for (const mod of perAccount) {
       await step.do(`enrich:${mod.slug}`, { retries: { limit: 2, backoff: "exponential" } }, async () => {
         await runSource(this.env, mod, { force: true, accountId });

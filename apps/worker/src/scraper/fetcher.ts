@@ -70,8 +70,15 @@ export interface FetchResult {
   fetched_from: "live" | "wayback";
 }
 
-function pickRandom<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)] as T;
+function pickRandom<T>(arr: readonly T[]): T {
+  if (arr.length === 0) {
+    throw new Error("pickRandom: empty array");
+  }
+  const item = arr[Math.floor(Math.random() * arr.length)];
+  if (item === undefined) {
+    throw new Error("pickRandom: unexpected undefined element");
+  }
+  return item;
 }
 
 interface RateLimitState {
