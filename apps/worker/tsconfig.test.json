@@ -195,6 +195,10 @@
     "src/services/edgeQuality/broker.ts",
     "src/services/edgeQuality/influence.ts",
     "src/services/edgeQuality/signalScale.ts",
-    "src/services/edgeQuality/signals.ts"
+    "src/services/edgeQuality/signals.ts",
+    "src/services/intros/pathfinder.ts",
+    "src/services/intros/features.ts",
+    "src/services/intros/model.ts",
+    "src/services/intros/opener.ts"
   ]
 }

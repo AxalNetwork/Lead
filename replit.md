@@ -396,6 +396,82 @@ contributors). The new `fundReturnsRoute` is mounted BEFORE the
 existing `fundsRoute` in `src/index.ts` so the `/:id` wildcard
 on the parent route doesn't shadow the new sub-paths.
 
+### Task #4 — Intro Routing Engine: migration 369 + source_kind="inferred" for predicted-conversion facts (ACCEPTED)
+Spec slotted the schema at migration 354, but slots 350–368 are all
+taken (per the Task #13/#14/#18/#2/#3 contract-update precedent
+above). The schema lands at `apps/worker/migrations/369_intro_routing.sql`
+(three tables: `intro_paths` append-only per request, `intro_outcomes`
+append-only outcome log, `intro_model_runs` one row per nightly
+retrain with is_current=1 on the live model). Future migrations
+should number from 370.
+
+Per the Task #1 canonical write contract, every per-path predicted-
+conversion fact (`entity.intro_predicted_conversion_pct`) mirrors
+onto the **target** entity via `insertFact` with
+`source_kind="inferred"` — same precedent as the Task #2/#3 model-
+output decisions; the spec mentions a hypothetical `"model"`
+source_kind but adding one would force a registry change in the
+rich PERSON profile path.
+
+Pathfinder (`services/intros/pathfinder.ts`) uses an exhaustive
+simple-path DFS with hop cap 3, ranked by Σ 1/(quality+0.1)
+(same weight formula as the spec). With hop cap 3 the search space
+is bounded by the size of the 3-hop neighborhood; full Yen with
+repeated Dijkstra deviations is functionally identical here and
+much harder to verify, so we enumerate + sort. Per-node neighbor
+cap of 200 (deterministic top-quality slice) bounds CPU on
+hub-heavy graphs.
+
+**Graceful degradation** (CONSTRAINT, not deviation): when every
+edge in the viewer↔target neighborhood lacks a `quality_score`,
+the route flips into `ranking_mode="hop_count_only"` and returns
+`predicted_conversion_pct=null` rather than faking a confidence
+number — per the spec's "never silently fakes a confidence number"
+rule. The UI surfaces the mode in the result meta line so
+operators see it's not a calibrated number.
+
+Logistic model (`services/intros/model.ts`) is pure: features →
+log-odds → sigmoid. Weights persist in `intro_model_runs`; the
+live model is the `is_current=1` row. Cold-install fallback is
+`DEFAULT_WEIGHTS` (hand-set priors matching the spec narrative
+"shorter + warmer + closer-to-target wins"). Retraining
+(`services/intros/train.ts::runNightlyIntroRetrain`) is a no-op
+until `MIN_TRAIN_SAMPLES=25` labeled outcomes exist AND both
+classes are represented; below that we never publish a model
+fit on too little data. Outcome→label mapping is fixed:
+`accepted|meeting_held|deal_closed → 1`,
+`declined|ghosted → 0`, `requested|made → drop` (in-flight,
+no signal yet).
+
+Brier score (mean-squared error of predictions vs. observed
+0/1) is persisted on every retrain row so operators see
+calibration drift over time — exposed via the read endpoint
+`GET /api/intros/model/current`.
+
+Opener generator (`services/intros/opener.ts`) is honest about
+LLM availability: when `OPENAI_API_KEY` is present we call
+`gpt-4o-mini` for a fluent draft; when absent OR on any HTTP/
+network error we fall back to a deterministic template that
+references the strongest signal from the edge's
+`quality_signals_json`. Both code paths terminate in
+`clampToWords(text, 60)` so the 60-word cap holds regardless
+of which generator fired or what the LLM returned.
+
+Nightly retrain (`runNightlyIntroRetrain`) piggybacks the
+consolidated `15 3 * * *` slot (Free plan caps crons at 5/5 —
+same constraint as Task #4 angel sweep, Task #14 verification
+sweep, Task #18 term benchmarks, Task #2 fund-return sweep,
+Task #3 edge-quality sweep). Mounted AFTER the edge-quality
+sweep so the latest `quality_score` values flow into the next
+night's predictions.
+
+Per the Task #4 static-routing constraint, the Outreach tab
+hydrates from `/dashboard/profile/?id=<entity_id>` (query
+string, not path segment). The tab pre-flights
+`GET /api/intros/by-target/:id` and only reveals when the
+access-guarded probe returns 2xx — same API-gating pattern as
+the Task #14 Verification tab.
+
 ### Task #3 — Edge-Quality Scoring + Power-Node Detection: migration 367 + source_kind="inferred" for influence facts (ACCEPTED)
 Spec slotted the schema at migration 353, but slots 350–366 are all
 taken (per the Task #13/#14/#18/#2 contract-update precedent above).

@@ -106,6 +106,120 @@ permalink: /dashboard/profile/
 })();
 </script>
 
+<!-- Task #4 (Intro Routing Engine): Outreach tab. Hidden by default;
+     revealed only when ?id=/?entity= present AND the operator
+     successfully fetches /api/intros/find. Per the Task #4 static-
+     routing constraint we identify the target via ?id= query string,
+     never a path segment. -->
+<section id="ads-intros-section" hidden style="margin-top:24px">
+  <h2 style="margin:0 0 8px 0;font-size:16px">Outreach — Intro paths</h2>
+  <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px">
+    <label style="font-size:12px;color:#555">Ask context
+      <input type="text" id="ads-intros-ask" placeholder="e.g. Series A in payments, looking for warm intros" style="display:block;min-width:340px;padding:6px 8px;font-size:13px;margin-top:2px"/>
+    </label>
+    <button type="button" id="ads-intros-find" class="ads-btn" style="padding:6px 12px">Find paths</button>
+    <span id="ads-intros-meta" style="font-size:11px;color:#888"></span>
+  </div>
+  <div id="ads-intros-results"><div style="color:#888;font-size:12px">Enter an ask context and click "Find paths".</div></div>
+</section>
+
+<script>
+(function () {
+  var qs = new URLSearchParams(location.search);
+  var entity = qs.get("id") || qs.get("entity");
+  if (!entity) return;
+  var apiBase = (window.ADS && window.ADS.API_BASE) || "https://api.aidatasignal.com";
+  var section = document.getElementById("ads-intros-section");
+  var askEl   = document.getElementById("ads-intros-ask");
+  var btn     = document.getElementById("ads-intros-find");
+  var metaEl  = document.getElementById("ads-intros-meta");
+  var resEl   = document.getElementById("ads-intros-results");
+
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]); }); }
+  function pct(x) { return x == null ? "—" : (Math.round(x * 1000) / 10) + "%"; }
+  function qual(x) { return x == null ? "—" : (Math.round(x * 100) / 100).toFixed(2); }
+
+  // Pre-flight: only reveal the section if the API responds 2xx to a
+  // probe. We use the read-only /api/intros/by-target endpoint for
+  // this because it's idempotent and gated by the same access guard.
+  fetch(apiBase + "/api/intros/by-target/" + encodeURIComponent(entity) + "?limit=1", { credentials: "include" })
+    .then(function (r) { if (!r.ok) throw new Error("forbidden"); return r.json(); })
+    .then(function () { section.hidden = false; })
+    .catch(function () { /* keep hidden on 401/403 */ });
+
+  function renderPaths(body) {
+    var paths = (body && body.paths) || [];
+    var mode = body && body.ranking_mode;
+    metaEl.textContent = mode === "hop_count_only"
+      ? "Ranking by hop count only — edge-quality scores not available."
+      : (body && body.model_version ? "model " + body.model_version.slice(0, 8) : "");
+    if (!paths.length) {
+      resEl.innerHTML = '<div style="color:#888;font-size:12px">No paths found within 3 hops.</div>';
+      return;
+    }
+    var html = paths.slice(0, 3).map(function (p) {
+      var chain = (p.path || []).map(function (n, i) {
+        var nm = esc(n.display_name || n.entity_id);
+        return i === 0 ? '<strong>' + nm + '</strong>' : ' → ' + nm + (n.edge_quality != null ? ' <span style="font-size:10px;color:#888">(q ' + qual(n.edge_quality) + ')</span>' : '');
+      }).join("");
+      var conf = p.predicted_conversion_pct != null
+        ? '<span style="background:#e6f4ec;color:#1f7a4d;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:600">' + pct(p.predicted_conversion_pct) + ' predicted</span>'
+        : '<span style="color:#888;font-size:11px">hop-count ranked</span>';
+      return ''
+        + '<div class="ads-card" style="margin-bottom:10px;padding:10px">'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+        + '<div style="font-size:13px">' + chain + '</div>'
+        + '<div>' + conf + '</div>'
+        + '</div>'
+        + '<div style="font-size:11px;color:#888;margin-bottom:6px">' + p.hops + ' hop' + (p.hops > 1 ? 's' : '') + ' · weakest edge: ' + qual(p.weakest_edge_quality) + '</div>'
+        + '<div style="background:#f7f8fa;padding:8px;border-left:3px solid #2c6eb5;font-size:12px;color:#333;white-space:pre-wrap;margin-bottom:6px">' + esc(p.suggested_opener || '') + '</div>'
+        + '<button type="button" data-path-id="' + esc(p.path_id) + '" class="ads-intros-req ads-btn" style="padding:4px 10px;font-size:11px">Mark as requested</button>'
+        + '<span class="ads-intros-req-status" data-for="' + esc(p.path_id) + '" style="margin-left:8px;font-size:11px;color:#888"></span>'
+        + '</div>';
+    }).join("");
+    resEl.innerHTML = html;
+    resEl.querySelectorAll(".ads-intros-req").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var pid = b.getAttribute("data-path-id");
+        var stat = resEl.querySelector('.ads-intros-req-status[data-for="' + pid + '"]');
+        b.disabled = true;
+        stat.textContent = "logging…";
+        fetch(apiBase + "/api/intros/" + encodeURIComponent(pid) + "/log-outcome", {
+          method: "POST", credentials: "include",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ status: "requested" }),
+        }).then(function (r) { return r.ok ? r.json() : Promise.reject(new Error("status " + r.status)); })
+          .then(function () { stat.textContent = "logged"; stat.style.color = "#1f7a4d"; })
+          .catch(function (e) { stat.textContent = "failed: " + e.message; stat.style.color = "#c0392b"; b.disabled = false; });
+      });
+    });
+  }
+
+  btn.addEventListener("click", function () {
+    var ask = (askEl.value || "").trim();
+    btn.disabled = true;
+    resEl.innerHTML = '<div class="ads-loading">Finding paths…</div>';
+    fetch(apiBase + "/api/intros/find", {
+      method: "POST", credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target_entity_id: entity, ask_context: ask, max_paths: 3 }),
+    }).then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+      .then(function (rr) {
+        btn.disabled = false;
+        if (!rr.ok) {
+          resEl.innerHTML = '<div style="color:#c0392b;font-size:12px">Error: ' + esc(rr.body && rr.body.error || "request failed") + (rr.body && rr.body.detail ? ' — ' + esc(rr.body.detail) : '') + '</div>';
+          return;
+        }
+        renderPaths(rr.body);
+      })
+      .catch(function (e) {
+        btn.disabled = false;
+        resEl.innerHTML = '<div style="color:#c0392b;font-size:12px">Error: ' + esc(e.message) + '</div>';
+      });
+  });
+})();
+</script>
+
 <script src="/assets/js/profile-bad-names.js?v={{ site.time | date: '%s' }}"></script>
 <script src="/assets/js/profile-tab.js?v={{ site.time | date: '%s' }}"></script>
 <script>

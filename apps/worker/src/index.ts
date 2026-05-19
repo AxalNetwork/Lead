@@ -63,6 +63,7 @@ import { movementsRoute, peopleMovementsRoute, firmsMovementsRoute } from "./rou
 import { fundsRoute, firmsFundsRoute } from "./routes/funds";
 import { fundReturnsRoute } from "./routes/fund_returns";
 import { influenceRoute } from "./routes/influence";
+import { introsRoute } from "./routes/intros";
 import { angelsRoute, syndicatesRoute } from "./routes/angels";
 import { dashboards as dashboardsRoute } from "./routes/dashboards";
 import { capTableRoute } from "./routes/cap_table";
@@ -207,6 +208,10 @@ api.route("/api/term-leaks", termLeaksRoute);
 // envelope route, which uses an exact-/:id match without trailing
 // segments so it does not shadow these sub-paths).
 api.route("/api", influenceRoute);
+// Task #4: Intro Routing Engine — POST /api/intros/find,
+// POST /api/intros/:path_id/log-outcome, GET /api/intros/model/current,
+// GET /api/intros/by-target/:id.
+api.route("/api/intros", introsRoute);
 
 api.notFound((c) => c.json({ error: "not_found", request_id: c.var.request_id }, 404));
 api.onError((err, c) => {

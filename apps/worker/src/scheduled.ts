@@ -570,6 +570,20 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         console.error("nightly edge quality sweep failed", (e as Error).message);
       }
 
+      // Task #4 (Intro Routing Engine): nightly retrain of the logistic
+      // conversion model from intro_outcomes. No-op until at least
+      // MIN_TRAIN_SAMPLES (25) labeled outcomes exist; persists one
+      // immutable row in intro_model_runs and flips is_current. Cheap
+      // (single pass over recent outcomes), piggybacks the consolidated
+      // nightly slot per the Free-plan cron cap.
+      try {
+        const { runNightlyIntroRetrain } = await import("./services/intros/train");
+        const r = await runNightlyIntroRetrain(env);
+        console.log("intro retrain done", JSON.stringify(r));
+      } catch (e) {
+        console.error("nightly intro retrain failed", (e as Error).message);
+      }
+
       // Task #18: nightly term-benchmarks rebuild. Re-buckets every
       // current preferred_series row by (stage, sector, year) and
       // upserts term_benchmarks. Cheap (single SELECT + N upserts);
