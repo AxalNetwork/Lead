@@ -47,22 +47,21 @@ export async function probeSecEdgar(env: Env, firm: string): Promise<RegistryHit
 }
 
 export async function probeOpenCorporates(_env: Env, firm: string): Promise<RegistryHit[]> {
-  // Task #5: keyless anonymous OpenCorporates v0.4 (rate-limited).
-  type Resp = { results?: { companies?: Array<{ company: { name: string; jurisdiction_code: string; opencorporates_url: string } }> } };
-  const data = await safeJson<Resp>(
-    fetch(`https://api.opencorporates.com/v0.4/companies/search?q=${encodeURIComponent(firm)}`),
-  );
-  const out: RegistryHit[] = [];
-  for (const c of data?.results?.companies ?? []) {
-    out.push({
-      url: c.company.opencorporates_url,
-      title: c.company.name,
-      snippet: c.company.jurisdiction_code,
+  // Task #5: the keyless OpenCorporates v0.4 JSON API was removed when the
+  // 13 paid third-party APIs were ripped out. The crawler's openCorporates
+  // SiteAdapter parses public company pages via the in-house fetcher when
+  // ingestion lands on opencorporates.com URLs. For discovery breadcrumbs
+  // we now point at the public search page (matching probeUkCompaniesHouse
+  // / probeEuTransparency), keeping discovery off the direct-API surface.
+  return [
+    {
+      url: `https://opencorporates.com/companies?q=${encodeURIComponent(firm)}&utf8=%E2%9C%93`,
+      title: `OpenCorporates search: ${firm}`,
+      snippet: "Open in browser to view registrations",
       source: "opencorporates",
-      org: c.company.name,
-    });
-  }
-  return out.slice(0, 5);
+      org: firm,
+    },
+  ];
 }
 
 export async function probeUkCompaniesHouse(_env: Env, firm: string): Promise<RegistryHit[]> {

@@ -615,8 +615,9 @@ export async function stampCooldown(env: Env, entityId: string): Promise<void> {
 // ---- Step F: search-engine corroboration (lightweight) -----------------
 
 // Task #5: routed through the in-house searchBootstrap (DuckDuckGo/Mojeek)
-// instead of the paid Brave Search API.
-async function braveSearch(env: Env, query: string): Promise<Array<{ title: string; description: string; url: string }>> {
+// instead of the paid Brave Search API. Function previously named
+// `braveSearch`; renamed when the third-party API audit completed.
+async function searchCorroborationHits(env: Env, query: string): Promise<Array<{ title: string; description: string; url: string }>> {
   try {
     const { bootstrapEntity } = await import("../services/searchBootstrap");
     const hits = await bootstrapEntity(env, { name: query, limit: 5 });
@@ -631,7 +632,7 @@ export async function corroborateClaims(
   profile: ExtractedProfile,
   evidenceUrl: string,
 ): Promise<number> {
-  const results = await braveSearch(env, `${canonicalName} firm`);
+  const results = await searchCorroborationHits(env, `${canonicalName} firm`);
   if (!results.length) return 0;
   // Persist top snippets as a fact so the dashboard can show corroboration.
   await insertFact(env, {

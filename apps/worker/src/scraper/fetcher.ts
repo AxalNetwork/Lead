@@ -71,7 +71,7 @@ export interface FetchResult {
 }
 
 function pickRandom<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
+  return arr[Math.floor(Math.random() * arr.length)] as T;
 }
 
 interface RateLimitState {
@@ -356,7 +356,7 @@ async function tier2Proxy(env: Env, url: string, opts: FetchOptions): Promise<Fe
   // Bright Data / Oxylabs "Web Unblocker" style endpoints.
   const headers: Record<string, string> = { ...buildHeaders() };
   if (env.PROXY_AUTH) {
-    headers.Authorization = `Basic ${btoa(env.PROXY_AUTH)}`;
+    headers["Authorization"] = `Basic ${btoa(env.PROXY_AUTH)}`;
   }
   const ctl = new AbortController();
   // Task #2: 20s fetch ceiling per spec policy.

@@ -78,22 +78,8 @@ export function clipSnippet(text: string, max = 480): string {
   return t.length > max ? t.slice(0, max - 1) + "…" : t;
 }
 
-export interface BraveHit {
-  url: string;
-  title: string;
-  description: string;
-  pageAge?: string;
-}
-
-/**
- * Task #5: paid Brave Search API was removed. The helper is preserved
- * as a no-op (always returns []) so any external caller that still
- * imports `braveSearch` typechecks and degrades gracefully. The
- * BraveHit shape is kept for the same reason.
- */
-export async function braveSearch(_env: Env, _query: string, _count = 10): Promise<BraveHit[]> {
-  return [];
-}
+// Task #5: the BraveHit type + braveSearch no-op were removed when the
+// in-house crawler audit confirmed no callers remained.
 
 export function apexDomain(input: string | undefined | null): string | undefined {
   if (!input) return undefined;
