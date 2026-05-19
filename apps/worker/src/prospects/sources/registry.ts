@@ -31,9 +31,9 @@ import capterra from "./capterra";
 
 // Task #5: the brave-only modules (linkedinJobsBrave,
 // linkedinAnnounceBrave, builtwith) were dropped from MODULES when paid
-// 3rd-party APIs were ripped out. Their files remain as deprecated stubs
-// so any external slug references still resolve to an empty crawl rather
-// than an import error.
+// 3rd-party APIs were ripped out. Their source files have been deleted;
+// any future LinkedIn / tech-stack discovery must go through the
+// in-house crawler + SiteAdapter + R2 archive path.
 
 export const MODULES: SourceModule[] = [
   greenhouse, lever, ashby, workable, recruitee, personio, smartrecruiters,
