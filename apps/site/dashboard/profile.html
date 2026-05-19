@@ -51,7 +51,10 @@ permalink: /dashboard/profile/
 
 <script>
 (function () {
-  var entity = new URLSearchParams(location.search).get("entity");
+  // Task #4 contract: profile page uses ?id=<entity_id>. We also accept
+  // ?entity= as a legacy alias so deep links from older docs keep working.
+  var qs = new URLSearchParams(location.search);
+  var entity = qs.get("id") || qs.get("entity");
   if (!entity) return;
   var section = document.getElementById("ads-profile-vf-section");
   section.hidden = false;

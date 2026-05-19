@@ -42,7 +42,7 @@ async function upsertCandidate(env: Env, subjectId: string, c: Candidate): Promi
         (id, subject_entity_id, ref_entity_id, ref_display_name, relationship_kind,
          shared_context, time_overlap_months, confidence, reasoning, evidence_url, builder_version)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(subject_entity_id, ref_display_name, relationship_kind, COALESCE(shared_context,''))
+       ON CONFLICT(subject_entity_id, ref_display_name, relationship_kind, shared_context)
        DO UPDATE SET
          ref_entity_id = excluded.ref_entity_id,
          time_overlap_months = excluded.time_overlap_months,
@@ -53,7 +53,7 @@ async function upsertCandidate(env: Env, subjectId: string, c: Candidate): Promi
          refreshed_at = datetime('now')`,
     ).bind(
       id, subjectId, c.ref_entity_id ?? null, c.ref_display_name, c.relationship_kind,
-      c.shared_context ?? null, c.time_overlap_months ?? null, c.confidence,
+      c.shared_context ?? "", c.time_overlap_months ?? null, c.confidence,
       c.reasoning, c.evidence_url ?? null, BUILDER_VERSION,
     ).run();
     return true;

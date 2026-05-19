@@ -195,12 +195,13 @@ Task #13 documents). The schema lands at
 `apps/worker/migrations/362_background_verification.sql`; future
 migrations should number from 363.
 
-`verification_findings` is append-only with the Task #1
+`verification_findings` is STRICTLY append-only with the Task #1
 supersedes-chain: re-runs that change `status` insert a new
 `is_current=1` row and mark the prior one
 `is_current=0, superseded_by=<new_id>`. Re-runs with the same status
-touch only `created_at` so the table doesn't grow unbounded on
-idempotent ticks. Derived business facts
+write NO row and do not mutate existing rows — the prior `created_at`
+is the durable "first observed" timestamp; freshness is tracked on
+`person_verification_state.last_verified_at` instead. Derived business facts
 (`person.education.verified`, `person.prior_startup.outcome`,
 `person.litigation.federal_hits`, `person.board_seat.verified`) flow
 through `insertFact` with `source_kind="enrichment"` and

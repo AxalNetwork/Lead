@@ -58,11 +58,11 @@ CREATE TABLE IF NOT EXISTS reference_candidates (
   refreshed_at        TEXT NOT NULL DEFAULT (datetime('now')),
   created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
--- Table-level UNIQUE cannot contain expressions in SQLite/D1; the
--- conflict target is a partial expression index that the persist
--- layer's ON CONFLICT clause matches exactly.
+-- SQLite UPSERT conflict targets cannot reference expression-indexed
+-- columns, so the natural key uses plain columns. The persist layer
+-- normalizes shared_context to '' (never NULL) before writing.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_rc_natural
-  ON reference_candidates(subject_entity_id, ref_display_name, relationship_kind, COALESCE(shared_context,''));
+  ON reference_candidates(subject_entity_id, ref_display_name, relationship_kind, shared_context);
 CREATE INDEX IF NOT EXISTS idx_rc_subject         ON reference_candidates(subject_entity_id, confidence DESC);
 CREATE INDEX IF NOT EXISTS idx_rc_subject_kind    ON reference_candidates(subject_entity_id, relationship_kind);
 CREATE INDEX IF NOT EXISTS idx_rc_ref             ON reference_candidates(ref_entity_id) WHERE ref_entity_id IS NOT NULL;
