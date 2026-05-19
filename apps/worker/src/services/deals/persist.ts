@@ -260,6 +260,16 @@ export async function persistDeal(
     ).run();
     await writeDerivedFacts(env, id, company_entity_id, c, source);
     await upsertParticipants(env, id, c, source);
+    // Task #9: replay the new deal as a primary_round valuation_mark
+    // when a valuation is present. Idempotent (dedupe_key UNIQUE).
+    if (c.event_type === "funding_round" && c.valuation_usd != null) {
+      try {
+        const { landMarkFromDealEvent } = await import("../valuation/markDrivers.js");
+        await landMarkFromDealEvent(env, id);
+      } catch (e) {
+        console.warn("valuation mark replay failed", id, (e as Error).message);
+      }
+    }
     return { deal_id: id, status: "provisional", was_new: true, skipped: false, dedupe_key };
   }
 
@@ -326,6 +336,16 @@ export async function persistDeal(
     announcement_date: nextAnnounce, valuation_usd: nextValuation,
   }, source);
   await upsertParticipants(env, existing.id, c, source);
+  // Task #9: re-replay on corroboration — a higher-authority source may
+  // have just supplied the valuation that was previously null. Idempotent.
+  if (existing.event_type === "funding_round" && nextValuation != null) {
+    try {
+      const { landMarkFromDealEvent } = await import("../valuation/markDrivers.js");
+      await landMarkFromDealEvent(env, existing.id);
+    } catch (e) {
+      console.warn("valuation mark re-replay failed", existing.id, (e as Error).message);
+    }
+  }
   return {
     deal_id: existing.id, status: nextStatus, was_new: false, skipped: false, dedupe_key,
   };

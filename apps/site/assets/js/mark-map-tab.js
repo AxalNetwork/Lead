@@ -105,6 +105,34 @@
     return '<table class="ads-table" style="width:100%;font-size:12px;margin-top:8px"><thead><tr><th>As-of</th><th>Source</th><th style="text-align:right">Valuation</th><th style="text-align:right">Conf.</th><th>Kind</th><th>Holder</th><th>Evidence</th></tr></thead><tbody>' + rows + '</tbody></table>';
   }
 
+  function renderPeers(snap) {
+    if (!snap || !snap.members || !snap.members.length) return "";
+    var pubs = snap.members.filter(function (m) { return m.is_public; }).slice(0, 8);
+    if (!pubs.length) return "";
+    var rows = pubs.map(function (m) {
+      return '<tr><td>' + (m.ticker ? '<strong>' + m.ticker + '</strong> · ' : "") + m.company_name + '</td>' +
+        '<td style="text-align:right">' + (m.ev_arr_multiple != null ? m.ev_arr_multiple.toFixed(1) + "x" : "—") + '</td>' +
+        '<td style="text-align:right">' + (m.ev_revenue_multiple != null ? m.ev_revenue_multiple.toFixed(1) + "x" : "—") + '</td>' +
+        '<td style="text-align:right">' + (m.growth_yoy_pct != null ? fmtPct(m.growth_yoy_pct) : "—") + '</td>' +
+        '<td style="text-align:right">' + (m.rule_of_40_pct != null ? fmtPct(m.rule_of_40_pct) : "—") + '</td></tr>';
+    }).join("");
+    return '<div style="margin-top:10px"><div style="font-weight:600;font-size:12px;margin-bottom:4px">Public peers · ' + snap.name + '</div>' +
+      '<table class="ads-table" style="width:100%;font-size:11px"><thead><tr><th>Company</th><th style="text-align:right">EV/ARR</th><th style="text-align:right">EV/Rev</th><th style="text-align:right">Growth YoY</th><th style="text-align:right">Rule of 40</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table></div>';
+  }
+
+  function renderMarkdownCallout(marks) {
+    var mds = marks.filter(function (m) { return m.source_kind === "markdown"; });
+    if (!mds.length) return "";
+    var latest = mds.slice().sort(function (a, b) { return b.as_of.localeCompare(a.as_of); })[0];
+    return '<div class="ads-card" style="padding:8px;margin-top:8px;border-left:3px solid ' + COLORS.markdown + ';background:#fef2f2">' +
+      '<div style="font-weight:600;font-size:12px;color:' + COLORS.markdown + '">Markdown alert</div>' +
+      '<div style="font-size:12px">Latest markdown ' + latest.as_of + ' → ' + fmtUsd(latest.implied_valuation_usd) +
+      (latest.holder_name_raw ? ' (' + latest.holder_name_raw + ')' : "") +
+      (latest.source_url ? ' · <a href="' + latest.source_url + '" target="_blank" rel="noopener">evidence</a>' : "") +
+      '</div></div>';
+  }
+
   function renderImplied(iv) {
     if (!iv || iv.basis === "none") return '<div class="ads-muted" style="font-size:12px;margin-top:8px">No implied-valuation range available.</div>';
     var basis = iv.basis === "ev_arr" ? "EV/ARR" : iv.basis === "ev_revenue" ? "EV/Revenue" : "Latest mark";
@@ -139,7 +167,20 @@
       var ivJson = ivR.ok ? await ivR.json() : null;
       var marks = marksJson.marks || [];
       var blended = marksJson.blended_line || [];
-      var html = renderSvg(marks, blended) + renderImplied(ivJson) + renderMarksTable(marks);
+      // If implied valuation references a comp panel, fetch its snapshot
+      // so we can surface the public peers driving the multiple range.
+      var snap = null;
+      if (ivJson && ivJson.panel_id) {
+        try {
+          var snapR = await fetch(API + "/api/comp-panels/" + encodeURIComponent(ivJson.panel_id) + "/snapshot", { credentials: "include" });
+          if (snapR.ok) snap = await snapR.json();
+        } catch (_) { /* peer panel is optional enhancement */ }
+      }
+      var html = renderSvg(marks, blended)
+        + renderMarkdownCallout(marks)
+        + renderImplied(ivJson)
+        + renderPeers(snap)
+        + renderMarksTable(marks);
       root.innerHTML = html;
     } catch (e) {
       root.innerHTML = '<div class="ads-muted" style="font-size:12px">Mark map unavailable: ' + e.message + '</div>';

@@ -30,6 +30,20 @@ export async function inferCapTableFromSecondaryListing(
   if (!r.ok || !r.html || r.html.length < 500) return skip("fetch_failed", input.company_entity_id);
   const ex = extractSecondaryListing(r.html, input.listing_url);
   if (!ex.ok) return skip(ex.reason ?? "extract_failed", input.company_entity_id);
+  // Task #9: also land this listing as a secondary_listing valuation_mark.
+  // Same HTML is re-parsed inside the driver; cheap and keeps the two
+  // landing paths (cap-table snapshot + mark-map timeline) independent.
+  try {
+    const { landMarkFromSecondaryListingHtml } = await import("../valuation/markDrivers.js");
+    await landMarkFromSecondaryListingHtml(env, {
+      company_entity_id: input.company_entity_id,
+      company_name_raw: input.company_name_raw,
+      listing_url: input.listing_url,
+      html: r.html,
+    });
+  } catch (e) {
+    console.warn("secondary-listing valuation mark failed", input.listing_url, (e as Error).message);
+  }
   const asOf = input.as_of ?? ex.partial.as_of ?? new Date().toISOString().slice(0, 10);
   const snap: CapTableSnapshotInput = {
     company_entity_id: input.company_entity_id,

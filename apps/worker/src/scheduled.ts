@@ -428,6 +428,20 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         console.error("nightly intl drain failed", (e as Error).message);
       }
 
+      // Task #9 (Valuation Intelligence): nightly comp-panel refresh —
+      // re-screens any comp_panels whose `next_refresh_at` has elapsed
+      // (cadence defaults to monthly, configurable per panel). Bounded
+      // at 50 panels/tick; idempotent (membership snapshot is replaced
+      // wholesale per refresh). Free plan caps crons at 5 so this
+      // piggybacks on the consolidated nightly slot.
+      try {
+        const { refreshStaleCompPanels } = await import("./services/valuation/compPanel");
+        const compRes = await refreshStaleCompPanels(env, 50);
+        console.log("comp-panel refresh sweep done", JSON.stringify(compRes));
+      } catch (e) {
+        console.error("nightly comp-panel refresh failed", (e as Error).message);
+      }
+
       // Task #4: Monday capital-markets weekly digest. Folded into this
       // nightly tick (Free plan caps crons at 5/5). Internal Monday-UTC
       // gate inside runCapitalMarketsWeeklyDigest — non-Monday runs are
