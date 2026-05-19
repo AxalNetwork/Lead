@@ -12,9 +12,11 @@ import { buildFundPortfolio } from "../funds/portfolio";
 import type { FundRow } from "../funds/types";
 import { estimateProceeds, scoreConfidence, computeFeeDrag, estimateOwnership } from "./proceeds";
 import type { CompanyInputs, ExitSignal } from "./proceeds";
-import { lookupBiasCorrection } from "./calibration";
+import { lookupBiasCorrection, applyBiasCorrection } from "./calibration";
+import { dealRowToExitSignal } from "./exitSignal";
+import type { DealRowForExit } from "./exitSignal";
 import { MGMT_FEE_PCT_PER_YEAR, MODEL_VERSION } from "./types";
-import type { AttributionRow, EventKind, FundReturnModel } from "./types";
+import type { AttributionRow, FundReturnModel } from "./types";
 
 interface DealForCompany {
   event_type: string;
@@ -22,6 +24,9 @@ interface DealForCompany {
   valuation_usd: number | null;
   announcement_date: string | null;
   source_url: string | null;
+  amount_raw: string | null;
+  use_of_proceeds: string | null;
+  sector_tags_json: string | null;
 }
 
 interface ValMarkRow {
@@ -31,14 +36,7 @@ interface ValMarkRow {
   source_url: string | null;
 }
 
-const EVENT_KIND_FROM_DEAL: Record<string, EventKind> = {
-  ipo: "ipo",
-  acquisition: "acquisition",
-  merger: "merger",
-  bankruptcy: "bankruptcy",
-};
-
-async function fetchExitSignal(
+export async function fetchExitSignal(
   env: Env,
   company_entity_id: string | null,
 ): Promise<ExitSignal | null> {
@@ -46,7 +44,8 @@ async function fetchExitSignal(
   // Latest deal_events row that represents a liquidity event for the
   // company. We trust event_type assigned by services/deals/persist.ts.
   const exitDeal = await env.DB.prepare(
-    `SELECT event_type, amount_usd, valuation_usd, announcement_date, source_url
+    `SELECT event_type, amount_usd, valuation_usd, announcement_date, source_url,
+            amount_raw, use_of_proceeds, sector_tags_json
        FROM deal_events
       WHERE company_entity_id = ?
         AND event_type IN ('ipo','acquisition','merger','bankruptcy')
@@ -54,28 +53,28 @@ async function fetchExitSignal(
   ).bind(company_entity_id).first<DealForCompany>();
 
   if (exitDeal) {
-    const kind = EVENT_KIND_FROM_DEAL[exitDeal.event_type];
-    if (kind === "bankruptcy") {
-      return { event_kind: "bankruptcy", event_date: exitDeal.announcement_date, source_url: exitDeal.source_url };
+    // For M&A we additionally read the disclosed company revenue fact
+    // (ARR > revenue > ACV preference). Pre-fetch BEFORE handing off
+    // to the pure mapper so the mapper stays DB-free.
+    let inferredRevenue: number | null = null;
+    if (exitDeal.event_type === "acquisition" || exitDeal.event_type === "merger") {
+      try {
+        const rev = await env.DB.prepare(
+          `SELECT value_number FROM facts
+            WHERE entity_id = ? AND is_current = 1
+              AND predicate IN ('commercial.arr_usd','commercial.revenue_usd','commercial.acv_usd')
+              AND value_number IS NOT NULL
+            ORDER BY CASE predicate
+              WHEN 'commercial.arr_usd' THEN 1
+              WHEN 'commercial.revenue_usd' THEN 2
+              WHEN 'commercial.acv_usd' THEN 3 END,
+              observed_at DESC LIMIT 1`,
+        ).bind(company_entity_id).first<{ value_number: number }>();
+        if (rev?.value_number && rev.value_number > 0) inferredRevenue = rev.value_number;
+      } catch { /* legacy DBs without facts.is_current degrade gracefully */ }
     }
-    if (kind === "ipo") {
-      // We don't always have shares_sold / offer_price; we feed
-      // last_mark_valuation_usd from deal valuation as the fallback.
-      return {
-        event_kind: "ipo",
-        event_date: exitDeal.announcement_date,
-        last_mark_valuation_usd: exitDeal.valuation_usd ?? null,
-        source_url: exitDeal.source_url,
-      };
-    }
-    if (kind === "acquisition" || kind === "merger") {
-      return {
-        event_kind: kind,
-        event_date: exitDeal.announcement_date,
-        ma_deal_size_usd: exitDeal.amount_usd ?? exitDeal.valuation_usd ?? null,
-        source_url: exitDeal.source_url,
-      };
-    }
+    const sig = dealRowToExitSignal(exitDeal as DealRowForExit, inferredRevenue);
+    if (sig) return sig as ExitSignal;
   }
   // Fallback to latest valuation mark for unexited residual value.
   let mark: ValMarkRow | null = null;
@@ -139,6 +138,14 @@ export async function runFundReturnModel(env: Env, fund: FundRow): Promise<FundR
     if (est.event_kind === "ipo" || est.event_kind === "acquisition" || est.event_kind === "merger" || est.event_kind === "bankruptcy") {
       resolved += 1;
     }
+    // Surface per-company estimator notes (ma_undisclosed_deal_size,
+    // ipo_used_valuation_fallback, ipo_missing_inputs,
+    // ownership_defaulted_to_5pct, …) into the run-level warnings so
+    // operators can see which positions degraded to coarse defaults.
+    for (const n of est.notes) {
+      const tag = `pos:${p.company_name || p.company_entity_id || "?"}:${n}`;
+      if (!warnings.includes(tag)) warnings.push(tag);
+    }
     contributions.push({
       company_entity_id: p.company_entity_id,
       company_name: p.company_name,
@@ -150,12 +157,15 @@ export async function runFundReturnModel(env: Env, fund: FundRow): Promise<FundR
 
   // Apply per-(vintage, strategy) bias correction to TVPI (and hence MOIC).
   const bias = await lookupBiasCorrection(env, fund.vintage_year, fund.strategy);
-  const distributedAdj = distributed * bias;
-  const residualAdj = residual * bias;
-
-  const dpi = called > 0 ? distributedAdj / called : null;
-  const tvpi = called > 0 ? (distributedAdj + residualAdj) / called : null;
-  const moic = invested > 0 ? (distributedAdj + residualAdj) / invested : null;
+  const adj = applyBiasCorrection({
+    distributed_usd: distributed, residual_usd: residual,
+    called_usd: called, invested_usd: invested, bias,
+  });
+  const distributedAdj = adj.distributed_adj_usd;
+  const residualAdj = adj.residual_adj_usd;
+  const dpi = adj.dpi;
+  const tvpi = adj.tvpi;
+  const moic = adj.moic;
 
   // Simplified annualized return: from (called, distributed+residual)
   // over years since first close. Returns null when duration unknown.
@@ -297,24 +307,49 @@ export async function runFundReturnModel(env: Env, fund: FundRow): Promise<FundR
   return out;
 }
 
-/** Nightly sweep: run the model for every fund. Bounded so it fits
- *  the consolidated `15 3 * * *` slot. */
-export async function runNightlyFundReturnSweep(env: Env, limit = 200): Promise<{ ran: number; failed: number }> {
-  const rows = await env.DB.prepare(
-    `SELECT id, firm_entity_id, fund_entity_id, fund_name, fund_number,
-            vintage_year, target_size_usd, hard_cap_usd, first_close_date,
-            final_close_date, announced_raised_usd, gp_commit_usd,
-            mgmt_fee_pct, carry_pct, hurdle_pct, strategy, sectors_json,
-            geos_json, fund_status, source_evidence_json, confidence,
-            updated_at, created_at
-       FROM funds
-      WHERE fund_status IN ('active','harvesting','wound_down')
-      ORDER BY updated_at DESC LIMIT ?`,
-  ).bind(limit).all<FundRow>();
-  let ran = 0; let failed = 0;
-  for (const fund of (rows.results ?? [])) {
-    try { await runFundReturnModel(env, fund); ran += 1; }
-    catch (e) { failed += 1; console.warn("fund return model failed", fund.id, (e as Error).message); }
+/** Nightly sweep: run the model for EVERY fund with status in
+ *  (active|harvesting|wound_down). Paginated by id so a single tick
+ *  works through the entire universe even if it spans thousands of
+ *  funds — Workers' 30s CPU ceiling is per-request, not per-handler,
+ *  and the per-fund model is bounded (one D1 query per portfolio
+ *  position). `maxTotal` is a safety ceiling, not a sample cap; the
+ *  default of 5000 covers the whole platform population today. */
+export async function runNightlyFundReturnSweep(
+  env: Env,
+  maxTotal = 5000,
+  pageSize = 100,
+): Promise<{ ran: number; failed: number; pages: number }> {
+  const FUND_COLS = `id, firm_entity_id, fund_entity_id, fund_name, fund_number,
+    vintage_year, target_size_usd, hard_cap_usd, first_close_date,
+    final_close_date, announced_raised_usd, gp_commit_usd,
+    mgmt_fee_pct, carry_pct, hurdle_pct, strategy, sectors_json,
+    geos_json, fund_status, source_evidence_json, confidence,
+    updated_at, created_at`;
+  let ran = 0; let failed = 0; let pages = 0;
+  let cursor: string | null = null;
+  while (ran + failed < maxTotal) {
+    const rows: D1Result<FundRow> = cursor === null
+      ? await env.DB.prepare(
+          `SELECT ${FUND_COLS} FROM funds
+            WHERE fund_status IN ('active','harvesting','wound_down')
+            ORDER BY id ASC LIMIT ?`,
+        ).bind(pageSize).all<FundRow>()
+      : await env.DB.prepare(
+          `SELECT ${FUND_COLS} FROM funds
+            WHERE fund_status IN ('active','harvesting','wound_down')
+              AND id > ?
+            ORDER BY id ASC LIMIT ?`,
+        ).bind(cursor, pageSize).all<FundRow>();
+    const page = rows.results ?? [];
+    if (page.length === 0) break;
+    pages += 1;
+    for (const fund of page) {
+      try { await runFundReturnModel(env, fund); ran += 1; }
+      catch (e) { failed += 1; console.warn("fund return model failed", fund.id, (e as Error).message); }
+      if (ran + failed >= maxTotal) break;
+    }
+    cursor = page[page.length - 1].id;
+    if (page.length < pageSize) break;
   }
-  return { ran, failed };
+  return { ran, failed, pages };
 }

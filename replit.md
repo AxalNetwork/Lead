@@ -345,13 +345,29 @@ more than ±50%.
 Nightly sweep (`runNightlyFundReturnSweep`) piggybacks the
 consolidated `15 3 * * *` slot (Free plan caps crons at 5/5 — same
 constraint as Task #4 angel sweep, Task #14 verification sweep,
-Task #18 term benchmarks). Bounded at 200 funds/tick. Calibration
-rebuild runs in the same tick AFTER the model sweep so the next
-night's run sees the freshest deltas.
+Task #18 term benchmarks). Paginated by `id` ASC (100 funds/page,
+safety ceiling 5000/tick) so every fund with status in
+(active|harvesting|wound_down) gets a fresh row each tick — not a
+sample. Calibration rebuild runs in the same tick AFTER the model
+sweep so the next night's run sees the freshest deltas.
 
-Per the Task #4 static-routing constraint, the fund-returns UI
-lives at `/dashboard/fund-returns/?id=<fund_id>` (query string, not
-path segment). API endpoints are
+Per-company exit-signal enrichment lives in pure helpers
+(`services/fundReturns/exitSignal.ts`): `parseIpoExtras` pulls offer
+price + share counts from `deal_events.use_of_proceeds` /
+`amount_raw`, backs into retained shares via implied total
+shares = valuation / offer_price, so the primary IPO formula
+(ownership × (sold × offer + retained × VWAP)) activates whenever
+the data is there; `parseEscrowPct` extracts holdback %; and
+`sectorMedianMultiple` provides the M&A undisclosed-deal-size
+fallback against a small public-trackers median table. All three
+are pure (no DB) and unit-tested.
+
+Per the Task #4 static-routing constraint, the modeled-returns UI
+lives as a tab inside the new Fund profile at
+`/dashboard/funds/detail/?id=<fund_id>` (Overview / Portfolio /
+Modeled returns). The legacy `/dashboard/fund-returns/?id=<id>` is
+preserved as a `location.replace()` redirect into the tab so existing
+deep links keep working. API endpoints are
 `GET /api/funds/:id/modeled-returns` (latest + history) and
 `GET /api/funds/:id/modeled-returns/attribution` (top-5
 contributors). The new `fundReturnsRoute` is mounted BEFORE the

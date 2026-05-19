@@ -401,7 +401,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       // actuals.
       try {
         const { runNightlyFundReturnSweep } = await import("./services/fundReturns/model");
-        const fr = await runNightlyFundReturnSweep(env, 200);
+        const fr = await runNightlyFundReturnSweep(env);
         console.log("nightly fund return sweep done", JSON.stringify(fr));
         const { rebuildCalibration } = await import("./services/fundReturns/calibration");
         const cal = await rebuildCalibration(env);

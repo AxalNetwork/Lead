@@ -1,55 +1,19 @@
 ---
 layout: default
-title: Fund returns (modeled)
+title: Fund returns (redirect)
 permalink: /dashboard/fund-returns/
 ---
 <section class="ads-section">
-  <h1 class="ads-h1">Fund returns (modeled)</h1>
-  <p class="ads-sub">DPI / MOIC / TVPI inference from public exits, Form D, and LP disclosures. Confidence band + top-5 contributors.</p>
-  {% include charts/dashboard_shell.html %}
-
-  <div id="dashboard-content" hidden>
-    <div class="ads-card">
-      <form id="fund-form" style="display:flex;gap:.5rem;flex-wrap:wrap">
-        <input class="ads-input" id="fund-id" placeholder="fund id (uuid)" style="min-width:320px">
-        <button class="ads-btn" type="submit">Load</button>
-      </form>
-      <p class="ads-mono" style="opacity:.7;margin-top:.5rem">URL: /dashboard/fund-returns/?id=&lt;fund_id&gt;</p>
-    </div>
-
-    <div id="returns-panel" class="ads-card" style="margin-top:1rem;display:none">
-      <div style="display:flex;gap:2rem;flex-wrap:wrap">
-        <div><div class="ads-mono" style="opacity:.7">DPI</div><div id="m-dpi" style="font-size:1.6rem;font-weight:600">—</div></div>
-        <div><div class="ads-mono" style="opacity:.7">TVPI</div><div id="m-tvpi" style="font-size:1.6rem;font-weight:600">—</div></div>
-        <div><div class="ads-mono" style="opacity:.7">MOIC</div><div id="m-moic" style="font-size:1.6rem;font-weight:600">—</div></div>
-        <div><div class="ads-mono" style="opacity:.7">Net IRR</div><div id="m-irr" style="font-size:1.6rem;font-weight:600">—</div></div>
-        <div><div class="ads-mono" style="opacity:.7">Confidence</div><div id="m-conf" style="font-size:1.6rem;font-weight:600">—</div></div>
-      </div>
-      <div style="margin-top:.75rem" class="ads-mono" id="m-coverage"></div>
-      <div style="margin-top:.5rem" class="ads-mono" id="m-warnings"></div>
-    </div>
-
-    <div id="attribution-panel" class="ads-card" style="margin-top:1rem;display:none">
-      <h2 class="ads-h2" style="margin-top:0">Top contributors</h2>
-      <div class="ads-table-wrap">
-        <table class="ads-table">
-          <thead><tr><th>Company</th><th>Event</th><th>Contribution</th><th>Share</th></tr></thead>
-          <tbody id="attribution-tbody"></tbody>
-        </table>
-      </div>
-    </div>
-
-    <div id="history-panel" class="ads-card" style="margin-top:1rem;display:none">
-      <h2 class="ads-h2" style="margin-top:0">Model history</h2>
-      <div class="ads-table-wrap">
-        <table class="ads-table">
-          <thead><tr><th>As of</th><th>DPI</th><th>TVPI</th><th>MOIC</th><th>Confidence</th><th>Coverage</th></tr></thead>
-          <tbody id="history-tbody"></tbody>
-        </table>
-      </div>
-    </div>
+  <div class="ads-card">
+    <p class="ads-muted">The Modeled-returns view has moved to the Fund profile. Redirecting…</p>
+    <p><a id="ads-redirect" href="/dashboard/funds/detail/">Go to fund profile</a></p>
   </div>
 </section>
-
-<script src="/assets/js/dashboards.js"></script>
-<script src="/assets/js/fund-returns.js"></script>
+<script>
+(function(){
+  var id = new URLSearchParams(location.search).get("id");
+  var target = "/dashboard/funds/detail/" + (id ? "?id=" + encodeURIComponent(id) + "#modeled-returns" : "");
+  document.getElementById("ads-redirect").href = target;
+  location.replace(target);
+})();
+</script>

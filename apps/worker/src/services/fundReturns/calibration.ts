@@ -115,6 +115,37 @@ export async function rebuildCalibration(env: Env): Promise<{ buckets: number; s
   return { buckets: buckets.size, samples };
 }
 
+/** Pure bias application: multiplies distributed and residual cashflows
+ *  by the bucket's bias correction and recomputes DPI / TVPI / MOIC.
+ *  Extracted as a pure helper so the (vintage, strategy) → bias →
+ *  metric transform is unit-testable without a DB. The runner calls
+ *  this after `lookupBiasCorrection` in `runFundReturnModel`. */
+export interface BiasInputs {
+  distributed_usd: number;
+  residual_usd: number;
+  called_usd: number;
+  invested_usd: number;
+  bias: number;
+}
+export interface BiasOutputs {
+  distributed_adj_usd: number;
+  residual_adj_usd: number;
+  dpi: number | null;
+  tvpi: number | null;
+  moic: number | null;
+}
+export function applyBiasCorrection(i: BiasInputs): BiasOutputs {
+  const distributedAdj = i.distributed_usd * i.bias;
+  const residualAdj = i.residual_usd * i.bias;
+  return {
+    distributed_adj_usd: distributedAdj,
+    residual_adj_usd: residualAdj,
+    dpi: i.called_usd > 0 ? distributedAdj / i.called_usd : null,
+    tvpi: i.called_usd > 0 ? (distributedAdj + residualAdj) / i.called_usd : null,
+    moic: i.invested_usd > 0 ? (distributedAdj + residualAdj) / i.invested_usd : null,
+  };
+}
+
 export async function lookupBiasCorrection(
   env: Env, vintage_year: number | null, strategy: string | null,
 ): Promise<number> {

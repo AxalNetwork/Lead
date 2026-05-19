@@ -187,6 +187,8 @@
     "src/services/termSheets/aggressiveness.ts",
     "src/services/termSheets/leakHarvester.ts",
     "src/services/fundReturns/types.ts",
-    "src/services/fundReturns/proceeds.ts"
+    "src/services/fundReturns/proceeds.ts",
+    "src/services/fundReturns/exitSignal.ts",
+    "src/services/fundReturns/calibration.ts"
   ]
 }

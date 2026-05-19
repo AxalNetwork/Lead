@@ -1,0 +1,92 @@
+---
+layout: default
+title: Fund detail
+permalink: /dashboard/funds/detail/
+---
+
+<div id="ads-fund-detail" data-loading>
+  <div class="ads-card"><p class="ads-muted">Loading fund…</p></div>
+</div>
+
+<template id="ads-fund-tpl">
+  <div class="ads-card" style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px">
+    <div>
+      <h1 class="ads-page-title" data-k="fund_name" style="margin:0">—</h1>
+      <p class="ads-muted" style="margin:2px 0 0;font-size:13px">
+        <span data-k="firm_name">—</span>
+        · vintage <span data-k="vintage_year">—</span>
+        · <span data-k="strategy">—</span>
+        · status <span data-k="fund_status">—</span>
+        · target <span data-k="target_size">—</span>
+      </p>
+    </div>
+  </div>
+
+  <div class="ads-card" style="margin-top:12px">
+    <div class="ads-tabs" id="ads-fund-tabs">
+      <button class="ads-tab active" data-tab="overview">Overview</button>
+      <button class="ads-tab" data-tab="portfolio">Portfolio</button>
+      <button class="ads-tab" data-tab="modeled-returns">Modeled returns</button>
+    </div>
+
+    <section data-pane="overview">
+      <div class="ads-overview-grid" style="margin-top:12px;font-size:13px">
+        <div><strong>Vintage</strong><div data-k="o_vintage">—</div></div>
+        <div><strong>Strategy</strong><div data-k="o_strategy">—</div></div>
+        <div><strong>Target size</strong><div data-k="o_target">—</div></div>
+        <div><strong>Announced raised</strong><div data-k="o_raised">—</div></div>
+        <div><strong>First close</strong><div data-k="o_first_close">—</div></div>
+        <div><strong>Final close</strong><div data-k="o_final_close">—</div></div>
+        <div><strong>Mgmt fee</strong><div data-k="o_mgmt">—</div></div>
+        <div><strong>Carry</strong><div data-k="o_carry">—</div></div>
+      </div>
+    </section>
+
+    <section data-pane="portfolio" hidden>
+      <div class="ads-mono" id="ads-portfolio-summary" style="margin:8px 0"></div>
+      <div class="ads-table-wrap">
+        <table class="ads-table">
+          <thead><tr><th>Company</th><th>Round</th><th>Check</th><th>Role</th><th>Date</th></tr></thead>
+          <tbody id="ads-portfolio-tbody"><tr><td colspan="5">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section data-pane="modeled-returns" hidden>
+      <div id="ads-mr-summary" class="ads-card" style="margin-top:.5rem">
+        <div style="display:flex;gap:2rem;flex-wrap:wrap">
+          <div><div class="ads-muted">DPI</div><div data-mr="dpi" style="font-size:1.6rem;font-weight:600">—</div></div>
+          <div><div class="ads-muted">TVPI</div><div data-mr="tvpi" style="font-size:1.6rem;font-weight:600">—</div></div>
+          <div><div class="ads-muted">MOIC</div><div data-mr="moic" style="font-size:1.6rem;font-weight:600">—</div></div>
+          <div><div class="ads-muted">Net IRR</div><div data-mr="irr" style="font-size:1.6rem;font-weight:600">—</div></div>
+          <div><div class="ads-muted">Confidence band</div><div data-mr="conf" style="font-size:1.6rem;font-weight:600">—</div></div>
+        </div>
+        <div class="ads-mono" data-mr="coverage" style="margin-top:.5rem"></div>
+        <div class="ads-mono" data-mr="delta" style="margin-top:.25rem"></div>
+        <div class="ads-mono" data-mr="warnings" style="margin-top:.25rem;color:#a30"></div>
+      </div>
+
+      <div class="ads-card" style="margin-top:.75rem">
+        <h3 style="margin:0 0 .5rem;font-size:14px">Top 5 contributors</h3>
+        <div class="ads-table-wrap">
+          <table class="ads-table">
+            <thead><tr><th>Company</th><th>Event</th><th>Contribution</th><th>Share</th></tr></thead>
+            <tbody id="ads-attribution-tbody"><tr><td colspan="4">No model run yet.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="ads-card" style="margin-top:.75rem">
+        <h3 style="margin:0 0 .5rem;font-size:14px">Model history</h3>
+        <div class="ads-table-wrap">
+          <table class="ads-table">
+            <thead><tr><th>As of</th><th>DPI</th><th>TVPI</th><th>MOIC</th><th>Confidence</th><th>Coverage</th></tr></thead>
+            <tbody id="ads-history-tbody"><tr><td colspan="6">—</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </div>
+</template>
+
+<script src="/assets/js/fund-detail.js"></script>
