@@ -58,6 +58,7 @@ import { fundsRoute, firmsFundsRoute } from "./routes/funds";
 import { angelsRoute, syndicatesRoute } from "./routes/angels";
 import { dashboards as dashboardsRoute } from "./routes/dashboards";
 import { capTableRoute } from "./routes/cap_table";
+import { valuationCompaniesRoute, compPanelsRoute } from "./routes/valuation";
 export { EntityLock } from "./do/EntityLock";
 export { HostThrottle } from "./do/HostThrottle";
 export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, PersonaEntityMatchWorkflow, PersonaMatchRefreshWorkflow, PersonaMatchEntityWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, AIProfileFillerWorkflow, AIProfileFillerBatchWorkflow, RefreshGovernmentWorkflow, DiscoverFromSeedWorkflow, CrawlFrontierWorkflow, MonitorEntityWorkflow, MonitorBatchWorkflow, DigestWorkflow, IndividualProfilerWorkflow } from "./ai/workflows";
@@ -176,6 +177,8 @@ api.route("/api/angels", angelsRoute);
 api.route("/api/syndicates", syndicatesRoute);
 api.route("/api/dashboards", dashboardsRoute);
 api.route("/api/companies", capTableRoute);
+api.route("/api/companies", valuationCompaniesRoute);
+api.route("/api/comp-panels", compPanelsRoute);
 
 api.notFound((c) => c.json({ error: "not_found", request_id: c.var.request_id }, 404));
 api.onError((err, c) => {

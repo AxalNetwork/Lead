@@ -165,6 +165,10 @@
     "src/services/capTable/dilution.ts",
     "src/services/capTable/s1CapTableParser.ts",
     "src/services/capTable/deCoiParser.ts",
-    "src/services/capTable/secondaryListingParser.ts"
+    "src/services/capTable/secondaryListingParser.ts",
+    "src/services/valuation/types.ts",
+    "src/services/valuation/nportParser.ts",
+    "src/services/valuation/compPanel.ts",
+    "src/services/valuation/impliedValuation.ts"
   ]
 }

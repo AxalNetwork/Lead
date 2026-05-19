@@ -1,0 +1,36 @@
+{% comment %}
+  Task #9: Embedded valuation Mark-Map panel for company detail pages.
+  Requires `include.table` (companies). Resolves the page's id/ref
+  query param to a u_entities.id via /api/entities/resolve and then
+  fetches /api/companies/:id/marks + /api/companies/:id/implied-valuation.
+{% endcomment %}
+<section id="ads-embedded-mark-map-section" class="ads-card" style="margin-top:16px;padding:12px">
+  <h3 style="margin:0 0 8px;font-size:14px">Valuation marks &amp; implied range</h3>
+  <div id="ads-embedded-mark-map-body"><div class="ads-loading">Loading valuation marks…</div></div>
+</section>
+<script src="/assets/js/mark-map-tab.js?v={{ site.time | date: '%s' }}"></script>
+<script>
+  (function () {
+    var TABLE = {{ include.table | jsonify }};
+    document.addEventListener("DOMContentLoaded", async function () {
+      var p = new URLSearchParams(window.location.search);
+      var ref = p.get("id") || p.get("ref");
+      var body = document.getElementById("ads-embedded-mark-map-body");
+      if (!ref) { body.innerHTML = '<div class="ads-muted" style="font-size:12px">No entity ref.</div>'; return; }
+      try {
+        var API = (window.ADS_API_BASE || "https://api.aidatasignal.com").replace(/\/+$/, "");
+        var r = await fetch(API + "/api/entities/resolve?table=" + encodeURIComponent(TABLE) + "&ref=" + encodeURIComponent(ref), { credentials: "include" });
+        var j = r.ok ? await r.json() : null;
+        if (!j || !j.entity_id) {
+          body.innerHTML = '<div class="ads-muted" style="font-size:12px">No unified entity mapped for this company yet.</div>';
+          return;
+        }
+        if (window.ADS && window.ADS.MarkMap) {
+          window.ADS.MarkMap.mount({ rootId: "ads-embedded-mark-map-body", entityId: j.entity_id });
+        }
+      } catch (e) {
+        body.innerHTML = '<div class="ads-muted" style="font-size:12px">Mark map unavailable: ' + e.message + '</div>';
+      }
+    });
+  })();
+</script>
