@@ -22,6 +22,7 @@ async function clQuery(env: import("../../../types").Env, url: string, token: st
     const res = await fetchPage(env, url, {
       liveOnly: true,
       timeoutMs: 15_000,
+      expectJson: true,
       headers: { Authorization: `Token ${token}`, Accept: "application/json" },
     });
     if (!res.ok || !res.html) return null;

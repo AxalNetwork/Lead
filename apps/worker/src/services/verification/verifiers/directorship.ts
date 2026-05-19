@@ -72,6 +72,7 @@ export const directorshipVerifier: Verifier = {
         const res = await fetchPage(env, url, {
           liveOnly: true,
           timeoutMs: 15_000,
+          expectJson: true,
           headers: {
             Accept: "application/json",
             Authorization: `Basic ${btoa(`${chKey}:`)}`,

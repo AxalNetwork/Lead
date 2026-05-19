@@ -59,6 +59,11 @@ export interface FetchOptions {
    *  authenticated REST API calls (e.g. CourtListener Token, Companies
    *  House Basic) so they inherit rate-limiting + retry + tiering. */
   headers?: Record<string, string>;
+  /** Skip the HTML-anti-bot heuristics (too_small / low_visible_text /
+   *  captcha-regex). Required for structured JSON API endpoints whose
+   *  valid responses are short or contain none of the visible-text
+   *  HTML markers. Only `status_<4xx/5xx>` blocking still applies. */
+  expectJson?: boolean;
 }
 
 export interface FetchResult {
@@ -232,7 +237,9 @@ async function tier0Direct(_env: Env, url: string, opts: FetchOptions): Promise<
       signal: ctl.signal,
     });
     const html = await res.text();
-    const blockReason = detectBlockReason(res.status, html);
+    const blockReason = opts.expectJson
+      ? (BLOCK_STATUSES.has(res.status) ? `status_${res.status}` : null)
+      : detectBlockReason(res.status, html);
     return {
       ok: res.ok && !blockReason,
       status: res.status,
@@ -376,7 +383,9 @@ async function tier2Proxy(env: Env, url: string, opts: FetchOptions): Promise<Fe
     const proxied = `${env.PROXY_URL}${env.PROXY_URL.includes("?") ? "&" : "?"}url=${encodeURIComponent(url)}`;
     const res = await fetch(proxied, { method: "GET", headers, redirect: "follow", signal: ctl.signal });
     const html = await res.text();
-    const blockReason = detectBlockReason(res.status, html);
+    const blockReason = opts.expectJson
+      ? (BLOCK_STATUSES.has(res.status) ? `status_${res.status}` : null)
+      : detectBlockReason(res.status, html);
     return {
       ok: res.ok && !blockReason,
       status: res.status,
