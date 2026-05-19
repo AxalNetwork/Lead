@@ -199,6 +199,7 @@ export async function buildFundPortfolio(env: Env, fundId: string): Promise<{
       company_name: r.company_name_raw,
       round_name: r.round_name,
       amount_usd: r.amount_usd,
+      position_usd: r.position_usd,
       role: role as PortfolioRow["role"],
       date: r.announcement_date ?? r.closing_date,
       sector_tags: sectors,
@@ -224,6 +225,11 @@ export async function buildFundPortfolio(env: Env, fundId: string): Promise<{
       company_name: f.issuer_name,
       round_name: null,
       amount_usd: f.total_amount_sold ?? f.total_offering_amount,
+      // Form D discloses the round total, not the fund's check — leave
+      // position_usd null rather than guess. Task #2 fund-return modeling
+      // warns on null check sizes instead of treating the round as the
+      // fund's investment.
+      position_usd: null,
       role: "participating",
       date: dt,
       sector_tags: sectors,

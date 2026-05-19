@@ -394,11 +394,12 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       }
 
       // Task #2 (Fund-Return Modeling): nightly DPI/TVPI/MOIC inference
-      // from public exits + Form D + LP disclosures. Bounded at 200
-      // funds/tick. Piggybacks the consolidated nightly slot (Free
-      // plan caps crons at 5/5). Calibration loop is recomputed after
-      // the sweep so the next run picks up any newly disclosed LP
-      // actuals.
+      // from public exits + Form D + LP disclosures. Bounded at 500
+      // funds/tick (oldest-modeled-first rotation; see
+      // runNightlyFundReturnSweep). Piggybacks the consolidated nightly
+      // slot (Free plan caps crons at 5/5). Calibration loop is
+      // recomputed after the sweep so the next run picks up any newly
+      // disclosed LP actuals.
       try {
         const { runNightlyFundReturnSweep } = await import("./services/fundReturns/model");
         const fr = await runNightlyFundReturnSweep(env);

@@ -109,7 +109,19 @@ export async function runFundReturnModel(env: Env, fund: FundRow): Promise<FundR
   }
 
   const positions = portfolio?.positions ?? [];
-  const invested = positions.reduce((s, p) => s + (p.amount_usd ?? 0), 0);
+  // Invested capital is the SUM OF FUND CHECKS (deal_participants.position_usd),
+  // NOT the sum of round sizes. Positions without a disclosed check size
+  // (Form D rows; deal rows where the participant row had no position_usd)
+  // are surfaced as `no_check_size` warnings and contribute 0 to invested
+  // rather than silently inflating capital with the round total.
+  let invested = 0;
+  for (const p of positions) {
+    if (p.position_usd != null && p.position_usd > 0) {
+      invested += p.position_usd;
+    } else {
+      warnings.push(`pos:${p.company_name || p.company_entity_id || "?"}:no_check_size`);
+    }
+  }
   const committed = fund.announced_raised_usd ?? null;
   const fee_drag = computeFeeDrag(committed, fund.first_close_date, as_of, MGMT_FEE_PCT_PER_YEAR);
   const called = invested + fee_drag;
@@ -121,13 +133,18 @@ export async function runFundReturnModel(env: Env, fund: FundRow): Promise<FundR
   const contributions: AttributionRow[] = [];
   for (const p of positions) {
     const exit = await fetchExitSignal(env, p.company_entity_id);
-    const ownership = exit?.last_mark_valuation_usd
-      ? estimateOwnership(p.amount_usd, exit.last_mark_valuation_usd)
-      : null;
+    // Ownership is check ÷ round-size when both are known. Fall back to
+    // check ÷ last_mark_valuation only when the round size is missing.
+    let ownership: number | null = null;
+    if (p.position_usd != null && p.amount_usd != null && p.amount_usd > 0) {
+      ownership = estimateOwnership(p.position_usd, p.amount_usd);
+    } else if (p.position_usd != null && exit?.last_mark_valuation_usd) {
+      ownership = estimateOwnership(p.position_usd, exit.last_mark_valuation_usd);
+    }
     const inputs: CompanyInputs = {
       company_entity_id: p.company_entity_id,
       company_name: p.company_name,
-      position_usd: p.amount_usd,
+      position_usd: p.position_usd,
       ownership_pct: ownership,
       exit,
     };
@@ -307,39 +324,41 @@ export async function runFundReturnModel(env: Env, fund: FundRow): Promise<FundR
   return out;
 }
 
-/** Nightly sweep: run the model for EVERY fund with status in
- *  (active|harvesting|wound_down). Paginated by id so a single tick
- *  works through the entire universe even if it spans thousands of
- *  funds — Workers' 30s CPU ceiling is per-request, not per-handler,
- *  and the per-fund model is bounded (one D1 query per portfolio
- *  position). `maxTotal` is a safety ceiling, not a sample cap; the
- *  default of 5000 covers the whole platform population today. */
+/** Nightly sweep: run the model for funds with status in
+ *  (active|harvesting|wound_down), rotated by oldest-modeled-first
+ *  using LEFT JOIN against fund_return_models. Bounded at `maxTotal`
+ *  funds per tick (default 500) so a single Workers cron invocation
+ *  stays within its CPU budget; funds not reached this tick are
+ *  picked up next night because their last as_of stays oldest. */
 export async function runNightlyFundReturnSweep(
   env: Env,
-  maxTotal = 5000,
+  maxTotal = 500,
   pageSize = 100,
 ): Promise<{ ran: number; failed: number; pages: number }> {
-  const FUND_COLS = `id, firm_entity_id, fund_entity_id, fund_name, fund_number,
-    vintage_year, target_size_usd, hard_cap_usd, first_close_date,
-    final_close_date, announced_raised_usd, gp_commit_usd,
-    mgmt_fee_pct, carry_pct, hurdle_pct, strategy, sectors_json,
-    geos_json, fund_status, source_evidence_json, confidence,
-    updated_at, created_at`;
+  const FUND_COLS = `f.id, f.firm_entity_id, f.fund_entity_id, f.fund_name, f.fund_number,
+    f.vintage_year, f.target_size_usd, f.hard_cap_usd, f.first_close_date,
+    f.final_close_date, f.announced_raised_usd, f.gp_commit_usd,
+    f.mgmt_fee_pct, f.carry_pct, f.hurdle_pct, f.strategy, f.sectors_json,
+    f.geos_json, f.fund_status, f.source_evidence_json, f.confidence,
+    f.updated_at, f.created_at`;
   let ran = 0; let failed = 0; let pages = 0;
-  let cursor: string | null = null;
   while (ran + failed < maxTotal) {
-    const rows: D1Result<FundRow> = cursor === null
-      ? await env.DB.prepare(
-          `SELECT ${FUND_COLS} FROM funds
-            WHERE fund_status IN ('active','harvesting','wound_down')
-            ORDER BY id ASC LIMIT ?`,
-        ).bind(pageSize).all<FundRow>()
-      : await env.DB.prepare(
-          `SELECT ${FUND_COLS} FROM funds
-            WHERE fund_status IN ('active','harvesting','wound_down')
-              AND id > ?
-            ORDER BY id ASC LIMIT ?`,
-        ).bind(cursor, pageSize).all<FundRow>();
+    // Oldest-modeled-first rotation: funds never modeled (NULL as_of)
+    // come first, then funds whose last model run is oldest. Within a
+    // tick we filter out funds already modeled today so a single
+    // invocation doesn't re-process the same row twice.
+    const today = new Date().toISOString().slice(0, 10);
+    const rows: D1Result<FundRow> = await env.DB.prepare(
+      `SELECT ${FUND_COLS} FROM funds f
+         LEFT JOIN (
+           SELECT fund_id, MAX(as_of) AS last_as_of
+             FROM fund_return_models GROUP BY fund_id
+         ) m ON m.fund_id = f.id
+        WHERE f.fund_status IN ('active','harvesting','wound_down')
+          AND (m.last_as_of IS NULL OR m.last_as_of < ?)
+        ORDER BY m.last_as_of IS NULL DESC, m.last_as_of ASC, f.id ASC
+        LIMIT ?`,
+    ).bind(today, Math.min(pageSize, maxTotal - (ran + failed))).all<FundRow>();
     const page = rows.results ?? [];
     if (page.length === 0) break;
     pages += 1;
@@ -348,7 +367,6 @@ export async function runNightlyFundReturnSweep(
       catch (e) { failed += 1; console.warn("fund return model failed", fund.id, (e as Error).message); }
       if (ran + failed >= maxTotal) break;
     }
-    cursor = page[page.length - 1].id;
     if (page.length < pageSize) break;
   }
   return { ran, failed, pages };

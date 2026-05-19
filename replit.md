@@ -317,6 +317,26 @@ one would force a registry change in the rich PERSON profile path.
 The `source` field is the literal string `"fund_return_model"` and
 `evidence_url` is null (model output, not a scraped page).
 
+Invested capital is the **sum of fund checks**
+(`deal_participants.position_usd`), NOT the sum of round sizes. The
+portfolio builder threads check size onto `PortfolioRow.position_usd`
+alongside the round-level `amount_usd`. Positions without a disclosed
+check size (Form D rows — Form D reports the round total, not the GP's
+contribution; and deal rows where the participant row had no
+`position_usd`) contribute 0 to invested and emit a per-position
+`pos:<company>:no_check_size` warning so operators see the gap rather
+than silent capital inflation. Ownership is `check ÷ round_size` when
+both are known, falling back to `check ÷ last_mark_valuation` only when
+the round size is missing.
+
+Nightly sweep is bounded at 500 funds/tick (well within Workers'
+per-cron CPU budget at ~50ms/fund) and rotates by oldest-modeled-first
+via `LEFT JOIN fund_return_models` on `MAX(as_of)`, with a
+same-day filter so a single tick never re-processes a fund twice.
+Funds not reached this tick are picked up next night because their
+last as_of stays oldest. There is no static `id ASC` cursor; the
+rotation IS the cursor.
+
 Per-company proceeds estimator (`services/fundReturns/proceeds.ts`)
 is a pure module: no DB access, accepts pre-fetched exit signals so
 it can be unit-tested in isolation. Exit-event classifier in

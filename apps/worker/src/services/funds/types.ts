@@ -79,7 +79,14 @@ export interface PortfolioRow {
   company_entity_id: string | null;
   company_name: string;
   round_name: string | null;
+  /** Total round size from deal_events.amount_usd or Form D total — used
+   *  for round-level analytics and as an ownership-denominator fallback. */
   amount_usd: number | null;
+  /** Fund's actual check size from deal_participants.position_usd — the
+   *  invested-capital base for fund-return modeling. Null for Form D rows
+   *  (no GP-level breakdown disclosed) and for deal_events rows where the
+   *  participant row didn't carry a check size. */
+  position_usd: number | null;
   role: "lead" | "participating" | "follow_on" | "unknown";
   date: string | null;
   sector_tags: string[];
