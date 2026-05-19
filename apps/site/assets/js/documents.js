@@ -122,25 +122,43 @@
       });
   }
 
+  var folderToggle = document.getElementById("upload-folder");
+  var fileInput = document.getElementById("upload-file");
+  folderToggle.addEventListener("change", function () {
+    if (folderToggle.checked) {
+      fileInput.setAttribute("webkitdirectory", "");
+      fileInput.setAttribute("directory", "");
+    } else {
+      fileInput.removeAttribute("webkitdirectory");
+      fileInput.removeAttribute("directory");
+    }
+  });
+
   document.getElementById("upload-form").addEventListener("submit", function (ev) {
     ev.preventDefault();
     var f = ev.target;
     var msg = document.getElementById("upload-msg");
-    var file = document.getElementById("upload-file").files[0];
-    if (!file) { msg.textContent = "Choose a file first."; return; }
+    var files = Array.from(fileInput.files || []);
+    if (!files.length) { msg.textContent = "Choose at least one file."; return; }
+    if (files.length > 50) { msg.textContent = "Max 50 files per upload (got " + files.length + ")."; return; }
     var fd = new FormData();
-    fd.append("file", file);
+    files.forEach(function (file) { fd.append("file", file); });
     var tgt = f.target_entity_id.value.trim();
     if (tgt) fd.append("target_entity_id", tgt);
     if (f.allow_raw_text.checked) fd.append("allow_raw_text", "1");
-    msg.textContent = "Uploading…";
+    msg.textContent = "Uploading " + files.length + " file" + (files.length > 1 ? "s" : "") + "…";
     fetch(API + "/api/documents/upload", { method: "POST", body: fd, credentials: "include" })
       .then(function (r) {
         if (!r.ok) return r.text().then(function (t) { throw new Error("HTTP " + r.status + ": " + t.slice(0, 200)); });
         return r.json();
       })
       .then(function (j) {
-        msg.textContent = "Uploaded: " + (j.detected_kind || "ok") + (j.extraction_error ? " (extract error: " + j.extraction_error + ")" : "");
+        if (j.results) {
+          var ok = j.uploaded != null ? j.uploaded : (j.results.filter(function (x) { return x.ok; }).length);
+          msg.textContent = "Uploaded " + ok + " / " + j.results.length;
+        } else {
+          msg.textContent = "Uploaded: " + (j.detected_kind || "ok") + (j.extraction_error ? " (extract error: " + j.extraction_error + ")" : "");
+        }
         f.reset();
         refreshDocs();
       })

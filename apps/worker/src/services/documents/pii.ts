@@ -18,6 +18,8 @@ export interface RedactionCounts {
   iban: number;
   phone: number;
   credit_card: number;
+  person_name: number;
+  street_address: number;
 }
 
 export interface RedactionResult {
@@ -54,10 +56,31 @@ function luhnValid(s: string): boolean {
   return sum % 10 === 0;
 }
 
+// Heuristic NER pass (Workers Runtime has no built-in ML NER, so we
+// approximate with conservative pattern rules). Two categories:
+// - PERSON: capitalized first+last name bigrams, optionally with middle
+//   initial. Skipped when the token is a stop-word, an all-caps acronym,
+//   or appears at sentence start (would over-redact normal prose).
+// - STREET_ADDRESS: a US-style "<num> <Title-cased words> <suffix>"
+//   ending in Street/St/Ave/Avenue/Blvd/Road/Rd/Drive/Dr/Lane/Ln/Court/Ct.
+// This is intentionally conservative — full NER is a follow-up.
+const PERSON_NAME_RE = /(?<![.!?]\s)(?<!^)\b([A-Z][a-z]{1,20})(?:\s+([A-Z]\.))?\s+([A-Z][a-z]{1,20})\b/g;
+const STREET_ADDRESS_RE = /\b\d{1,6}\s+(?:[A-Z][a-z]+\s+){1,4}(?:Street|St|Avenue|Ave|Boulevard|Blvd|Road|Rd|Drive|Dr|Lane|Ln|Court|Ct|Way|Place|Pl)\b\.?/g;
+// Avoid scrubbing common bigrams that look name-shaped.
+const NAME_STOPWORDS = new Set([
+  "United", "States", "New", "York", "Los", "Angeles", "San", "Francisco",
+  "Series", "Preferred", "Stock", "Company", "Agreement", "Effective", "Date",
+  "Cap", "Table", "Pre", "Post", "Money", "Term", "Sheet", "Board", "Directors",
+  "Right", "First", "Refusal", "Tag", "Along", "Drag", "Option", "Pool",
+  "Confidential", "Information", "Receiving", "Party", "Disclosing", "Governed",
+  "January", "February", "March", "April", "May", "June", "July", "August",
+  "September", "October", "November", "December",
+]);
+
 export function redactPii(input: string): RedactionResult {
   const counts: RedactionCounts = {
     email: 0, ssn: 0, itin: 0, us_bank_account: 0,
-    iban: 0, phone: 0, credit_card: 0,
+    iban: 0, phone: 0, credit_card: 0, person_name: 0, street_address: 0,
   };
   let text = input;
   text = text.replace(EMAIL_RE, () => { counts.email++; return "[REDACTED_EMAIL]"; });
@@ -70,8 +93,17 @@ export function redactPii(input: string): RedactionResult {
     if (luhnValid(m)) { counts.credit_card++; return "[REDACTED_CC]"; }
     return m;
   });
-  // Phone last so we don't eat digits from already-redacted runs.
+  // Phone before name so phone-with-name lines don't double-tag.
   text = text.replace(PHONE_RE, () => { counts.phone++; return "[REDACTED_PHONE]"; });
+  // Heuristic NER pass: street addresses first (digit-prefixed, unambiguous).
+  text = text.replace(STREET_ADDRESS_RE, () => { counts.street_address++; return "[REDACTED_ADDRESS]"; });
+  // Person names: capitalized bigram (with optional middle initial); skip
+  // stopwords on either token to avoid scrubbing legal/business terms.
+  text = text.replace(PERSON_NAME_RE, (m, a: string, _mi: string | undefined, b: string) => {
+    if (NAME_STOPWORDS.has(a) || NAME_STOPWORDS.has(b)) return m;
+    counts.person_name++;
+    return "[REDACTED_NAME]";
+  });
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   return { text, counts, total };
 }
@@ -81,7 +113,7 @@ export function prepareForLlm(input: string, allowRaw: boolean): RedactionResult
   if (allowRaw) {
     return {
       text: input,
-      counts: { email: 0, ssn: 0, itin: 0, us_bank_account: 0, iban: 0, phone: 0, credit_card: 0 },
+      counts: { email: 0, ssn: 0, itin: 0, us_bank_account: 0, iban: 0, phone: 0, credit_card: 0, person_name: 0, street_address: 0 },
       total: 0,
     };
   }

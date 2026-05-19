@@ -9,7 +9,10 @@ permalink: /dashboard/documents/
 
   <div class="ads-card">
     <form id="upload-form" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
-      <input class="ads-input" type="file" name="file" id="upload-file" required>
+      <input class="ads-input" type="file" name="file" id="upload-file" multiple required>
+      <label style="display:flex;align-items:center;gap:.25rem" title="Pick a folder">
+        <input type="checkbox" id="upload-folder"> folder upload
+      </label>
       <input class="ads-input" name="target_entity_id" placeholder="link to entity_id (optional)">
       <label style="display:flex;align-items:center;gap:.25rem">
         <input type="checkbox" name="allow_raw_text" value="1"> allow raw text (skip PII redaction — audit-logged)

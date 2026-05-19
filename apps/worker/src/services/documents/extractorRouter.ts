@@ -38,6 +38,7 @@ export interface ExtractorEnvelope {
 
 const EMPTY_COUNTS: RedactionCounts = {
   email: 0, ssn: 0, itin: 0, us_bank_account: 0, iban: 0, phone: 0, credit_card: 0,
+  person_name: 0, street_address: 0,
 };
 
 export function runExtractor(input: ExtractorInput): ExtractorEnvelope {

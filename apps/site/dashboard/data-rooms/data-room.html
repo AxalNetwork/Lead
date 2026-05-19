@@ -11,7 +11,20 @@ permalink: /dashboard/data-rooms/
     <div id="room-meta" class="ads-mono">Loading…</div>
   </div>
 
-  <div id="room-index"></div>
+  <div id="reader" style="display:grid;grid-template-columns:260px 1fr 360px;gap:.75rem;margin-top:1rem;min-height:600px">
+    <aside class="ads-card" style="overflow:auto" id="reader-left">
+      <h2 class="ads-h2" style="margin-top:0">Documents</h2>
+      <div id="reader-categories" class="ads-mono">Loading…</div>
+    </aside>
+    <main class="ads-card" id="reader-center" style="overflow:auto">
+      <div id="reader-doc-title" class="ads-mono ads-muted">Select a document on the left.</div>
+      <div id="reader-doc-body" style="margin-top:.5rem"></div>
+    </main>
+    <aside class="ads-card" id="reader-right" style="overflow:auto">
+      <h2 class="ads-h2" style="margin-top:0">Structured extraction</h2>
+      <div id="reader-extraction" class="ads-mono ads-muted">—</div>
+    </aside>
+  </div>
 </section>
 
 <script src="/assets/js/data-room.js"></script>

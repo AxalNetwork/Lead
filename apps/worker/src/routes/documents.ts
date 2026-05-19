@@ -1,7 +1,9 @@
 // Task #13: Document Intelligence routes.
 //
 // Surface:
-//   POST   /api/documents/upload                multipart blob + optional target_entity_id
+//   POST   /api/documents/upload                multipart: one or more `file` parts
+//                                               + optional target_entity_id / data_room_id
+//                                               (folder upload = multiple files in one request)
 //   GET    /api/documents                        list (owner-scoped)
 //   GET    /api/documents/:id                   detail
 //   GET    /api/documents/:id/extractions       all extraction rows for a doc
@@ -103,44 +105,70 @@ async function extractText(bytes: ArrayBuffer, ext: string, mime: string): Promi
   return { text: "" };
 }
 
-documentsRoute.post("/upload", async (c) => {
-  const email = c.get("email");
-  let form: FormData;
-  try { form = await c.req.formData(); }
-  catch { return c.json({ error: "bad_request", message: "expected multipart/form-data" }, 400); }
-  const fileEntry = form.get("file") as unknown;
-  const file = fileEntry as { name?: string; size?: number; type?: string; arrayBuffer: () => Promise<ArrayBuffer> } | null;
-  if (!file || typeof file !== "object" || typeof file.size !== "number" || typeof file.arrayBuffer !== "function") {
-    return c.json({ error: "bad_request", message: "file field required" }, 400);
-  }
-  if (file.size > MAX_BYTES) return c.json({ error: "too_large", message: "max 50 MB" }, 413);
+interface UploadResultItem {
+  ok: boolean;
+  id?: string;
+  filename: string;
+  size?: number;
+  sha256?: string;
+  detected_kind?: string;
+  classifier_confidence?: number;
+  extraction_status?: string;
+  extraction_error?: string | null;
+  error?: string;
+}
+
+async function processOneFile(
+  c: { env: Env },
+  email: string,
+  file: { name?: string; size?: number; type?: string; arrayBuffer: () => Promise<ArrayBuffer> },
+  opts: { targetEntityId: string | null; dataRoomId: string | null; allowRawText: boolean },
+): Promise<UploadResultItem> {
   const filename = safeName(file.name || "document");
   const ext = extOf(filename);
-  if (!ALLOWED_EXT.has(ext)) return c.json({ error: "unsupported_type", ext }, 415);
-
-  const targetEntityId = (form.get("target_entity_id") as string | null) || null;
-  const dataRoomId = (form.get("data_room_id") as string | null) || null;
-  const allowRawText = (form.get("allow_raw_text") as string | null) === "1";
+  if (typeof file.size !== "number") return { ok: false, filename, error: "bad_file" };
+  if (file.size > MAX_BYTES) return { ok: false, filename, error: "too_large" };
+  if (!ALLOWED_EXT.has(ext)) return { ok: false, filename, error: "unsupported_type" };
 
   const bytes = await file.arrayBuffer();
   const sha = await sha256Hex(bytes);
   const id = crypto.randomUUID();
-  const r2Key = `documents/${id}/${filename}`;
+  // Content-addressed R2 key (sha256-prefixed). Multiple documents with
+  // the same bytes share the underlying blob; the per-document id still
+  // gives each row a unique handle for owner-scoping and audit.
+  const r2Key = `documents/sha256/${sha}/${filename}`;
   const mime = file.type || null;
 
   await c.env.UPLOADS.put(r2Key, bytes, {
     httpMetadata: { contentType: mime || "application/octet-stream" },
+    customMetadata: { document_id: id, filename, owner_email: email },
   });
 
   const now = new Date().toISOString();
+  // Per spec: both statuses start at 'pending'; transition to 'running'
+  // immediately before extraction kicks off.
   await c.env.DB.prepare(
     `INSERT INTO documents (
        id, owner_email, target_entity_id, filename, mime, size_bytes, r2_key, sha256,
        ocr_status, extraction_status, allow_raw_text, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'running', ?, ?, ?)`,
-  ).bind(id, email, targetEntityId, filename, mime, file.size, r2Key, sha, allowRawText ? 1 : 0, now, now).run();
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'pending', ?, ?, ?)`,
+  ).bind(id, email, opts.targetEntityId, filename, mime, file.size, r2Key, sha, opts.allowRawText ? 1 : 0, now, now).run();
 
-  // Inline extraction. Bounded by the 50 MB upload cap.
+  // Upload-time raw-text override is a sensitive policy decision: audit it
+  // here in addition to PATCH /:id/allow-raw-text (which only fires on
+  // post-upload flips).
+  if (opts.allowRawText) {
+    console.log(JSON.stringify({
+      event: "document.allow_raw_text",
+      origin: "upload",
+      document_id: id, owner: email, filename, allow: true,
+    }));
+  }
+
+  await c.env.DB.prepare(
+    `UPDATE documents SET extraction_status = 'running', updated_at = ? WHERE id = ?`,
+  ).bind(new Date().toISOString(), id).run();
+
   let detected_kind: string = "unknown";
   let confidence = 0;
   let extractionError: string | null = null;
@@ -149,8 +177,8 @@ documentsRoute.post("/upload", async (c) => {
     const cls = classifyDocument({ filename, mime, sampleText: text.slice(0, 4000) });
     detected_kind = cls.kind;
     confidence = cls.confidence;
-    const envelope = runExtractor({ kind: cls.kind, text, sheets, allowRawText });
-    await persistExtraction(c.env, id, targetEntityId, `r2://${r2Key}`, envelope);
+    const envelope = runExtractor({ kind: cls.kind, text, sheets, allowRawText: opts.allowRawText });
+    await persistExtraction(c.env, id, opts.targetEntityId, `r2://${r2Key}`, envelope);
     await c.env.DB.prepare(
       `UPDATE documents SET detected_kind = ?, classifier_confidence = ?, ocr_status = 'done',
          extraction_status = 'done', page_count = ?, updated_at = ? WHERE id = ?`,
@@ -163,31 +191,68 @@ documentsRoute.post("/upload", async (c) => {
     ).bind(extractionError, new Date().toISOString(), id).run();
   }
 
-  // Auto-add to data room if specified. Owner-scoped: silently skips
-  // when the room does not belong to the caller (no cross-tenant write).
-  if (dataRoomId) {
+  if (opts.dataRoomId) {
     const room = await c.env.DB.prepare(
       `SELECT id FROM document_data_rooms WHERE id = ? AND owner_email = ?`,
-    ).bind(dataRoomId, email).first();
+    ).bind(opts.dataRoomId, email).first();
     if (room) {
       const { categorizeForDataRoom } = await import("../services/documents/persist");
       const category = categorizeForDataRoom(detected_kind, filename);
       try {
         await c.env.DB.prepare(
           `INSERT INTO data_room_documents (id, data_room_id, document_id, category) VALUES (?, ?, ?, ?)`,
-        ).bind(crypto.randomUUID(), dataRoomId, id, category).run();
+        ).bind(crypto.randomUUID(), opts.dataRoomId, id, category).run();
       } catch (e) { console.warn("data-room auto-add failed", (e as Error).message); }
     } else {
-      console.warn("data-room auto-add skipped: room not owned by caller", dataRoomId, email);
+      console.warn("data-room auto-add skipped: room not owned by caller", opts.dataRoomId, email);
     }
   }
 
-  return c.json({
-    id, filename, size: file.size, sha256: sha,
+  return {
+    ok: true, id, filename, size: file.size, sha256: sha,
     detected_kind, classifier_confidence: confidence,
     extraction_status: extractionError ? "error" : "done",
     extraction_error: extractionError,
-  }, 201);
+  };
+}
+
+documentsRoute.post("/upload", async (c) => {
+  const email = c.get("email");
+  let form: FormData;
+  try { form = await c.req.formData(); }
+  catch { return c.json({ error: "bad_request", message: "expected multipart/form-data" }, 400); }
+
+  // Folder upload = multiple `file` parts in one multipart request. Each
+  // is processed independently; per-file failures don't fail the batch.
+  const files = form.getAll("file").filter(
+    (f) => f && typeof f === "object" && "arrayBuffer" in (f as object),
+  ) as unknown as Array<{ name?: string; size?: number; type?: string; arrayBuffer: () => Promise<ArrayBuffer> }>;
+  if (!files.length) return c.json({ error: "bad_request", message: "at least one `file` field required" }, 400);
+  if (files.length > 50) return c.json({ error: "too_many_files", message: "max 50 files per request" }, 413);
+
+  const opts = {
+    targetEntityId: (form.get("target_entity_id") as string | null) || null,
+    dataRoomId: (form.get("data_room_id") as string | null) || null,
+    allowRawText: (form.get("allow_raw_text") as string | null) === "1",
+  };
+
+  const results: UploadResultItem[] = [];
+  for (const f of files) {
+    try { results.push(await processOneFile(c, email, f, opts)); }
+    catch (e) { results.push({ ok: false, filename: safeName(f.name || "document"), error: (e as Error).message.slice(0, 200) }); }
+  }
+  const okCount = results.filter((r) => r.ok).length;
+  // Single-file shape preserved for backwards compat when only one file was sent.
+  if (results.length === 1 && results[0].ok) {
+    const r = results[0];
+    return c.json({
+      id: r.id, filename: r.filename, size: r.size, sha256: r.sha256,
+      detected_kind: r.detected_kind, classifier_confidence: r.classifier_confidence,
+      extraction_status: r.extraction_status, extraction_error: r.extraction_error,
+      results,
+    }, 201);
+  }
+  return c.json({ uploaded: okCount, total: results.length, results }, okCount > 0 ? 201 : 400);
 });
 
 documentsRoute.get("/", async (c) => {
