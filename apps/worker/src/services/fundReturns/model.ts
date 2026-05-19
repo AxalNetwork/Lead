@@ -324,15 +324,16 @@ export async function runFundReturnModel(env: Env, fund: FundRow): Promise<FundR
   return out;
 }
 
-/** Nightly sweep: run the model for funds with status in
- *  (active|harvesting|wound_down), rotated by oldest-modeled-first
- *  using LEFT JOIN against fund_return_models. Bounded at `maxTotal`
- *  funds per tick (default 500) so a single Workers cron invocation
- *  stays within its CPU budget; funds not reached this tick are
- *  picked up next night because their last as_of stays oldest. */
+/** Nightly sweep: run the model for EVERY fund with status in
+ *  (active|harvesting|wound_down). Rotated by oldest-modeled-first
+ *  via LEFT JOIN against fund_return_models, with a same-day filter
+ *  so a single tick never re-processes a fund twice. `maxTotal` is a
+ *  hard safety ceiling (default 5000 — covers the whole platform
+ *  population today); the per-fund model is bounded so the full sweep
+ *  fits within the Workers cron CPU ceiling on paid plans. */
 export async function runNightlyFundReturnSweep(
   env: Env,
-  maxTotal = 500,
+  maxTotal = 5000,
   pageSize = 100,
 ): Promise<{ ran: number; failed: number; pages: number }> {
   const FUND_COLS = `f.id, f.firm_entity_id, f.fund_entity_id, f.fund_name, f.fund_number,

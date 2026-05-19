@@ -123,6 +123,30 @@
       qmr("warnings").textContent = warns.length ? "Warnings: "+warns.join(", ") : "";
 
       var contribs = a.contributors || [];
+      // Top-5 contribution chart: horizontal CSS bars sized as a
+      // percentage of the leader's contribution so the visual remains
+      // readable when share-of-total is tiny.
+      var chart = document.getElementById("ads-attribution-chart");
+      if (contribs.length) {
+        var maxC = Math.max.apply(null, contribs.map(function(c){ return Math.max(0, c.contribution_usd||0); })) || 1;
+        chart.innerHTML = contribs.slice(0,5).map(function(c){
+          var pct = Math.max(0, Math.min(100, Math.round(((c.contribution_usd||0) / maxC) * 100)));
+          var color = (c.event_kind === "bankruptcy") ? "#b33" :
+                      (c.event_kind === "ipo") ? "#2a7" :
+                      (c.event_kind === "acquisition" || c.event_kind === "merger") ? "#27a" : "#888";
+          return '<div style="display:flex;align-items:center;gap:.5rem;margin:.25rem 0;font-size:12px">'
+               + '<div style="flex:0 0 12rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
+               + esc(c.company_name||"?")+' <span class="ads-muted">('+esc(c.event_kind||"")+')</span></div>'
+               + '<div style="flex:1;background:#eee;border-radius:3px;height:14px;position:relative">'
+               +   '<div style="width:'+pct+'%;background:'+color+';height:100%;border-radius:3px"></div>'
+               + '</div>'
+               + '<div class="ads-mono" style="flex:0 0 7rem;text-align:right">'+fmtMoney(c.contribution_usd)+'</div>'
+               + '<div class="ads-mono" style="flex:0 0 3rem;text-align:right">'+Math.round((c.share_pct||0)*100)+'%</div>'
+               + '</div>';
+        }).join("");
+      } else {
+        chart.innerHTML = '<div class="ads-muted" style="font-size:12px">No resolved contributors yet.</div>';
+      }
       document.getElementById("ads-attribution-tbody").innerHTML = (contribs.length ? contribs : []).map(function(c){
         return "<tr><td>"+esc(c.company_name||"")+"</td><td>"+esc(c.event_kind||"")
           +"</td><td>"+fmtMoney(c.contribution_usd)+"</td><td>"+Math.round((c.share_pct||0)*100)+"%</td></tr>";

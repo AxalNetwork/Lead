@@ -329,13 +329,15 @@ than silent capital inflation. Ownership is `check ÷ round_size` when
 both are known, falling back to `check ÷ last_mark_valuation` only when
 the round size is missing.
 
-Nightly sweep is bounded at 500 funds/tick (well within Workers'
-per-cron CPU budget at ~50ms/fund) and rotates by oldest-modeled-first
-via `LEFT JOIN fund_return_models` on `MAX(as_of)`, with a
-same-day filter so a single tick never re-processes a fund twice.
-Funds not reached this tick are picked up next night because their
-last as_of stays oldest. There is no static `id ASC` cursor; the
-rotation IS the cursor.
+Nightly sweep models EVERY eligible fund each night
+(active | harvesting | wound_down). Rotation is oldest-modeled-first
+via `LEFT JOIN fund_return_models` on `MAX(as_of)` so that if the
+ceiling is ever hit, the funds most overdue for a refresh are
+processed first. A same-day filter
+(`m.last_as_of IS NULL OR m.last_as_of < today`) ensures a single
+tick never re-processes a fund it already modeled. The hard safety
+ceiling is 5000 funds/tick — comfortably above the present platform
+population and well within the Workers cron CPU budget at ~50ms/fund.
 
 Per-company proceeds estimator (`services/fundReturns/proceeds.ts`)
 is a pure module: no DB access, accepts pre-fetched exit signals so
