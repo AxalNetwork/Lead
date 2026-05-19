@@ -50,7 +50,7 @@ permalink: /dashboard/verification/
       const rows = body.items.map((it) => {
         const icon = it.status === "confirmed" ? "✓" : it.status === "contradicted" ? "✗" : "?";
         const color = it.status === "confirmed" ? "#1f7a4d" : it.status === "contradicted" ? "#c0392b" : "#888";
-        const ev = it.evidence_url ? '<a href="' + it.evidence_url + '" target="_blank" rel="noopener">evidence</a>' : "";
+        const ev = it.evidence_url && safeHref(it.evidence_url) ? '<a href="' + escapeHtml(it.evidence_url) + '" target="_blank" rel="noopener">evidence</a>' : "";
         const sn = it.evidence_snippet ? '<div style="margin-top:4px;font-size:12px;color:#555">' + escapeHtml(it.evidence_snippet) + '</div>' : "";
         return '<tr><td style="font-size:18px;color:' + color + ';width:30px">' + icon + '</td><td>' +
           '<div style="font-weight:600">' + escapeHtml(it.claim_summary || it.claim_predicate) + '</div>' +
@@ -87,6 +87,8 @@ permalink: /dashboard/verification/
   function escapeHtml(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   }
+  // Reject javascript:/data:/vbscript: URLs etc.; only http(s) allowed.
+  function safeHref(u) { try { const p = new URL(u, location.href); return p.protocol === "https:" || p.protocol === "http:"; } catch { return false; } }
 
   root.innerHTML = "";
   await Promise.all([loadVerifications(), loadReferences()]);

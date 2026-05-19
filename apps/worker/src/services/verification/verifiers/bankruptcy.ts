@@ -23,23 +23,18 @@ export const bankruptcyVerifier: Verifier = {
     const name = (p.person_name ?? "").trim();
     if (!name) return { status: "skipped", confidence: 0, reason: "missing_name" };
 
+    // Authoritative federal-bankruptcy lookup is PACER PCL — tracked
+    // separately as taskRef #20. Until that client lands we always
+    // run the CourtListener bankruptcy-court (RECAP `court_type=B`)
+    // check, which has real (partial) federal coverage, rather than
+    // short-circuiting on PACER cred presence.
     const pacerUser = (env as unknown as { PACER_USER?: string }).PACER_USER;
     const pacerPass = (env as unknown as { PACER_PASS?: string }).PACER_PASS;
-    if (pacerUser && pacerPass) {
-      // Real PCL flow is task #20; this is the authoritative path
-      // when implemented. Until then we declare unverifiable rather
-      // than silently downgrading to a confirmed/clean answer.
-      return {
-        status: "unverifiable",
-        confidence: 0.2,
-        reason: "pacer_client_pending_taskRef_20",
-      };
-    }
+    const pacerNote = pacerUser && pacerPass ? "pacer_pcl_pending_taskRef_20" : "pacer_unconfigured";
 
-    // CourtListener bankruptcy-court fallback via in-house fetcher.
     const token = (env as unknown as { COURTLISTENER_TOKEN?: string }).COURTLISTENER_TOKEN;
     if (!token) {
-      return { status: "unverifiable", confidence: 0.2, reason: "no_bankruptcy_source_configured" };
+      return { status: "unverifiable", confidence: 0.2, reason: `no_bankruptcy_source_configured (${pacerNote}, courtlistener_unconfigured)` };
     }
     const url = `https://www.courtlistener.com/api/rest/v3/search/?type=r&court_type=B&q=${encodeURIComponent(`"${name}"`)}`;
     try {
@@ -60,10 +55,10 @@ export const bankruptcyVerifier: Verifier = {
           confidence: 0.6,
           evidence_url: url,
           sources: [url],
-          evidence_snippet: `CourtListener bankruptcy-court search: 0 hits for "${name}". Coverage is partial (not all districts ingested).`,
+          evidence_snippet: `CourtListener bankruptcy-court search: 0 hits for "${name}". Coverage is partial (not all districts ingested; PACER PCL is the authoritative source — taskRef #20).`,
           derived_predicate: "person.bankruptcy.hits",
           derived_value_text: "0",
-          reason: "courtlistener_b_only",
+          reason: `courtlistener_b_only (${pacerNote})`,
         };
       }
       const first = body.results?.[0];

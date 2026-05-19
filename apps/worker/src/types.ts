@@ -96,6 +96,7 @@ export interface Env {
   COURTLISTENER_TOKEN?: string;
   PACER_USER?: string;
   PACER_PASS?: string;
+  COMPANIES_HOUSE_API_KEY?: string;
   PROXY_AUTH?: string;
   // Task #5: SCRAPER_API_*, BRAVE_*, HUNTER_*, APOLLO_*, ROCKETREACH_*,
   // PEOPLEDATALABS_*, PROXYCURL_*, CRUNCHBASE_*, OPENCORPORATES_*,

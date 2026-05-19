@@ -270,6 +270,32 @@ export async function runNightlyVerificationSweep(env: Env, limit = 200): Promis
     ).bind(limit).all<{ entity_id: string; claims_hash: string | null }>();
     const primary = r.results ?? [];
 
+    // Discovery pool — persons with verifiable claims that have no
+    // person_verification_state row yet. Without this branch, the
+    // sweep would only ever revisit already-known persons and never
+    // pick up newly-ingested ones. Union the three claim sources;
+    // each table is optional (test DBs may lack it).
+    const seenForDiscovery = new Set(primary.map((p) => p.entity_id));
+    const discoveryRoom = Math.max(0, limit - primary.length);
+    if (discoveryRoom > 0) {
+      try {
+        const disc = await env.DB.prepare(
+          `SELECT DISTINCT entity_id FROM (
+             SELECT entity_id FROM career_history
+             UNION SELECT entity_id FROM education_history
+             UNION SELECT entity_id FROM board_seats
+           ) c
+           WHERE entity_id NOT IN (SELECT entity_id FROM person_verification_state)
+           LIMIT ?`,
+        ).bind(discoveryRoom).all<{ entity_id: string }>();
+        for (const row of disc.results ?? []) {
+          if (seenForDiscovery.has(row.entity_id)) continue;
+          primary.push({ entity_id: row.entity_id, claims_hash: null });
+          seenForDiscovery.add(row.entity_id);
+        }
+      } catch { /* claim source tables optional in test DBs */ }
+    }
+
     // Claims-changed pool — recompute the current claims_hash for
     // persons not already in the primary pool and compare against the
     // stored hash. Bounded so the tick stays cheap.

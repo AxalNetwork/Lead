@@ -63,13 +63,19 @@ export const directorshipVerifier: Verifier = {
         if (f?.value_text) companyNumber = f.value_text;
       } catch { /* */ }
     }
-    if (companyNumber) {
+    // Companies House requires an API key sent as HTTP Basic auth
+    // (key as username, empty password). Skip cleanly if unset.
+    const chKey = (env as unknown as { COMPANIES_HOUSE_API_KEY?: string }).COMPANIES_HOUSE_API_KEY;
+    if (companyNumber && chKey) {
       const url = `https://api.company-information.service.gov.uk/company/${encodeURIComponent(companyNumber)}/officers`;
       try {
         const res = await fetchPage(env, url, {
           liveOnly: true,
           timeoutMs: 15_000,
-          headers: { Accept: "application/json" },
+          headers: {
+            Accept: "application/json",
+            Authorization: `Basic ${btoa(`${chKey}:`)}`,
+          },
         });
         if (res.ok && res.html) {
           let body: ChOfficers; try { body = JSON.parse(res.html) as ChOfficers; } catch { body = {}; }
