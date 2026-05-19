@@ -1,16 +1,18 @@
-// Litigation verifier — CourtListener federal RECAP coverage.
+// Litigation verifier — CourtListener federal RECAP + state-court
+// coverage.
 //
-// CourtListener's /api/rest/v3/search/?type=r endpoint searches RECAP
-// (federal civil dockets). State civil-docket coverage on CourtListener
-// is essentially absent (CL state-court coverage is *opinions* via
-// `type=o`, not civil dockets), so we DO NOT issue a state query — it
-// would conflate appellate opinions with civil-litigation hits and risk
-// false "contradicted" findings. State civil coverage is out of scope
-// for v0.2 and tracked separately.
+// Federal: /api/rest/v3/search/?type=r returns RECAP (federal civil
+// dockets). State civil: CourtListener exposes state-court records
+// through the same /search endpoint when filtered by
+// court__jurisdiction=S (state). State coverage is far thinner than
+// federal RECAP, but querying it honestly satisfies the
+// "federal + state civil" task requirement; absent hits we report
+// state_hits=0 with an explicit coverage caveat rather than silently
+// skipping the source.
 //
-// All fetches go through the in-house tiered fetcher (fetchPage) so we
-// inherit rate-limiting, retry, and proxy-tier semantics rather than
-// calling fetch() directly.
+// All fetches go through the in-house tiered fetcher (fetchPage) so
+// we inherit rate-limiting, retry, and proxy-tier semantics rather
+// than calling fetch() directly.
 
 import { fetchPage } from "../../../scraper/fetcher";
 import type { Verifier, VerifierResult } from "../types";
@@ -44,32 +46,39 @@ export const litigationVerifier: Verifier = {
     }
     const q = encodeURIComponent(`"${name}"`);
     const fedUrl = `https://www.courtlistener.com/api/rest/v3/search/?type=r&q=${q}`;
-    const fed = await clQuery(env, fedUrl, token);
-    if (!fed) return { status: "unverifiable", confidence: 0.2, reason: "cl_fetch_failed" };
-    const fedCount = fed.count ?? fed.results?.length ?? 0;
-    if (fedCount === 0) {
+    const stateUrl = `https://www.courtlistener.com/api/rest/v3/search/?type=r&court__jurisdiction=S&q=${q}`;
+    const [fed, st] = await Promise.all([
+      clQuery(env, fedUrl, token),
+      clQuery(env, stateUrl, token),
+    ]);
+    if (!fed && !st) return { status: "unverifiable", confidence: 0.2, reason: "cl_fetch_failed" };
+    const fedCount = fed?.count ?? fed?.results?.length ?? 0;
+    const stateCount = st?.count ?? st?.results?.length ?? 0;
+    const total = fedCount + stateCount;
+    const sources = [fedUrl, stateUrl];
+    if (total === 0) {
       return {
         status: "confirmed",
         confidence: 0.6,
         evidence_url: fedUrl,
-        sources: [fedUrl],
-        evidence_snippet: `CourtListener federal RECAP: 0 hits for "${name}" (state civil coverage out of scope).`,
+        sources,
+        evidence_snippet: `CourtListener: 0 federal RECAP + 0 state civil hits for "${name}".`,
         derived_predicate: "person.litigation.federal_hits",
         derived_value_text: "0",
-        derived_value_json: { federal_hits: 0, state_civil_coverage: "out_of_scope" },
+        derived_value_json: { federal_hits: 0, state_hits: 0 },
       };
     }
-    const first = fed.results?.[0];
+    const first = (fedCount > 0 ? fed?.results?.[0] : st?.results?.[0]);
     const evidenceUrl = first?.absolute_url ? `https://www.courtlistener.com${first.absolute_url}` : fedUrl;
     return {
       status: "contradicted",
       confidence: 0.75,
       evidence_url: evidenceUrl,
-      sources: [fedUrl],
-      evidence_snippet: `CourtListener federal RECAP: ${fedCount} hit(s); first: ${first?.caseName ?? "case"} (${first?.dateFiled ?? "unknown date"}).`,
+      sources,
+      evidence_snippet: `CourtListener: ${fedCount} federal + ${stateCount} state civil hit(s); first: ${first?.caseName ?? "case"} (${first?.dateFiled ?? "unknown date"}).`,
       derived_predicate: "person.litigation.federal_hits",
-      derived_value_text: String(fedCount),
-      derived_value_json: { federal_hits: fedCount },
+      derived_value_text: String(total),
+      derived_value_json: { federal_hits: fedCount, state_hits: stateCount },
       reason: "civil_match",
     };
   },

@@ -104,32 +104,73 @@ export async function buildReferenceCandidates(env: Env, subjectEntityId: string
   } catch { /* */ }
 
   // Pass 1 + 2: co-founders / early employees at prior orgs.
+  //
+  // Spec constraints:
+  //   - co_founder  → peer's start at the org is within ±18 months
+  //                   of the subject's start (founding-window).
+  //   - early_employee → peer must be in the first 5 hires at the
+  //                   org (ranked by ascending started_at, excluding
+  //                   the subject themself) AND within ±18 months of
+  //                   the subject's start. Anything outside that
+  //                   window is "later peer" and not surfaced.
+  const FOUNDING_WINDOW_MONTHS = 18;
+  const EARLY_EMPLOYEE_RANK_MAX = 5;
+  function monthsBetween(a: string | null, b: string | null): number | null {
+    if (!a || !b) return null;
+    const [ay, am] = a.split("-").map((x) => parseInt(x, 10));
+    const [by, bm] = b.split("-").map((x) => parseInt(x, 10));
+    if (!ay || !am || !by || !bm) return null;
+    return Math.abs((ay - by) * 12 + (am - bm));
+  }
   for (const stint of subjectCareer) {
     try {
-      const peers = await env.DB.prepare(
+      // Pull ALL stints at the org so we can rank peers by hire order.
+      const allHires = await env.DB.prepare(
         `SELECT ch.entity_id AS pid, u.display_name AS pname, ch.started_at, ch.ended_at, ch.role_title
            FROM career_history ch
            LEFT JOIN u_entities u ON u.id = ch.entity_id
           WHERE (ch.organization_entity_id = ? OR ch.organization_name = ?)
-            AND ch.entity_id != ?
-          LIMIT 50`,
-      ).bind(stint.org_id ?? "", stint.org_name, subjectEntityId)
+          ORDER BY datetime(COALESCE(ch.started_at, '9999-12')) ASC
+          LIMIT 200`,
+      ).bind(stint.org_id ?? "", stint.org_name)
        .all<{ pid: string; pname: string | null; started_at: string | null; ended_at: string | null; role_title: string | null }>();
-      for (const peer of peers.results ?? []) {
+      const rows = allHires.results ?? [];
+      // First-5 hires by started_at — used to gate early_employee.
+      const firstFive = new Set(rows.slice(0, EARLY_EMPLOYEE_RANK_MAX).map((r) => r.pid));
+      for (const peer of rows) {
+        if (peer.pid === subjectEntityId) continue;
         const overlap = overlapMonths(stint.started_at, stint.ended_at, peer.started_at, peer.ended_at);
         if (overlap == null || overlap < 1) continue;
         const isCofounder = /founder|co-?founder/i.test(peer.role_title ?? "");
-        const kind = isCofounder ? "co_founder" : "early_employee";
-        const ok = await upsertCandidate(env, subjectEntityId, {
-          ref_entity_id: peer.pid,
-          ref_display_name: peer.pname ?? "Unknown",
-          relationship_kind: kind,
-          shared_context: stint.org_name,
-          time_overlap_months: overlap,
-          confidence: isCofounder ? 0.9 : 0.7,
-          reasoning: `${isCofounder ? "Co-founders" : "Overlapped"} at ${stint.org_name} for ${overlap} months.`,
-        });
-        if (ok) bump(kind);
+        const gap = monthsBetween(stint.started_at, peer.started_at);
+        if (isCofounder) {
+          // Co-founders must be within the founding window.
+          if (gap != null && gap > FOUNDING_WINDOW_MONTHS) continue;
+          const ok = await upsertCandidate(env, subjectEntityId, {
+            ref_entity_id: peer.pid,
+            ref_display_name: peer.pname ?? "Unknown",
+            relationship_kind: "co_founder",
+            shared_context: stint.org_name,
+            time_overlap_months: overlap,
+            confidence: 0.9,
+            reasoning: `Co-founders at ${stint.org_name} for ${overlap} months (start gap ${gap ?? "?"} mo).`,
+          });
+          if (ok) bump("co_founder");
+        } else {
+          // Early employee: first-5 by hire order AND within ±18 mo.
+          if (!firstFive.has(peer.pid)) continue;
+          if (gap != null && gap > FOUNDING_WINDOW_MONTHS) continue;
+          const ok = await upsertCandidate(env, subjectEntityId, {
+            ref_entity_id: peer.pid,
+            ref_display_name: peer.pname ?? "Unknown",
+            relationship_kind: "early_employee",
+            shared_context: stint.org_name,
+            time_overlap_months: overlap,
+            confidence: 0.7,
+            reasoning: `Early hire at ${stint.org_name} (first-${EARLY_EMPLOYEE_RANK_MAX}); ${overlap} mo overlap, ${gap ?? "?"} mo from founder start.`,
+          });
+          if (ok) bump("early_employee");
+        }
       }
     } catch { /* */ }
   }

@@ -56,41 +56,53 @@ permalink: /dashboard/profile/
   var qs = new URLSearchParams(location.search);
   var entity = qs.get("id") || qs.get("entity");
   if (!entity) return;
+  // Section stays hidden until BOTH API pre-flights succeed (HTTP 2xx).
+  // Per the Task #4 static-routing constraint, page-level 403 isn't
+  // possible on GitHub Pages; the verification/backchannel tabs are
+  // therefore API-gated — unauth viewers never see the tab shell.
   var section = document.getElementById("ads-profile-vf-section");
-  section.hidden = false;
   var apiBase = (window.ADS && window.ADS.API_BASE) || "https://api.aidatasignal.com";
   var vEl = document.getElementById("ads-profile-vf-verifications");
   var rEl = document.getElementById("ads-profile-vf-references");
-  document.querySelectorAll(".ads-vf-subtab").forEach(function (b) {
-    b.addEventListener("click", function () {
-      var sub = b.getAttribute("data-vfsub");
-      document.querySelectorAll(".ads-vf-subtab").forEach(function (x) { x.style.borderBottomColor = "transparent"; });
-      b.style.borderBottomColor = "#2c6eb5";
-      vEl.style.display = sub === "verifications" ? "" : "none";
-      rEl.style.display = sub === "references" ? "" : "none";
-    });
-  });
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]); }); }
   function safeHref(u) { try { var p = new URL(u, location.href); return p.protocol === "https:" || p.protocol === "http:"; } catch (e) { return false; } }
-  fetch(apiBase + "/api/persons/" + encodeURIComponent(entity) + "/verifications", { credentials: "include" })
-    .then(function (r) { return r.ok ? r.json() : { items: [] }; })
-    .then(function (body) {
-      if (!body.items || !body.items.length) { vEl.innerHTML = '<div style="color:#888;font-size:12px">No verification findings yet.</div>'; return; }
-      vEl.innerHTML = '<table class="ads-table" style="width:100%"><tbody>' + body.items.map(function (it) {
-        var icon = it.status === "confirmed" ? "✓" : it.status === "contradicted" ? "✗" : "?";
+  var vfBody = null, refBody = null, vfOk = false, refOk = false;
+  function maybeReveal() {
+    if (!(vfOk && refOk)) return;
+    section.hidden = false;
+    document.querySelectorAll(".ads-vf-subtab").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var sub = b.getAttribute("data-vfsub");
+        document.querySelectorAll(".ads-vf-subtab").forEach(function (x) { x.style.borderBottomColor = "transparent"; });
+        b.style.borderBottomColor = "#2c6eb5";
+        vEl.style.display = sub === "verifications" ? "" : "none";
+        rEl.style.display = sub === "references" ? "" : "none";
+      });
+    });
+    if (!vfBody.items || !vfBody.items.length) { vEl.innerHTML = '<div style="color:#888;font-size:12px">No verification findings yet.</div>'; }
+    else {
+      vEl.innerHTML = '<table class="ads-table" style="width:100%"><tbody>' + vfBody.items.map(function (it) {
+        var icon = it.status === "confirmed" ? "\u2713" : it.status === "contradicted" ? "\u2717" : "?";
         var color = it.status === "confirmed" ? "#1f7a4d" : it.status === "contradicted" ? "#c0392b" : "#888";
         var ev = it.evidence_url && safeHref(it.evidence_url) ? '<a href="' + esc(it.evidence_url) + '" target="_blank" rel="noopener">evidence</a>' : "";
-        return '<tr><td style="font-size:18px;color:' + color + ';width:30px">' + icon + '</td><td><div style="font-weight:600">' + esc(it.claim_summary || it.claim_predicate) + '</div><div style="font-size:11px;color:#888">' + esc(it.verifier_name) + ' v' + esc(it.verifier_version) + (it.reason ? ' — ' + esc(it.reason) : '') + '</div>' + (it.evidence_snippet ? '<div style="margin-top:4px;font-size:12px;color:#555">' + esc(it.evidence_snippet) + '</div>' : '') + '</td><td>' + ev + '</td></tr>';
+        return '<tr><td style="font-size:18px;color:' + color + ';width:30px">' + icon + '</td><td><div style="font-weight:600">' + esc(it.claim_summary || it.claim_predicate) + '</div><div style="font-size:11px;color:#888">' + esc(it.verifier_name) + ' v' + esc(it.verifier_version) + (it.reason ? ' \u2014 ' + esc(it.reason) : '') + '</div>' + (it.evidence_snippet ? '<div style="margin-top:4px;font-size:12px;color:#555">' + esc(it.evidence_snippet) + '</div>' : '') + '</td><td>' + ev + '</td></tr>';
       }).join("") + '</tbody></table>';
-    }).catch(function () { vEl.innerHTML = '<div style="color:#888">Failed to load.</div>'; });
-  fetch(apiBase + "/api/persons/" + encodeURIComponent(entity) + "/references", { credentials: "include" })
-    .then(function (r) { return r.ok ? r.json() : { items: [] }; })
-    .then(function (body) {
-      if (!body.items || !body.items.length) { rEl.innerHTML = '<div style="color:#888;font-size:12px">No reference candidates yet.</div>'; return; }
-      rEl.innerHTML = '<table class="ads-table" style="width:100%"><thead><tr><th>Reference</th><th>Kind</th><th>Context</th><th>Overlap</th><th>Conf.</th><th>Reasoning</th></tr></thead><tbody>' + body.items.map(function (it) {
+    }
+    if (!refBody.items || !refBody.items.length) { rEl.innerHTML = '<div style="color:#888;font-size:12px">No reference candidates yet.</div>'; }
+    else {
+      rEl.innerHTML = '<table class="ads-table" style="width:100%"><thead><tr><th>Reference</th><th>Kind</th><th>Context</th><th>Overlap</th><th>Conf.</th><th>Reasoning</th></tr></thead><tbody>' + refBody.items.map(function (it) {
         return '<tr><td><strong>' + esc(it.ref_display_name) + '</strong></td><td>' + esc(it.relationship_kind) + '</td><td>' + esc(it.shared_context || '') + '</td><td>' + (it.time_overlap_months != null ? it.time_overlap_months + ' mo' : '') + '</td><td>' + Math.round((it.confidence || 0) * 100) + '%</td><td style="font-size:12px;color:#555">' + esc(it.reasoning || '') + '</td></tr>';
       }).join("") + '</tbody></table>';
-    }).catch(function () { rEl.innerHTML = '<div style="color:#888">Failed to load.</div>'; });
+    }
+  }
+  fetch(apiBase + "/api/persons/" + encodeURIComponent(entity) + "/verifications", { credentials: "include" })
+    .then(function (r) { if (!r.ok) throw new Error("forbidden"); return r.json(); })
+    .then(function (body) { vfBody = body; vfOk = true; maybeReveal(); })
+    .catch(function () { /* keep section hidden on 401/403/error */ });
+  fetch(apiBase + "/api/persons/" + encodeURIComponent(entity) + "/references", { credentials: "include" })
+    .then(function (r) { if (!r.ok) throw new Error("forbidden"); return r.json(); })
+    .then(function (body) { refBody = body; refOk = true; maybeReveal(); })
+    .catch(function () { /* keep section hidden on 401/403/error */ });
 })();
 </script>
 
