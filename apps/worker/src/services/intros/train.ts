@@ -8,6 +8,25 @@
 
 import type { Env } from "../../types";
 import type { IntroFeatures } from "./features";
+
+/** Pure row → sample mapper used by loadTrainingSamples. Extracted so
+ *  the "every label-bearing outcome row feeds training" contract can
+ *  be unit-tested without a D1 stub. */
+export function rowsToTrainingSamples(
+  rows: Array<{ features_json: string | null; status: string | null }>,
+): TrainingSample[] {
+  const out: TrainingSample[] = [];
+  for (const row of rows) {
+    if (!row || !row.status || !row.features_json) continue;
+    const label = outcomeToLabel(row.status);
+    if (label == null) continue;
+    let f: IntroFeatures | null = null;
+    try { f = JSON.parse(row.features_json) as IntroFeatures; } catch { f = null; }
+    if (!f) continue;
+    out.push({ features: f, label });
+  }
+  return out;
+}
 import {
   DEFAULT_WEIGHTS,
   MIN_TRAIN_SAMPLES,
@@ -46,59 +65,32 @@ export async function loadCurrentWeights(env: Env): Promise<{ weights: ModelWeig
   }
 }
 
-/** Materialise training samples from logged (path, outcome) pairs. */
+/** Materialise training samples from EVERY label-bearing intro_outcomes
+ *  row. A single path with multiple outcomes (e.g. requested → accepted
+ *  → deal_closed) contributes one training sample per label-bearing
+ *  status. `outcomeToLabel` drops the in-flight statuses (requested,
+ *  made) upstream so they don't unbalance training; the remaining
+ *  rows (accepted / meeting_held / deal_closed / declined / ghosted)
+ *  all flow into the fit. Per the Task #4 spec, every outcome row
+ *  must reach the learning loop. */
 export async function loadTrainingSamples(env: Env, cap: number = TRAIN_CAP): Promise<TrainingSample[]> {
-  // Join intro_paths to its LATEST outcome (max created_at). Each path
-  // contributes at most one sample; later outcomes (e.g. accepted →
-  // deal_closed) overwrite earlier signals (requested) because we
-  // prefer the most informative state.
   const sql = `
-    SELECT p.features_json, o.status
-      FROM intro_paths p
-      JOIN (
-        SELECT path_id, status, created_at,
-               ROW_NUMBER() OVER (PARTITION BY path_id ORDER BY created_at DESC) AS rn
-          FROM intro_outcomes
-      ) o ON o.path_id = p.id AND o.rn = 1
+    SELECT p.features_json, o.status, o.created_at AS outcome_at
+      FROM intro_outcomes o
+      JOIN intro_paths    p ON p.id = o.path_id
      WHERE p.features_json IS NOT NULL
-     ORDER BY p.created_at DESC
+     ORDER BY o.created_at DESC
      LIMIT ?`;
   let rows: Array<{ features_json: string; status: string }> = [];
   try {
-    const r = await env.DB.prepare(sql).bind(cap).all<{ features_json: string; status: string }>();
+    const r = await env.DB.prepare(sql).bind(cap).all<{
+      features_json: string; status: string; outcome_at: string;
+    }>();
     rows = r.results ?? [];
   } catch {
-    // ROW_NUMBER OVER may not be available on every D1 snapshot. Fall
-    // back to a simpler per-path subquery; functionally identical for
-    // the labels the model can learn from.
-    try {
-      const r = await env.DB.prepare(
-        `SELECT p.features_json,
-                (SELECT status FROM intro_outcomes
-                  WHERE path_id = p.id
-                  ORDER BY created_at DESC LIMIT 1) AS status
-           FROM intro_paths p
-          WHERE p.features_json IS NOT NULL
-          ORDER BY p.created_at DESC
-          LIMIT ?`,
-      ).bind(cap).all<{ features_json: string; status: string }>();
-      rows = r.results ?? [];
-    } catch {
-      rows = [];
-    }
+    rows = [];
   }
-
-  const out: TrainingSample[] = [];
-  for (const row of rows) {
-    if (!row.status) continue;
-    const label = outcomeToLabel(row.status);
-    if (label == null) continue;
-    let f: IntroFeatures | null = null;
-    try { f = JSON.parse(row.features_json) as IntroFeatures; } catch { f = null; }
-    if (!f) continue;
-    out.push({ features: f, label });
-  }
-  return out;
+  return rowsToTrainingSamples(rows);
 }
 
 /** Persist a newly fit run and flip the prior is_current=1 row to 0. */

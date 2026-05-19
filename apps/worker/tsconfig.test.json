@@ -200,6 +200,7 @@
     "src/services/intros/features.ts",
     "src/services/intros/model.ts",
     "src/services/intros/opener.ts",
-    "src/services/intros/authz.ts"
+    "src/services/intros/authz.ts",
+    "src/services/intros/train.ts"
   ]
 }
