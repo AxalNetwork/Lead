@@ -393,6 +393,23 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         console.error("nightly fund refresh failed", (e as Error).message);
       }
 
+      // Task #2 (Fund-Return Modeling): nightly DPI/TVPI/MOIC inference
+      // from public exits + Form D + LP disclosures. Bounded at 200
+      // funds/tick. Piggybacks the consolidated nightly slot (Free
+      // plan caps crons at 5/5). Calibration loop is recomputed after
+      // the sweep so the next run picks up any newly disclosed LP
+      // actuals.
+      try {
+        const { runNightlyFundReturnSweep } = await import("./services/fundReturns/model");
+        const fr = await runNightlyFundReturnSweep(env, 200);
+        console.log("nightly fund return sweep done", JSON.stringify(fr));
+        const { rebuildCalibration } = await import("./services/fundReturns/calibration");
+        const cal = await rebuildCalibration(env);
+        console.log("nightly fund return calibration done", JSON.stringify(cal));
+      } catch (e) {
+        console.error("nightly fund return sweep failed", (e as Error).message);
+      }
+
       // Task #4 (Angel & Syndicate Network Mapper): nightly per-angel
       // ledger refresh + syndicate analytics rebuild. Piggybacks on this
       // consolidated nightly slot — Free plan caps crons at 5.

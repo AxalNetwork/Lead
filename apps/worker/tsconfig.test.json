@@ -185,6 +185,8 @@
     "src/services/termSheets/preferredSeriesParser.ts",
     "src/services/termSheets/benchmarks.ts",
     "src/services/termSheets/aggressiveness.ts",
-    "src/services/termSheets/leakHarvester.ts"
+    "src/services/termSheets/leakHarvester.ts",
+    "src/services/fundReturns/types.ts",
+    "src/services/fundReturns/proceeds.ts"
   ]
 }

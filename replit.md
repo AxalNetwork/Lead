@@ -300,5 +300,63 @@ panel hydrates from `/dashboard/companies/detail/?id=<entity_id>`
 (query string, not path segment) and the term-aggressiveness widget
 from `/dashboard/investors/detail/?id=<entity_id>`.
 
+### Task #2 — Fund-Return Modeling: migration 366 + source_kind="inferred" for modeled fund facts (ACCEPTED)
+Spec slotted the schema at migration 352, but slots 350–365 are all
+taken (per the Task #13/#14/#18 contract-update precedent above).
+The model schema lands at `apps/worker/migrations/366_fund_returns.sql`
+(two tables: `fund_return_models` append-only per-run, and
+`fund_return_calibration` per-(vintage, strategy) bias bucket).
+Future migrations should number from 367.
+
+Per the Task #1 canonical write contract, every modeled fund-level
+fact (`fund.dpi`, `fund.tvpi`, `fund.moic`, `fund.net_irr_pct`,
+`fund.return_confidence`) flows through `insertFact` with
+`source_kind="inferred"` — the existing enum value that best matches
+model output. There is no dedicated `"model"` source_kind; adding
+one would force a registry change in the rich PERSON profile path.
+The `source` field is the literal string `"fund_return_model"` and
+`evidence_url` is null (model output, not a scraped page).
+
+Per-company proceeds estimator (`services/fundReturns/proceeds.ts`)
+is a pure module: no DB access, accepts pre-fetched exit signals so
+it can be unit-tested in isolation. Exit-event classifier in
+`services/fundReturns/model.ts::fetchExitSignal` reads
+`deal_events.event_type IN ('ipo','acquisition','merger','bankruptcy')`
+as the primary signal; falls back to the latest `valuation_marks` row
+for unexited residual. `valuation_marks` is wrapped in try/catch so
+legacy test DBs without the Task #9 table degrade gracefully — the
+position falls back to held-at-cost rather than throwing.
+
+Confidence band per spec: ≥70% positions resolved → high, 40–70% →
+medium, <40% → low. Only `ipo`/`acquisition`/`merger`/`bankruptcy`
+count as resolved; `unexited` and unknown do not. Fee drag is
+2%/yr × years since `first_close_date` × `announced_raised_usd`,
+capped at 10 years. Net IRR is the simplified annualized return
+((TVPI ^ (1/years)) − 1); null when fund duration < 6 months.
+
+Calibration loop (`rebuildCalibration`) is a no-op until LP
+disclosures with fund-level tvpi/dpi actuals exist in
+`lp_fund_commitments` (Task #95 dependency). When sample_size < 3
+in a (vintage, strategy) bucket, `lookupBiasCorrection` returns
+`1.0` rather than applying a noisy correction. Bias is bounded to
+[0.5, 1.5] so a small actuals sample cannot swing the modeled TVPI
+more than ±50%.
+
+Nightly sweep (`runNightlyFundReturnSweep`) piggybacks the
+consolidated `15 3 * * *` slot (Free plan caps crons at 5/5 — same
+constraint as Task #4 angel sweep, Task #14 verification sweep,
+Task #18 term benchmarks). Bounded at 200 funds/tick. Calibration
+rebuild runs in the same tick AFTER the model sweep so the next
+night's run sees the freshest deltas.
+
+Per the Task #4 static-routing constraint, the fund-returns UI
+lives at `/dashboard/fund-returns/?id=<fund_id>` (query string, not
+path segment). API endpoints are
+`GET /api/funds/:id/modeled-returns` (latest + history) and
+`GET /api/funds/:id/modeled-returns/attribution` (top-5
+contributors). The new `fundReturnsRoute` is mounted BEFORE the
+existing `fundsRoute` in `src/index.ts` so the `/:id` wildcard
+on the parent route doesn't shadow the new sub-paths.
+
 ## User preferences
 - (none recorded yet)
