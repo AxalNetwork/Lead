@@ -5,10 +5,15 @@
 // markdowns), the confidence-weighted blended monthly line, and an
 // "Implied valuation" panel pulled from the most relevant comp panel.
 //
-// Pure DOM + SVG; no chart library.
+// All rendering uses safe DOM construction (createElement +
+// textContent + setAttribute) so attacker-influenced strings from
+// scraped/external sources (holder_name_raw, company_name, ticker,
+// panel_name, notes, source_url) cannot inject markup or
+// javascript: URLs.
 
 (function () {
   var API = (window.ADS_API_BASE || "https://api.aidatasignal.com").replace(/\/+$/, "");
+  var SVG_NS = "http://www.w3.org/2000/svg";
 
   function fmtUsd(v) {
     if (v == null || !isFinite(v)) return "—";
@@ -21,6 +26,47 @@
   function fmtPct(v) {
     if (v == null || !isFinite(v)) return "—";
     return (v * 100).toFixed(1) + "%";
+  }
+
+  // URL allow-list: only http / https / mailto. Anything else (notably
+  // javascript:, data:) is rejected and we render no link.
+  function safeHref(url) {
+    if (typeof url !== "string") return null;
+    var trimmed = url.trim();
+    if (!trimmed) return null;
+    if (/^(https?:|mailto:)/i.test(trimmed)) return trimmed;
+    return null;
+  }
+
+  function el(tag, attrs, text) {
+    var node = document.createElement(tag);
+    if (attrs) {
+      for (var k in attrs) {
+        if (!Object.prototype.hasOwnProperty.call(attrs, k)) continue;
+        if (attrs[k] == null) continue;
+        node.setAttribute(k, String(attrs[k]));
+      }
+    }
+    if (text != null) node.textContent = String(text);
+    return node;
+  }
+  function svgEl(tag, attrs, text) {
+    var node = document.createElementNS(SVG_NS, tag);
+    if (attrs) {
+      for (var k in attrs) {
+        if (!Object.prototype.hasOwnProperty.call(attrs, k)) continue;
+        if (attrs[k] == null) continue;
+        node.setAttribute(k, String(attrs[k]));
+      }
+    }
+    if (text != null) node.textContent = String(text);
+    return node;
+  }
+  function evidenceLink(url, label) {
+    var href = safeHref(url);
+    if (!href) return document.createTextNode("—");
+    var a = el("a", { href: href, target: "_blank", rel: "noopener noreferrer" }, label || "evidence");
+    return a;
   }
 
   var COLORS = {
@@ -38,11 +84,13 @@
     markdown: "Markdown",
   };
 
-  function renderSvg(marks, blended) {
+  function buildSvg(marks, blended) {
     var W = 720, H = 280, PAD = { l: 60, r: 16, t: 16, b: 36 };
     var iw = W - PAD.l - PAD.r, ih = H - PAD.t - PAD.b;
     var withVal = marks.filter(function (m) { return m.implied_valuation_usd != null; });
-    if (!withVal.length) return '<div class="ads-muted" style="font-size:12px">No valuation marks recorded yet.</div>';
+    if (!withVal.length) {
+      return el("div", { "class": "ads-muted", style: "font-size:12px" }, "No valuation marks recorded yet.");
+    }
     var vals = withVal.map(function (m) { return m.implied_valuation_usd; });
     blended.forEach(function (b) { vals.push(b.blended_valuation_usd); });
     var vmin = Math.min.apply(null, vals), vmax = Math.max.apply(null, vals);
@@ -52,112 +100,180 @@
     if (dmin === dmax) { dmax = dmin + 86400000; }
     function x(d) { return PAD.l + (d - dmin) / (dmax - dmin) * iw; }
     function y(v) { return PAD.t + ih - (v - vmin) / (vmax - vmin) * ih; }
-    var parts = [];
-    parts.push('<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-width:' + W + 'px;height:auto;background:#fafafa;border:1px solid #e5e7eb;border-radius:6px">');
-    // Y-axis ticks (5 levels)
+
+    var svg = svgEl("svg", {
+      viewBox: "0 0 " + W + " " + H,
+      style: "width:100%;max-width:" + W + "px;height:auto;background:#fafafa;border:1px solid #e5e7eb;border-radius:6px",
+    });
     for (var i = 0; i <= 4; i++) {
       var yt = PAD.t + (ih * i / 4);
       var vt = vmax - (vmax - vmin) * (i / 4);
-      parts.push('<line x1="' + PAD.l + '" y1="' + yt + '" x2="' + (W - PAD.r) + '" y2="' + yt + '" stroke="#e5e7eb" stroke-width="1"/>');
-      parts.push('<text x="' + (PAD.l - 4) + '" y="' + (yt + 3) + '" text-anchor="end" font-size="10" fill="#6b7280">' + fmtUsd(vt) + '</text>');
+      svg.appendChild(svgEl("line", { x1: PAD.l, y1: yt, x2: W - PAD.r, y2: yt, stroke: "#e5e7eb", "stroke-width": 1 }));
+      svg.appendChild(svgEl("text", { x: PAD.l - 4, y: yt + 3, "text-anchor": "end", "font-size": 10, fill: "#6b7280" }, fmtUsd(vt)));
     }
-    // X-axis date labels (4 across)
     for (var k = 0; k <= 3; k++) {
       var xt = PAD.l + (iw * k / 3);
       var dt = new Date(dmin + (dmax - dmin) * (k / 3));
       var lbl = dt.getUTCFullYear() + "-" + String(dt.getUTCMonth() + 1).padStart(2, "0");
-      parts.push('<text x="' + xt + '" y="' + (H - 14) + '" text-anchor="middle" font-size="10" fill="#6b7280">' + lbl + '</text>');
+      svg.appendChild(svgEl("text", { x: xt, y: H - 14, "text-anchor": "middle", "font-size": 10, fill: "#6b7280" }, lbl));
     }
-    // Blended line
     if (blended.length > 1) {
-      var path = blended.map(function (b, idx) {
+      var d = blended.map(function (b, idx) {
         var ts = Date.parse(b.month + "-15");
         return (idx === 0 ? "M" : "L") + x(ts) + "," + y(b.blended_valuation_usd);
       }).join(" ");
-      parts.push('<path d="' + path + '" fill="none" stroke="#111827" stroke-width="2" stroke-dasharray="4,2" opacity="0.6"/>');
+      svg.appendChild(svgEl("path", { d: d, fill: "none", stroke: "#111827", "stroke-width": 2, "stroke-dasharray": "4,2", opacity: 0.6 }));
     }
-    // Marks
     withVal.forEach(function (m) {
       var cx = x(Date.parse(m.as_of)), cy = y(m.implied_valuation_usd);
       var col = COLORS[m.source_kind] || "#6b7280";
-      parts.push('<circle cx="' + cx + '" cy="' + cy + '" r="' + (3 + m.confidence * 4) + '" fill="' + col + '" fill-opacity="0.75" stroke="' + col + '" stroke-width="1"><title>' +
-        (LABELS[m.source_kind] || m.source_kind) + " · " + m.as_of + " · " + fmtUsd(m.implied_valuation_usd) +
-        (m.notes ? " · " + m.notes.replace(/[<>&]/g, "") : "") + '</title></circle>');
+      var c = svgEl("circle", {
+        cx: cx, cy: cy, r: 3 + m.confidence * 4,
+        fill: col, "fill-opacity": 0.75, stroke: col, "stroke-width": 1,
+      });
+      var title = (LABELS[m.source_kind] || m.source_kind) + " · " + m.as_of + " · " + fmtUsd(m.implied_valuation_usd);
+      if (m.notes) title += " · " + m.notes;
+      c.appendChild(svgEl("title", null, title));
+      svg.appendChild(c);
     });
-    parts.push('</svg>');
-    // Legend
-    var legend = ['<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:11px">'];
-    Object.keys(LABELS).forEach(function (k) {
-      legend.push('<span><span style="display:inline-block;width:8px;height:8px;background:' + COLORS[k] + ';border-radius:50%;margin-right:4px"></span>' + LABELS[k] + '</span>');
+
+    var wrap = el("div");
+    wrap.appendChild(svg);
+    var legend = el("div", { style: "display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:11px" });
+    Object.keys(LABELS).forEach(function (key) {
+      var span = el("span");
+      span.appendChild(el("span", {
+        style: "display:inline-block;width:8px;height:8px;background:" + COLORS[key] + ";border-radius:50%;margin-right:4px",
+      }));
+      span.appendChild(document.createTextNode(LABELS[key]));
+      legend.appendChild(span);
     });
-    legend.push('<span style="color:#6b7280">— blended (confidence-weighted)</span>');
-    legend.push('</div>');
-    return parts.join("") + legend.join("");
+    legend.appendChild(el("span", { style: "color:#6b7280" }, "— blended (confidence-weighted)"));
+    wrap.appendChild(legend);
+    return wrap;
   }
 
-  function renderMarksTable(marks) {
-    if (!marks.length) return "";
-    var rows = marks.slice().reverse().map(function (m) {
-      var pill = '<span style="background:' + (COLORS[m.source_kind] || "#6b7280") + ';color:#fff;border-radius:3px;padding:1px 6px;font-size:10px">' + (LABELS[m.source_kind] || m.source_kind) + '</span>';
-      var ev = m.source_url ? '<a href="' + m.source_url + '" target="_blank" rel="noopener">evidence</a>' : "—";
-      return '<tr><td>' + m.as_of + '</td><td>' + pill + '</td><td style="text-align:right">' + fmtUsd(m.implied_valuation_usd) + '</td><td style="text-align:right">' + (m.confidence * 100).toFixed(0) + '%</td><td>' + (m.mark_kind || "") + '</td><td>' + (m.holder_name_raw || "") + '</td><td>' + ev + '</td></tr>';
-    }).join("");
-    return '<table class="ads-table" style="width:100%;font-size:12px;margin-top:8px"><thead><tr><th>As-of</th><th>Source</th><th style="text-align:right">Valuation</th><th style="text-align:right">Conf.</th><th>Kind</th><th>Holder</th><th>Evidence</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  function buildMarksTable(marks) {
+    if (!marks.length) return document.createDocumentFragment();
+    var table = el("table", { "class": "ads-table", style: "width:100%;font-size:12px;margin-top:8px" });
+    var thead = el("thead");
+    var headRow = el("tr");
+    ["As-of", "Source", "Valuation", "Conf.", "Kind", "Holder", "Evidence"].forEach(function (h, idx) {
+      headRow.appendChild(el("th", idx >= 2 && idx <= 3 ? { style: "text-align:right" } : null, h));
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+    var tbody = el("tbody");
+    marks.slice().reverse().forEach(function (m) {
+      var tr = el("tr");
+      tr.appendChild(el("td", null, m.as_of));
+      var pillTd = el("td");
+      pillTd.appendChild(el("span", {
+        style: "background:" + (COLORS[m.source_kind] || "#6b7280") + ";color:#fff;border-radius:3px;padding:1px 6px;font-size:10px",
+      }, LABELS[m.source_kind] || m.source_kind));
+      tr.appendChild(pillTd);
+      tr.appendChild(el("td", { style: "text-align:right" }, fmtUsd(m.implied_valuation_usd)));
+      tr.appendChild(el("td", { style: "text-align:right" }, (m.confidence * 100).toFixed(0) + "%"));
+      tr.appendChild(el("td", null, m.mark_kind || ""));
+      tr.appendChild(el("td", null, m.holder_name_raw || ""));
+      var evTd = el("td");
+      evTd.appendChild(evidenceLink(m.source_url));
+      tr.appendChild(evTd);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    return table;
   }
 
-  function renderPeers(snap) {
-    if (!snap || !snap.members || !snap.members.length) return "";
+  function buildPeers(snap) {
+    if (!snap || !snap.members || !snap.members.length) return document.createDocumentFragment();
     var pubs = snap.members.filter(function (m) { return m.is_public; }).slice(0, 8);
-    if (!pubs.length) return "";
-    var rows = pubs.map(function (m) {
-      return '<tr><td>' + (m.ticker ? '<strong>' + m.ticker + '</strong> · ' : "") + m.company_name + '</td>' +
-        '<td style="text-align:right">' + (m.ev_arr_multiple != null ? m.ev_arr_multiple.toFixed(1) + "x" : "—") + '</td>' +
-        '<td style="text-align:right">' + (m.ev_revenue_multiple != null ? m.ev_revenue_multiple.toFixed(1) + "x" : "—") + '</td>' +
-        '<td style="text-align:right">' + (m.growth_yoy_pct != null ? fmtPct(m.growth_yoy_pct) : "—") + '</td>' +
-        '<td style="text-align:right">' + (m.rule_of_40_pct != null ? fmtPct(m.rule_of_40_pct) : "—") + '</td></tr>';
-    }).join("");
-    return '<div style="margin-top:10px"><div style="font-weight:600;font-size:12px;margin-bottom:4px">Public peers · ' + snap.name + '</div>' +
-      '<table class="ads-table" style="width:100%;font-size:11px"><thead><tr><th>Company</th><th style="text-align:right">EV/ARR</th><th style="text-align:right">EV/Rev</th><th style="text-align:right">Growth YoY</th><th style="text-align:right">Rule of 40</th></tr></thead>' +
-      '<tbody>' + rows + '</tbody></table></div>';
+    if (!pubs.length) return document.createDocumentFragment();
+    var wrap = el("div", { style: "margin-top:10px" });
+    wrap.appendChild(el("div", { style: "font-weight:600;font-size:12px;margin-bottom:4px" }, "Public peers · " + (snap.name || "")));
+    var table = el("table", { "class": "ads-table", style: "width:100%;font-size:11px" });
+    var thead = el("thead"); var hr = el("tr");
+    hr.appendChild(el("th", null, "Company"));
+    ["EV/ARR", "EV/Rev", "Growth YoY", "Rule of 40"].forEach(function (h) {
+      hr.appendChild(el("th", { style: "text-align:right" }, h));
+    });
+    thead.appendChild(hr); table.appendChild(thead);
+    var tbody = el("tbody");
+    pubs.forEach(function (m) {
+      var tr = el("tr");
+      var nameTd = el("td");
+      if (m.ticker) {
+        nameTd.appendChild(el("strong", null, m.ticker));
+        nameTd.appendChild(document.createTextNode(" · " + (m.company_name || "")));
+      } else {
+        nameTd.textContent = m.company_name || "";
+      }
+      tr.appendChild(nameTd);
+      tr.appendChild(el("td", { style: "text-align:right" }, m.ev_arr_multiple != null ? m.ev_arr_multiple.toFixed(1) + "x" : "—"));
+      tr.appendChild(el("td", { style: "text-align:right" }, m.ev_revenue_multiple != null ? m.ev_revenue_multiple.toFixed(1) + "x" : "—"));
+      tr.appendChild(el("td", { style: "text-align:right" }, fmtPct(m.growth_yoy_pct)));
+      tr.appendChild(el("td", { style: "text-align:right" }, fmtPct(m.rule_of_40_pct)));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    return wrap;
   }
 
-  function renderMarkdownCallout(marks) {
+  function buildMarkdownCallout(marks) {
     var mds = marks.filter(function (m) { return m.source_kind === "markdown"; });
-    if (!mds.length) return "";
+    if (!mds.length) return document.createDocumentFragment();
     var latest = mds.slice().sort(function (a, b) { return b.as_of.localeCompare(a.as_of); })[0];
-    return '<div class="ads-card" style="padding:8px;margin-top:8px;border-left:3px solid ' + COLORS.markdown + ';background:#fef2f2">' +
-      '<div style="font-weight:600;font-size:12px;color:' + COLORS.markdown + '">Markdown alert</div>' +
-      '<div style="font-size:12px">Latest markdown ' + latest.as_of + ' → ' + fmtUsd(latest.implied_valuation_usd) +
-      (latest.holder_name_raw ? ' (' + latest.holder_name_raw + ')' : "") +
-      (latest.source_url ? ' · <a href="' + latest.source_url + '" target="_blank" rel="noopener">evidence</a>' : "") +
-      '</div></div>';
+    var card = el("div", {
+      "class": "ads-card",
+      style: "padding:8px;margin-top:8px;border-left:3px solid " + COLORS.markdown + ";background:#fef2f2",
+    });
+    card.appendChild(el("div", { style: "font-weight:600;font-size:12px;color:" + COLORS.markdown }, "Markdown alert"));
+    var body = el("div", { style: "font-size:12px" });
+    var line = "Latest markdown " + latest.as_of + " → " + fmtUsd(latest.implied_valuation_usd);
+    if (latest.holder_name_raw) line += " (" + latest.holder_name_raw + ")";
+    body.appendChild(document.createTextNode(line));
+    var href = safeHref(latest.source_url);
+    if (href) {
+      body.appendChild(document.createTextNode(" · "));
+      body.appendChild(evidenceLink(latest.source_url));
+    }
+    card.appendChild(body);
+    return card;
   }
 
-  function renderImplied(iv) {
-    if (!iv || iv.basis === "none") return '<div class="ads-muted" style="font-size:12px;margin-top:8px">No implied-valuation range available.</div>';
+  function buildImplied(iv) {
+    if (!iv || iv.basis === "none") {
+      return el("div", { "class": "ads-muted", style: "font-size:12px;margin-top:8px" }, "No implied-valuation range available.");
+    }
     var basis = iv.basis === "ev_arr" ? "EV/ARR" : iv.basis === "ev_revenue" ? "EV/Revenue" : "Latest mark";
-    var html = '<div class="ads-card" style="padding:8px;margin-top:12px;background:#f9fafb">' +
-      '<div style="font-weight:600;font-size:13px;margin-bottom:4px">Implied valuation · ' + basis + '</div>' +
-      '<div style="display:flex;gap:18px;flex-wrap:wrap;font-size:12px">' +
-      '<div><div style="color:#6b7280">Low</div><div>' + fmtUsd(iv.low_usd) + '</div></div>' +
-      '<div><div style="color:#6b7280">Median</div><div style="font-weight:600">' + fmtUsd(iv.median_usd) + '</div></div>' +
-      '<div><div style="color:#6b7280">High</div><div>' + fmtUsd(iv.high_usd) + '</div></div>';
+    var card = el("div", { "class": "ads-card", style: "padding:8px;margin-top:12px;background:#f9fafb" });
+    card.appendChild(el("div", { style: "font-weight:600;font-size:13px;margin-bottom:4px" }, "Implied valuation · " + basis));
+    var row = el("div", { style: "display:flex;gap:18px;flex-wrap:wrap;font-size:12px" });
+    function stat(label, value, strong) {
+      var d = el("div");
+      d.appendChild(el("div", { style: "color:#6b7280" }, label));
+      d.appendChild(el("div", strong ? { style: "font-weight:600" } : null, value));
+      return d;
+    }
+    row.appendChild(stat("Low", fmtUsd(iv.low_usd)));
+    row.appendChild(stat("Median", fmtUsd(iv.median_usd), true));
+    row.appendChild(stat("High", fmtUsd(iv.high_usd)));
     if (iv.multiple_median != null) {
-      html += '<div><div style="color:#6b7280">Multiple (p25/p50/p75)</div><div>' + iv.multiple_low.toFixed(1) + 'x / ' + iv.multiple_median.toFixed(1) + 'x / ' + iv.multiple_high.toFixed(1) + 'x</div></div>';
+      row.appendChild(stat("Multiple (p25/p50/p75)",
+        iv.multiple_low.toFixed(1) + "x / " + iv.multiple_median.toFixed(1) + "x / " + iv.multiple_high.toFixed(1) + "x"));
     }
-    if (iv.panel_name) {
-      html += '<div><div style="color:#6b7280">Comp panel</div><div>' + iv.panel_name + '</div></div>';
-    }
-    html += '</div>';
-    if (iv.notes) html += '<div style="color:#6b7280;font-size:11px;margin-top:4px">' + iv.notes + '</div>';
-    html += '</div>';
-    return html;
+    if (iv.panel_name) row.appendChild(stat("Comp panel", iv.panel_name));
+    card.appendChild(row);
+    if (iv.notes) card.appendChild(el("div", { style: "color:#6b7280;font-size:11px;margin-top:4px" }, iv.notes));
+    return card;
   }
 
   async function mount(opts) {
     var root = document.getElementById(opts.rootId);
     if (!root) return;
-    root.innerHTML = '<div class="ads-loading">Loading valuation marks…</div>';
+    root.innerHTML = "";
+    root.appendChild(el("div", { "class": "ads-loading" }, "Loading valuation marks…"));
     try {
       var [marksR, ivR] = await Promise.all([
         fetch(API + "/api/companies/" + encodeURIComponent(opts.entityId) + "/marks", { credentials: "include" }),
@@ -167,26 +283,26 @@
       var ivJson = ivR.ok ? await ivR.json() : null;
       var marks = marksJson.marks || [];
       var blended = marksJson.blended_line || [];
-      // If implied valuation references a comp panel, fetch its snapshot
-      // so we can surface the public peers driving the multiple range.
       var snap = null;
       if (ivJson && ivJson.panel_id) {
         try {
           var snapR = await fetch(API + "/api/comp-panels/" + encodeURIComponent(ivJson.panel_id) + "/snapshot", { credentials: "include" });
           if (snapR.ok) snap = await snapR.json();
-        } catch (_) { /* peer panel is optional enhancement */ }
+        } catch (_) { /* peer panel is optional */ }
       }
-      var html = renderSvg(marks, blended)
-        + renderMarkdownCallout(marks)
-        + renderImplied(ivJson)
-        + renderPeers(snap)
-        + renderMarksTable(marks);
-      root.innerHTML = html;
+      root.innerHTML = "";
+      root.appendChild(buildSvg(marks, blended));
+      root.appendChild(buildMarkdownCallout(marks));
+      root.appendChild(buildImplied(ivJson));
+      root.appendChild(buildPeers(snap));
+      root.appendChild(buildMarksTable(marks));
     } catch (e) {
-      root.innerHTML = '<div class="ads-muted" style="font-size:12px">Mark map unavailable: ' + e.message + '</div>';
+      root.innerHTML = "";
+      root.appendChild(el("div", { "class": "ads-muted", style: "font-size:12px" }, "Mark map unavailable: " + e.message));
     }
   }
 
+  // Exposed for unit-tests (test/markMap.security.test.mjs).
   window.ADS = window.ADS || {};
-  window.ADS.MarkMap = { mount: mount };
+  window.ADS.MarkMap = { mount: mount, _safeHref: safeHref };
 })();

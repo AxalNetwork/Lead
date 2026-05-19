@@ -436,7 +436,9 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       // piggybacks on the consolidated nightly slot.
       try {
         const { refreshStaleCompPanels } = await import("./services/valuation/compPanel");
-        const compRes = await refreshStaleCompPanels(env, 50);
+        // Default staleHours = 24*28 (monthly cadence per spec); the
+        // function itself caps the per-tick refresh count at 50.
+        const compRes = await refreshStaleCompPanels(env);
         console.log("comp-panel refresh sweep done", JSON.stringify(compRes));
       } catch (e) {
         console.error("nightly comp-panel refresh failed", (e as Error).message);
