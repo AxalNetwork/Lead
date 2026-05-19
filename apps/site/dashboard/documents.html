@@ -1,0 +1,75 @@
+---
+layout: default
+title: Documents
+permalink: /dashboard/documents/
+---
+<section class="ads-section">
+  <h1 class="ads-h1">Document intelligence</h1>
+  <p class="ads-sub">Upload pitch decks, SAFEs, term sheets, SHAs, commercial contracts, NDAs and financial models. PII is redacted by default; extracted facts mirror onto the linked entity.</p>
+
+  <div class="ads-card">
+    <form id="upload-form" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+      <input class="ads-input" type="file" name="file" id="upload-file" required>
+      <input class="ads-input" name="target_entity_id" placeholder="link to entity_id (optional)">
+      <label style="display:flex;align-items:center;gap:.25rem">
+        <input type="checkbox" name="allow_raw_text" value="1"> allow raw text (skip PII redaction — audit-logged)
+      </label>
+      <button class="ads-btn" type="submit">Upload</button>
+      <span id="upload-msg" class="ads-mono" style="margin-left:.5rem"></span>
+    </form>
+  </div>
+
+  <div class="ads-card" style="margin-top:1rem">
+    <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+      <strong>Filter:</strong>
+      <select class="ads-input" id="filter-kind">
+        <option value="">All kinds</option>
+        <option value="pitch_deck">Pitch deck</option>
+        <option value="financial_model">Financial model</option>
+        <option value="safe">SAFE</option>
+        <option value="term_sheet">Term sheet</option>
+        <option value="shareholder_agreement">Shareholder agreement</option>
+        <option value="commercial_contract">Commercial contract</option>
+        <option value="nda">NDA</option>
+        <option value="unknown">Unknown</option>
+      </select>
+      <input class="ads-input" id="filter-entity" placeholder="entity_id">
+      <button class="ads-btn" id="refresh-btn" type="button">Refresh</button>
+    </div>
+    <div class="ads-table-wrap" style="margin-top:.75rem">
+      <table class="ads-table" id="docs-table">
+        <thead>
+          <tr>
+            <th>Uploaded</th><th>Filename</th><th>Kind</th><th>Conf.</th>
+            <th>Size</th><th>PII redacted</th><th>Linked entity</th><th>Status</th><th></th>
+          </tr>
+        </thead>
+        <tbody><tr><td colspan="9">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="ads-card" style="margin-top:1rem" id="detail-card" hidden>
+    <h2 class="ads-h2">Document detail</h2>
+    <div id="detail-meta" class="ads-mono"></div>
+    <h3 class="ads-h2" style="margin-top:.75rem">Extractions</h3>
+    <div id="detail-extractions"></div>
+  </div>
+
+  <h2 class="ads-h2" style="margin-top:1.5rem">Data rooms</h2>
+  <div class="ads-card">
+    <form id="room-form" style="display:flex;gap:.5rem;flex-wrap:wrap">
+      <input class="ads-input" name="name" placeholder="Data room name" required>
+      <input class="ads-input" name="target_entity_id" placeholder="target entity_id (optional)">
+      <button class="ads-btn" type="submit">Create room</button>
+    </form>
+    <div class="ads-table-wrap" style="margin-top:.75rem">
+      <table class="ads-table" id="rooms-table">
+        <thead><tr><th>Created</th><th>Name</th><th>Target entity</th><th>Docs</th><th></th></tr></thead>
+        <tbody><tr><td colspan="5">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<script src="/assets/js/documents.js"></script>

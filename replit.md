@@ -157,5 +157,36 @@ run in the nightly tick. Running the angel sweep more frequently than
 weekly is strictly safe (bounded at 500 angels/tick, idempotent
 upsert) — it only increases freshness.
 
+### Task #13 — Document intelligence: migration 361 + source_kind="import" for document facts (ACCEPTED)
+The Task #13 spec slots above #14 in the queue but migrations 358/359/360
+were already taken when the work landed, so the documents migration is
+`apps/worker/migrations/361_documents.sql` (4 tables: `documents`,
+`document_extractions`, `document_data_rooms`, `data_room_documents`).
+Subsequent migrations should number from 362.
+
+Derived business facts mirrored from extractors
+(`safe.cap_usd`, `deal_terms.pre_money_usd`, `commercial.acv_usd`, …)
+flow through `insertFact` per the Task #1 canonical write contract,
+with `source_kind="import"` (the existing enum value that best matches
+operator-uploaded artifacts — there is no dedicated "document" kind).
+The `source` field carries the extractor name
+(`document:safeParser`, `document:termSheetParser`, …) and
+`evidence_url` is `r2://documents/<id>/<filename>`.
+
+Document processing is **inline** in `POST /api/documents/upload`
+rather than queued via JobKind: the existing job system has no
+`document_extract` kind, and uploads are bounded at 50 MB so inline
+extraction fits within Workers' CPU budget for the supported text
+formats (PDF via pdfjs-dist, XLSX via the xlsx package, plain
+text/HTML). PII redaction is **default on** (regex pass for email
+/ SSN / ITIN / US bank / IBAN / phone / Luhn-checked credit-card);
+the per-document `allow_raw_text` flag bypasses redaction and is
+audit-logged at `console.log({event:"document.allow_raw_text",…})`.
+
+Per the Task #4 static-routing constraint, the data-room detail
+page lives at `/dashboard/data-rooms/?id=<room_id>` (query string
+rather than path segment) and hydrates strictly from
+`GET /api/data-rooms/:id/index`.
+
 ## User preferences
 - (none recorded yet)

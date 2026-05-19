@@ -169,6 +169,17 @@
     "src/services/valuation/types.ts",
     "src/services/valuation/nportParser.ts",
     "src/services/valuation/compPanel.ts",
-    "src/services/valuation/impliedValuation.ts"
+    "src/services/valuation/impliedValuation.ts",
+    "src/services/documents/pii.ts",
+    "src/services/documents/classifier.ts",
+    "src/services/documents/extractorRouter.ts",
+    "src/services/documents/persist.ts",
+    "src/services/documents/extractors/safe.ts",
+    "src/services/documents/extractors/termSheet.ts",
+    "src/services/documents/extractors/sha.ts",
+    "src/services/documents/extractors/commercial.ts",
+    "src/services/documents/extractors/nda.ts",
+    "src/services/documents/extractors/pitchDeck.ts",
+    "src/services/documents/extractors/financialModel.ts"
   ]
 }
