@@ -170,11 +170,10 @@ export async function runVerifiers(env: Env, personEntityId: string): Promise<Ru
     }
 
     const prior = await findPriorFinding(env, personEntityId, claim);
-    // If prior exists with same status, just touch its row (no new write).
+    // Strict append-only: same-status re-runs write NO row at all
+    // (never UPDATE an existing finding in place). The prior row stays
+    // is_current=1 unchanged; counts roll up the latest observation.
     if (prior && prior.status === result.status) {
-      try {
-        await env.DB.prepare(`UPDATE verification_findings SET created_at = datetime('now') WHERE id = ?`).bind(prior.id).run();
-      } catch { /* */ }
       summary.by_status[result.status] = (summary.by_status[result.status] ?? 0) + 1;
       continue;
     }
@@ -253,26 +252,27 @@ export async function runVerifiers(env: Env, personEntityId: string): Promise<Ru
  * Verification tab was viewed in the last 30 days OR whose claims
  * (claims_hash) changed since last_verified_at.
  */
-export async function runNightlyVerificationSweep(env: Env, limit = 200): Promise<{ picked: number; findings: number; claims_changed: number }> {
-  let picked = 0;
+export async function runNightlyVerificationSweep(env: Env, limit = 200): Promise<{ picked: number; findings: number; claims_changed: number; verified_ids: string[] }> {
   let findings = 0;
   let claimsChanged = 0;
+  const verifiedIds: string[] = [];
   try {
-    // Primary pick: stalest persons by (never-verified | recently-viewed | >7d old).
+    // Spec criterion: re-verify the 200 stalest persons whose
+    // Verification tab was viewed in the last 30 days OR whose claims
+    // changed since last_verified_at. Both clauses, no broad time-based
+    // sweep.
     const r = await env.DB.prepare(
       `SELECT entity_id, claims_hash FROM person_verification_state
         WHERE last_verified_at IS NULL
            OR last_viewed_at >= datetime('now','-30 days')
-           OR datetime(last_verified_at) < datetime('now','-7 days')
         ORDER BY COALESCE(last_verified_at, '1970-01-01') ASC
         LIMIT ?`,
     ).bind(limit).all<{ entity_id: string; claims_hash: string | null }>();
     const primary = r.results ?? [];
 
-    // Secondary pick: "claims changed" — recompute current claims_hash and
-    // compare against stored hash. Cheap-ish: gatherClaims runs the same
-    // queries the runner would, but with no fetches. We cap secondary
-    // pool at limit/2 candidates to keep the tick bounded.
+    // Claims-changed pool — recompute the current claims_hash for
+    // persons not already in the primary pool and compare against the
+    // stored hash. Bounded so the tick stays cheap.
     const seen = new Set(primary.map((p) => p.entity_id));
     const remaining = Math.max(0, limit - primary.length);
     const changedPicks: Array<{ entity_id: string; claims_hash: string | null }> = [];
@@ -281,10 +281,9 @@ export async function runNightlyVerificationSweep(env: Env, limit = 200): Promis
         const cand = await env.DB.prepare(
           `SELECT entity_id, claims_hash FROM person_verification_state
             WHERE last_verified_at IS NOT NULL
-              AND datetime(last_verified_at) >= datetime('now','-7 days')
             ORDER BY datetime(last_verified_at) ASC
             LIMIT ?`,
-        ).bind(Math.min(remaining * 2, 500)).all<{ entity_id: string; claims_hash: string | null }>();
+        ).bind(Math.min(remaining * 4, 1000)).all<{ entity_id: string; claims_hash: string | null }>();
         for (const row of cand.results ?? []) {
           if (seen.has(row.entity_id) || changedPicks.length >= remaining) continue;
           try {
@@ -301,10 +300,10 @@ export async function runNightlyVerificationSweep(env: Env, limit = 200): Promis
     }
 
     for (const row of [...primary, ...changedPicks]) {
-      picked += 1;
       try {
         const s = await runVerifiers(env, row.entity_id);
         findings += s.findings_written;
+        verifiedIds.push(row.entity_id);
       } catch (e) {
         console.warn("nightly verify failed", row.entity_id, (e as Error).message);
       }
@@ -312,5 +311,5 @@ export async function runNightlyVerificationSweep(env: Env, limit = 200): Promis
   } catch (e) {
     console.warn("nightly verification sweep failed", (e as Error).message);
   }
-  return { picked, findings, claims_changed: claimsChanged };
+  return { picked: verifiedIds.length, findings, claims_changed: claimsChanged, verified_ids: verifiedIds };
 }

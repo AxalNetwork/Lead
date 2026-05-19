@@ -35,6 +35,61 @@ permalink: /dashboard/profile/
 
 <div id="ads-profile-root"><div class="ads-loading">Loading profile…</div></div>
 
+<!-- Task #14: Verification + Backchannel-refs tabs, mounted on the profile page.
+     Hidden by default; the script below reveals them when ?entity=<id> is
+     present. Hydrates from /api/persons/:id/verifications + /references
+     (the same query-string contract as /dashboard/verification/). -->
+<section id="ads-profile-vf-section" hidden style="margin-top:24px">
+  <h2 style="margin:0 0 8px 0;font-size:16px">Background verification</h2>
+  <div style="display:flex;gap:8px;border-bottom:1px solid #e3e6ea">
+    <button type="button" class="ads-vf-subtab" data-vfsub="verifications" style="padding:6px 12px;background:none;border:none;border-bottom:2px solid #2c6eb5;font-weight:600">Verification</button>
+    <button type="button" class="ads-vf-subtab" data-vfsub="references" style="padding:6px 12px;background:none;border:none;border-bottom:2px solid transparent">Backchannel refs</button>
+  </div>
+  <div id="ads-profile-vf-verifications" style="margin-top:10px"><div class="ads-loading">Loading…</div></div>
+  <div id="ads-profile-vf-references" style="margin-top:10px;display:none"><div class="ads-loading">Loading…</div></div>
+</section>
+
+<script>
+(function () {
+  var entity = new URLSearchParams(location.search).get("entity");
+  if (!entity) return;
+  var section = document.getElementById("ads-profile-vf-section");
+  section.hidden = false;
+  var apiBase = (window.ADS && window.ADS.API_BASE) || "https://api.aidatasignal.com";
+  var vEl = document.getElementById("ads-profile-vf-verifications");
+  var rEl = document.getElementById("ads-profile-vf-references");
+  document.querySelectorAll(".ads-vf-subtab").forEach(function (b) {
+    b.addEventListener("click", function () {
+      var sub = b.getAttribute("data-vfsub");
+      document.querySelectorAll(".ads-vf-subtab").forEach(function (x) { x.style.borderBottomColor = "transparent"; });
+      b.style.borderBottomColor = "#2c6eb5";
+      vEl.style.display = sub === "verifications" ? "" : "none";
+      rEl.style.display = sub === "references" ? "" : "none";
+    });
+  });
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]); }); }
+  fetch(apiBase + "/api/persons/" + encodeURIComponent(entity) + "/verifications", { credentials: "include" })
+    .then(function (r) { return r.ok ? r.json() : { items: [] }; })
+    .then(function (body) {
+      if (!body.items || !body.items.length) { vEl.innerHTML = '<div style="color:#888;font-size:12px">No verification findings yet.</div>'; return; }
+      vEl.innerHTML = '<table class="ads-table" style="width:100%"><tbody>' + body.items.map(function (it) {
+        var icon = it.status === "confirmed" ? "✓" : it.status === "contradicted" ? "✗" : "?";
+        var color = it.status === "confirmed" ? "#1f7a4d" : it.status === "contradicted" ? "#c0392b" : "#888";
+        var ev = it.evidence_url ? '<a href="' + esc(it.evidence_url) + '" target="_blank" rel="noopener">evidence</a>' : "";
+        return '<tr><td style="font-size:18px;color:' + color + ';width:30px">' + icon + '</td><td><div style="font-weight:600">' + esc(it.claim_summary || it.claim_predicate) + '</div><div style="font-size:11px;color:#888">' + esc(it.verifier_name) + ' v' + esc(it.verifier_version) + (it.reason ? ' — ' + esc(it.reason) : '') + '</div>' + (it.evidence_snippet ? '<div style="margin-top:4px;font-size:12px;color:#555">' + esc(it.evidence_snippet) + '</div>' : '') + '</td><td>' + ev + '</td></tr>';
+      }).join("") + '</tbody></table>';
+    }).catch(function () { vEl.innerHTML = '<div style="color:#888">Failed to load.</div>'; });
+  fetch(apiBase + "/api/persons/" + encodeURIComponent(entity) + "/references", { credentials: "include" })
+    .then(function (r) { return r.ok ? r.json() : { items: [] }; })
+    .then(function (body) {
+      if (!body.items || !body.items.length) { rEl.innerHTML = '<div style="color:#888;font-size:12px">No reference candidates yet.</div>'; return; }
+      rEl.innerHTML = '<table class="ads-table" style="width:100%"><thead><tr><th>Reference</th><th>Kind</th><th>Context</th><th>Overlap</th><th>Conf.</th></tr></thead><tbody>' + body.items.map(function (it) {
+        return '<tr><td><strong>' + esc(it.ref_display_name) + '</strong></td><td>' + esc(it.relationship_kind) + '</td><td>' + esc(it.shared_context || '') + '</td><td>' + (it.time_overlap_months != null ? it.time_overlap_months + ' mo' : '') + '</td><td>' + Math.round((it.confidence || 0) * 100) + '%</td></tr>';
+      }).join("") + '</tbody></table>';
+    }).catch(function () { rEl.innerHTML = '<div style="color:#888">Failed to load.</div>'; });
+})();
+</script>
+
 <script src="/assets/js/profile-bad-names.js?v={{ site.time | date: '%s' }}"></script>
 <script src="/assets/js/profile-tab.js?v={{ site.time | date: '%s' }}"></script>
 <script>

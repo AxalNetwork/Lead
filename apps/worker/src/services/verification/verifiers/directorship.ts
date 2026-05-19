@@ -1,13 +1,16 @@
-// Directorship verifier — corroborates a person.board_seat claim against
-// SEC DEF 14A / 8-K board-disclosure rows when we have them, falling
-// back to companies-house style state-registry hits.
+// Directorship verifier — SEC director disclosures (DEF 14A / 8-K)
+// when present, Companies House officer lookup for UK-registered orgs
+// (via in-house fetcher), then press-release cooccurrence as a soft
+// signal.
 
-
+import { fetchPage } from "../../../scraper/fetcher";
 import type { Verifier, VerifierResult } from "../types";
+
+interface ChOfficers { items?: Array<{ name?: string; officer_role?: string; appointed_on?: string }> }
 
 export const directorshipVerifier: Verifier = {
   name: "directorship",
-  version: "0.1.0",
+  version: "0.2.0",
   supports(c) { return c.predicate === "person.board_seat"; },
   async verify(env, personId, claim): Promise<VerifierResult> {
     const p = claim.payload as {
@@ -17,12 +20,14 @@ export const directorshipVerifier: Verifier = {
       started_at?: string | null;
       ended_at?: string | null;
       source_url?: string | null;
+      person_name?: string | null;
+      uk_company_number?: string | null;
     };
     const orgId = p.organization_entity_id ?? null;
     const orgName = p.organization_name ?? "";
     if (!orgId && !orgName) return { status: "skipped", confidence: 0, reason: "missing_org" };
 
-    // SEC DEF 14A / 8-K board disclosures — sec_director_filings (if present).
+    // 1. SEC DEF 14A / 8-K — strongest signal for US issuers.
     if (orgId) {
       try {
         const r = await env.DB.prepare(
@@ -44,7 +49,48 @@ export const directorshipVerifier: Verifier = {
       } catch { /* optional table */ }
     }
 
-    // Press-release cooccurrence as soft signal.
+    // 2. Companies House officer lookup (UK-registered orgs). Cheap,
+    //    public, in-house-fetched. Requires a uk_company_number on the
+    //    claim or stored as a fact on the org entity.
+    let companyNumber: string | null = p.uk_company_number ?? null;
+    if (!companyNumber && orgId) {
+      try {
+        const f = await env.DB.prepare(
+          `SELECT value_text FROM facts
+            WHERE entity_id = ? AND predicate = 'firm.companies_house_number' AND is_current = 1
+            LIMIT 1`,
+        ).bind(orgId).first<{ value_text: string }>();
+        if (f?.value_text) companyNumber = f.value_text;
+      } catch { /* */ }
+    }
+    if (companyNumber) {
+      const url = `https://api.company-information.service.gov.uk/company/${encodeURIComponent(companyNumber)}/officers`;
+      try {
+        const res = await fetchPage(env, url, {
+          liveOnly: true,
+          timeoutMs: 15_000,
+          headers: { Accept: "application/json" },
+        });
+        if (res.ok && res.html) {
+          let body: ChOfficers; try { body = JSON.parse(res.html) as ChOfficers; } catch { body = {}; }
+          const personName = (p.person_name ?? "").toLowerCase();
+          const match = (body.items ?? []).find((o) => personName && (o.name ?? "").toLowerCase().includes(personName));
+          if (match) {
+            return {
+              status: "confirmed",
+              confidence: 0.9,
+              evidence_url: url,
+              sources: [url],
+              evidence_snippet: `Companies House lists ${match.officer_role ?? "officer"}${match.appointed_on ? ` appointed ${match.appointed_on}` : ""}.`,
+              derived_predicate: "person.board_seat.verified",
+              derived_value_json: { organization_entity_id: orgId, organization_name: orgName, source: "companies_house", company_number: companyNumber },
+            };
+          }
+        }
+      } catch { /* fall through */ }
+    }
+
+    // 3. Press-release cooccurrence as soft signal.
     try {
       const r = await env.DB.prepare(
         `SELECT url, published_at FROM entity_mentions
@@ -68,7 +114,7 @@ export const directorshipVerifier: Verifier = {
     return {
       status: "unverifiable",
       confidence: 0.3,
-      reason: "no_disclosure_or_press",
+      reason: "no_disclosure_or_press_or_registry",
       evidence_url: p.source_url ?? null,
     };
   },

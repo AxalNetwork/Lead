@@ -55,6 +55,10 @@ export interface FetchOptions {
    * stale people into the crawl.
    */
   liveOnly?: boolean;
+  /** Extra request headers merged on top of buildHeaders(). Used by
+   *  authenticated REST API calls (e.g. CourtListener Token, Companies
+   *  House Basic) so they inherit rate-limiting + retry + tiering. */
+  headers?: Record<string, string>;
 }
 
 export interface FetchResult {
@@ -223,7 +227,7 @@ async function tier0Direct(_env: Env, url: string, opts: FetchOptions): Promise<
   try {
     const res = await fetch(url, {
       method: "GET",
-      headers: buildHeaders(),
+      headers: { ...buildHeaders(), ...(opts.headers ?? {}) },
       redirect: "follow",
       signal: ctl.signal,
     });
