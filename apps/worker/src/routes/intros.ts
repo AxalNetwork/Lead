@@ -20,13 +20,14 @@ import {
   loadTargetHooks,
 } from "../services/intros/graph";
 import { loadCurrentWeights } from "../services/intros/train";
+import { decideByTargetScope, decideOutcomeAccess } from "../services/intros/authz";
 
 const VALID_STATUSES = new Set([
   "requested", "made", "accepted", "declined", "ghosted", "meeting_held", "deal_closed",
 ]);
 const MAX_PATHS_CAP = 10;
 
-export const introsRoute = new Hono<{ Bindings: Env; Variables: { email: string } }>();
+export const introsRoute = new Hono<{ Bindings: Env; Variables: { email: string; is_admin: boolean } }>();
 
 introsRoute.post("/find", async (c) => {
   let body: {
@@ -204,11 +205,16 @@ introsRoute.post("/:path_id/log-outcome", async (c) => {
   if (!VALID_STATUSES.has(status)) {
     return c.json({ error: "invalid_status", allowed: Array.from(VALID_STATUSES) }, 400);
   }
-  // Validate the path exists.
-  const exists = await c.env.DB.prepare(
-    `SELECT id FROM intro_paths WHERE id = ?`,
-  ).bind(path_id).first<{ id: string }>();
-  if (!exists) return c.json({ error: "path_not_found" }, 404);
+  // Owner-or-admin gate: only the operator who originally requested
+  // the path (intro_paths.viewer_email) may log outcomes against it.
+  // Admins (per accessGuard) can override. Anyone else gets 403 —
+  // unauthorized writes would poison the nightly retrain labels.
+  const row = await c.env.DB.prepare(
+    `SELECT id, viewer_email FROM intro_paths WHERE id = ?`,
+  ).bind(path_id).first<{ id: string; viewer_email: string | null }>();
+  if (!row) return c.json({ error: "path_not_found" }, 404);
+  const access = decideOutcomeAccess(c.var.email, row.viewer_email, c.var.is_admin === true);
+  if (!access.allowed) return c.json({ error: "forbidden" }, 403);
 
   const id = crypto.randomUUID();
   try {
@@ -251,16 +257,33 @@ introsRoute.get("/by-target/:id", async (c) => {
   const id = c.req.param("id");
   if (!id) return c.json({ error: "bad_request" }, 400);
   const limit = Math.min(50, Math.max(1, Number(c.req.query("limit") ?? "10")));
+  // Owner-scoped read: non-admin callers see only their own path
+  // history for this target. Admins see all rows. The `viewer_email`
+  // column is omitted from the non-admin projection to avoid leaking
+  // other operators' identities even when filtered.
+  const scopeDecision = decideByTargetScope(c.var.email, c.var.is_admin === true);
   try {
+    if (scopeDecision.scope === "admin") {
+      const r = await c.env.DB.prepare(
+        `SELECT id, viewer_email, hops, predicted_conversion_pct, weakest_edge_quality,
+                suggested_opener, ranking_mode, created_at
+           FROM intro_paths
+          WHERE target_entity_id = ?
+          ORDER BY created_at DESC
+          LIMIT ?`,
+      ).bind(id, limit).all();
+      return c.json({ target_entity_id: id, items: r.results ?? [], scope: "admin" });
+    }
+    if (!scopeDecision.filter_owner_email) return c.json({ target_entity_id: id, items: [], scope: "owner" });
     const r = await c.env.DB.prepare(
-      `SELECT id, viewer_email, hops, predicted_conversion_pct, weakest_edge_quality,
+      `SELECT id, hops, predicted_conversion_pct, weakest_edge_quality,
               suggested_opener, ranking_mode, created_at
          FROM intro_paths
-        WHERE target_entity_id = ?
+        WHERE target_entity_id = ? AND LOWER(viewer_email) = LOWER(?)
         ORDER BY created_at DESC
         LIMIT ?`,
-    ).bind(id, limit).all();
-    return c.json({ target_entity_id: id, items: r.results ?? [] });
+    ).bind(id, scopeDecision.filter_owner_email, limit).all();
+    return c.json({ target_entity_id: id, items: r.results ?? [], scope: "owner" });
   } catch {
     return c.json({ target_entity_id: id, items: [] });
   }
