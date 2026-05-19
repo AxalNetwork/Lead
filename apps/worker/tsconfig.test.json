@@ -189,6 +189,9 @@
     "src/services/fundReturns/types.ts",
     "src/services/fundReturns/proceeds.ts",
     "src/services/fundReturns/exitSignal.ts",
-    "src/services/fundReturns/calibration.ts"
+    "src/services/fundReturns/calibration.ts",
+    "src/services/edgeQuality/aggregate.ts",
+    "src/services/edgeQuality/pagerank.ts",
+    "src/services/edgeQuality/broker.ts"
   ]
 }

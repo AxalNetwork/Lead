@@ -396,5 +396,67 @@ contributors). The new `fundReturnsRoute` is mounted BEFORE the
 existing `fundsRoute` in `src/index.ts` so the `/:id` wildcard
 on the parent route doesn't shadow the new sub-paths.
 
+### Task #3 — Edge-Quality Scoring + Power-Node Detection: migration 367 + source_kind="inferred" for influence facts (ACCEPTED)
+Spec slotted the schema at migration 353, but slots 350–366 are all
+taken (per the Task #13/#14/#18/#2 contract-update precedent above).
+The schema lands at `apps/worker/migrations/367_edge_quality.sql`
+(adds `quality_score` / `quality_signals_json` / `last_interaction_at`
+to `rel_edges`; creates `entity_influence` with global PageRank,
+per-sector PageRank JSON, broker score, degree counts, and
+is_power_node flag). Future migrations should number from 368.
+
+Per the Task #1 canonical write contract, every derived per-entity
+influence fact (`entity.pagerank_score`, `entity.broker_score`)
+flows through `insertFact` with `source_kind="inferred"` — the
+existing enum value that best matches model output. There is no
+dedicated `"model"` source_kind (same reasoning as the Task #2
+fund-return modeling note above); adding one would force a
+registry change in the rich PERSON profile path. The `source`
+field is the literal string `"edge_quality_engine"`.
+
+Quality signals (8 collectors: co-investment, public co-mentions,
+board overlap, twitter reply rate, linkedin endorsements, joint
+panels, same firm/school, mutual-connections Jaccard) live in
+`services/edgeQuality/signals.ts`. Each collector wraps its source
+query in a `safeQuery` try/catch so missing optional source tables
+(`deal_participants`, `entity_mentions`, `social_interactions`,
+`linkedin_endorsements`, `conference_attendees`) degrade to
+absent-signal — not error — same pattern as the Task #14
+verification optional-source pattern above.
+
+PageRank + broker score are pure modules (`pagerank.ts`,
+`broker.ts`) — no DB access, unit-tested on fixture graphs. The
+broker score is `1 − clamp01(Burt's network constraint)` on the
+undirected symmetrized graph; high = high broker. Power-node
+flag is set on the top-N (N=50) per primary_sector by sector-
+PageRank.
+
+Edge scoring is paginated by `id ASC` with `EDGE_BATCH=200` per
+loop iteration and a safety ceiling of 25 pages = 5000 edges/tick
+(Task #2 fund-return precedent). The entity_influence rebuild
+loads the full scored graph in memory; the platform population
+comfortably fits today and we'll chunk by SCC if/when it grows
+past that bound.
+
+**Dual-graph constraint** (CONSTRAINT, not deviation): two graph
+tables exist — `rel_edges` (Task #4 unified, TEXT entity ids) is
+the spec's target; the legacy `relationships` (INTEGER ids,
+migration 19) is what the existing Profile relationship graph
+UI (`apps/site/assets/js/relationship-graph.js`) reads via
+`GET /api/relationships/entity/:id`. The new endpoints
+(`/api/entities/:id/relationships`, `/api/entities/:id/influence`,
+`/api/power-nodes`) operate on `rel_edges` per the spec. The
+UI overlay overlays `quality_score` onto the existing graph by
+fetching the new endpoint in parallel and matching edges by
+`(src_entity_id, dst_entity_id, kind)` via the entity ↔ legacy
+mapping; the legacy endpoint shape is preserved.
+
+Sweep piggybacks the consolidated `15 3 * * *` slot (Free plan
+caps crons at 5/5 — same constraint as Task #4 angel sweep,
+Task #14 verification sweep, Task #18 term benchmarks, Task #2
+fund-return sweep). Runs AFTER the existing relationship
+derivation step so freshly-derived edges get scored in the same
+tick.
+
 ## User preferences
 - (none recorded yet)

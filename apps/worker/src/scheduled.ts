@@ -555,6 +555,21 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         console.error("nightly delaware coi sweep failed", (e as Error).message);
       }
 
+      // Task #3: Edge-Quality Scoring + Power-Node Detection.
+      // Re-scores every rel_edges row from the 8 public signals
+      // (capped at 5000 edges/tick) and rebuilds entity_influence
+      // with global + per-sector PageRank and broker scores. Piggybacks
+      // the consolidated nightly slot per the Free-plan cron cap
+      // (see Task #4 angel-sweep / Task #14 verification / Task #18
+      // benchmarks notes).
+      try {
+        const { runEdgeQualitySweep } = await import("./services/edgeQuality/sweep");
+        const r = await runEdgeQualitySweep(env);
+        console.log("edge quality sweep done", JSON.stringify(r));
+      } catch (e) {
+        console.error("nightly edge quality sweep failed", (e as Error).message);
+      }
+
       // Task #18: nightly term-benchmarks rebuild. Re-buckets every
       // current preferred_series row by (stage, sector, year) and
       // upserts term_benchmarks. Cheap (single SELECT + N upserts);

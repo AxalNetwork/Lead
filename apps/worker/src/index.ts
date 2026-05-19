@@ -62,6 +62,7 @@ import { dealsRoute, companiesDealsRoute, investorsDealsRoute } from "./routes/d
 import { movementsRoute, peopleMovementsRoute, firmsMovementsRoute } from "./routes/movements";
 import { fundsRoute, firmsFundsRoute } from "./routes/funds";
 import { fundReturnsRoute } from "./routes/fund_returns";
+import { influenceRoute } from "./routes/influence";
 import { angelsRoute, syndicatesRoute } from "./routes/angels";
 import { dashboards as dashboardsRoute } from "./routes/dashboards";
 import { capTableRoute } from "./routes/cap_table";
@@ -199,6 +200,13 @@ api.route("/api/companies", companiesPreferredStackRoute);
 api.route("/api/investors", investorsTermAggressivenessRoute);
 api.route("/api/term-benchmarks", termBenchmarksRoute);
 api.route("/api/term-leaks", termLeaksRoute);
+// Task #3: Edge-Quality Scoring + Power-Node Detection.
+// Mounted at /api so the route owns /entities/:id/influence,
+// /entities/:id/relationships, and /power-nodes. Must mount BEFORE
+// any later catch-all but AFTER /api/entities/:id (the unified
+// envelope route, which uses an exact-/:id match without trailing
+// segments so it does not shadow these sub-paths).
+api.route("/api", influenceRoute);
 
 api.notFound((c) => c.json({ error: "not_found", request_id: c.var.request_id }, 404));
 api.onError((err, c) => {

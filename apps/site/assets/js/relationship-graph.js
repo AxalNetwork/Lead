@@ -75,12 +75,51 @@
     var graph = null;
     var expanded = {}; // entityId -> true for nodes already expanded once
     var clickBound = false;
+    // Task #3 — Edge-Quality Scoring + Power-Node Detection.
+    // The legacy /api/relationships/entity/:id endpoint speaks the
+    // INTEGER-id graph; the new /api/entities/:id/influence speaks the
+    // unified TEXT-id graph (rel_edges). When the caller passes
+    // `unifiedEntityId` we surface the anchor's PageRank / broker score
+    // / power-node badge in the sidebar. Edge-thickness overlay is
+    // documented as a follow-up in replit.md (dual-graph constraint).
+    var unifiedEntityId = opts.unifiedEntityId || null;
+    var influenceSummary = null;
+    function loadInfluence() {
+      if (!unifiedEntityId) return Promise.resolve(null);
+      return api("/api/entities/" + encodeURIComponent(unifiedEntityId) + "/influence")
+        .then(function (j) { influenceSummary = j; return j; })
+        .catch(function () { influenceSummary = null; return null; });
+    }
+    function influenceHtml() {
+      if (!influenceSummary) return "";
+      var i = influenceSummary;
+      if (i.pagerank_score == null) return "";
+      var glow = i.is_power_node
+        ? "<span style='display:inline-block;padding:2px 6px;border-radius:10px;background:radial-gradient(circle,#fde68a,#f59e0b);color:#000;font-weight:600;font-size:10px;box-shadow:0 0 8px #f59e0b'>POWER NODE</span> "
+        : "";
+      var pr = (i.pagerank_score || 0).toFixed(4);
+      var br = (i.broker_score || 0).toFixed(3);
+      var deg = (i.in_degree || 0) + "/" + (i.out_degree || 0);
+      var sector = i.primary_sector ? esc(i.primary_sector) : "—";
+      return "<div style='margin-top:8px;padding:8px;border:1px solid #e5e5ea;border-radius:6px;background:#fafafa'>" +
+        glow +
+        "<div style='font-size:10px;color:#666;margin-bottom:4px'>INFLUENCE</div>" +
+        "<div>PageRank: <b>" + pr + "</b></div>" +
+        "<div>Broker: <b>" + br + "</b></div>" +
+        "<div>In/Out degree: <b>" + deg + "</b></div>" +
+        "<div>Primary sector: <b>" + sector + "</b></div>" +
+        "</div>";
+    }
     function load() {
       loading.hidden = false;
       var qs = "?depth=" + depth + "&limit=" + limit
         + (activeKinds && activeKinds.length ? "&kinds=" + encodeURIComponent(activeKinds.join(",")) : "")
         + (opts.includeFamily ? "&include_family=1" : "");
-      api("/api/relationships/entity/" + encodeURIComponent(entityId) + qs).then(function (j) {
+      Promise.all([
+        api("/api/relationships/entity/" + encodeURIComponent(entityId) + qs),
+        loadInfluence(),
+      ]).then(function (results) {
+        var j = results[0];
         loading.hidden = true;
         // Flatten ref_table/ref_id onto the node so initial click payloads
         // match expand/collapse payloads (deeplinks need them at top level).
@@ -97,6 +136,8 @@
             "<div class='ads-muted' style='margin-bottom:6px'>" + esc(n.kind) + (n.ref_table ? " · " + esc(n.ref_table) + "#" + esc(n.ref_id) : "") + "</div>" +
             "<button class='ads-btn ads-btn--ghost' data-act='toggle' data-id='" + n.id + "' style='margin-right:6px'>" + expandLabel + "</button>";
           if (link) html += "<a href='" + link + "'>Open detail →</a>";
+          // Show influence summary for the anchor entity (Task #3).
+          if (n.id === entityId) html += influenceHtml();
           if (opts.onSelect) opts.onSelect(n);
           side.innerHTML = html;
         });
