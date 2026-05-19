@@ -523,8 +523,15 @@ export async function fetchPage(env: Env, url: string, opts: FetchOptions = {}):
   // Non-GET requests (PACER auth, PCL search, …) can't safely escalate
   // to the browser-render or HTTP-forward proxy tiers — neither replays
   // POST bodies and PACER ToS forbids 3p proxying. Use tier-0 only.
+  // Likewise, GETs that carry an Authorization header (CourtListener
+  // Token, Companies House Basic) skip tier-2: the HTTP-forward proxy
+  // overwrites Authorization with PROXY_AUTH, so the upstream API
+  // would receive proxy creds instead of the caller's token and
+  // 401. Tier-1 (browser) is also a poor fit for token-auth REST APIs
+  // and is therefore skipped — these calls are tier-0 only.
   const isNonGet = opts.method && opts.method !== "GET";
-  const tiers: Array<(env: Env, url: string, opts: FetchOptions) => Promise<FetchResult>> = isNonGet
+  const hasAuth = !!(opts.headers && Object.keys(opts.headers).some((k) => k.toLowerCase() === "authorization"));
+  const tiers: Array<(env: Env, url: string, opts: FetchOptions) => Promise<FetchResult>> = isNonGet || hasAuth
     ? [tier0Direct]
     : opts.forceBrowser
     ? [tier1Browser, tier2Proxy]
