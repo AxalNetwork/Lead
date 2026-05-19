@@ -74,12 +74,28 @@ async function probeCrawlerFetcher(env: Env): Promise<CheckResult> {
       liveOnly: true, skipPolicy: true, timeoutMs: 4000, minIntervalMs: 0,
     });
     const ok = r.ok && r.html.length > 0;
+    // An optional tier being intentionally unconfigured (no PROXY_URL,
+    // no BROWSER binding) is a CONFIG STATE, not a fetcher fault — the
+    // probe should not flip the binding to "degraded" on it. We surface
+    // the same situation as "ok" with an informational detail so
+    // operators can still see which optional tier is unset. A real
+    // fetch failure (timeout, block, captcha, status_4xx/5xx, …) still
+    // reports "degraded".
+    const reason = r.blockReason ?? "";
+    const unconfiguredTier =
+      reason === "proxy_not_configured" ||
+      reason === "browser_binding_unavailable" ||
+      reason === "puppeteer_module_missing";
     return {
       binding: "crawler:fetcher",
-      status: ok ? "ok" : "degraded",
+      status: ok || unconfiguredTier ? "ok" : "degraded",
       latency_ms: Date.now() - t0,
       required: false,
-      detail: ok ? `tier_${r.tier} http_${r.status}` : (r.blockReason ?? `tier_${r.tier}`),
+      detail: ok
+        ? `tier_${r.tier} http_${r.status}`
+        : unconfiguredTier
+        ? `optional_tier_unconfigured:${reason}`
+        : (r.blockReason ?? `tier_${r.tier}`),
     };
   } catch (e) {
     return {
