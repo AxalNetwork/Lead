@@ -6,6 +6,7 @@
 //                                               (folder upload = multiple files in one request)
 //   GET    /api/documents                        list (owner-scoped)
 //   GET    /api/documents/:id                   detail
+//   GET    /api/documents/:id/preview           redacted first-page text (reader UI)
 //   GET    /api/documents/:id/extractions       all extraction rows for a doc
 //   PATCH  /api/documents/:id/allow-raw-text    flip the redaction-override flag (audited)
 //   DELETE /api/documents/:id                   remove R2 object + row
@@ -179,10 +180,17 @@ async function processOneFile(
     confidence = cls.confidence;
     const envelope = runExtractor({ kind: cls.kind, text, sheets, allowRawText: opts.allowRawText });
     await persistExtraction(c.env, id, opts.targetEntityId, `r2://${r2Key}`, envelope);
+    // Reader-UI preview: store ≤4000 chars of the (PII-aware) extracted
+    // text. When allow_raw_text=0 we run the redactor here too, so the
+    // preview never exposes PII even if the per-extractor envelope was
+    // raw. When allow_raw_text=1 the raw text is stored — same policy
+    // surface that's already audit-logged at upload time.
+    const { redactPii } = await import("../services/documents/pii");
+    const previewText = (opts.allowRawText ? text : redactPii(text).text).slice(0, 4000);
     await c.env.DB.prepare(
       `UPDATE documents SET detected_kind = ?, classifier_confidence = ?, ocr_status = 'done',
-         extraction_status = 'done', page_count = ?, updated_at = ? WHERE id = ?`,
-    ).bind(detected_kind, confidence, pageCount ?? null, new Date().toISOString(), id).run();
+         extraction_status = 'done', page_count = ?, first_page_text = ?, updated_at = ? WHERE id = ?`,
+    ).bind(detected_kind, confidence, pageCount ?? null, previewText, new Date().toISOString(), id).run();
   } catch (e) {
     extractionError = (e as Error).message.slice(0, 500);
     console.warn("document extraction failed", id, extractionError);
@@ -274,6 +282,32 @@ documentsRoute.get("/:id", async (c) => {
   ).bind(id, email).first();
   if (!row) return c.json({ error: "not_found" }, 404);
   return c.json({ document: row });
+});
+
+// Reader-pane preview: returns the redacted first-page text captured
+// at extraction time. Owner-scoped. Powers the center pane in the
+// data-room reader UI (Task #13 step 8).
+documentsRoute.get("/:id/preview", async (c) => {
+  const email = c.get("email");
+  const id = c.req.param("id");
+  const row = await c.env.DB.prepare(
+    `SELECT id, filename, mime, detected_kind, page_count, allow_raw_text, first_page_text
+       FROM documents WHERE id = ? AND owner_email = ?`,
+  ).bind(id, email).first<{
+    id: string; filename: string; mime: string | null; detected_kind: string | null;
+    page_count: number | null; allow_raw_text: number; first_page_text: string | null;
+  }>();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  return c.json({
+    document_id: row.id,
+    filename: row.filename,
+    mime: row.mime,
+    detected_kind: row.detected_kind,
+    page_count: row.page_count,
+    redacted: row.allow_raw_text === 0,
+    first_page_text: row.first_page_text || "",
+    truncated: (row.first_page_text || "").length >= 4000,
+  });
 });
 
 documentsRoute.get("/:id/extractions", async (c) => {

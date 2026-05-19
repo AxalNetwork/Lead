@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS documents (
   extraction_error         TEXT,
   allow_raw_text           INTEGER NOT NULL DEFAULT 0,      -- 0 = redact-before-LLM (default), 1 = send raw
   page_count               INTEGER,
+  first_page_text          TEXT,                     -- redacted preview text (≤4000 chars) for reader UI center pane
   created_at               TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at               TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

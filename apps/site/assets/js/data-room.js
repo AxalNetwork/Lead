@@ -59,9 +59,13 @@
       ' · uploaded ' + fmt(doc.created_at);
     docBody.innerHTML = '<div class="ads-muted">Loading extraction summary…</div>';
     extPane.innerHTML = '<div class="ads-muted">Loading…</div>';
-    api("/api/documents/" + encodeURIComponent(docId)).then(function (j) {
-      var d = j.document || {};
-      docBody.innerHTML =
+    Promise.all([
+      api("/api/documents/" + encodeURIComponent(docId)),
+      api("/api/documents/" + encodeURIComponent(docId) + "/preview"),
+    ]).then(function (results) {
+      var d = (results[0] && results[0].document) || {};
+      var p = results[1] || {};
+      var meta =
         '<div class="ads-mono" style="font-size:.85em">' +
           '<div>id: <code>' + esc(d.id) + '</code></div>' +
           '<div>sha256: <code>' + esc(d.sha256 || "—") + '</code></div>' +
@@ -69,8 +73,17 @@
           '<div>linked entity: <code>' + esc(d.target_entity_id || "—") + '</code></div>' +
           '<div>OCR: ' + esc(d.ocr_status) + ' · extraction: ' + esc(d.extraction_status) + '</div>' +
           '<div>allow_raw_text: ' + (d.allow_raw_text ? '<strong>yes</strong>' : 'no') + '</div>' +
-        '</div>' +
-        '<p style="margin-top:.5rem" class="ads-muted">Raw page view is unavailable in this UI; inspect via R2 directly using the key above.</p>';
+        '</div>';
+      var previewText = p.first_page_text || "";
+      var previewHeader = '<div style="margin-top:.75rem;display:flex;align-items:center;gap:.5rem">' +
+        '<strong>Document preview</strong>' +
+        (p.redacted ? '<span class="ads-pill ads-pill--ok">PII redacted</span>' : '<span class="ads-pill ads-pill--warn">raw text</span>') +
+        (p.truncated ? '<span class="ads-muted">(first ~4000 chars)</span>' : '') +
+        '</div>';
+      var previewBody = previewText
+        ? '<pre style="white-space:pre-wrap;word-wrap:break-word;background:#f6f7f9;padding:.75rem;margin-top:.25rem;max-height:520px;overflow:auto;font-size:.85em;line-height:1.4">' + esc(previewText) + '</pre>'
+        : '<div class="ads-muted" style="margin-top:.25rem">No extractable text (image-only PDF, binary office format, or extraction failed).</div>';
+      docBody.innerHTML = meta + previewHeader + previewBody;
     }).catch(function (e) { docBody.innerHTML = '<div>Failed: ' + esc(e.message) + '</div>'; });
     api("/api/documents/" + encodeURIComponent(docId) + "/extractions")
       .then(function (j) { renderExtraction(j.extractions || []); })
