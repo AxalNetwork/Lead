@@ -88,12 +88,16 @@ export async function gatherClaims(env: Env, personEntityId: string): Promise<Cl
          FROM board_seats WHERE entity_id = ?`,
     ).bind(personEntityId).all<{ organization_entity_id: string | null; organization_name: string; role: string | null; started_at: string | null; ended_at: string | null; source_url: string | null }>();
     for (const row of r.results ?? []) {
-      const hash = await sha256Hex(`bd|${canonicalize(row as unknown as Record<string, unknown>)}`);
+      // Carry person_name through so the directorship verifier can
+      // match against Companies House / press cooccurrence sources
+      // without having to re-query u_entities.
+      const payload = { ...(row as unknown as Record<string, unknown>), person_name: personName };
+      const hash = await sha256Hex(`bd|${canonicalize(payload)}`);
       claims.push({
         predicate: "person.board_seat",
         value_hash: hash,
         summary: `${row.role ?? "Board seat"} @ ${row.organization_name}`,
-        payload: row as unknown as Record<string, unknown>,
+        payload,
       });
     }
   } catch { /* */ }

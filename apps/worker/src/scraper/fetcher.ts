@@ -372,7 +372,11 @@ async function tier2Proxy(env: Env, url: string, opts: FetchOptions): Promise<Fe
   // base URL, the target URL is appended as a query parameter, and
   // PROXY_AUTH is sent as basic auth. This pattern matches Smartproxy /
   // Bright Data / Oxylabs "Web Unblocker" style endpoints.
-  const headers: Record<string, string> = { ...buildHeaders() };
+  // Merge caller-supplied headers (e.g. CourtListener Token,
+  // Companies House Basic) so authenticated API calls work after
+  // tier-0 fails and we escalate to the proxy. PROXY_AUTH (basic auth
+  // *to the proxy*) is applied after so it always wins on conflict.
+  const headers: Record<string, string> = { ...buildHeaders(), ...(opts.headers ?? {}) };
   if (env.PROXY_AUTH) {
     headers["Authorization"] = `Basic ${btoa(env.PROXY_AUTH)}`;
   }
