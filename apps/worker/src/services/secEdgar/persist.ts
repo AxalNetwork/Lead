@@ -437,6 +437,19 @@ async function persistS1(env: Env, h: FilingHeader, d: FormS1Payload, source: st
     facts++;
   }
   await recordFilingHeader(env, h, xref.entity_id, d);
+  // Task #5: also fan-out into cap-table inference. The S-1 driver
+  // re-fetches the primary doc through the in-house crawler (which
+  // archives + obeys rate limits / robots) and emits a high-confidence
+  // `s1_filing` snapshot. Best-effort: a parser miss must not abort
+  // the S-1 fact write path.
+  if (h.accession_no) {
+    try {
+      const { inferCapTableFromS1 } = await import("../capTable/s1Inference");
+      await inferCapTableFromS1(env, h.accession_no);
+    } catch (e) {
+      console.warn("inferCapTableFromS1 failed", h.accession_no, (e as Error).message);
+    }
+  }
   return { accession_no: h.accession_no, entity_id: xref.entity_id, facts_written: facts, rows_written: 0, skipped: false };
 }
 

@@ -1,0 +1,267 @@
+// Task #5: Cap-Table API routes.
+//
+//   GET  /api/companies/:id/cap-table                — latest snapshot per source
+//   GET  /api/companies/:id/cap-table/history        — all snapshots ordered by as_of
+//   GET  /api/companies/:id/cap-table/dilution       — dilution waterfall
+//   POST /api/companies/:id/cap-table/rebuild        — admin: re-sweep Form D + press
+//
+// All routes mount under /api/* (accessGuard) in apps/worker/src/index.ts.
+
+import { Hono } from "hono";
+import type { Env } from "../types";
+import {
+  buildDilutionWaterfall, sweepFormDInferenceForCompany, sweepPressInferenceForCompany,
+  sweepS1InferenceForCompany, inferCapTableFromDeCoi, inferCapTableFromSecondaryListing,
+  type SnapshotForDilution,
+} from "../services/capTable";
+import type { CapTableSourceKind, HolderClass, SecurityType } from "../services/capTable/types";
+
+type Vars = { email: string; is_admin: boolean };
+
+export const capTableRoute = new Hono<{ Bindings: Env; Variables: Vars }>();
+
+interface SnapshotRow {
+  id: string;
+  company_entity_id: string;
+  company_name_raw: string;
+  as_of: string;
+  source_kind: string;
+  source_url: string;
+  source_accession_no: string | null;
+  fully_diluted_shares: number | null;
+  post_money_usd: number | null;
+  pre_money_usd: number | null;
+  option_pool_pct: number | null;
+  preferred_pct: number | null;
+  common_pct: number | null;
+  confidence: number;
+  notes: string | null;
+  created_at: string;
+}
+
+interface HolderRow {
+  id: string;
+  snapshot_id: string;
+  holder_entity_id: string | null;
+  holder_name_raw: string;
+  holder_name_normalized: string | null;
+  holder_class: string;
+  security_type: string | null;
+  shares: number | null;
+  pct_ownership: number | null;
+  original_investment_usd: number | null;
+  round_acquired: string | null;
+  liquidation_preference_x: number | null;
+  participating: number | null;
+}
+
+async function resolveEntityIdFromCompanyParam(
+  env: Env, idParam: string,
+): Promise<string | null> {
+  // The :id param accepts either a u_entities.id (TEXT uuid) or a
+  // numeric companies.id (legacy). When numeric, hop through the
+  // existing entity-resolve facts.
+  if (/^[0-9]+$/.test(idParam)) {
+    const c = await env.DB.prepare(
+      `SELECT name FROM companies WHERE id = ?`,
+    ).bind(Number(idParam)).first<{ name: string }>();
+    if (!c) return null;
+    // Look up via normalized name (mirrors deals route convention).
+    const { normalizeCompanyName } = await import("../services/deals/dedupe");
+    const norm = normalizeCompanyName(c.name);
+    if (!norm) return null;
+    const r = await env.DB.prepare(
+      `SELECT entity_id FROM facts WHERE predicate='company.name_normalized' AND value_text=? AND is_current=1 LIMIT 1`,
+    ).bind(norm).first<{ entity_id: string }>();
+    return r?.entity_id ?? null;
+  }
+  return idParam;
+}
+
+async function loadSnapshotsForCompany(env: Env, entityId: string): Promise<SnapshotRow[]> {
+  const r = await env.DB.prepare(
+    `SELECT id, company_entity_id, company_name_raw, as_of, source_kind, source_url,
+            source_accession_no, fully_diluted_shares, post_money_usd, pre_money_usd,
+            option_pool_pct, preferred_pct, common_pct, confidence, notes, created_at
+       FROM cap_table_snapshots
+      WHERE company_entity_id = ?
+      ORDER BY as_of ASC, confidence DESC`,
+  ).bind(entityId).all<SnapshotRow>();
+  return r.results ?? [];
+}
+
+async function loadHoldersForSnapshots(env: Env, snapshotIds: string[]): Promise<Map<string, HolderRow[]>> {
+  if (!snapshotIds.length) return new Map();
+  const placeholders = snapshotIds.map(() => "?").join(",");
+  const r = await env.DB.prepare(
+    `SELECT id, snapshot_id, holder_entity_id, holder_name_raw, holder_name_normalized,
+            holder_class, security_type, shares, pct_ownership, original_investment_usd,
+            round_acquired, liquidation_preference_x, participating
+       FROM cap_table_holders
+      WHERE snapshot_id IN (${placeholders})
+      ORDER BY pct_ownership DESC NULLS LAST, shares DESC NULLS LAST`,
+  ).bind(...snapshotIds).all<HolderRow>();
+  const grouped = new Map<string, HolderRow[]>();
+  for (const h of (r.results ?? [])) {
+    if (!grouped.has(h.snapshot_id)) grouped.set(h.snapshot_id, []);
+    grouped.get(h.snapshot_id)!.push(h);
+  }
+  return grouped;
+}
+
+function serializeSnapshot(s: SnapshotRow, holders: HolderRow[]) {
+  return {
+    snapshot_id: s.id,
+    company_entity_id: s.company_entity_id,
+    company_name_raw: s.company_name_raw,
+    as_of: s.as_of,
+    source_kind: s.source_kind,
+    source_url: s.source_url,
+    source_accession_no: s.source_accession_no,
+    fully_diluted_shares: s.fully_diluted_shares,
+    post_money_usd: s.post_money_usd,
+    pre_money_usd: s.pre_money_usd,
+    option_pool_pct: s.option_pool_pct,
+    preferred_pct: s.preferred_pct,
+    common_pct: s.common_pct,
+    confidence: s.confidence,
+    notes: s.notes,
+    created_at: s.created_at,
+    holders: holders.map((h) => ({
+      holder_name: h.holder_name_raw,
+      holder_entity_id: h.holder_entity_id,
+      holder_class: h.holder_class,
+      security_type: h.security_type,
+      shares: h.shares,
+      pct_ownership: h.pct_ownership,
+      original_investment_usd: h.original_investment_usd,
+      round_acquired: h.round_acquired,
+      liquidation_preference_x: h.liquidation_preference_x,
+      participating: h.participating == null ? null : !!h.participating,
+    })),
+  };
+}
+
+// ---------------------------------------------------------- LATEST
+capTableRoute.get("/:id/cap-table", async (c) => {
+  const entityId = await resolveEntityIdFromCompanyParam(c.env, c.req.param("id"));
+  if (!entityId) return c.json({ error: "company_not_resolved" }, 404);
+  const all = await loadSnapshotsForCompany(c.env, entityId);
+  if (!all.length) return c.json({ entity_id: entityId, snapshots: [], latest_by_source: {}, best: null });
+  // Latest per source kind.
+  const latestBySource = new Map<string, SnapshotRow>();
+  for (const s of all) {
+    const prior = latestBySource.get(s.source_kind);
+    if (!prior || s.as_of > prior.as_of) latestBySource.set(s.source_kind, s);
+  }
+  // "Best" snapshot: prefer highest source-confidence tier with most
+  // holders, breaking ties by recency.
+  const tier: Record<string, number> = {
+    s1_filing: 5, delaware_coi: 4, form_d_inference: 3,
+    secondary_listing: 2, press_inference: 1,
+  };
+  const candidates = Array.from(latestBySource.values());
+  candidates.sort((a, b) => (tier[b.source_kind] ?? 0) - (tier[a.source_kind] ?? 0)
+    || b.confidence - a.confidence || b.as_of.localeCompare(a.as_of));
+  const best = candidates[0];
+  const ids = candidates.map((s) => s.id);
+  const holders = await loadHoldersForSnapshots(c.env, ids);
+  return c.json({
+    entity_id: entityId,
+    best: best ? serializeSnapshot(best, holders.get(best.id) ?? []) : null,
+    latest_by_source: Object.fromEntries(
+      candidates.map((s) => [s.source_kind, serializeSnapshot(s, holders.get(s.id) ?? [])]),
+    ),
+    snapshot_count: all.length,
+  });
+});
+
+// ---------------------------------------------------------- HISTORY
+capTableRoute.get("/:id/cap-table/history", async (c) => {
+  const entityId = await resolveEntityIdFromCompanyParam(c.env, c.req.param("id"));
+  if (!entityId) return c.json({ error: "company_not_resolved" }, 404);
+  const all = await loadSnapshotsForCompany(c.env, entityId);
+  const holders = await loadHoldersForSnapshots(c.env, all.map((s) => s.id));
+  return c.json({
+    entity_id: entityId,
+    count: all.length,
+    snapshots: all.map((s) => serializeSnapshot(s, holders.get(s.id) ?? [])),
+  });
+});
+
+// ---------------------------------------------------------- DILUTION
+capTableRoute.get("/:id/cap-table/dilution", async (c) => {
+  const entityId = await resolveEntityIdFromCompanyParam(c.env, c.req.param("id"));
+  if (!entityId) return c.json({ error: "company_not_resolved" }, 404);
+  const all = await loadSnapshotsForCompany(c.env, entityId);
+  if (all.length < 2) return c.json({ entity_id: entityId, steps: [], reason: "need_two_snapshots" });
+  const holders = await loadHoldersForSnapshots(c.env, all.map((s) => s.id));
+  const input: SnapshotForDilution[] = all.map((s) => ({
+    id: s.id, as_of: s.as_of,
+    source_kind: s.source_kind as CapTableSourceKind,
+    fully_diluted_shares: s.fully_diluted_shares,
+    post_money_usd: s.post_money_usd,
+    option_pool_pct: s.option_pool_pct,
+    preferred_pct: s.preferred_pct,
+    common_pct: s.common_pct,
+    confidence: s.confidence,
+    holders: (holders.get(s.id) ?? []).map((h) => ({
+      holder_name_normalized: h.holder_name_normalized,
+      holder_name_raw: h.holder_name_raw,
+      holder_entity_id: h.holder_entity_id,
+      holder_class: h.holder_class as HolderClass,
+      security_type: h.security_type as SecurityType | null,
+      shares: h.shares,
+      pct_ownership: h.pct_ownership,
+      round_acquired: h.round_acquired,
+    })),
+  }));
+  const steps = buildDilutionWaterfall(input);
+  return c.json({ entity_id: entityId, steps });
+});
+
+// ---------------------------------------------------------- REBUILD
+// Admin-only. Sweeps every ingestion path we can drive without a
+// human-supplied URL (Form D, press wires, archived S-1s) and
+// optionally accepts a body of `coi_urls[]` / `secondary_urls[]` so
+// operators can backfill Delaware COIs and secondary listings on
+// demand without waiting for the upstream crawler.
+capTableRoute.post("/:id/cap-table/rebuild", async (c) => {
+  if (!c.var.is_admin) return c.json({ error: "forbidden" }, 403);
+  const entityId = await resolveEntityIdFromCompanyParam(c.env, c.req.param("id"));
+  if (!entityId) return c.json({ error: "company_not_resolved" }, 404);
+  const body = await c.req.json().catch(() => ({} as Record<string, unknown>));
+  const coiUrls = Array.isArray((body as { coi_urls?: unknown }).coi_urls)
+    ? ((body as { coi_urls: unknown[] }).coi_urls.filter((x) => typeof x === "string") as string[])
+    : [];
+  const secUrls = Array.isArray((body as { secondary_urls?: unknown }).secondary_urls)
+    ? ((body as { secondary_urls: unknown[] }).secondary_urls.filter((x) => typeof x === "string") as string[])
+    : [];
+  const company = await c.env.DB.prepare(
+    `SELECT display_name FROM u_entities WHERE id = ?`,
+  ).bind(entityId).first<{ display_name: string }>();
+  const name = company?.display_name ?? "Unknown company";
+
+  const fd = await sweepFormDInferenceForCompany(c.env, entityId);
+  const press = await sweepPressInferenceForCompany(c.env, entityId);
+  const s1 = await sweepS1InferenceForCompany(c.env, entityId);
+  const coi: Array<{ url: string; snapshot_id: string | null; holders: number; skipped: boolean; reason?: string }> = [];
+  for (const url of coiUrls.slice(0, 10)) {
+    try {
+      const r = await inferCapTableFromDeCoi(c.env, { company_entity_id: entityId, company_name_raw: name, source_url: url });
+      coi.push({ url, snapshot_id: r.snapshot_id, holders: r.holders_written, skipped: r.skipped, reason: r.reason });
+    } catch (e) {
+      coi.push({ url, snapshot_id: null, holders: 0, skipped: true, reason: (e as Error).message });
+    }
+  }
+  const sec: Array<{ url: string; snapshot_id: string | null; holders: number; skipped: boolean; reason?: string }> = [];
+  for (const url of secUrls.slice(0, 10)) {
+    try {
+      const r = await inferCapTableFromSecondaryListing(c.env, { company_entity_id: entityId, company_name_raw: name, listing_url: url });
+      sec.push({ url, snapshot_id: r.snapshot_id, holders: r.holders_written, skipped: r.skipped, reason: r.reason });
+    } catch (e) {
+      sec.push({ url, snapshot_id: null, holders: 0, skipped: true, reason: (e as Error).message });
+    }
+  }
+  return c.json({ entity_id: entityId, form_d: fd, press, s1, delaware_coi: coi, secondary_listing: sec });
+});

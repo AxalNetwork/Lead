@@ -159,6 +159,10 @@
     "src/crawler/profileWorkflows/politician_federal.ts",
     "src/crawler/profileWorkflows/regulator_sec.ts",
     "src/crawler/profileWorkflows/academic_researcher.ts",
-    "src/crawler/profileWorkflows/journalist_business.ts"
+    "src/crawler/profileWorkflows/journalist_business.ts",
+    "src/services/capTable/types.ts",
+    "src/services/capTable/normalize.ts",
+    "src/services/capTable/dilution.ts",
+    "src/services/capTable/s1CapTableParser.ts"
   ]
 }
