@@ -103,45 +103,81 @@ influenceRoute.get("/entities/:id/relationships", async (c) => {
     source: string | null;
   }>();
 
-  const edges = (r.results ?? []).map((row) => ({
-    id: row.id,
-    src_entity_id: row.src_entity_id,
-    dst_entity_id: row.dst_entity_id,
-    kind: row.kind,
-    strength: row.strength,
-    quality_score: row.quality_score,
-    quality_signals: safeParse(row.quality_signals_json),
-    last_interaction_at: row.last_interaction_at,
-    evidence_url: row.evidence_url,
-    source: row.source,
-  }));
+  const rawEdges = r.results ?? [];
+
+  // Best-effort enrich each edge with the neighbor's display_name —
+  // the UI uses neighbor_name in its sidebar and for fallback name-
+  // matching. When u_entities is unavailable (test DBs / stubs) we
+  // ship the edges without names; the UI keys overlays off
+  // neighbor_id which is always present.
+  const neighborIds = Array.from(new Set(rawEdges.map((e) => (e.src_entity_id === id ? e.dst_entity_id : e.src_entity_id))));
+  const nameById = new Map<string, string>();
+  if (neighborIds.length) {
+    try {
+      for (let i = 0; i < neighborIds.length; i += 100) {
+        const slice = neighborIds.slice(i, i + 100);
+        const nr = await c.env.DB.prepare(
+          `SELECT id, display_name FROM u_entities WHERE id IN (${slice.map(() => "?").join(",")})`,
+        ).bind(...slice).all<{ id: string; display_name: string | null }>();
+        for (const row of nr.results ?? []) {
+          if (row.display_name) nameById.set(row.id, row.display_name);
+        }
+      }
+    } catch {
+      // u_entities shape unavailable — neighbor_name remains null.
+    }
+  }
+
+  const edges = rawEdges.map((row) => {
+    const neighborId = row.src_entity_id === id ? row.dst_entity_id : row.src_entity_id;
+    return {
+      id: row.id,
+      src_entity_id: row.src_entity_id,
+      dst_entity_id: row.dst_entity_id,
+      neighbor_id: neighborId,
+      neighbor_name: nameById.get(neighborId) ?? null,
+      kind: row.kind,
+      strength: row.strength,
+      quality_score: row.quality_score,
+      quality_signals: safeParse(row.quality_signals_json),
+      last_interaction_at: row.last_interaction_at,
+      evidence_url: row.evidence_url,
+      source: row.source,
+    };
+  });
   return c.json({ entity_id: id, min_quality: minQuality, edges });
 });
 
 // GET /api/power-nodes?sector=fintech&persona=founder&limit=50
+//
+// JOINs u_entities so display_name is returned alongside the score
+// columns (UI uses display_name for badges). Persona filter is
+// applied in SQL BEFORE the LIMIT so the returned set is the true
+// top-N for the requested slice. If u_entities isn't available
+// (test DBs / stubs) we fall back to a no-join query which omits
+// display_name and the persona filter — operators can see the data
+// either way, just without the persona slice.
 influenceRoute.get("/power-nodes", async (c) => {
   const sector = (c.req.query("sector") ?? "").toLowerCase().trim() || null;
   const persona = (c.req.query("persona") ?? "").toLowerCase().trim() || null;
-  const limit = Math.min(200, Math.max(1, Number(c.req.query("limit") ?? "50")));
+  const limit = Math.min(500, Math.max(1, Number(c.req.query("limit") ?? "50")));
 
-  // Sector filter applies on entity_influence.primary_sector; persona
-  // filter joins through u_entities.role_default (best-effort — when
-  // the column or table is absent, the filter is treated as a no-op
-  // and the sweep still returns sector-ranked rows).
-  const where: string[] = ["is_power_node = 1"];
+  const joined = `
+    SELECT i.entity_id, i.pagerank_score, i.broker_score, i.primary_sector,
+           i.in_degree, i.out_degree, i.total_degree,
+           u.display_name, u.role_default
+      FROM entity_influence i
+      LEFT JOIN u_entities u ON u.id = i.entity_id
+     WHERE i.is_power_node = 1`;
+  const conds: string[] = [];
   const binds: Array<string | number> = [];
-  if (sector) {
-    where.push("primary_sector = ?");
-    binds.push(sector);
-  }
-  const sql = `SELECT entity_id, pagerank_score, broker_score, primary_sector,
-                      in_degree, out_degree, total_degree
-                 FROM entity_influence
-                WHERE ${where.join(" AND ")}
-                ORDER BY pagerank_score DESC
+  if (sector) { conds.push("i.primary_sector = ?"); binds.push(sector); }
+  if (persona) { conds.push("LOWER(COALESCE(u.role_default,'')) = ?"); binds.push(persona); }
+  const tail = `${conds.length ? " AND " + conds.join(" AND ") : ""}
+                ORDER BY i.pagerank_score DESC
                 LIMIT ?`;
   binds.push(limit);
-  const r = await c.env.DB.prepare(sql).bind(...binds).all<{
+  let rows: Array<{
     entity_id: string;
     pagerank_score: number;
     broker_score: number;
@@ -149,26 +185,78 @@ influenceRoute.get("/power-nodes", async (c) => {
     in_degree: number;
     out_degree: number;
     total_degree: number;
-  }>();
-  let rows = r.results ?? [];
-
-  // Persona filter — applied post-query to keep the SQL stable when
-  // u_entities is in a stub/legacy shape.
-  if (persona && rows.length) {
-    try {
-      const ids = rows.map((row) => row.entity_id);
-      const fr = await c.env.DB.prepare(
-        `SELECT id, role_default FROM u_entities
-          WHERE id IN (${ids.map(() => "?").join(",")})`,
-      ).bind(...ids).all<{ id: string; role_default: string | null }>();
-      const role = new Map((fr.results ?? []).map((x) => [x.id, (x.role_default ?? "").toLowerCase()]));
-      rows = rows.filter((r) => role.get(r.entity_id) === persona);
-    } catch {
-      // u_entities shape unavailable — fall through with sector-only results.
-    }
+    display_name: string | null;
+    role_default: string | null;
+  }> = [];
+  try {
+    const r = await c.env.DB.prepare(joined + tail).bind(...binds).all<typeof rows[number]>();
+    rows = r.results ?? [];
+  } catch {
+    // Fallback: u_entities absent or in a stub shape. Persona filter
+    // cannot be honored without it; sector-only results still ship.
+    const where: string[] = ["is_power_node = 1"];
+    const bindsLite: Array<string | number> = [];
+    if (sector) { where.push("primary_sector = ?"); bindsLite.push(sector); }
+    bindsLite.push(limit);
+    const r = await c.env.DB.prepare(
+      `SELECT entity_id, pagerank_score, broker_score, primary_sector,
+              in_degree, out_degree, total_degree,
+              NULL AS display_name, NULL AS role_default
+         FROM entity_influence
+        WHERE ${where.join(" AND ")}
+        ORDER BY pagerank_score DESC
+        LIMIT ?`,
+    ).bind(...bindsLite).all<typeof rows[number]>();
+    rows = r.results ?? [];
   }
 
   return c.json({ sector, persona, count: rows.length, power_nodes: rows });
+});
+
+// POST /api/entities/resolve
+//
+// Bulk-resolves legacy (ref_table, ref_id) pairs to unified entity
+// ids so the relationship-graph UI can overlay influence/quality
+// data without forcing every callsite (lead.js, firm-detail.js,
+// relationships.js) to know about unified ids. Returns a map keyed
+// by `${ref_table}:${ref_id}` → unified_entity_id (or null when no
+// matching u_entities row exists).
+influenceRoute.post("/entities/resolve", async (c) => {
+  let body: { refs?: Array<{ ref_table?: string; ref_id?: string | number }> };
+  try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
+  const refs = (body.refs ?? []).filter((r) => r && r.ref_table && r.ref_id != null).slice(0, 500);
+  const out: Record<string, string | null> = {};
+  if (!refs.length) return c.json({ map: out });
+  try {
+    // Chunked IN to stay under D1 bind limits.
+    for (let i = 0; i < refs.length; i += 100) {
+      const slice = refs.slice(i, i + 100);
+      // Build a UNION ALL because (ref_table, ref_id) is a composite
+      // and SQLite IN-tuples aren't reliably supported.
+      const sql = slice
+        .map(() => `SELECT ? AS ref_table, ? AS ref_id`)
+        .join(" UNION ALL ");
+      const binds: Array<string | number> = [];
+      for (const r of slice) {
+        binds.push(String(r.ref_table));
+        binds.push(String(r.ref_id));
+      }
+      const r = await c.env.DB.prepare(
+        `WITH wanted(ref_table, ref_id) AS (${sql})
+         SELECT w.ref_table, w.ref_id, u.id
+           FROM wanted w
+           LEFT JOIN u_entities u
+             ON u.ref_table = w.ref_table AND u.ref_id = w.ref_id`,
+      ).bind(...binds).all<{ ref_table: string; ref_id: string; id: string | null }>();
+      for (const row of r.results ?? []) {
+        out[`${row.ref_table}:${row.ref_id}`] = row.id ?? null;
+      }
+    }
+  } catch {
+    // u_entities not in expected shape — return whatever we have
+    // (likely empty). UI degrades to legacy rendering.
+  }
+  return c.json({ map: out });
 });
 
 function clamp01(x: number): number {

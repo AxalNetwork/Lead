@@ -78,58 +78,96 @@
     // Task #3 — Edge-Quality Scoring + Power-Node Detection.
     // The legacy /api/relationships/entity/:id endpoint speaks the
     // INTEGER-id graph; the new /api/entities/:id/* endpoints speak
-    // the unified TEXT-id graph (rel_edges). We overlay them by
-    // matching neighbor (name, kind) — both endpoints expose those
-    // human-readable fields. Edges incident to the anchor get a
-    // quality_score, and any neighbor flagged is_power_node in the
-    // unified graph gets the glow halo on the canvas.
-    var unifiedEntityId = opts.unifiedEntityId || null;
+    // the unified TEXT-id graph (rel_edges). We bridge the two via
+    // POST /api/entities/resolve which maps each legacy node's
+    // (ref_table, ref_id) → unified_entity_id. Once we have that
+    // mapping the overlays key off STABLE IDs (not display names),
+    // and every existing callsite auto-activates the overlay without
+    // having to pass `unifiedEntityId` explicitly. The opt-in
+    // `unifiedEntityId` param is still respected if the caller
+    // already knows it.
     var influenceSummary = null;
-    var qualityByNeighborKey = {};   // "name|kind" → quality_score
-    var powerSetByName = {};         // lowercased name → true
+    var qualityByLegacyEdge = {};       // "src|dst|kind" → quality_score (legacy ids)
+    var powerSetUnifiedIds = {};        // unified_id → true
+    var unifiedIdByLegacyNodeId = {};   // legacy node id → unified id
+    var anchorUnifiedId = opts.unifiedEntityId || null;
+
+    function resolveUnifiedIds(legacyNodes) {
+      // Bulk-resolve all (ref_table, ref_id) → unified id.
+      var refs = [];
+      var keys = [];
+      legacyNodes.forEach(function (n) {
+        if (n.ref_table && n.ref_id != null) {
+          refs.push({ ref_table: n.ref_table, ref_id: n.ref_id });
+          keys.push({ node_id: n.id, key: n.ref_table + ":" + n.ref_id });
+        }
+      });
+      unifiedIdByLegacyNodeId = {};
+      if (!refs.length) return Promise.resolve({});
+      return apiPost("/api/entities/resolve", { refs: refs })
+        .then(function (j) {
+          var m = (j && j.map) || {};
+          keys.forEach(function (k) {
+            if (m[k.key]) unifiedIdByLegacyNodeId[k.node_id] = m[k.key];
+          });
+          if (!anchorUnifiedId && unifiedIdByLegacyNodeId[entityId]) {
+            anchorUnifiedId = unifiedIdByLegacyNodeId[entityId];
+          }
+          return m;
+        })
+        .catch(function () { return {}; });
+    }
     function loadInfluence() {
-      if (!unifiedEntityId) return Promise.resolve(null);
-      return api("/api/entities/" + encodeURIComponent(unifiedEntityId) + "/influence")
+      if (!anchorUnifiedId) return Promise.resolve(null);
+      return api("/api/entities/" + encodeURIComponent(anchorUnifiedId) + "/influence")
         .then(function (j) { influenceSummary = j; return j; })
         .catch(function () { influenceSummary = null; return null; });
     }
-    function loadUnifiedRelationships() {
-      if (!unifiedEntityId) return Promise.resolve(null);
-      return api("/api/entities/" + encodeURIComponent(unifiedEntityId) + "/relationships")
+    function loadAnchorUnifiedRelationships() {
+      if (!anchorUnifiedId) return Promise.resolve(null);
+      return api("/api/entities/" + encodeURIComponent(anchorUnifiedId) + "/relationships?limit=500")
         .then(function (j) {
-          qualityByNeighborKey = {};
+          // Build a unified-id → quality lookup keyed by
+          // (neighbor_unified_id, kind). The legacy edge mapping is
+          // then done by looking up each legacy edge's neighbor's
+          // unified id via unifiedIdByLegacyNodeId.
           var rows = (j && j.edges) || [];
+          var byNeighbor = {};
           for (var i = 0; i < rows.length; i++) {
             var r = rows[i];
-            var nm = (r.neighbor_name || "").toLowerCase().trim();
-            var kd = (r.kind || "").toLowerCase().trim();
-            if (!nm) continue;
-            var key = nm + "|" + kd;
-            var prev = qualityByNeighborKey[key];
+            var nbr = r.neighbor_id;
+            if (!nbr) continue;
+            var key = nbr + "|" + (r.kind || "").toLowerCase().trim();
+            var prev = byNeighbor[key];
             if (prev == null || (r.quality_score || 0) > prev) {
-              qualityByNeighborKey[key] = r.quality_score != null ? r.quality_score : null;
+              byNeighbor[key] = r.quality_score != null ? r.quality_score : null;
             }
           }
+          // Stash on the closure for the edge-mapping pass below.
+          loadAnchorUnifiedRelationships._byNeighbor = byNeighbor;
           return j;
         })
-        .catch(function () { qualityByNeighborKey = {}; return null; });
+        .catch(function () { loadAnchorUnifiedRelationships._byNeighbor = {}; return null; });
     }
     function loadPowerNodes() {
-      // Best-effort: pull the global power-node set so non-anchor power
-      // nodes can also glow. Match by display name (the only cross-graph
-      // attribute available). Failures are non-fatal — anchor glow still
-      // works from influenceSummary.is_power_node.
+      // Pull the global power-node set so any node in the subgraph
+      // whose unified id is flagged can glow. Match by stable id.
       return api("/api/power-nodes?limit=500")
         .then(function (j) {
-          powerSetByName = {};
+          powerSetUnifiedIds = {};
           var rows = (j && j.power_nodes) || [];
           for (var i = 0; i < rows.length; i++) {
-            var nm = (rows[i].display_name || "").toLowerCase().trim();
-            if (nm) powerSetByName[nm] = true;
+            if (rows[i].entity_id) powerSetUnifiedIds[rows[i].entity_id] = true;
           }
           return j;
         })
-        .catch(function () { powerSetByName = {}; return null; });
+        .catch(function () { powerSetUnifiedIds = {}; return null; });
+    }
+
+    function apiPost(path, body) {
+      if (window.adsApiFetch) return window.adsApiFetch(path, { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } });
+      var base = (window.ADS && window.ADS.apiBase) || "https://api.aidatasignal.com";
+      return fetch(base + path, { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" }, credentials: "include" }).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
     }
     function influenceHtml() {
       if (!influenceSummary) return "";
@@ -156,40 +194,51 @@
       var qs = "?depth=" + depth + "&limit=" + limit
         + (activeKinds && activeKinds.length ? "&kinds=" + encodeURIComponent(activeKinds.join(",")) : "")
         + (opts.includeFamily ? "&include_family=1" : "");
-      Promise.all([
-        api("/api/relationships/entity/" + encodeURIComponent(entityId) + qs),
-        loadInfluence(),
-        loadUnifiedRelationships(),
-        loadPowerNodes(),
-      ]).then(function (results) {
+      // Step 1: load legacy graph + global power-node set in parallel.
+      // Step 2: resolve all legacy nodes' (ref_table, ref_id) →
+      // unified ids in one bulk call.
+      // Step 3: with the mapping in hand, fetch anchor influence +
+      // anchor unified relationships (which need the unified id).
+      // Step 4: render with overlays keyed by stable ids.
+      api("/api/relationships/entity/" + encodeURIComponent(entityId) + qs)
+        .then(function (j) {
+          return Promise.all([
+            j,
+            resolveUnifiedIds(j.nodes || []),
+            loadPowerNodes(),
+          ]);
+        })
+        .then(function (step2) {
+          var j = step2[0];
+          return Promise.all([
+            j,
+            loadInfluence(),
+            loadAnchorUnifiedRelationships(),
+          ]);
+        })
+        .then(function (results) {
         var j = results[0];
         loading.hidden = true;
-        // Build a name lookup so we can overlay quality_score onto
-        // anchor-incident edges and is_power_node onto any node we can
-        // match by display name.
-        var nodeNameById = {};
-        (j.nodes || []).forEach(function (n) {
-          nodeNameById[n.id] = (n.name || "").toLowerCase().trim();
-        });
         var anchorIsPower = !!(influenceSummary && influenceSummary.is_power_node);
+        var byNeighbor = loadAnchorUnifiedRelationships._byNeighbor || {};
         // Flatten ref_table/ref_id onto the node so initial click payloads
         // match expand/collapse payloads (deeplinks need them at top level).
         var nodes = (j.nodes || []).map(function (n) {
-          var nameLc = (n.name || "").toLowerCase().trim();
-          var isPower = (n.id === entityId && anchorIsPower) || (nameLc && powerSetByName[nameLc]);
-          return { id: n.id, label: n.name, name: n.name, kind: n.kind, ref_table: n.ref_table, ref_id: n.ref_id, is_power_node: isPower, ref: n };
+          var unifiedId = unifiedIdByLegacyNodeId[n.id];
+          var isPower = (n.id === entityId && anchorIsPower) || (unifiedId && !!powerSetUnifiedIds[unifiedId]);
+          return { id: n.id, label: n.name, name: n.name, kind: n.kind, ref_table: n.ref_table, ref_id: n.ref_id, is_power_node: !!isPower, ref: n };
         });
         var edges = (j.edges || []).map(function (e) {
           // For edges incident to the anchor we know the neighbor's
-          // (name, kind) and can look up the quality_score from the
-          // unified endpoint by that composite key.
+          // legacy id and can map it to a unified id, then look up
+          // quality_score by (neighbor_unified_id, kind).
           var quality = null;
-          var nbrId = (e.src === entityId) ? e.dst : ((e.dst === entityId) ? e.src : null);
-          if (nbrId != null) {
-            var nbrName = nodeNameById[nbrId];
-            if (nbrName) {
-              var key = nbrName + "|" + (e.kind || "").toLowerCase().trim();
-              var q = qualityByNeighborKey[key];
+          var nbrLegacyId = (e.src === entityId) ? e.dst : ((e.dst === entityId) ? e.src : null);
+          if (nbrLegacyId != null) {
+            var nbrUnifiedId = unifiedIdByLegacyNodeId[nbrLegacyId];
+            if (nbrUnifiedId) {
+              var key = nbrUnifiedId + "|" + (e.kind || "").toLowerCase().trim();
+              var q = byNeighbor[key];
               if (typeof q === "number") quality = q;
             }
           }
@@ -231,10 +280,12 @@
         + (activeKinds && activeKinds.length ? "&kinds=" + encodeURIComponent(activeKinds.join(",")) : "")
         + (opts.includeFamily ? "&include_family=1" : "");
       api("/api/relationships/entity/" + encodeURIComponent(id) + qs).then(function (j) {
+        return resolveUnifiedIds(j.nodes || []).then(function () { return j; });
+      }).then(function (j) {
         graph.addData({
           nodes: (j.nodes || []).map(function (n) {
-            var nameLc = (n.name || "").toLowerCase().trim();
-            return { id: n.id, label: n.name, name: n.name, kind: n.kind, ref_table: n.ref_table, ref_id: n.ref_id, is_power_node: !!(nameLc && powerSetByName[nameLc]) };
+            var unifiedId = unifiedIdByLegacyNodeId[n.id];
+            return { id: n.id, label: n.name, name: n.name, kind: n.kind, ref_table: n.ref_table, ref_id: n.ref_id, is_power_node: !!(unifiedId && powerSetUnifiedIds[unifiedId]) };
           }),
           edges: (j.edges || []).map(function (e) { return { src: e.src, dst: e.dst, kind: e.kind, strength: e.strength }; }),
         });
