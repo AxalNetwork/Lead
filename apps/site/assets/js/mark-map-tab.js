@@ -220,26 +220,63 @@
     return wrap;
   }
 
-  function buildMarkdownCallout(marks) {
-    var mds = marks.filter(function (m) { return m.source_kind === "markdown"; });
-    if (!mds.length) return document.createDocumentFragment();
-    var latest = mds.slice().sort(function (a, b) { return b.as_of.localeCompare(a.as_of); })[0];
-    var card = el("div", {
-      "class": "ads-card",
-      style: "padding:8px;margin-top:8px;border-left:3px solid " + COLORS.markdown + ";background:#fef2f2",
-    });
-    card.appendChild(el("div", { style: "font-weight:600;font-size:12px;color:" + COLORS.markdown }, "Markdown alert"));
-    var body = el("div", { style: "font-size:12px" });
-    var line = "Latest markdown " + latest.as_of + " → " + fmtUsd(latest.implied_valuation_usd);
-    if (latest.holder_name_raw) line += " (" + latest.holder_name_raw + ")";
-    body.appendChild(document.createTextNode(line));
-    var href = safeHref(latest.source_url);
-    if (href) {
-      body.appendChild(document.createTextNode(" · "));
-      body.appendChild(evidenceLink(latest.source_url));
+  // Detect a step-change between consecutive mutual-fund-holding marks
+  // (the dominant source kind for both markdowns and markups). A
+  // ≥10% drop from one fund report to the next is a "markdown"; a
+  // ≥10% lift is a "markup". This keeps parity with the spec's "both
+  // markdowns and markups are called out" requirement even when the
+  // upstream pipeline hasn't relabelled the source_kind itself.
+  function detectMarkChanges(marks) {
+    var fundMarks = marks
+      .filter(function (m) { return m.source_kind === "mutual_fund_holding" && m.implied_valuation_usd != null; })
+      .slice()
+      .sort(function (a, b) { return a.as_of.localeCompare(b.as_of); });
+    var explicit = marks.filter(function (m) { return m.source_kind === "markdown"; });
+    var out = [];
+    for (var i = 1; i < fundMarks.length; i++) {
+      var prev = fundMarks[i - 1], cur = fundMarks[i];
+      var delta = (cur.implied_valuation_usd - prev.implied_valuation_usd) / prev.implied_valuation_usd;
+      if (delta <= -0.10) out.push({ kind: "markdown", as_of: cur.as_of, from: prev.implied_valuation_usd, to: cur.implied_valuation_usd, delta: delta, holder: cur.holder_name_raw, source_url: cur.source_url });
+      else if (delta >= 0.10) out.push({ kind: "markup", as_of: cur.as_of, from: prev.implied_valuation_usd, to: cur.implied_valuation_usd, delta: delta, holder: cur.holder_name_raw, source_url: cur.source_url });
     }
-    card.appendChild(body);
-    return card;
+    explicit.forEach(function (m) {
+      out.push({ kind: "markdown", as_of: m.as_of, from: null, to: m.implied_valuation_usd, delta: null, holder: m.holder_name_raw, source_url: m.source_url });
+    });
+    return out.sort(function (a, b) { return b.as_of.localeCompare(a.as_of); });
+  }
+
+  function buildMarkdownCallout(marks) {
+    var changes = detectMarkChanges(marks);
+    if (!changes.length) return document.createDocumentFragment();
+    var frag = document.createDocumentFragment();
+    // Show at most one markdown + one markup callout (latest of each).
+    var seen = {};
+    changes.forEach(function (c) {
+      if (seen[c.kind]) return;
+      seen[c.kind] = true;
+      var isUp = c.kind === "markup";
+      var color = isUp ? COLORS.primary_round : COLORS.markdown;
+      var bg = isUp ? "#eff6ff" : "#fef2f2";
+      var card = el("div", {
+        "class": "ads-card",
+        style: "padding:8px;margin-top:8px;border-left:3px solid " + color + ";background:" + bg,
+      });
+      card.appendChild(el("div", { style: "font-weight:600;font-size:12px;color:" + color },
+        isUp ? "Markup alert" : "Markdown alert"));
+      var body = el("div", { style: "font-size:12px" });
+      var line = "Latest " + c.kind + " " + c.as_of + " → " + fmtUsd(c.to);
+      if (c.from != null) line += " (was " + fmtUsd(c.from) + ", " + (c.delta >= 0 ? "+" : "") + (c.delta * 100).toFixed(1) + "%)";
+      if (c.holder) line += " · " + c.holder;
+      body.appendChild(document.createTextNode(line));
+      var href = safeHref(c.source_url);
+      if (href) {
+        body.appendChild(document.createTextNode(" · "));
+        body.appendChild(evidenceLink(c.source_url));
+      }
+      card.appendChild(body);
+      frag.appendChild(card);
+    });
+    return frag;
   }
 
   function buildImplied(iv) {

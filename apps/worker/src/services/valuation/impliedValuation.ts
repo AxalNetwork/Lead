@@ -8,6 +8,16 @@
 // comp_metrics if disclosed, or last public deal_event valuation as
 // fallback).
 
+// Stage-aware panel selection is INTENTIONALLY DEFERRED: today's
+// criteria_json schema carries `sector` + financial bands but not a
+// dedicated `stage` field, and entity-side stage facts (e.g.
+// `firm.stages`, `company.last_round_stage`) are emitted unevenly
+// across profile types. Nearest-panel selection therefore uses
+// membership-first (the panel that actually lists this company) and
+// sector-second. When a `criteria.stage` field is added to comp_panels
+// (follow-up alongside the 10-Q extractor in Task #11), this
+// selection can be extended to prefer panels whose stage matches the
+// target's most recent funding round.
 import type { Env } from "../../types";
 import type { ImpliedValuationRange } from "./types";
 

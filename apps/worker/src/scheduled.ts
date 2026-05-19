@@ -429,9 +429,10 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       }
 
       // Task #9 (Valuation Intelligence): nightly comp-panel refresh —
-      // re-screens any comp_panels whose `next_refresh_at` has elapsed
-      // (cadence defaults to monthly, configurable per panel). Bounded
-      // at 50 panels/tick; idempotent (membership snapshot is replaced
+      // re-screens any comp_panels whose `last_refreshed_at` is older
+      // than the staleHours cutoff (default 28 days = monthly cadence
+      // per spec). Bounded at 50 panels/tick by the function's
+      // internal LIMIT; idempotent (membership snapshot is replaced
       // wholesale per refresh). Free plan caps crons at 5 so this
       // piggybacks on the consolidated nightly slot.
       try {
