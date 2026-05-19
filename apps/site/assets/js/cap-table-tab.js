@@ -86,6 +86,7 @@
     { key: "pct_ownership", label: "%", align: "right", sortVal: function (h) { return h.pct_ownership == null ? -Infinity : h.pct_ownership; } },
     { key: "original_investment_usd", label: "Investment", align: "right", sortVal: function (h) { return h.original_investment_usd == null ? -Infinity : h.original_investment_usd; } },
     { key: "round_acquired", label: "Round", align: "left", sortVal: function (h) { return h.round_acquired || ""; } },
+    { key: "evidence", label: "Evidence", align: "left", sortVal: function (h) { return h.evidence_source_kind || ""; } },
   ];
 
   function sortHolders(holders) {
@@ -107,6 +108,12 @@
       return '<th data-sort="' + c.key + '" style="text-align:' + c.align + ';cursor:pointer;user-select:none">' + esc(c.label) + arrow + '</th>';
     }).join("");
     var rows = sorted.map(function (h) {
+      var evidenceCell = "—";
+      if (h.evidence_url) {
+        var label = h.evidence_source_kind ? h.evidence_source_kind.replace(/_/g, " ") : "source";
+        evidenceCell = '<a href="' + esc(h.evidence_url) + '" target="_blank" rel="noopener" style="font-size:11px">' + esc(label) + ' ↗</a>';
+        if (h.evidence_accession_no) evidenceCell += ' <span style="font-size:10px;color:#999">' + esc(h.evidence_accession_no) + '</span>';
+      }
       return '<tr>' +
         '<td>' + esc(h.holder_name) + (h.holder_entity_id ? ' <a href="/dashboard/profile/?entity=' + encodeURIComponent(h.holder_entity_id) + '" style="font-size:10px">↗</a>' : '') + '</td>' +
         '<td style="font-size:11px;color:#666">' + esc(h.holder_class) + '</td>' +
@@ -115,6 +122,7 @@
         '<td style="text-align:right">' + fmtPct(h.pct_ownership) + '</td>' +
         '<td style="text-align:right">' + fmtUsd(h.original_investment_usd) + '</td>' +
         '<td style="font-size:11px">' + esc(h.round_acquired || "—") + '</td>' +
+        '<td style="font-size:11px">' + evidenceCell + '</td>' +
       '</tr>';
     }).join("");
     return '<table class="ads-table" data-holders-table="' + esc(mountId || "") + '" style="width:100%;font-size:12px;border-collapse:collapse">' +

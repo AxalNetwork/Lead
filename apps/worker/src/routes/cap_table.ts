@@ -140,6 +140,13 @@ function serializeSnapshot(s: SnapshotRow, holders: HolderRow[]) {
       round_acquired: h.round_acquired,
       liquidation_preference_x: h.liquidation_preference_x,
       participating: h.participating == null ? null : !!h.participating,
+      // Per-holder evidence: row-level when available (future:
+      // section anchors / table-cell URLs), else inherit the
+      // snapshot's source URL so every holder row is independently
+      // verifiable against the public artifact.
+      evidence_url: s.source_url,
+      evidence_source_kind: s.source_kind,
+      evidence_accession_no: s.source_accession_no,
     })),
   };
 }
