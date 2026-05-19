@@ -10,9 +10,11 @@
 import { Hono } from "hono";
 import type { Env } from "../types";
 import {
-  buildDilutionWaterfall, sweepFormDInferenceForCompany, sweepPressInferenceForCompany,
+  buildDilutionWaterfall, mergeDealEventsIntoTimeline, projectTrajectory,
+  sweepFormDInferenceForCompany, sweepPressInferenceForCompany,
   sweepS1InferenceForCompany, inferCapTableFromDeCoi, inferCapTableFromSecondaryListing,
-  type SnapshotForDilution,
+  inferCapTableFromDelawareSosMetadata,
+  type SnapshotForDilution, type DealEventForDilution,
 } from "../services/capTable";
 import type { CapTableSourceKind, HolderClass, SecurityType } from "../services/capTable/types";
 
@@ -161,8 +163,27 @@ capTableRoute.get("/:id/cap-table", async (c) => {
     secondary_listing: 2, press_inference: 1,
   };
   const candidates = Array.from(latestBySource.values());
-  candidates.sort((a, b) => (tier[b.source_kind] ?? 0) - (tier[a.source_kind] ?? 0)
-    || b.confidence - a.confidence || b.as_of.localeCompare(a.as_of));
+  // A snapshot tagged metadata_only=true (e.g. DE-SOS metadata path) is
+  // structurally empty (no holders, no shares, no post-money). Demote
+  // these below ANY snapshot carrying real holder rows so a richer
+  // form_d_inference or press_inference doesn't get hidden behind a
+  // bare COI metadata entry.
+  const isMetadataOnly = (s: SnapshotRow): boolean =>
+    !!(s.notes && /metadata_only\s*=\s*true/i.test(s.notes));
+  const holdersCountByIdRaw = await c.env.DB.prepare(
+    `SELECT snapshot_id, COUNT(*) AS n FROM cap_table_holders WHERE snapshot_id IN (${candidates.map(() => "?").join(",") || "''"}) GROUP BY snapshot_id`,
+  ).bind(...candidates.map((s) => s.id)).all<{ snapshot_id: string; n: number }>().catch(() => ({ results: [] as { snapshot_id: string; n: number }[] }));
+  const holdersCount = new Map<string, number>();
+  for (const r of (holdersCountByIdRaw.results ?? [])) holdersCount.set(r.snapshot_id, r.n);
+  candidates.sort((a, b) => {
+    const aMeta = isMetadataOnly(a) || (holdersCount.get(a.id) ?? 0) === 0;
+    const bMeta = isMetadataOnly(b) || (holdersCount.get(b.id) ?? 0) === 0;
+    // Snapshots with real holders always beat metadata-only/empty ones.
+    if (aMeta !== bMeta) return aMeta ? 1 : -1;
+    return (tier[b.source_kind] ?? 0) - (tier[a.source_kind] ?? 0)
+      || b.confidence - a.confidence
+      || b.as_of.localeCompare(a.as_of);
+  });
   const best = candidates[0];
   const ids = candidates.map((s) => s.id);
   const holders = await loadHoldersForSnapshots(c.env, ids);
@@ -194,7 +215,6 @@ capTableRoute.get("/:id/cap-table/dilution", async (c) => {
   const entityId = await resolveEntityIdFromCompanyParam(c.env, c.req.param("id"));
   if (!entityId) return c.json({ error: "company_not_resolved" }, 404);
   const all = await loadSnapshotsForCompany(c.env, entityId);
-  if (all.length < 2) return c.json({ entity_id: entityId, steps: [], reason: "need_two_snapshots" });
   const holders = await loadHoldersForSnapshots(c.env, all.map((s) => s.id));
   const input: SnapshotForDilution[] = all.map((s) => ({
     id: s.id, as_of: s.as_of,
@@ -216,8 +236,53 @@ capTableRoute.get("/:id/cap-table/dilution", async (c) => {
       round_acquired: h.round_acquired,
     })),
   }));
-  const steps = buildDilutionWaterfall(input);
-  return c.json({ entity_id: entityId, steps });
+  // Merge funding-round deal_events into the timeline so rounds with
+  // no parsed snapshot still appear as a dilution step. Sector
+  // medians fill missing post-money.
+  const deals = await c.env.DB.prepare(
+    `SELECT id, COALESCE(announcement_date, closing_date) AS as_of,
+            round_name, amount_usd, valuation_usd, sector_tags_json
+       FROM deal_events
+      WHERE company_entity_id = ? AND event_type = 'funding_round'
+        AND (announcement_date IS NOT NULL OR closing_date IS NOT NULL)
+      ORDER BY as_of ASC`,
+  ).bind(entityId).all<{ id: string; as_of: string; round_name: string | null; amount_usd: number | null; valuation_usd: number | null; sector_tags_json: string | null }>();
+  const dealRows: DealEventForDilution[] = (deals.results ?? []).map((d) => ({
+    id: d.id, as_of: d.as_of, round_name: d.round_name,
+    amount_usd: d.amount_usd, valuation_usd: d.valuation_usd,
+    sector_tag: d.sector_tags_json ? (() => { try { const a = JSON.parse(d.sector_tags_json!); return Array.isArray(a) && a.length ? String(a[0]) : null; } catch { return null; } })() : null,
+  }));
+  // Sector median post-money (cheap fallback).
+  const sectorRow = dealRows.find((d) => d.sector_tag);
+  let medianPost: number | null = null;
+  if (sectorRow?.sector_tag) {
+    const r = await c.env.DB.prepare(
+      `SELECT valuation_usd FROM deal_events
+        WHERE valuation_usd IS NOT NULL AND event_type='funding_round'
+          AND sector_tags_json LIKE ?
+        ORDER BY valuation_usd ASC LIMIT 200`,
+    ).bind(`%${sectorRow.sector_tag}%`).all<{ valuation_usd: number }>();
+    const vals = (r.results ?? []).map((x) => x.valuation_usd).filter((v) => v > 0);
+    if (vals.length >= 5) medianPost = vals[Math.floor(vals.length / 2)];
+  }
+  const merged = mergeDealEventsIntoTimeline(input, dealRows, medianPost);
+  if (merged.length < 2) {
+    return c.json({
+      entity_id: entityId, steps: [], projection: null,
+      sector_median_post_money_usd: medianPost,
+      deal_events_merged: dealRows.length,
+      reason: "need_two_timeline_points",
+    });
+  }
+  const steps = buildDilutionWaterfall(merged);
+  const projection = projectTrajectory(steps);
+  return c.json({
+    entity_id: entityId,
+    steps,
+    projection,
+    sector_median_post_money_usd: medianPost,
+    deal_events_merged: dealRows.length,
+  });
 });
 
 // ---------------------------------------------------------- REBUILD
@@ -237,6 +302,9 @@ capTableRoute.post("/:id/cap-table/rebuild", async (c) => {
   const secUrls = Array.isArray((body as { secondary_urls?: unknown }).secondary_urls)
     ? ((body as { secondary_urls: unknown[] }).secondary_urls.filter((x) => typeof x === "string") as string[])
     : [];
+  const sosMeta = (body as { delaware_sos?: unknown }).delaware_sos as
+    | { file_number: string; formation_date: string; entity_status?: string; registered_agent?: string; source_url?: string }
+    | undefined;
   const company = await c.env.DB.prepare(
     `SELECT display_name FROM u_entities WHERE id = ?`,
   ).bind(entityId).first<{ display_name: string }>();
@@ -263,5 +331,20 @@ capTableRoute.post("/:id/cap-table/rebuild", async (c) => {
       sec.push({ url, snapshot_id: null, holders: 0, skipped: true, reason: (e as Error).message });
     }
   }
-  return c.json({ entity_id: entityId, form_d: fd, press, s1, delaware_coi: coi, secondary_listing: sec });
+  let deSos: { snapshot_id: string | null; skipped: boolean; reason?: string } | null = null;
+  if (sosMeta?.file_number && sosMeta?.formation_date) {
+    try {
+      const r = await inferCapTableFromDelawareSosMetadata(c.env, {
+        company_entity_id: entityId, company_name_raw: name,
+        file_number: sosMeta.file_number, formation_date: sosMeta.formation_date,
+        entity_status: sosMeta.entity_status ?? null,
+        registered_agent: sosMeta.registered_agent ?? null,
+        source_url: sosMeta.source_url ?? null,
+      });
+      deSos = { snapshot_id: r.snapshot_id, skipped: r.skipped, reason: r.reason };
+    } catch (e) {
+      deSos = { snapshot_id: null, skipped: true, reason: (e as Error).message };
+    }
+  }
+  return c.json({ entity_id: entityId, form_d: fd, press, s1, delaware_coi: coi, secondary_listing: sec, delaware_sos_metadata: deSos });
 });

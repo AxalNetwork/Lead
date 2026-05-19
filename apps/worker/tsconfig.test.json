@@ -163,6 +163,8 @@
     "src/services/capTable/types.ts",
     "src/services/capTable/normalize.ts",
     "src/services/capTable/dilution.ts",
-    "src/services/capTable/s1CapTableParser.ts"
+    "src/services/capTable/s1CapTableParser.ts",
+    "src/services/capTable/deCoiParser.ts",
+    "src/services/capTable/secondaryListingParser.ts"
   ]
 }

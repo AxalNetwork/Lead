@@ -5,8 +5,9 @@
 // never composes its own SQL writes.
 
 export { persistCapTableSnapshot } from "./persist";
-export { buildDilutionWaterfall } from "./dilution";
-export type { DilutionStep, DilutionHolder, SnapshotForDilution } from "./dilution";
+export { buildDilutionWaterfall, mergeDealEventsIntoTimeline, projectTrajectory } from "./dilution";
+export type { DilutionStep, DilutionHolder, SnapshotForDilution, DealEventForDilution, TrajectoryProjection } from "./dilution";
+export { inferCapTableFromDelawareSosMetadata } from "./deSosMetadata";
 export { extractS1CapTable } from "./s1CapTableParser";
 export { extractDelawareCoi } from "./deCoiParser";
 export { extractSecondaryListing } from "./secondaryListingParser";

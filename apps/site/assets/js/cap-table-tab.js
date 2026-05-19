@@ -75,9 +75,38 @@
     '</div>';
   }
 
-  function renderHoldersTable(holders) {
+  // Sortable holders table. Click a column header to cycle asc/desc;
+  // a small arrow indicates the active direction.
+  var SORT_STATE = { key: "pct_ownership", dir: "desc" };
+  var COLS = [
+    { key: "holder_name", label: "Holder", align: "left", sortVal: function (h) { return (h.holder_name || "").toLowerCase(); } },
+    { key: "holder_class", label: "Class", align: "left", sortVal: function (h) { return h.holder_class || ""; } },
+    { key: "security_type", label: "Security", align: "left", sortVal: function (h) { return h.security_type || ""; } },
+    { key: "shares", label: "Shares", align: "right", sortVal: function (h) { return h.shares == null ? -Infinity : h.shares; } },
+    { key: "pct_ownership", label: "%", align: "right", sortVal: function (h) { return h.pct_ownership == null ? -Infinity : h.pct_ownership; } },
+    { key: "original_investment_usd", label: "Investment", align: "right", sortVal: function (h) { return h.original_investment_usd == null ? -Infinity : h.original_investment_usd; } },
+    { key: "round_acquired", label: "Round", align: "left", sortVal: function (h) { return h.round_acquired || ""; } },
+  ];
+
+  function sortHolders(holders) {
+    var col = COLS.find(function (c) { return c.key === SORT_STATE.key; }) || COLS[4];
+    var sign = SORT_STATE.dir === "asc" ? 1 : -1;
+    return holders.slice().sort(function (a, b) {
+      var va = col.sortVal(a), vb = col.sortVal(b);
+      if (va < vb) return -1 * sign;
+      if (va > vb) return 1 * sign;
+      return 0;
+    });
+  }
+
+  function renderHoldersTable(holders, mountId) {
     if (!holders || !holders.length) return '<div class="ads-muted" style="font-size:12px">No holders disclosed at this confidence tier.</div>';
-    var rows = holders.map(function (h) {
+    var sorted = sortHolders(holders);
+    var thead = COLS.map(function (c) {
+      var arrow = SORT_STATE.key === c.key ? (SORT_STATE.dir === "asc" ? " ▲" : " ▼") : "";
+      return '<th data-sort="' + c.key + '" style="text-align:' + c.align + ';cursor:pointer;user-select:none">' + esc(c.label) + arrow + '</th>';
+    }).join("");
+    var rows = sorted.map(function (h) {
       return '<tr>' +
         '<td>' + esc(h.holder_name) + (h.holder_entity_id ? ' <a href="/dashboard/profile/?entity=' + encodeURIComponent(h.holder_entity_id) + '" style="font-size:10px">↗</a>' : '') + '</td>' +
         '<td style="font-size:11px;color:#666">' + esc(h.holder_class) + '</td>' +
@@ -88,10 +117,29 @@
         '<td style="font-size:11px">' + esc(h.round_acquired || "—") + '</td>' +
       '</tr>';
     }).join("");
-    return '<table class="ads-table" style="width:100%;font-size:12px;border-collapse:collapse">' +
-      '<thead><tr style="text-align:left;border-bottom:1px solid #ddd">' +
-      '<th>Holder</th><th>Class</th><th>Security</th><th style="text-align:right">Shares</th><th style="text-align:right">%</th><th style="text-align:right">Investment</th><th>Round</th>' +
-      '</tr></thead><tbody>' + rows + '</tbody></table>';
+    return '<table class="ads-table" data-holders-table="' + esc(mountId || "") + '" style="width:100%;font-size:12px;border-collapse:collapse">' +
+      '<thead><tr style="text-align:left;border-bottom:1px solid #ddd">' + thead + '</tr></thead>' +
+      '<tbody>' + rows + '</tbody></table>';
+  }
+
+  function bindSortHandlers(rootEl, snap) {
+    var table = rootEl.querySelector("table[data-holders-table]");
+    if (!table) return;
+    table.querySelectorAll("th[data-sort]").forEach(function (th) {
+      th.addEventListener("click", function () {
+        var key = th.getAttribute("data-sort");
+        if (SORT_STATE.key === key) {
+          SORT_STATE.dir = SORT_STATE.dir === "asc" ? "desc" : "asc";
+        } else {
+          SORT_STATE.key = key;
+          SORT_STATE.dir = key === "holder_name" || key === "holder_class" || key === "security_type" || key === "round_acquired" ? "asc" : "desc";
+        }
+        // Re-render only the holders table region.
+        var marker = rootEl.querySelector("[data-holders-region]");
+        if (marker) marker.innerHTML = renderHoldersTable(snap.holders, "holders-region");
+        bindSortHandlers(rootEl, snap);
+      });
+    });
   }
 
   function renderDilution(steps) {
@@ -116,6 +164,15 @@
       '</tr></thead><tbody>' + rows + '</tbody></table>';
   }
 
+  function renderProjection(p) {
+    if (!p) return "";
+    return '<div style="margin-top:12px;padding:8px;background:#f0f4ff;border-left:3px solid #3a72b5;font-size:12px">' +
+      '<strong>Trajectory projection (' + esc(p.projected_as_of) + ')</strong> — basis: ' + p.basis_steps + ' step(s). ' +
+      'Projected post-money: ' + esc(fmtUsd(p.projected_post_money_usd)) + '; ' +
+      'projected founder %: ' + esc(fmtPct(p.projected_founder_pct)) + '.' +
+      '</div>';
+  }
+
   async function mount(opts) {
     var root = document.getElementById(opts.rootId);
     if (!root) return;
@@ -130,8 +187,10 @@
       root.innerHTML =
         renderConfidenceBanner(snap.best) +
         renderSummary(snap.best) +
-        renderHoldersTable(snap.best.holders) +
-        renderDilution(dil.steps);
+        '<div data-holders-region>' + renderHoldersTable(snap.best.holders, "holders-region") + '</div>' +
+        renderDilution(dil.steps) +
+        (dil.projection ? renderProjection(dil.projection) : "");
+      bindSortHandlers(root, snap.best);
     } catch (e) {
       root.innerHTML = '<div class="ads-muted" style="font-size:12px">Cap table unavailable: ' + esc(e.message) + '</div>';
     }

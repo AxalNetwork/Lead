@@ -12,6 +12,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const { extractS1CapTable } = await import("../../../../test-dist/services/capTable/s1CapTableParser.js");
 
 const REDDIT_HTML = await readFile(join(__dirname, "fixtures", "reddit-s1-principal-stockholders.html"), "utf8");
+const KLAVIYO_HTML = await readFile(join(__dirname, "fixtures", "klaviyo-s1-principal-stockholders.html"), "utf8");
 
 test("Reddit S-1: extracts Principal Stockholders table", () => {
   const r = extractS1CapTable(REDDIT_HTML);
@@ -67,6 +68,46 @@ test("Reddit S-1: founder vs preferred-investor classification", () => {
   assert.ok(sequoia, "Sequoia row missing");
   assert.equal(sequoia.holder_class, "preferred_investor",
     `Sequoia should classify as preferred_investor, got ${sequoia.holder_class}`);
+});
+
+test("Klaviyo S-1: extracts Principal Stockholders table with multi-row header", () => {
+  const r = extractS1CapTable(KLAVIYO_HTML);
+  assert.equal(r.ok, true, `expected ok extraction, got reason=${r.reason}`);
+  assert.ok(r.holders.length >= 7, `expected >=7 holders, got ${r.holders.length}`);
+});
+
+test("Klaviyo S-1: known holders are recovered (>95% name accuracy)", () => {
+  const r = extractS1CapTable(KLAVIYO_HTML);
+  const names = r.holders.map((h) => h.holder_name_raw);
+  const required = [
+    "Andrew Bialecki", "Ed Hallen", "Summit Partners", "Accomplice Management",
+    "Astral Capital LLC", "Shopify Inc.", "Sara Adler", "Amanda Whalen",
+  ];
+  let found = 0;
+  for (const want of required) {
+    if (names.some((n) => n.includes(want.split(",")[0]))) found++;
+  }
+  const accuracy = found / required.length;
+  assert.ok(accuracy >= 0.95, `Klaviyo holder accuracy ${(accuracy*100).toFixed(0)}% < 95% (found ${found}/${required.length})`);
+});
+
+test("Combined S-1 corpus accuracy >95% across Reddit + Klaviyo", () => {
+  const reddit = extractS1CapTable(REDDIT_HTML);
+  const klaviyo = extractS1CapTable(KLAVIYO_HTML);
+  const allWanted = [
+    ["Advance Magazine Publishers", reddit], ["Tencent", reddit], ["Quiet Capital", reddit],
+    ["OMERS", reddit], ["Vy Capital", reddit], ["Sequoia", reddit],
+    ["Andreessen Horowitz", reddit], ["Steven Huffman", reddit],
+    ["Andrew Bialecki", klaviyo], ["Ed Hallen", klaviyo], ["Summit Partners", klaviyo],
+    ["Accomplice Management", klaviyo], ["Astral Capital", klaviyo], ["Shopify", klaviyo],
+    ["Sara Adler", klaviyo], ["Amanda Whalen", klaviyo],
+  ];
+  let found = 0;
+  for (const [want, ex] of allWanted) {
+    if (ex.holders.some((h) => h.holder_name_raw.includes(want))) found++;
+  }
+  const accuracy = found / allWanted.length;
+  assert.ok(accuracy >= 0.95, `Corpus accuracy ${(accuracy*100).toFixed(0)}% < 95% (${found}/${allWanted.length})`);
 });
 
 test("extractor returns ok=false when the page has no Principal Stockholders table", () => {

@@ -77,6 +77,31 @@ export interface SnapshotForDilution {
   }>;
 }
 
+/** Stand-alone deal_event (funding_round) merged into the timeline so
+ *  the waterfall can interpolate between higher-confidence parsed
+ *  snapshots. When a deal has no corresponding cap-table snapshot,
+ *  we still know "post-money went from $X to $Y across this round."
+ *  These appear as `source_kind = press_inference` synthetic
+ *  snapshots in the merged stream. */
+export interface DealEventForDilution {
+  id: string;
+  as_of: string;
+  round_name: string | null;
+  amount_usd: number | null;
+  valuation_usd: number | null;
+  sector_tag: string | null;
+}
+
+export interface TrajectoryProjection {
+  // Best-effort extrapolation: applies the average per-step share
+  // growth and per-step founder-dilution across observed steps.
+  projected_as_of: string;
+  projected_post_money_usd: number | null;
+  projected_founder_pct: number | null;
+  projected_share_growth_ratio: number | null;
+  basis_steps: number;
+}
+
 function classPct(snap: SnapshotForDilution, cls: HolderClass): number | null {
   // Prefer the snapshot-level summary fields when present; else aggregate
   // the holder rows.
@@ -98,6 +123,82 @@ function classPct(snap: SnapshotForDilution, cls: HolderClass): number | null {
 
 function holderKey(h: SnapshotForDilution["holders"][number]): string {
   return h.holder_entity_id ?? (h.holder_name_normalized ?? h.holder_name_raw.toLowerCase());
+}
+
+/** Merge deal_events into the snapshot timeline. Each deal that has
+ *  no nearby snapshot (±30d) is promoted to a synthetic snapshot so
+ *  the waterfall sees the round as a step. Missing post-money is
+ *  filled from a sector median when one is provided.
+ *
+ *  Inputs:
+ *    snapshots — real cap-table snapshots
+ *    deals     — deal_event rows (funding_round only)
+ *    sectorMedianPostMoneyUsd — optional fallback post-money to apply
+ *                               when a deal lacks a valuation
+ */
+export function mergeDealEventsIntoTimeline(
+  snapshots: SnapshotForDilution[],
+  deals: DealEventForDilution[],
+  sectorMedianPostMoneyUsd: number | null = null,
+): SnapshotForDilution[] {
+  const out: SnapshotForDilution[] = snapshots.slice();
+  const snapDates = new Set(snapshots.map((s) => s.as_of.slice(0, 10)));
+  for (const d of deals) {
+    if (!d.as_of) continue;
+    const day = d.as_of.slice(0, 10);
+    // Skip if a real snapshot exists within ±30 days.
+    let near = false;
+    for (const s of snapshots) {
+      const dt = Math.abs(Date.parse(s.as_of) - Date.parse(d.as_of));
+      if (Number.isFinite(dt) && dt < 30 * 86400_000) { near = true; break; }
+    }
+    if (near || snapDates.has(day)) continue;
+    const post = d.valuation_usd ?? sectorMedianPostMoneyUsd ?? null;
+    out.push({
+      id: `deal:${d.id}`,
+      as_of: d.as_of,
+      source_kind: "press_inference",
+      fully_diluted_shares: null,
+      post_money_usd: post,
+      option_pool_pct: null,
+      preferred_pct: null,
+      common_pct: null,
+      confidence: 0.30,
+      holders: [],
+    });
+  }
+  return out;
+}
+
+/** Project one step forward from the observed dilution trajectory.
+ *  Uses the geometric mean of per-step share-growth and the
+ *  arithmetic mean of founder pct deltas. Returns null when we have
+ *  fewer than 2 steps to extrapolate from. */
+export function projectTrajectory(steps: DilutionStep[], horizonMonths: number = 12): TrajectoryProjection | null {
+  if (steps.length < 2) return null;
+  const ratios = steps.map((s) => s.share_growth_ratio).filter((r): r is number => r != null && r > 0);
+  const founderDeltas = steps.map((s) => s.founder_pct_change).filter((r): r is number => r != null);
+  const last = steps[steps.length - 1];
+  const lastDate = new Date(last.to_as_of + "T00:00:00Z").getTime();
+  if (!Number.isFinite(lastDate)) return null;
+  const target = new Date(lastDate + horizonMonths * 30 * 86400_000).toISOString().slice(0, 10);
+  const geoMeanRatio = ratios.length
+    ? Math.exp(ratios.reduce((a, r) => a + Math.log(r), 0) / ratios.length)
+    : null;
+  const meanFounderDelta = founderDeltas.length
+    ? founderDeltas.reduce((a, r) => a + r, 0) / founderDeltas.length
+    : null;
+  const founderLast = steps[steps.length - 1].holders
+    .filter((h) => h.holder_class === "founder")
+    .reduce((a, h) => a + (h.pct_after ?? 0), 0);
+  return {
+    projected_as_of: target,
+    projected_post_money_usd: last.to_post_money_usd != null && geoMeanRatio != null
+      ? Math.round(last.to_post_money_usd * geoMeanRatio) : null,
+    projected_founder_pct: meanFounderDelta != null ? Math.max(0, founderLast + meanFounderDelta) : null,
+    projected_share_growth_ratio: geoMeanRatio,
+    basis_steps: steps.length,
+  };
 }
 
 /** Build per-snapshot dilution steps from a chronological snapshot list. */
