@@ -28,11 +28,8 @@ export const bankruptcyVerifier: Verifier = {
     // run the CourtListener bankruptcy-court (RECAP `court_type=B`)
     // check, which has real (partial) federal coverage, rather than
     // short-circuiting on PACER cred presence.
-    const pacerUser = (env as unknown as { PACER_USER?: string }).PACER_USER;
-    const pacerPass = (env as unknown as { PACER_PASS?: string }).PACER_PASS;
-    const pacerNote = pacerUser && pacerPass ? "pacer_pcl_pending_taskRef_20" : "pacer_unconfigured";
-
-    const token = (env as unknown as { COURTLISTENER_TOKEN?: string }).COURTLISTENER_TOKEN;
+    const pacerNote = env.PACER_USER && env.PACER_PASS ? "pacer_pcl_pending_taskRef_20" : "pacer_unconfigured";
+    const token = env.COURTLISTENER_TOKEN;
     if (!token) {
       return { status: "unverifiable", confidence: 0.2, reason: `no_bankruptcy_source_configured (${pacerNote}, courtlistener_unconfigured)` };
     }

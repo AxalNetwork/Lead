@@ -65,7 +65,7 @@ export const directorshipVerifier: Verifier = {
     }
     // Companies House requires an API key sent as HTTP Basic auth
     // (key as username, empty password). Skip cleanly if unset.
-    const chKey = (env as unknown as { COMPANIES_HOUSE_API_KEY?: string }).COMPANIES_HOUSE_API_KEY;
+    const chKey = env.COMPANIES_HOUSE_API_KEY;
     if (companyNumber && chKey) {
       const url = `https://api.company-information.service.gov.uk/company/${encodeURIComponent(companyNumber)}/officers`;
       try {

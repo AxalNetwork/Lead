@@ -37,7 +37,7 @@ export const litigationVerifier: Verifier = {
     const p = claim.payload as { person_name?: string };
     const name = (p.person_name ?? "").trim();
     if (!name) return { status: "skipped", confidence: 0, reason: "missing_name" };
-    const token = (env as unknown as { COURTLISTENER_TOKEN?: string }).COURTLISTENER_TOKEN;
+    const token = env.COURTLISTENER_TOKEN;
     if (!token) {
       return { status: "unverifiable", confidence: 0.2, reason: "courtlistener_unconfigured" };
     }
