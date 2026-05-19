@@ -12,10 +12,13 @@
 //      signal is real and counts as corroboration when PACER
 //      misses (e.g. transient PACER auth outage).
 //
-// Both sources are queried directly via fetch() — PACER login is a
-// JSON POST and PCL is a JSON POST, neither benefits from the HTML
-// tier ladder in scraper/fetcher and both must NOT be routed through
-// a third-party proxy (PACER ToS).
+// Both PACER endpoints are JSON POSTs. They route through the in-house
+// `fetchPage` so they inherit centralized rate-limiting, retry logging
+// and the per-host circuit breaker. `method:"POST"` automatically
+// suppresses tier-1 (browser-render) and tier-2 (HTTP-forward proxy)
+// escalation — neither replays POST bodies and PACER ToS forbids
+// third-party proxying anyway. `skipPolicy:true` bypasses robots
+// (PACER is a paid auth-gated service, not a public crawl target).
 
 import { fetchPage } from "../../../scraper/fetcher";
 import type { Env } from "../../../types";
@@ -59,13 +62,18 @@ function splitName(name: string): { firstName?: string; lastName?: string } {
 async function pacerLogin(env: Env): Promise<string | null> {
   if (!env.PACER_USER || !env.PACER_PASS) return null;
   try {
-    const r = await fetch(PACER_LOGIN_URL, {
+    const r = await fetchPage(env, PACER_LOGIN_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ loginId: env.PACER_USER, password: env.PACER_PASS }),
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      expectJson: true,
+      liveOnly: true,
+      skipPolicy: true,
+      timeoutMs: 15_000,
     });
-    if (!r.ok) return null;
-    const body = await r.json() as { nextGenCSO?: string; loginResult?: string };
+    if (!r.ok || !r.html) return null;
+    let body: { nextGenCSO?: string; loginResult?: string };
+    try { body = JSON.parse(r.html) as { nextGenCSO?: string; loginResult?: string }; } catch { return null; }
     if (body && body.nextGenCSO && (body.loginResult === "0" || body.loginResult === undefined)) {
       return body.nextGenCSO;
     }
@@ -84,21 +92,26 @@ async function pacerSearch(env: Env, name: string): Promise<PacerSearch> {
   const { firstName, lastName } = splitName(name);
   if (!lastName) return { status: "unverifiable", count: 0, reason: "pacer_missing_lastname" };
   try {
-    const r = await fetch(PACER_PCL_SEARCH_URL, {
+    const r = await fetchPage(env, PACER_PCL_SEARCH_URL, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        "X-NEXT-GEN-CSO": token,
-      },
       body: JSON.stringify({
         lastName,
         firstName: firstName ?? "",
         jurisdictionType: "bk", // bankruptcy only
       }),
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "X-NEXT-GEN-CSO": token,
+      },
+      expectJson: true,
+      liveOnly: true,
+      skipPolicy: true,
+      timeoutMs: 15_000,
     });
-    if (!r.ok) return { status: "unverifiable", count: 0, reason: `pacer_http_${r.status}` };
-    const body = await r.json() as PclResponse;
+    if (!r.ok || !r.html) return { status: "unverifiable", count: 0, reason: `pacer_http_${r.status}` };
+    let body: PclResponse;
+    try { body = JSON.parse(r.html) as PclResponse; } catch { return { status: "unverifiable", count: 0, reason: "pacer_parse_failed" }; }
     const count = body.pageInfo?.totalElements ?? body.content?.length ?? 0;
     if (count === 0) return { status: "confirmed", count: 0 };
     return { status: "contradicted", count, first: body.content?.[0] };

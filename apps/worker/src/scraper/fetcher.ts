@@ -64,6 +64,12 @@ export interface FetchOptions {
    *  valid responses are short or contain none of the visible-text
    *  HTML markers. Only `status_<4xx/5xx>` blocking still applies. */
   expectJson?: boolean;
+  /** HTTP method. Defaults to GET. Non-GET requests are tier-0 only —
+   *  browser-render and HTTP-forward proxy tiers can't replay POST
+   *  bodies reliably, so escalation is suppressed. */
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  /** Request body for non-GET requests. */
+  body?: string;
 }
 
 export interface FetchResult {
@@ -230,12 +236,15 @@ async function tier0Direct(_env: Env, url: string, opts: FetchOptions): Promise<
     opts.signal.addEventListener("abort", () => ctl.abort(), { once: true });
   }
   try {
-    const res = await fetch(url, {
-      method: "GET",
+    const method = opts.method ?? "GET";
+    const init: RequestInit = {
+      method,
       headers: { ...buildHeaders(), ...(opts.headers ?? {}) },
       redirect: "follow",
       signal: ctl.signal,
-    });
+    };
+    if (method !== "GET" && opts.body !== undefined) init.body = opts.body;
+    const res = await fetch(url, init);
     const html = await res.text();
     const blockReason = opts.expectJson
       ? (BLOCK_STATUSES.has(res.status) ? `status_${res.status}` : null)
@@ -511,7 +520,13 @@ export async function fetchPage(env: Env, url: string, opts: FetchOptions = {}):
     await waitForRateLimit(env, host, opts.minIntervalMs ?? 4000);
   }
 
-  const tiers: Array<(env: Env, url: string, opts: FetchOptions) => Promise<FetchResult>> = opts.forceBrowser
+  // Non-GET requests (PACER auth, PCL search, …) can't safely escalate
+  // to the browser-render or HTTP-forward proxy tiers — neither replays
+  // POST bodies and PACER ToS forbids 3p proxying. Use tier-0 only.
+  const isNonGet = opts.method && opts.method !== "GET";
+  const tiers: Array<(env: Env, url: string, opts: FetchOptions) => Promise<FetchResult>> = isNonGet
+    ? [tier0Direct]
+    : opts.forceBrowser
     ? [tier1Browser, tier2Proxy]
     : [tier0Direct, tier1Browser, tier2Proxy];
 
