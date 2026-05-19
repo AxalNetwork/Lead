@@ -1,0 +1,94 @@
+---
+layout: default
+title: Verification
+permalink: /dashboard/verification/
+---
+
+<div style="margin-bottom:14px">
+  <h1 class="ads-page-title" id="ads-vf-title" style="margin:0">Background Verification</h1>
+  <p class="ads-page-sub" style="margin:4px 0 0">
+    Pass <code>?id=&lt;person_entity_id&gt;</code> to scope this view.
+    Confirmed claims show ✓, contradicted ✗ (red), unverifiable ?.
+  </p>
+</div>
+
+<div id="ads-vf-root"><div class="ads-loading">Loading…</div></div>
+
+<div style="margin-top:18px;display:flex;gap:8px;border-bottom:1px solid #e3e6ea">
+  <button type="button" class="ads-tab-btn" data-tab="verifications" style="padding:8px 14px;background:none;border:none;border-bottom:2px solid #2c6eb5;font-weight:600">Verification</button>
+  <button type="button" class="ads-tab-btn" data-tab="references" style="padding:8px 14px;background:none;border:none;border-bottom:2px solid transparent">Backchannel refs</button>
+</div>
+<div id="ads-vf-tab-verifications" style="margin-top:14px"></div>
+<div id="ads-vf-tab-references" style="margin-top:14px;display:none"></div>
+
+<script>
+(async function () {
+  const params = new URLSearchParams(location.search);
+  const id = params.get("id");
+  const root = document.getElementById("ads-vf-root");
+  const vTab = document.getElementById("ads-vf-tab-verifications");
+  const rTab = document.getElementById("ads-vf-tab-references");
+  if (!id) { root.innerHTML = '<div class="ads-card">Missing ?id= query string.</div>'; return; }
+
+  document.querySelectorAll(".ads-tab-btn").forEach((b) => b.addEventListener("click", () => {
+    const tab = b.getAttribute("data-tab");
+    document.querySelectorAll(".ads-tab-btn").forEach((x) => x.style.borderBottomColor = "transparent");
+    b.style.borderBottomColor = "#2c6eb5";
+    vTab.style.display = tab === "verifications" ? "" : "none";
+    rTab.style.display = tab === "references" ? "" : "none";
+  }));
+
+  const apiBase = (window.ADS && window.ADS.API_BASE) || "https://api.aidatasignal.com";
+  const opts = { credentials: "include" };
+
+  async function loadVerifications() {
+    try {
+      const r = await fetch(apiBase + "/api/persons/" + encodeURIComponent(id) + "/verifications", opts);
+      if (r.status === 403) { vTab.innerHTML = '<div class="ads-card">Access denied.</div>'; return; }
+      const body = await r.json();
+      if (!body.items || !body.items.length) { vTab.innerHTML = '<div class="ads-card">No verification findings yet.</div>'; return; }
+      const rows = body.items.map((it) => {
+        const icon = it.status === "confirmed" ? "✓" : it.status === "contradicted" ? "✗" : "?";
+        const color = it.status === "confirmed" ? "#1f7a4d" : it.status === "contradicted" ? "#c0392b" : "#888";
+        const ev = it.evidence_url ? '<a href="' + it.evidence_url + '" target="_blank" rel="noopener">evidence</a>' : "";
+        const sn = it.evidence_snippet ? '<div style="margin-top:4px;font-size:12px;color:#555">' + escapeHtml(it.evidence_snippet) + '</div>' : "";
+        return '<tr><td style="font-size:18px;color:' + color + ';width:30px">' + icon + '</td><td>' +
+          '<div style="font-weight:600">' + escapeHtml(it.claim_summary || it.claim_predicate) + '</div>' +
+          '<div style="font-size:11px;color:#888">' + escapeHtml(it.verifier_name) + ' v' + escapeHtml(it.verifier_version) +
+          (it.reason ? ' — ' + escapeHtml(it.reason) : '') + '</div>' + sn + '</td><td>' + ev + '</td></tr>';
+      }).join("");
+      const stateLine = body.state && body.state.last_verified_at
+        ? '<div style="font-size:11px;color:#888;margin-bottom:6px">Last verified: ' + body.state.last_verified_at + '</div>'
+        : '';
+      vTab.innerHTML = stateLine + '<table class="ads-table" style="width:100%"><tbody>' + rows + '</tbody></table>';
+    } catch (e) { vTab.innerHTML = '<div class="ads-card">Failed to load verifications.</div>'; }
+  }
+
+  async function loadReferences() {
+    try {
+      const r = await fetch(apiBase + "/api/persons/" + encodeURIComponent(id) + "/references", opts);
+      if (r.status === 403) { rTab.innerHTML = '<div class="ads-card">Access denied.</div>'; return; }
+      const body = await r.json();
+      if (!body.items || !body.items.length) { rTab.innerHTML = '<div class="ads-card">No reference candidates yet.</div>'; return; }
+      const rows = body.items.map((it) => {
+        return '<tr><td><strong>' + escapeHtml(it.ref_display_name) + '</strong></td>' +
+          '<td>' + escapeHtml(it.relationship_kind) + '</td>' +
+          '<td>' + escapeHtml(it.shared_context || '') + '</td>' +
+          '<td>' + (it.time_overlap_months != null ? it.time_overlap_months + ' mo' : '') + '</td>' +
+          '<td>' + (Math.round((it.confidence || 0) * 100)) + '%</td>' +
+          '<td style="font-size:12px;color:#555">' + escapeHtml(it.reasoning || '') + '</td></tr>';
+      }).join("");
+      rTab.innerHTML = '<table class="ads-table" style="width:100%">' +
+        '<thead><tr><th>Reference</th><th>Kind</th><th>Context</th><th>Overlap</th><th>Conf.</th><th>Reasoning</th></tr></thead>' +
+        '<tbody>' + rows + '</tbody></table>';
+    } catch (e) { rTab.innerHTML = '<div class="ads-card">Failed to load references.</div>'; }
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  }
+
+  root.innerHTML = "";
+  await Promise.all([loadVerifications(), loadReferences()]);
+})();
+</script>

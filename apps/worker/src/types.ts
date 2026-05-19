@@ -93,6 +93,9 @@ export interface Env {
   AI_SEARCH?: Fetcher;
   // Fetcher tier secrets (all optional; absent ⇒ tier is skipped).
   PROXY_URL?: string;
+  COURTLISTENER_TOKEN?: string;
+  PACER_USER?: string;
+  PACER_PASS?: string;
   PROXY_AUTH?: string;
   // Task #5: SCRAPER_API_*, BRAVE_*, HUNTER_*, APOLLO_*, ROCKETREACH_*,
   // PEOPLEDATALABS_*, PROXYCURL_*, CRUNCHBASE_*, OPENCORPORATES_*,

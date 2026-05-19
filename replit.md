@@ -188,5 +188,60 @@ page lives at `/dashboard/data-rooms/?id=<room_id>` (query string
 rather than path segment) and hydrates strictly from
 `GET /api/data-rooms/:id/index`.
 
+### Task #14 — Background verification + reference network (ACCEPTED)
+Spec slotted migration 358 but 358/359/360/361 were already taken
+(Task #4 alert kinds / Task #5 cap tables / Task #9 valuation /
+Task #13 documents). The schema lands at
+`apps/worker/migrations/362_background_verification.sql`; future
+migrations should number from 363.
+
+`verification_findings` is append-only with the Task #1
+supersedes-chain: re-runs that change `status` insert a new
+`is_current=1` row and mark the prior one
+`is_current=0, superseded_by=<new_id>`. Re-runs with the same status
+touch only `created_at` so the table doesn't grow unbounded on
+idempotent ticks. Derived business facts
+(`person.education.verified`, `person.prior_startup.outcome`,
+`person.litigation.federal_hits`, `person.board_seat.verified`) flow
+through `insertFact` with `source_kind="enrichment"` and
+`source="verifier:<name>"` per the Task #1 canonical write contract.
+
+Public-records fetchers are honest about what they can prove:
+CourtListener emits `unverifiable` (reason `courtlistener_unconfigured`)
+when `COURTLISTENER_TOKEN` is absent — never silently `confirmed`.
+PACER is stubbed as `unverifiable` (reason `pacer_client_not_implemented`)
+even with credentials set; the real PCL flow lands in a follow-up.
+Education verifier requires both a known commencement-page URL AND
+a person display name from `u_entities`; absent either, it returns
+`unverifiable` rather than guessing.
+
+Admin gating on `POST /api/persons/:id/verify` uses `c.var.is_admin`
+populated by the existing `accessGuard` middleware
+(`src/middleware/access.ts`, NOT a separate `accessGuard.ts`) rather
+than a parallel `adminOnly` middleware — there is no shared
+admin-only middleware in this worker yet, and this matches the
+inline-admin-check pattern used by the dashboards / ops routes.
+
+Optional source tables (`sec_form4_insiders`, `firm_team_snapshots`,
+`entity_mentions`, `sec_director_filings`, `publication_authors`,
+`conference_attendees`, `accelerator_batches`, `deal_events`) are
+wrapped in try/catch in both runner and reference builder so the
+modules degrade gracefully when a particular source isn't populated
+in a given environment (test DBs, fresh installs). This is
+intentional and not a silent fallback — missing-source paths return
+`unverifiable` or simply skip a pass; verified data never depends on
+swallowed errors.
+
+Nightly sweep piggybacks the consolidated `15 3 * * *` slot (Free
+plan caps crons at 5/5 — same constraint as the Task #4 angel-sweep
+note above). Bounded at 200 persons/tick. Sweep criterion:
+`last_verified_at IS NULL` OR viewed in last 30 days OR last
+verified >7 days ago. Reference-network rebuild runs in the same
+tick for the persons just verified.
+
+Per the Task #4 static-routing constraint, the Profile verification
+tab lives at `/dashboard/verification/?id=<entity_id>` (query string,
+not path segment).
+
 ## User preferences
 - (none recorded yet)

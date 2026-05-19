@@ -180,6 +180,7 @@
     "src/services/documents/extractors/commercial.ts",
     "src/services/documents/extractors/nda.ts",
     "src/services/documents/extractors/pitchDeck.ts",
-    "src/services/documents/extractors/financialModel.ts"
+    "src/services/documents/extractors/financialModel.ts",
+    "src/services/verification/**/*.ts"
   ]
 }

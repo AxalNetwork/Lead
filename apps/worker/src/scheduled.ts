@@ -457,6 +457,36 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         console.error("capital-markets weekly digest failed", (e as Error).message);
       }
 
+      // Task #14: Background verification + reference-network nightly
+      // sweep. Re-verifies up to 200 stalest persons whose Verification
+      // tab was viewed in the last 30 days OR whose claims changed.
+      // Bounded per-tick. Piggybacks the consolidated nightly slot
+      // (Free plan caps crons at 5/5).
+      try {
+        const { runNightlyVerificationSweep } = await import("./services/verification/runner");
+        const { buildReferenceCandidates } = await import("./services/verification/references");
+        const verifyRes = await runNightlyVerificationSweep(env, 200);
+        console.log("nightly verification sweep done", JSON.stringify(verifyRes));
+        // Rebuild references for the same persons in the same tick.
+        try {
+          const r = await env.DB.prepare(
+            `SELECT entity_id FROM person_verification_state
+              WHERE datetime(last_verified_at) >= datetime('now','-2 hour')
+              LIMIT 200`,
+          ).all<{ entity_id: string }>();
+          let refs = 0;
+          for (const row of r.results ?? []) {
+            try {
+              const s = await buildReferenceCandidates(env, row.entity_id);
+              refs += s.total;
+            } catch (e) { console.warn("ref builder failed", row.entity_id, (e as Error).message); }
+          }
+          console.log("nightly reference-network build done", refs);
+        } catch (e) { console.warn("nightly reference-network sweep failed", (e as Error).message); }
+      } catch (e) {
+        console.error("nightly verification sweep failed", (e as Error).message);
+      }
+
       // 5. Project match refresh
       try {
         const r = await env.DB.prepare(`SELECT id FROM projects WHERE deleted_at IS NULL AND status = 'active' ORDER BY last_modified DESC LIMIT 200`).all<{ id: string }>();

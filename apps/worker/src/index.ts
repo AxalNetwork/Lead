@@ -61,6 +61,7 @@ import { capTableRoute } from "./routes/cap_table";
 import { valuationCompaniesRoute, compPanelsRoute } from "./routes/valuation";
 import { documentsRoute } from "./routes/documents";
 import { dataRoomsRoute } from "./routes/data_rooms";
+import { personsVerificationRoute } from "./routes/verification";
 export { EntityLock } from "./do/EntityLock";
 export { HostThrottle } from "./do/HostThrottle";
 export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, PersonaEntityMatchWorkflow, PersonaMatchRefreshWorkflow, PersonaMatchEntityWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, AIProfileFillerWorkflow, AIProfileFillerBatchWorkflow, RefreshGovernmentWorkflow, DiscoverFromSeedWorkflow, CrawlFrontierWorkflow, MonitorEntityWorkflow, MonitorBatchWorkflow, DigestWorkflow, IndividualProfilerWorkflow } from "./ai/workflows";
@@ -183,6 +184,7 @@ api.route("/api/companies", valuationCompaniesRoute);
 api.route("/api/comp-panels", compPanelsRoute);
 api.route("/api/documents", documentsRoute);
 api.route("/api/data-rooms", dataRoomsRoute);
+api.route("/api/persons", personsVerificationRoute);
 
 api.notFound((c) => c.json({ error: "not_found", request_id: c.var.request_id }, 404));
 api.onError((err, c) => {
