@@ -17,6 +17,8 @@ import { computeInfluence, type ScoredEdge } from "./influence";
 import { insertFact } from "../../entities/facts";
 
 const EDGE_BATCH = 200;        // edges scored per loop iteration
+const EDGE_TICK_CAP = 5000;    // hard ceiling per nightly tick (Task #2 precedent)
+const INFLUENCE_EDGE_CAP = 200_000;  // bounded compute ceiling for influence rebuild
 const SOURCE = "edge_quality_engine";
 
 export interface SweepResult {
@@ -24,29 +26,41 @@ export interface SweepResult {
   entities_ranked: number;
   sectors_ranked: number;
   power_nodes: number;
+  full_pass_wrapped: boolean;
+  influence_loaded_edges: number;
+  influence_truncated: boolean;
   duration_ms: number;
 }
 
 export async function runEdgeQualitySweep(env: Env): Promise<SweepResult> {
   const start = Date.now();
-  const edgesScored = await rescoreAllEdges(env);
-  const { ranked, sectors, powerNodes } = await rebuildEntityInfluence(env);
+  const rescored = await rescoreAllEdges(env);
+  const infl = await rebuildEntityInfluence(env);
   return {
-    edges_scored: edgesScored,
-    entities_ranked: ranked,
-    sectors_ranked: sectors,
-    power_nodes: powerNodes,
+    edges_scored: rescored.scored,
+    entities_ranked: infl.ranked,
+    sectors_ranked: infl.sectors,
+    power_nodes: infl.powerNodes,
+    full_pass_wrapped: rescored.wrapped,
+    influence_loaded_edges: infl.loadedEdges,
+    influence_truncated: infl.truncated,
     duration_ms: Date.now() - start,
   };
 }
 
-async function rescoreAllEdges(env: Env): Promise<number> {
-  let cursor = "";
+interface RescoreResult { scored: number; wrapped: boolean; }
+
+async function rescoreAllEdges(env: Env): Promise<RescoreResult> {
+  // Resumable cursor: pick up where the previous tick stopped so on
+  // graphs larger than EDGE_TICK_CAP the tail doesn't starve. Wraps
+  // to '' (start) when no more rows after the cursor; that wrap is
+  // recorded as last_full_pass_at so operators can verify freshness
+  // (every edge re-scored within ⌈total_edges / EDGE_TICK_CAP⌉ days).
+  let cursor = await loadCursor(env);
   let scored = 0;
-  // Iterate by id ASC; bounded so a single tick doesn't blow the CPU
-  // budget. The 5000 hard ceiling matches the Task #2 fund-sweep
-  // precedent.
-  for (let page = 0; page < 25; page++) {
+  let wrapped = false;
+  const pages = Math.ceil(EDGE_TICK_CAP / EDGE_BATCH);
+  for (let page = 0; page < pages; page++) {
     const r = await env.DB.prepare(
       `SELECT id, src_entity_id, dst_entity_id
          FROM rel_edges
@@ -54,8 +68,24 @@ async function rescoreAllEdges(env: Env): Promise<number> {
         ORDER BY id ASC
         LIMIT ?`,
     ).bind(cursor, EDGE_BATCH).all<{ id: string; src_entity_id: string; dst_entity_id: string }>();
-    const rows = r.results ?? [];
-    if (!rows.length) break;
+    let rows = r.results ?? [];
+    if (!rows.length) {
+      // End of table — wrap to the beginning if we haven't already
+      // this tick. If we wrap and still get nothing, the table is
+      // empty and we exit.
+      if (cursor === "") break;
+      cursor = "";
+      wrapped = true;
+      const r2 = await env.DB.prepare(
+        `SELECT id, src_entity_id, dst_entity_id
+           FROM rel_edges
+          WHERE id > ?
+          ORDER BY id ASC
+          LIMIT ?`,
+      ).bind(cursor, EDGE_BATCH).all<{ id: string; src_entity_id: string; dst_entity_id: string }>();
+      rows = r2.results ?? [];
+      if (!rows.length) break;
+    }
     for (const row of rows) {
       try {
         const signals = await collectAllSignals(env, {
@@ -81,31 +111,98 @@ async function rescoreAllEdges(env: Env): Promise<number> {
       }
     }
     cursor = rows[rows.length - 1].id;
-    if (rows.length < EDGE_BATCH) break;
+    if (rows.length < EDGE_BATCH) {
+      // End of table reached mid-page → wrap on next tick.
+      cursor = "";
+      wrapped = true;
+      break;
+    }
   }
-  return scored;
+  await persistCursor(env, cursor, scored, wrapped);
+  return { scored, wrapped };
+}
+
+async function loadCursor(env: Env): Promise<string> {
+  try {
+    const r = await env.DB.prepare(
+      `SELECT cursor FROM edge_quality_state WHERE id = 1`,
+    ).first<{ cursor: string }>();
+    return r?.cursor ?? "";
+  } catch {
+    // Migration 368 not applied — fall back to non-resumable behavior.
+    return "";
+  }
+}
+
+async function persistCursor(env: Env, cursor: string, scored: number, wrapped: boolean): Promise<void> {
+  try {
+    if (wrapped) {
+      await env.DB.prepare(
+        `UPDATE edge_quality_state
+            SET cursor = ?,
+                last_full_pass_at = datetime('now'),
+                edges_scored_cum = edges_scored_cum + ?,
+                updated_at = datetime('now')
+          WHERE id = 1`,
+      ).bind(cursor, scored).run();
+    } else {
+      await env.DB.prepare(
+        `UPDATE edge_quality_state
+            SET cursor = ?,
+                edges_scored_cum = edges_scored_cum + ?,
+                updated_at = datetime('now')
+          WHERE id = 1`,
+      ).bind(cursor, scored).run();
+    }
+  } catch {
+    // Migration 368 not applied yet — degrade silently. Next tick
+    // will still re-score from the start.
+  }
 }
 
 interface InfluenceResult {
   ranked: number;
   sectors: number;
   powerNodes: number;
+  loadedEdges: number;
+  truncated: boolean;
 }
 
 async function rebuildEntityInfluence(env: Env): Promise<InfluenceResult> {
-  // Load full scored graph. For the present platform population this
-  // fits comfortably in Worker memory; if it grows past fit-in-memory
-  // computeInfluence() degrades gracefully via its nodeCap/edgeCap
-  // guardrails (still returns global PageRank + degrees; skips broker
-  // and per-sector PR on graphs > 20k nodes / 200k edges).
-  const edges = await env.DB.prepare(
-    `SELECT src_entity_id AS src, dst_entity_id AS dst,
-            COALESCE(quality_score, 0.5) AS weight
-       FROM rel_edges`,
-  ).all<{ src: string; dst: string; weight: number }>();
-  const edgeRows: ScoredEdge[] = (edges.results ?? []) as ScoredEdge[];
+  // Load the scored graph in id-ASC chunks (10k/page) up to a hard
+  // INFLUENCE_EDGE_CAP ceiling. Global PageRank is not algorithmically
+  // chunkable — it needs the full graph in memory — but the streamed
+  // load shapes memory growth, and once the cap is hit we stop reading
+  // and let computeInfluence() degrade gracefully via its existing
+  // nodeCap/edgeCap guardrails (still returns global PR + degrees;
+  // skips broker and per-sector PR on oversized graphs).
+  const edgeRows: ScoredEdge[] = [];
+  let cursor = "";
+  let truncated = false;
+  const PAGE = 10_000;
+  while (edgeRows.length < INFLUENCE_EDGE_CAP) {
+    const r = await env.DB.prepare(
+      `SELECT id, src_entity_id AS src, dst_entity_id AS dst,
+              COALESCE(quality_score, 0.5) AS weight
+         FROM rel_edges
+        WHERE id > ?
+        ORDER BY id ASC
+        LIMIT ?`,
+    ).bind(cursor, PAGE).all<{ id: string; src: string; dst: string; weight: number }>();
+    const rows = r.results ?? [];
+    if (!rows.length) break;
+    for (const row of rows) {
+      if (edgeRows.length >= INFLUENCE_EDGE_CAP) { truncated = true; break; }
+      edgeRows.push({ src: row.src, dst: row.dst, weight: row.weight });
+    }
+    cursor = rows[rows.length - 1].id;
+    if (rows.length < PAGE) break;
+  }
+  if (truncated) {
+    console.warn("entity_influence load truncated at edge cap", INFLUENCE_EDGE_CAP);
+  }
   if (edgeRows.length === 0) {
-    return { ranked: 0, sectors: 0, powerNodes: 0 };
+    return { ranked: 0, sectors: 0, powerNodes: 0, loadedEdges: 0, truncated: false };
   }
   const nodeIds = new Set<string>();
   for (const e of edgeRows) { nodeIds.add(e.src); nodeIds.add(e.dst); }
@@ -191,7 +288,13 @@ async function rebuildEntityInfluence(env: Env): Promise<InfluenceResult> {
     }
   }
 
-  return { ranked, sectors: result.sectors_ranked, powerNodes: result.power_nodes };
+  return {
+    ranked,
+    sectors: result.sectors_ranked,
+    powerNodes: result.power_nodes,
+    loadedEdges: edgeRows.length,
+    truncated: truncated || result.truncated_for_size,
+  };
 }
 
 /**

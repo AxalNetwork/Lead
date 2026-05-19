@@ -194,6 +194,7 @@
     "src/services/edgeQuality/pagerank.ts",
     "src/services/edgeQuality/broker.ts",
     "src/services/edgeQuality/influence.ts",
-    "src/services/edgeQuality/signalScale.ts"
+    "src/services/edgeQuality/signalScale.ts",
+    "src/services/edgeQuality/signals.ts"
   ]
 }
