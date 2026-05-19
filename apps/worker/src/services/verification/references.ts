@@ -13,7 +13,33 @@
 // gracefully degrades when a particular source isn't populated yet.
 
 import type { Env } from "../../types";
-import { overlapMonths } from "./util";
+import { overlapMonths, sha256Hex } from "./util";
+
+/**
+ * Compute a stable hash over the source rows that feed the reference
+ * graph for an entity. Used by the nightly sweep to detect graph-only
+ * changes (a new publication, new board seat, new accelerator-batch
+ * peer) without requiring the profile to be viewed first.
+ *
+ * Each optional source is wrapped in try/catch so missing tables in
+ * test DBs degrade to "no contribution" instead of throwing.
+ */
+export async function computeReferenceGraphHash(env: Env, entityId: string): Promise<string> {
+  const parts: string[] = [];
+  const push = async (label: string, sql: string) => {
+    try {
+      const r = await env.DB.prepare(sql).bind(entityId).all<Record<string, unknown>>();
+      const rows = (r.results ?? []).map((x) => JSON.stringify(x)).sort();
+      parts.push(`${label}:${rows.join("|")}`);
+    } catch { parts.push(`${label}:_missing`); }
+  };
+  await push("career", `SELECT organization_entity_id, organization_name, started_at, ended_at, role_title FROM career_history WHERE entity_id = ?`);
+  await push("board",  `SELECT organization_entity_id, organization_name, started_at, ended_at FROM board_seats WHERE entity_id = ?`);
+  await push("pubs",   `SELECT publication_id FROM publication_authors WHERE entity_id = ?`);
+  await push("conf",   `SELECT conference_id FROM conference_attendees WHERE entity_id = ?`);
+  await push("accel",  `SELECT accelerator, batch FROM accelerator_batches WHERE entity_id = ?`);
+  return sha256Hex(parts.join("\n"));
+}
 
 const BUILDER_VERSION = "0.1.0";
 
@@ -210,6 +236,21 @@ export async function buildReferenceCandidates(env: Env, subjectEntityId: string
       if (ok) bump("batch_cohort");
     }
   } catch { /* */ }
+
+  // Persist the reference-graph hash so the nightly sweep can detect
+  // graph-only changes and trigger rebuilds without a profile view.
+  try {
+    const hash = await computeReferenceGraphHash(env, subjectEntityId);
+    await env.DB.prepare(
+      `INSERT INTO person_verification_state (entity_id, reference_graph_hash, updated_at)
+       VALUES (?, ?, datetime('now'))
+       ON CONFLICT(entity_id) DO UPDATE SET
+         reference_graph_hash = excluded.reference_graph_hash,
+         updated_at = datetime('now')`,
+    ).bind(subjectEntityId, hash).run();
+  } catch (e) {
+    console.warn("reference_graph_hash persist failed", (e as Error).message);
+  }
 
   return summary;
 }

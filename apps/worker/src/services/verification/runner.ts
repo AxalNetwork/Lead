@@ -339,3 +339,65 @@ export async function runNightlyVerificationSweep(env: Env, limit = 200): Promis
   }
   return { picked: verifiedIds.length, findings, claims_changed: claimsChanged, verified_ids: verifiedIds };
 }
+
+/**
+ * Nightly reference-graph sweep — pick persons whose
+ * reference_graph_hash differs from the currently-computed hash, plus
+ * persons present in any graph source but missing from
+ * person_verification_state. Returns the entity ids to rebuild.
+ *
+ * Caller (scheduled.ts) is responsible for invoking
+ * buildReferenceCandidates(env, id) for each returned id — that
+ * builder also updates the stored hash so the next tick won't
+ * re-pick the same id unless the graph actually changed.
+ */
+export async function pickReferenceGraphChanged(env: Env, limit = 200): Promise<string[]> {
+  const { computeReferenceGraphHash } = await import("./references.js");
+  const picks: string[] = [];
+  const seen = new Set<string>();
+
+  // 1. Existing rows: compare stored hash vs current.
+  try {
+    const r = await env.DB.prepare(
+      `SELECT entity_id, reference_graph_hash FROM person_verification_state
+        ORDER BY datetime(COALESCE(updated_at, '1970-01-01')) ASC
+        LIMIT ?`,
+    ).bind(Math.min(limit * 4, 1000)).all<{ entity_id: string; reference_graph_hash: string | null }>();
+    for (const row of r.results ?? []) {
+      if (picks.length >= limit) break;
+      try {
+        const cur = await computeReferenceGraphHash(env, row.entity_id);
+        if (cur !== (row.reference_graph_hash ?? "")) {
+          picks.push(row.entity_id);
+          seen.add(row.entity_id);
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* */ }
+
+  // 2. Discovery: persons present in a graph source but unknown to
+  //    person_verification_state — first-time references build.
+  if (picks.length < limit) {
+    const room = limit - picks.length;
+    try {
+      const d = await env.DB.prepare(
+        `SELECT DISTINCT entity_id FROM (
+           SELECT entity_id FROM publication_authors
+           UNION SELECT entity_id FROM conference_attendees
+           UNION SELECT entity_id FROM accelerator_batches
+           UNION SELECT entity_id FROM board_seats
+           UNION SELECT entity_id FROM career_history
+         ) g
+         WHERE entity_id NOT IN (SELECT entity_id FROM person_verification_state)
+         LIMIT ?`,
+      ).bind(room).all<{ entity_id: string }>();
+      for (const row of d.results ?? []) {
+        if (picks.length >= limit) break;
+        if (seen.has(row.entity_id)) continue;
+        picks.push(row.entity_id);
+        seen.add(row.entity_id);
+      }
+    } catch { /* optional tables */ }
+  }
+  return picks;
+}

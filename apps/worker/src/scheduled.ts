@@ -463,21 +463,24 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       // Bounded per-tick. Piggybacks the consolidated nightly slot
       // (Free plan caps crons at 5/5).
       try {
-        const { runNightlyVerificationSweep } = await import("./services/verification/runner");
+        const { runNightlyVerificationSweep, pickReferenceGraphChanged } = await import("./services/verification/runner");
         const { buildReferenceCandidates } = await import("./services/verification/references");
         const verifyRes = await runNightlyVerificationSweep(env, 200);
         console.log("nightly verification sweep done", JSON.stringify({ picked: verifyRes.picked, findings: verifyRes.findings, claims_changed: verifyRes.claims_changed }));
-        // Rebuild references ONLY for the persons we actually re-verified
-        // this tick — these are the persons whose graph (career, board,
-        // publications, …) we just observed change.
+        // Rebuild references for (a) persons we just re-verified AND
+        // (b) persons whose reference-graph hash changed independently
+        // of verification claims (graph-only deltas — new publication,
+        // new board seat, new co-attendee). Bounded at 200/tick.
+        const graphPicks = await pickReferenceGraphChanged(env, 200);
+        const rebuildIds = Array.from(new Set([...verifyRes.verified_ids, ...graphPicks]));
         let refs = 0;
-        for (const id of verifyRes.verified_ids) {
+        for (const id of rebuildIds) {
           try {
             const s = await buildReferenceCandidates(env, id);
             refs += s.total;
           } catch (e) { console.warn("ref builder failed", id, (e as Error).message); }
         }
-        console.log("nightly reference-network build done", refs);
+        console.log("nightly reference-network build done", JSON.stringify({ rebuilt: rebuildIds.length, graph_changed: graphPicks.length, candidates: refs }));
       } catch (e) {
         console.error("nightly verification sweep failed", (e as Error).message);
       }
