@@ -348,7 +348,19 @@ documentsRoute.delete("/:id", async (c) => {
   const id = c.req.param("id");
   const row = await c.env.DB.prepare(`SELECT r2_key FROM documents WHERE id = ? AND owner_email = ?`).bind(id, email).first<{ r2_key: string }>();
   if (!row) return c.json({ error: "not_found" }, 404);
-  try { await c.env.UPLOADS.delete(row.r2_key); } catch { /* ignore */ }
+  // Delete the documents row first, then garbage-collect the underlying
+  // R2 object ONLY when no other documents row still references the
+  // same content-addressed key. Two uploads of identical bytes share
+  // one blob (see upload's `documents/sha256/<sha>/<filename>` key) —
+  // unconditional R2 delete would silently destroy the backing file
+  // for every sibling row.
   await c.env.DB.prepare(`DELETE FROM documents WHERE id = ?`).bind(id).run();
-  return c.json({ ok: true });
+  const refs = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM documents WHERE r2_key = ?`,
+  ).bind(row.r2_key).first<{ n: number }>();
+  const stillReferenced = (refs?.n ?? 0) > 0;
+  if (!stillReferenced) {
+    try { await c.env.UPLOADS.delete(row.r2_key); } catch { /* ignore */ }
+  }
+  return c.json({ ok: true, blob_retained: stillReferenced });
 });

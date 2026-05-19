@@ -5,6 +5,7 @@
 //   GET    /api/data-rooms/:id                   detail
 //   GET    /api/data-rooms/:id/index             categorized doc list + extraction summaries
 //   POST   /api/data-rooms/:id/documents         attach a doc {document_id, category?}
+//                                                 OR bulk {document_ids:[…], category?}
 //   DELETE /api/data-rooms/:id/documents/:docId  detach a doc
 //   DELETE /api/data-rooms/:id                   remove room (cascade detaches)
 
@@ -90,25 +91,49 @@ dataRoomsRoute.get("/:id/index", async (c) => {
   return c.json({ data_room: room, by_category: grouped, total: docs.length });
 });
 
+// Single-doc and bulk attach share one route: when the body provides
+// `document_ids` (array), every id is attached and a per-id result
+// envelope is returned. Capped at 200 ids per call to bound query cost.
 dataRoomsRoute.post("/:id/documents", async (c) => {
   const email = c.get("email");
   const id = c.req.param("id");
-  const body = await c.req.json().catch(() => ({})) as { document_id?: string; category?: string };
-  if (!body.document_id) return c.json({ error: "bad_request", message: "document_id required" }, 400);
+  const body = await c.req.json().catch(() => ({})) as {
+    document_id?: string; document_ids?: string[]; category?: string;
+  };
+  const ids: string[] = Array.isArray(body.document_ids) && body.document_ids.length
+    ? body.document_ids.filter((x) => typeof x === "string")
+    : (body.document_id ? [body.document_id] : []);
+  if (!ids.length) return c.json({ error: "bad_request", message: "document_id or document_ids[] required" }, 400);
+  if (ids.length > 200) return c.json({ error: "too_many", message: "max 200 documents per bulk attach" }, 413);
   const room = await c.env.DB.prepare(`SELECT id FROM document_data_rooms WHERE id = ? AND owner_email = ?`).bind(id, email).first();
   if (!room) return c.json({ error: "not_found" }, 404);
-  const doc = await c.env.DB.prepare(`SELECT id, filename, detected_kind FROM documents WHERE id = ? AND owner_email = ?`).bind(body.document_id, email).first<{ id: string; filename: string; detected_kind: string | null }>();
-  if (!doc) return c.json({ error: "document_not_found" }, 404);
-  const category = body.category ?? categorizeForDataRoom(doc.detected_kind ?? "unknown", doc.filename);
-  try {
-    await c.env.DB.prepare(
-      `INSERT INTO data_room_documents (id, data_room_id, document_id, category) VALUES (?, ?, ?, ?)`,
-    ).bind(crypto.randomUUID(), id, body.document_id, category).run();
-  } catch (e) {
-    if (/UNIQUE/i.test((e as Error).message)) return c.json({ error: "already_attached" }, 409);
-    throw e;
+
+  const results: Array<{ document_id: string; ok: boolean; category?: string; error?: string }> = [];
+  for (const docId of ids) {
+    const doc = await c.env.DB.prepare(
+      `SELECT id, filename, detected_kind FROM documents WHERE id = ? AND owner_email = ?`,
+    ).bind(docId, email).first<{ id: string; filename: string; detected_kind: string | null }>();
+    if (!doc) { results.push({ document_id: docId, ok: false, error: "document_not_found" }); continue; }
+    const category = body.category ?? categorizeForDataRoom(doc.detected_kind ?? "unknown", doc.filename);
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO data_room_documents (id, data_room_id, document_id, category) VALUES (?, ?, ?, ?)`,
+      ).bind(crypto.randomUUID(), id, docId, category).run();
+      results.push({ document_id: docId, ok: true, category });
+    } catch (e) {
+      if (/UNIQUE/i.test((e as Error).message)) results.push({ document_id: docId, ok: false, error: "already_attached" });
+      else results.push({ document_id: docId, ok: false, error: (e as Error).message.slice(0, 200) });
+    }
   }
-  return c.json({ ok: true, category }, 201);
+  const attached = results.filter((r) => r.ok).length;
+  // Single-id callers keep the legacy response shape.
+  if (ids.length === 1 && body.document_id && !body.document_ids) {
+    const r = results[0];
+    if (!r.ok && r.error === "document_not_found") return c.json({ error: "document_not_found" }, 404);
+    if (!r.ok && r.error === "already_attached") return c.json({ error: "already_attached" }, 409);
+    return c.json({ ok: true, category: r.category }, 201);
+  }
+  return c.json({ attached, total: ids.length, results }, attached > 0 ? 201 : 400);
 });
 
 dataRoomsRoute.delete("/:id/documents/:docId", async (c) => {
