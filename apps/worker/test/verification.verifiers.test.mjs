@@ -132,11 +132,51 @@ test("bankruptcyVerifier returns unverifiable when no source configured", async 
   assert.match(r.reason, /no_bankruptcy_source_configured/);
 });
 
-test("bankruptcyVerifier notes PACER pending when creds set but PCL stub unimplemented", async () => {
+test("bankruptcyVerifier returns confirmed on PACER PCL zero-hit response", async () => {
   const env = makeEnv({ env: { PACER_USER: "u", PACER_PASS: "p" } });
-  const r = await bankruptcyVerifier.verify(env, "p", { predicate: "person.bankruptcy_check", value_hash: "", summary: "", payload: { person_name: "Jane Doe" } });
-  assert.equal(r.status, "unverifiable");
-  assert.match(r.reason, /pacer_pcl_pending_taskRef_20/);
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("cso-auth")) return new Response(JSON.stringify({ nextGenCSO: "TOK", loginResult: "0" }), { status: 200 });
+    if (String(url).includes("pcl-public-api")) return new Response(JSON.stringify({ content: [], pageInfo: { totalElements: 0 } }), { status: 200 });
+    return new Response("", { status: 404 });
+  };
+  try {
+    const r = await bankruptcyVerifier.verify(env, "p", { predicate: "person.bankruptcy_check", value_hash: "", summary: "", payload: { person_name: "Jane Doe" } });
+    assert.equal(r.status, "confirmed");
+    assert.equal(r.reason, "pacer_pcl");
+    assert.equal(r.derived_value_text, "0");
+  } finally { globalThis.fetch = origFetch; }
+});
+
+test("bankruptcyVerifier returns contradicted on PACER PCL hit", async () => {
+  const env = makeEnv({ env: { PACER_USER: "u", PACER_PASS: "p" } });
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("cso-auth")) return new Response(JSON.stringify({ nextGenCSO: "TOK", loginResult: "0" }), { status: 200 });
+    if (String(url).includes("pcl-public-api")) return new Response(JSON.stringify({
+      content: [{ caseTitle: "In re Doe", caseNumber: "23-12345", courtId: "nysb", dateFiled: "2023-04-01" }],
+      pageInfo: { totalElements: 1 },
+    }), { status: 200 });
+    return new Response("", { status: 404 });
+  };
+  try {
+    const r = await bankruptcyVerifier.verify(env, "p", { predicate: "person.bankruptcy_check", value_hash: "", summary: "", payload: { person_name: "Jane Doe" } });
+    assert.equal(r.status, "contradicted");
+    assert.equal(r.reason, "pacer_pcl_match");
+    assert.equal(r.derived_value_text, "1");
+    assert.match(r.evidence_snippet, /In re Doe/);
+  } finally { globalThis.fetch = origFetch; }
+});
+
+test("bankruptcyVerifier falls back to unverifiable when PACER auth fails and no CourtListener token", async () => {
+  const env = makeEnv({ env: { PACER_USER: "u", PACER_PASS: "p" } });
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("forbidden", { status: 401 });
+  try {
+    const r = await bankruptcyVerifier.verify(env, "p", { predicate: "person.bankruptcy_check", value_hash: "", summary: "", payload: { person_name: "Jane Doe" } });
+    assert.equal(r.status, "unverifiable");
+    assert.match(r.reason, /pacer_auth_failed/);
+  } finally { globalThis.fetch = origFetch; }
 });
 
 test("directorshipVerifier returns unverifiable when no source backs the claim", async () => {
