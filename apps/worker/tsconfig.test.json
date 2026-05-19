@@ -192,6 +192,8 @@
     "src/services/fundReturns/calibration.ts",
     "src/services/edgeQuality/aggregate.ts",
     "src/services/edgeQuality/pagerank.ts",
-    "src/services/edgeQuality/broker.ts"
+    "src/services/edgeQuality/broker.ts",
+    "src/services/edgeQuality/influence.ts",
+    "src/services/edgeQuality/signalScale.ts"
   ]
 }

@@ -77,18 +77,59 @@
     var clickBound = false;
     // Task #3 — Edge-Quality Scoring + Power-Node Detection.
     // The legacy /api/relationships/entity/:id endpoint speaks the
-    // INTEGER-id graph; the new /api/entities/:id/influence speaks the
-    // unified TEXT-id graph (rel_edges). When the caller passes
-    // `unifiedEntityId` we surface the anchor's PageRank / broker score
-    // / power-node badge in the sidebar. Edge-thickness overlay is
-    // documented as a follow-up in replit.md (dual-graph constraint).
+    // INTEGER-id graph; the new /api/entities/:id/* endpoints speak
+    // the unified TEXT-id graph (rel_edges). We overlay them by
+    // matching neighbor (name, kind) — both endpoints expose those
+    // human-readable fields. Edges incident to the anchor get a
+    // quality_score, and any neighbor flagged is_power_node in the
+    // unified graph gets the glow halo on the canvas.
     var unifiedEntityId = opts.unifiedEntityId || null;
     var influenceSummary = null;
+    var qualityByNeighborKey = {};   // "name|kind" → quality_score
+    var powerSetByName = {};         // lowercased name → true
     function loadInfluence() {
       if (!unifiedEntityId) return Promise.resolve(null);
       return api("/api/entities/" + encodeURIComponent(unifiedEntityId) + "/influence")
         .then(function (j) { influenceSummary = j; return j; })
         .catch(function () { influenceSummary = null; return null; });
+    }
+    function loadUnifiedRelationships() {
+      if (!unifiedEntityId) return Promise.resolve(null);
+      return api("/api/entities/" + encodeURIComponent(unifiedEntityId) + "/relationships")
+        .then(function (j) {
+          qualityByNeighborKey = {};
+          var rows = (j && j.edges) || [];
+          for (var i = 0; i < rows.length; i++) {
+            var r = rows[i];
+            var nm = (r.neighbor_name || "").toLowerCase().trim();
+            var kd = (r.kind || "").toLowerCase().trim();
+            if (!nm) continue;
+            var key = nm + "|" + kd;
+            var prev = qualityByNeighborKey[key];
+            if (prev == null || (r.quality_score || 0) > prev) {
+              qualityByNeighborKey[key] = r.quality_score != null ? r.quality_score : null;
+            }
+          }
+          return j;
+        })
+        .catch(function () { qualityByNeighborKey = {}; return null; });
+    }
+    function loadPowerNodes() {
+      // Best-effort: pull the global power-node set so non-anchor power
+      // nodes can also glow. Match by display name (the only cross-graph
+      // attribute available). Failures are non-fatal — anchor glow still
+      // works from influenceSummary.is_power_node.
+      return api("/api/power-nodes?limit=500")
+        .then(function (j) {
+          powerSetByName = {};
+          var rows = (j && j.power_nodes) || [];
+          for (var i = 0; i < rows.length; i++) {
+            var nm = (rows[i].display_name || "").toLowerCase().trim();
+            if (nm) powerSetByName[nm] = true;
+          }
+          return j;
+        })
+        .catch(function () { powerSetByName = {}; return null; });
     }
     function influenceHtml() {
       if (!influenceSummary) return "";
@@ -118,13 +159,42 @@
       Promise.all([
         api("/api/relationships/entity/" + encodeURIComponent(entityId) + qs),
         loadInfluence(),
+        loadUnifiedRelationships(),
+        loadPowerNodes(),
       ]).then(function (results) {
         var j = results[0];
         loading.hidden = true;
+        // Build a name lookup so we can overlay quality_score onto
+        // anchor-incident edges and is_power_node onto any node we can
+        // match by display name.
+        var nodeNameById = {};
+        (j.nodes || []).forEach(function (n) {
+          nodeNameById[n.id] = (n.name || "").toLowerCase().trim();
+        });
+        var anchorIsPower = !!(influenceSummary && influenceSummary.is_power_node);
         // Flatten ref_table/ref_id onto the node so initial click payloads
         // match expand/collapse payloads (deeplinks need them at top level).
-        var nodes = (j.nodes || []).map(function (n) { return { id: n.id, label: n.name, name: n.name, kind: n.kind, ref_table: n.ref_table, ref_id: n.ref_id, ref: n }; });
-        var edges = (j.edges || []).map(function (e) { return { src: e.src, dst: e.dst, kind: e.kind, strength: e.strength, ref: e }; });
+        var nodes = (j.nodes || []).map(function (n) {
+          var nameLc = (n.name || "").toLowerCase().trim();
+          var isPower = (n.id === entityId && anchorIsPower) || (nameLc && powerSetByName[nameLc]);
+          return { id: n.id, label: n.name, name: n.name, kind: n.kind, ref_table: n.ref_table, ref_id: n.ref_id, is_power_node: isPower, ref: n };
+        });
+        var edges = (j.edges || []).map(function (e) {
+          // For edges incident to the anchor we know the neighbor's
+          // (name, kind) and can look up the quality_score from the
+          // unified endpoint by that composite key.
+          var quality = null;
+          var nbrId = (e.src === entityId) ? e.dst : ((e.dst === entityId) ? e.src : null);
+          if (nbrId != null) {
+            var nbrName = nodeNameById[nbrId];
+            if (nbrName) {
+              var key = nbrName + "|" + (e.kind || "").toLowerCase().trim();
+              var q = qualityByNeighborKey[key];
+              if (typeof q === "number") quality = q;
+            }
+          }
+          return { src: e.src, dst: e.dst, kind: e.kind, strength: e.strength, quality_score: quality, ref: e };
+        });
         if (graph) graph.stop();
         graph = window.ADSForceGraph(canvas, { nodes: nodes, edges: edges }, { anchorId: entityId, height: opts.height });
         if (clickBound) return; clickBound = true;
@@ -162,7 +232,10 @@
         + (opts.includeFamily ? "&include_family=1" : "");
       api("/api/relationships/entity/" + encodeURIComponent(id) + qs).then(function (j) {
         graph.addData({
-          nodes: (j.nodes || []).map(function (n) { return { id: n.id, label: n.name, name: n.name, kind: n.kind, ref_table: n.ref_table, ref_id: n.ref_id }; }),
+          nodes: (j.nodes || []).map(function (n) {
+            var nameLc = (n.name || "").toLowerCase().trim();
+            return { id: n.id, label: n.name, name: n.name, kind: n.kind, ref_table: n.ref_table, ref_id: n.ref_id, is_power_node: !!(nameLc && powerSetByName[nameLc]) };
+          }),
           edges: (j.edges || []).map(function (e) { return { src: e.src, dst: e.dst, kind: e.kind, strength: e.strength }; }),
         });
         expanded[id] = (j.nodes || []).map(function (n) { return n.id; }).filter(function (nid) { return nid !== id && nid !== entityId; });

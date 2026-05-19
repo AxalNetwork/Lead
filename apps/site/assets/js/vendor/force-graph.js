@@ -62,7 +62,7 @@
     });
     var idIx = {}; nodes.forEach(function (n, i) { idIx[n.id] = i; });
     var edges = data.edges.filter(function (e) { return idIx[e.src] != null && idIx[e.dst] != null; }).map(function (e) {
-      return { s: nodes[idIx[e.src]], t: nodes[idIx[e.dst]], kind: e.kind, color: e.color || edgeColor(e.kind), label: e.label, strength: Number(e.strength) || 1, ref: e };
+      return { s: nodes[idIx[e.src]], t: nodes[idIx[e.dst]], kind: e.kind, color: e.color || edgeColor(e.kind), label: e.label, strength: Number(e.strength) || 1, quality_score: (typeof e.quality_score === "number" ? e.quality_score : null), ref: e };
     });
 
     // Highlight a single node (used to mark the "anchor" of the subgraph).
@@ -133,24 +133,50 @@
       for (var i = 0; i < edges.length; i++) {
         var e = edges[i];
         ctx.strokeStyle = rgb(e.color);
-        // Edge width scales by strength (1..6 → 1.0..3.6 px). Stronger
-        // co-investment / mention overlaps render thicker so hub
-        // relationships are visually distinguishable.
-        var s = Math.max(1, Math.min(6, e.strength || 1));
-        ctx.lineWidth = 0.8 + s * 0.45;
+        // Task #3: if quality_score is set (overlay from the unified
+        // /api/entities/:id/relationships endpoint) use it to drive
+        // thickness in [1.0..4.0] px. Otherwise fall back to legacy
+        // `strength` scaling so existing graphs still differentiate.
+        if (e.quality_score != null && Number.isFinite(e.quality_score)) {
+          var q = Math.max(0, Math.min(1, e.quality_score));
+          ctx.lineWidth = 1.0 + q * 3.0;
+          // Higher quality = more opaque.
+          ctx.globalAlpha = 0.45 + q * 0.55;
+        } else {
+          var s = Math.max(1, Math.min(6, e.strength || 1));
+          ctx.lineWidth = 0.8 + s * 0.45;
+          ctx.globalAlpha = 1;
+        }
         ctx.beginPath(); ctx.moveTo(e.s.x, e.s.y); ctx.lineTo(e.t.x, e.t.y); ctx.stroke();
+        ctx.globalAlpha = 1;
       }
       // Nodes.
       for (var j = 0; j < nodes.length; j++) {
         var n = nodes[j];
         var isAnchor = n.id === anchorId;
         var isHover = hover === n;
+        var isPower = !!n.is_power_node;
+        // Task #3: power-node glow — a soft amber halo drawn under the
+        // node disc. Renders for any node flagged is_power_node, not
+        // just the anchor, so cluster leaders pop visually.
+        if (isPower) {
+          var glowR = n.r + 10;
+          var grad = ctx.createRadialGradient(n.x, n.y, n.r, n.x, n.y, glowR);
+          grad.addColorStop(0, "rgba(245,158,11,0.55)");
+          grad.addColorStop(1, "rgba(245,158,11,0)");
+          ctx.fillStyle = grad;
+          ctx.beginPath();
+          ctx.arc(n.x, n.y, glowR, 0, Math.PI * 2);
+          ctx.fill();
+        }
         ctx.fillStyle = n.color;
         ctx.beginPath();
         ctx.arc(n.x, n.y, n.r + (isAnchor ? 4 : 0) + (isHover ? 2 : 0), 0, Math.PI * 2);
         ctx.fill();
         if (isAnchor || isHover) {
           ctx.strokeStyle = "#000"; ctx.lineWidth = 1.5; ctx.stroke();
+        } else if (isPower) {
+          ctx.strokeStyle = "#b45309"; ctx.lineWidth = 1.2; ctx.stroke();
         }
         if (isHover || isAnchor) {
           ctx.fillStyle = "#111"; ctx.font = "11px system-ui, sans-serif";
@@ -257,7 +283,7 @@
         });
         (extra.edges || []).forEach(function (e) {
           if (idIx[e.src] == null || idIx[e.dst] == null) return;
-          edges.push({ s: nodes[idIx[e.src]], t: nodes[idIx[e.dst]], kind: e.kind, color: edgeColor(e.kind), label: e.label, strength: Number(e.strength) || 1, ref: e });
+          edges.push({ s: nodes[idIx[e.src]], t: nodes[idIx[e.dst]], kind: e.kind, color: edgeColor(e.kind), label: e.label, strength: Number(e.strength) || 1, quality_score: (typeof e.quality_score === "number" ? e.quality_score : null), ref: e });
         });
         if (added) { stopped = false; requestAnimationFrame(step); }
       },

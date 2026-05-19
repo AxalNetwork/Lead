@@ -13,12 +13,10 @@
 import type { Env } from "../../types";
 import { collectAllSignals } from "./signals";
 import { aggregateSignals } from "./aggregate";
-import { pagerank, type PRNode, type PREdge } from "./pagerank";
-import { brokerScores } from "./broker";
+import { computeInfluence, type ScoredEdge } from "./influence";
 import { insertFact } from "../../entities/facts";
 
 const EDGE_BATCH = 200;        // edges scored per loop iteration
-const POWER_TOP_N = 50;        // per-sector top-N flagged is_power_node
 const SOURCE = "edge_quality_engine";
 
 export interface SweepResult {
@@ -97,95 +95,50 @@ interface InfluenceResult {
 async function rebuildEntityInfluence(env: Env): Promise<InfluenceResult> {
   // Load full scored graph. For the present platform population this
   // fits comfortably in Worker memory; if it grows past fit-in-memory
-  // we'll chunk by SCC.
+  // computeInfluence() degrades gracefully via its nodeCap/edgeCap
+  // guardrails (still returns global PageRank + degrees; skips broker
+  // and per-sector PR on graphs > 20k nodes / 200k edges).
   const edges = await env.DB.prepare(
     `SELECT src_entity_id AS src, dst_entity_id AS dst,
             COALESCE(quality_score, 0.5) AS weight
        FROM rel_edges`,
   ).all<{ src: string; dst: string; weight: number }>();
-  const edgeRows = edges.results ?? [];
-  const nodeSet = new Set<string>();
-  for (const e of edgeRows) {
-    nodeSet.add(e.src);
-    nodeSet.add(e.dst);
-  }
-  if (nodeSet.size === 0) {
+  const edgeRows: ScoredEdge[] = (edges.results ?? []) as ScoredEdge[];
+  if (edgeRows.length === 0) {
     return { ranked: 0, sectors: 0, powerNodes: 0 };
   }
-  const nodes: PRNode[] = Array.from(nodeSet).map((id) => ({ id }));
-  const prEdges: PREdge[] = edgeRows.map((e) => ({ src: e.src, dst: e.dst, weight: e.weight }));
-  const global = pagerank(nodes, prEdges);
+  const nodeIds = new Set<string>();
+  for (const e of edgeRows) { nodeIds.add(e.src); nodeIds.add(e.dst); }
+  const primarySector = await loadPrimarySectors(env, Array.from(nodeIds));
 
-  // Per-entity in/out degree (count, not weight).
-  const inDeg = new Map<string, number>();
-  const outDeg = new Map<string, number>();
-  for (const e of edgeRows) {
-    outDeg.set(e.src, (outDeg.get(e.src) ?? 0) + 1);
-    inDeg.set(e.dst, (inDeg.get(e.dst) ?? 0) + 1);
+  const result = computeInfluence(edgeRows, primarySector);
+  if (result.truncated_for_size) {
+    console.warn("entity_influence rebuild truncated", result.truncation_reasons.join(","));
   }
 
-  // Broker score on the undirected symmetrized graph.
-  const undirected = new Map<string, Map<string, number>>();
-  for (const e of edgeRows) {
-    if (!undirected.has(e.src)) undirected.set(e.src, new Map());
-    if (!undirected.has(e.dst)) undirected.set(e.dst, new Map());
-    const a = undirected.get(e.src)!;
-    const b = undirected.get(e.dst)!;
-    a.set(e.dst, Math.max(a.get(e.dst) ?? 0, e.weight));
-    b.set(e.src, Math.max(b.get(e.src) ?? 0, e.weight));
-  }
-  const broker = brokerScores({ adjacency: undirected });
-
-  // Primary sector per entity (best-effort from facts).
-  const primarySector = await loadPrimarySectors(env, nodes.map((n) => n.id));
-
-  // Per-sector PageRank — partition entities by primary_sector, then
-  // PR-rank within each induced subgraph.
-  const sectorBuckets = new Map<string, string[]>();
-  for (const id of nodeSet) {
-    const s = primarySector.get(id);
-    if (!s) continue;
-    if (!sectorBuckets.has(s)) sectorBuckets.set(s, []);
-    sectorBuckets.get(s)!.push(id);
-  }
-  const sectorScores = new Map<string, Map<string, number>>(); // entity_id → sector → score
-  for (const [sector, ids] of sectorBuckets) {
-    if (ids.length < 2) continue;
-    const idSet = new Set(ids);
-    const sectorEdges = prEdges.filter((e) => idSet.has(e.src) && idSet.has(e.dst));
-    if (!sectorEdges.length) continue;
-    const sub = pagerank(
-      ids.map((id) => ({ id })),
-      sectorEdges,
-    );
-    for (const [id, sc] of sub.scores) {
-      if (!sectorScores.has(id)) sectorScores.set(id, new Map());
-      sectorScores.get(id)!.set(sector, sc);
+  // Prune entity_influence rows for entities no longer in the graph.
+  // This keeps the table from accumulating stale rows after edges are
+  // deleted or merged.
+  try {
+    const currentIds = new Set(result.rows.map((r) => r.entity_id));
+    const existing = await env.DB.prepare(
+      `SELECT entity_id FROM entity_influence`,
+    ).all<{ entity_id: string }>();
+    const stale = (existing.results ?? [])
+      .map((r) => r.entity_id)
+      .filter((id) => !currentIds.has(id));
+    for (let i = 0; i < stale.length; i += 100) {
+      const slice = stale.slice(i, i + 100);
+      await env.DB.prepare(
+        `DELETE FROM entity_influence WHERE entity_id IN (${slice.map(() => "?").join(",")})`,
+      ).bind(...slice).run();
     }
+  } catch (e) {
+    console.warn("entity_influence prune failed", (e as Error).message);
   }
 
-  // Power-node detection — top-N per sector by sector-PageRank.
-  const powerSet = new Set<string>();
-  for (const [, ids] of sectorBuckets) {
-    const ranked = ids
-      .map((id) => ({ id, score: sectorScores.get(id)?.get(primarySector.get(id) ?? "") ?? 0 }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, POWER_TOP_N);
-    for (const r of ranked) powerSet.add(r.id);
-  }
-
-  // Persist entity_influence + mirror facts.
   let ranked = 0;
-  for (const id of nodeSet) {
-    const pr = global.scores.get(id) ?? 0;
-    const br = broker.get(id) ?? 0;
-    const sectorJson = sectorScores.has(id)
-      ? JSON.stringify(Object.fromEntries(sectorScores.get(id)!))
-      : null;
-    const sector = primarySector.get(id) ?? null;
-    const isPower = powerSet.has(id) ? 1 : 0;
-    const inD = inDeg.get(id) ?? 0;
-    const outD = outDeg.get(id) ?? 0;
+  for (const row of result.rows) {
     try {
       await env.DB.prepare(
         `INSERT INTO entity_influence
@@ -202,34 +155,43 @@ async function rebuildEntityInfluence(env: Env): Promise<InfluenceResult> {
             is_power_node = excluded.is_power_node,
             primary_sector = excluded.primary_sector,
             computed_at = excluded.computed_at`,
-      ).bind(id, pr, sectorJson, br, inD, outD, inD + outD, isPower, sector).run();
+      ).bind(
+        row.entity_id,
+        row.pagerank_score,
+        row.sector_pagerank_json,
+        row.broker_score,
+        row.in_degree,
+        row.out_degree,
+        row.total_degree,
+        row.is_power_node,
+        row.primary_sector,
+      ).run();
       ranked += 1;
     } catch (e) {
-      console.warn("entity_influence upsert failed", id, (e as Error).message);
+      console.warn("entity_influence upsert failed", row.entity_id, (e as Error).message);
       continue;
     }
-    // Mirror facts via canonical write path.
     try {
       await insertFact(env, {
-        entity_id: id,
+        entity_id: row.entity_id,
         predicate: "entity.pagerank_score",
-        value_number: round4(pr),
+        value_number: round4(row.pagerank_score),
         source_kind: "inferred",
         source: SOURCE,
       });
       await insertFact(env, {
-        entity_id: id,
+        entity_id: row.entity_id,
         predicate: "entity.broker_score",
-        value_number: round4(br),
+        value_number: round4(row.broker_score),
         source_kind: "inferred",
         source: SOURCE,
       });
     } catch (e) {
-      console.warn("influence insertFact failed", id, (e as Error).message);
+      console.warn("influence insertFact failed", row.entity_id, (e as Error).message);
     }
   }
 
-  return { ranked, sectors: sectorBuckets.size, powerNodes: powerSet.size };
+  return { ranked, sectors: result.sectors_ranked, powerNodes: result.power_nodes };
 }
 
 /**

@@ -9,6 +9,7 @@
 
 import type { Env } from "../../types";
 import type { RawSignal, SignalKey } from "./aggregate";
+import { logScale, maxDate, boardOverlapMonths, jaccardNeighbors } from "./signalScale";
 
 export interface EdgeIdentity {
   src_entity_id: string;
@@ -24,12 +25,6 @@ async function safeQuery<T>(
   } catch {
     return fallback;
   }
-}
-
-/** Log-normalize a non-negative count to [0,1] with knee at `knee`. */
-function logScale(count: number, knee: number): number {
-  if (count <= 0) return 0;
-  return Math.min(1, Math.log1p(count) / Math.log1p(knee));
 }
 
 /** Co-investment count in the last 5y. Reads deal_participants. */
@@ -87,13 +82,9 @@ export async function signalBoardOverlap(env: Env, e: EdgeIdentity): Promise<Raw
     let totalMonths = 0;
     let latest: string | null = null;
     for (const row of rows) {
-      const s = maxDate(row.s1, row.s2);
-      const e2 = minDate(row.e1 ?? new Date().toISOString(), row.e2 ?? new Date().toISOString());
-      if (!s || !e2) continue;
-      const months = Math.max(0, monthsBetween(s, e2));
-      totalMonths += months;
-      if (!latest || (row.e1 && row.e1 > latest)) latest = row.e1;
-      if (!latest || (row.e2 && row.e2 > latest)) latest = row.e2;
+      totalMonths += boardOverlapMonths(row.s1, row.e1, row.s2, row.e2);
+      latest = maxDate(latest, row.e1);
+      latest = maxDate(latest, row.e2);
     }
     if (totalMonths === 0) return null;
     return { value: logScale(totalMonths, 36), observed_at: latest };
@@ -191,14 +182,12 @@ export async function signalMutualJaccard(env: Env, e: EdgeIdentity): Promise<Ra
           WHERE (src_entity_id = ? OR dst_entity_id = ?)`,
       ).bind(e.dst_entity_id, e.dst_entity_id, e.dst_entity_id).all<{ nbr: string }>(),
     ]);
-    const A = new Set((a.results ?? []).map((r) => r.nbr).filter((n) => n && n !== e.src_entity_id && n !== e.dst_entity_id));
-    const B = new Set((b.results ?? []).map((r) => r.nbr).filter((n) => n && n !== e.src_entity_id && n !== e.dst_entity_id));
-    if (A.size === 0 && B.size === 0) return null;
-    let inter = 0;
-    for (const x of A) if (B.has(x)) inter++;
-    const union = A.size + B.size - inter;
-    if (union === 0) return null;
-    return { value: inter / union, observed_at: null };
+    const exclude = new Set([e.src_entity_id, e.dst_entity_id]);
+    const aNbrs = (a.results ?? []).map((r) => r.nbr);
+    const bNbrs = (b.results ?? []).map((r) => r.nbr);
+    const j = jaccardNeighbors(aNbrs, bNbrs, exclude);
+    if (j === 0) return null;
+    return { value: j, observed_at: null };
   }, null);
 }
 
@@ -228,19 +217,3 @@ export async function collectAllSignals(
   return out;
 }
 
-function maxDate(a: string | null, b: string | null): string | null {
-  if (!a) return b;
-  if (!b) return a;
-  return a > b ? a : b;
-}
-function minDate(a: string | null, b: string | null): string | null {
-  if (!a) return b;
-  if (!b) return a;
-  return a < b ? a : b;
-}
-function monthsBetween(a: string, b: string): number {
-  const t1 = Date.parse(a);
-  const t2 = Date.parse(b);
-  if (!Number.isFinite(t1) || !Number.isFinite(t2)) return 0;
-  return Math.max(0, (t2 - t1) / (30.44 * 24 * 3600 * 1000));
-}
