@@ -55,7 +55,7 @@ test("buildSuggestions: excludes investors already on the pipeline", async () =>
     ],
     entities: [{ id: "ent_b", display_name: "Fund B" }],
   });
-  const out = await sug.buildSuggestions(env, "pipe_1", null, 5);
+  const out = await sug.buildSuggestions(env, "pipe_1", null, "Series A in fintech", 5);
   assert.equal(out.length, 1);
   assert.equal(out[0].investor_entity_id, "ent_b");
   assert.equal(out[0].display_name, "Fund B");
@@ -63,11 +63,13 @@ test("buildSuggestions: excludes investors already on the pipeline", async () =>
   assert.equal(out[0].reputation.is_public, true);
   assert.equal(out[0].intro_hops, null);
   assert.equal(out[0].intro_predicted_pct, null);
+  assert.equal(out[0].ask_match, null);
+  assert.equal(out[0].ranking_mode, null);
 });
 
 test("buildSuggestions: empty candidate pool returns []", async () => {
   const env = stubEnv({ existing: [], candidates: [], entities: [] });
-  const out = await sug.buildSuggestions(env, "pipe_1", "ent_founder", 5);
+  const out = await sug.buildSuggestions(env, "pipe_1", "ent_founder", "Series A", 5);
   assert.deepEqual(out, []);
 });
 
@@ -82,10 +84,31 @@ test("buildSuggestions: never fakes intro confidence when no path is found", asy
     ],
     entities: [],
   });
-  const out = await sug.buildSuggestions(env, "pipe_1", "ent_founder", 5);
+  const out = await sug.buildSuggestions(env, "pipe_1", "ent_founder", "Series B in payments", 5);
   assert.equal(out.length, 1);
   assert.equal(out[0].intro_hops, null);
   assert.equal(out[0].intro_predicted_pct, null);
+});
+
+test("buildSuggestions: accepts askContext arity and threads it without throwing", async () => {
+  // Contract check: the buildSuggestions signature MUST accept askContext
+  // as a positional arg between founderEntityId and limit so the route
+  // can pass pipeline.raise_purpose into the Task #4 intro engine.
+  // (function.length stops at first default param so we can't assert
+  // an exact arity here; we exercise the new positional shape instead.)
+  const env = stubEnv({
+    existing: [],
+    candidates: [
+      { investor_entity_id: "ent_q", follow_on_rate_pct: 0.5, founder_nps: 25, term_aggressiveness_pct: 0.3, sample_size: 6, is_public: 1 },
+    ],
+    entities: [{ id: "ent_q", display_name: "Quartz Ventures" }],
+  });
+  const out = await sug.buildSuggestions(env, "pipe_1", null, "Series A in climate hardware", 5);
+  assert.equal(out.length, 1);
+  // Without founder entity, intro routing doesn't run — but the row shape
+  // surfaces the new ask_match / ranking_mode fields as nulls.
+  assert.ok("ask_match" in out[0]);
+  assert.ok("ranking_mode" in out[0]);
 });
 
 // ── reputation collectors ──
@@ -267,19 +290,20 @@ test("projectPublicReputation: redacts feedback-derived fields when is_public=0"
     computed_at: "2026-01-01",
   };
   const out = proj.projectPublicReputation(raw);
-  // Feedback-derived fields nulled.
+  // Per spec, EVERY aggregate is gated by min-sample (>=5) — including
+  // SEC-derived term_aggressiveness_pct and follow_on_rate_pct.
   assert.equal(out.speed_to_no_days_median, null);
   assert.equal(out.board_behavior_score, null);
   assert.equal(out.founder_nps, null);
   assert.equal(out.reneged_term_sheets_count, null);
-  // SEC-derived fields stay visible per the projection contract.
-  assert.equal(out.term_aggressiveness_pct, 0.4);
-  assert.equal(out.follow_on_rate_pct, 0.6);
+  assert.equal(out.term_aggressiveness_pct, null);
+  assert.equal(out.follow_on_rate_pct, null);
   // Metadata + flags surface.
   assert.equal(out.is_public, false);
   assert.equal(out.low_sample, true);
   assert.deepEqual(out.redacted_fields.sort(), [
-    "board_behavior_score", "founder_nps", "reneged_term_sheets_count", "speed_to_no_days_median",
+    "board_behavior_score", "follow_on_rate_pct", "founder_nps",
+    "reneged_term_sheets_count", "speed_to_no_days_median", "term_aggressiveness_pct",
   ]);
   // Above the gate everything surfaces.
   const above = proj.projectPublicReputation({ ...raw, sample_size: 5, is_public: 1, low_sample: 0 });

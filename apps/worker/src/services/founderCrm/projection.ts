@@ -56,11 +56,12 @@ export function projectPublicReputation(row: RawReputationRow): PublicReputation
   return {
     investor_entity_id: row.investor_entity_id,
     speed_to_no_days_median: redactIfPrivate(row.speed_to_no_days_median, "speed_to_no_days_median"),
-    // term_aggressiveness_pct + follow_on_rate_pct are derived from
-    // SEC filings / Form D (Task #18 + deal_participants) — they are
-    // PUBLIC data and never gated by the feedback sample size.
-    term_aggressiveness_pct: row.term_aggressiveness_pct,
-    follow_on_rate_pct: row.follow_on_rate_pct,
+    // Per spec: "minimum 5 reviews before any aggregate is publicly
+    // visible". ALL aggregate fields are gated by the sample size —
+    // including SEC-derived term_aggressiveness_pct and follow_on_rate_pct.
+    // The min-sample gate is a single bright line for the entire surface.
+    term_aggressiveness_pct: redactIfPrivate(row.term_aggressiveness_pct, "term_aggressiveness_pct"),
+    follow_on_rate_pct: redactIfPrivate(row.follow_on_rate_pct, "follow_on_rate_pct"),
     board_behavior_score: redactIfPrivate(row.board_behavior_score, "board_behavior_score"),
     founder_nps: redactIfPrivate(row.founder_nps, "founder_nps"),
     reneged_term_sheets_count: redactIfPrivate(row.reneged_term_sheets_count, "reneged_term_sheets_count"),

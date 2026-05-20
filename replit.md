@@ -613,18 +613,18 @@ registry change in the rich PERSON profile path.
 Min-sample gate: aggregates are written to the `investor_reputation`
 row regardless of sample size, but `is_public=0` and `low_sample=1`
 when feedback `sample_size < 5`. The public projection
-(`projectPublicReputation`) nulls every feedback-derived field
-(`speed_to_no_days_median`, `board_behavior_score`, `founder_nps`,
-`reneged_term_sheets_count`) below the gate and lists them in
+(`projectPublicReputation`) nulls EVERY aggregate field below the
+gate — `speed_to_no_days_median`, `board_behavior_score`,
+`founder_nps`, `reneged_term_sheets_count`, AND the SEC-derived
+`term_aggressiveness_pct` / `follow_on_rate_pct` — per the spec's
+single bright line "minimum 5 reviews before any aggregate is
+publicly visible". Every redacted field is listed in
 `redacted_fields` so the UI can render "needs more reviews" rather
-than misleading zeros. SEC-derived signals (`term_aggressiveness_pct`
-from Task #18 + `follow_on_rate_pct` from `deal_participants`)
-remain visible because they come from public data and are NOT
-bound to the feedback sample gate. Mirror facts onto `u_entities`
-are written ONLY when `is_public=1` — below the gate we hold the
-row but do not publish facts to the ledger. Admin callers
-(`c.var.is_admin`) bypass the projection redaction and see the raw
-row via the same endpoint.
+than misleading zeros. Mirror facts onto `u_entities` are written
+ONLY when `is_public=1` — below the gate we hold the row but do
+not publish facts to the ledger. Admin callers (`c.var.is_admin`)
+bypass the projection redaction and see the raw row via the same
+endpoint.
 
 Anonymity guarantees: `POST /api/founder-feedback` runs every
 submission through `anonymizeFeedback(body, salt)` before persist.
@@ -659,15 +659,23 @@ and conversion funnels.
 Suggested-investors integration: `GET
 /api/founder-pipelines/:id/suggestions` ranks public reputation
 rows (high NPS, high follow-on, low aggressiveness), filters out
-investors already on the pipeline, then attempts to attach a
-top intro path per candidate via the Task #4 intro routing engine
-(`loadNeighborhood` + `findKShortestPaths`, hop cap 3, neighbor
-cap 200). Per the Task #4 "never silently fakes a confidence
-number" rule, `intro_predicted_pct` is always null on suggestions
-(only the production `POST /api/intros/find` route runs the
-trained logistic model); `intro_hops` is null when no path exists
-or `founder_entity_id` is unresolved. The UI surfaces "no path"
-explicitly rather than hiding the missing signal.
+investors already on the pipeline, then runs every remaining
+candidate through the full Task #4 intro-routing engine with the
+pipeline's `raise_purpose` threaded in as `ask_context`:
+`loadNeighborhood` + `findKShortestPaths` (hop cap 3, neighbor cap
+200) for the path, `extractFeatures` + `predict` against the live
+trained weights (via `loadCurrentWeights`, falling back to
+`DEFAULT_WEIGHTS` cold-start) for `intro_predicted_pct` AND the
+`ask_match` feature (cosine overlap between raise_purpose and the
+target's conversation hooks). Candidates are re-ranked by
+(predicted_pct DESC, ask_match DESC) so topically-relevant
+investors with a real intro path rise to the top. Per the Task #4
+"never silently fakes a confidence number" rule,
+`intro_predicted_pct` stays null in `hop_count_only` mode (every
+edge in the neighborhood lacks `quality_score`); `intro_hops`
+stays null when no path exists or `founder_entity_id` is
+unresolved. The UI surfaces "no path" explicitly rather than
+hiding the missing signal.
 
 Nightly recompute (`runNightlyReputationSweep`) piggybacks the
 consolidated `15 3 * * *` slot (Free plan caps crons at 5/5 —

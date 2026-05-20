@@ -250,8 +250,11 @@ founderCrmRoute.get("/founder-pipelines/:id/suggestions", async (c) => {
   const limitRaw = Number(c.req.query("limit") ?? "5");
   const limit = Number.isFinite(limitRaw) ? Math.min(20, Math.max(1, Math.trunc(limitRaw))) : 5;
   const founderEntityId = typeof row.founder_entity_id === "string" ? row.founder_entity_id : null;
-  const items = await buildSuggestions(c.env, row.id, founderEntityId, limit);
-  return c.json({ items, founder_entity_id: founderEntityId });
+  // Per Task #5 spec: pipeline's raise_purpose is the ask context
+  // passed into the Task #4 intro-routing engine.
+  const askContext = typeof row.raise_purpose === "string" ? row.raise_purpose : null;
+  const items = await buildSuggestions(c.env, row.id, founderEntityId, askContext, limit);
+  return c.json({ items, founder_entity_id: founderEntityId, ask_context: askContext });
 });
 
 // ── Public investor reputation projection ───────────────────────────
