@@ -220,6 +220,7 @@
     "src/services/founderCrm/stages.ts",
     "src/services/founderCrm/anonymize.ts",
     "src/services/founderCrm/projection.ts",
-    "src/services/founderCrm/reputation.ts"
+    "src/services/founderCrm/reputation.ts",
+    "src/services/founderCrm/suggestions.ts"
   ]
 }

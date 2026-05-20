@@ -16,6 +16,77 @@ const rep = await import("../../../../test-dist/services/founderCrm/reputation.j
 const stages = await import("../../../../test-dist/services/founderCrm/stages.js");
 const anon = await import("../../../../test-dist/services/founderCrm/anonymize.js");
 const proj = await import("../../../../test-dist/services/founderCrm/projection.js");
+const sug = await import("../../../../test-dist/services/founderCrm/suggestions.js");
+
+// ── suggestions integration ──
+//
+// Stub D1 env: returns canned rows for each SQL the suggestions module
+// issues. We verify (a) excluded-investors filter, (b) ordering by the
+// founder-friendly composite, (c) display-name merge, (d) intro_hops
+// degrades to null when founderEntityId is null (intro routing never
+// runs — Task #14 honest-degradation, never fakes a confidence number).
+
+function stubEnv(tables) {
+  return {
+    DB: {
+      prepare(sql) {
+        const s = sql.replace(/\s+/g, " ").trim();
+        const binds = [];
+        return {
+          bind(...args) { binds.push(...args); return this; },
+          async all() {
+            if (/FROM founder_pipeline_investors/i.test(s)) return { results: tables.existing || [] };
+            if (/FROM investor_reputation/i.test(s))       return { results: tables.candidates || [] };
+            if (/FROM u_entities/i.test(s))                return { results: tables.entities || [] };
+            return { results: [] };
+          },
+        };
+      },
+    },
+  };
+}
+
+test("buildSuggestions: excludes investors already on the pipeline", async () => {
+  const env = stubEnv({
+    existing:  [{ investor_entity_id: "ent_a" }],
+    candidates: [
+      { investor_entity_id: "ent_a", follow_on_rate_pct: 0.5, founder_nps: 30, term_aggressiveness_pct: 0.3, sample_size: 6, is_public: 1 },
+      { investor_entity_id: "ent_b", follow_on_rate_pct: 0.6, founder_nps: 40, term_aggressiveness_pct: 0.2, sample_size: 7, is_public: 1 },
+    ],
+    entities: [{ id: "ent_b", display_name: "Fund B" }],
+  });
+  const out = await sug.buildSuggestions(env, "pipe_1", null, 5);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].investor_entity_id, "ent_b");
+  assert.equal(out[0].display_name, "Fund B");
+  // Reputation surfaces; intro routing skipped when founderEntityId=null.
+  assert.equal(out[0].reputation.is_public, true);
+  assert.equal(out[0].intro_hops, null);
+  assert.equal(out[0].intro_predicted_pct, null);
+});
+
+test("buildSuggestions: empty candidate pool returns []", async () => {
+  const env = stubEnv({ existing: [], candidates: [], entities: [] });
+  const out = await sug.buildSuggestions(env, "pipe_1", "ent_founder", 5);
+  assert.deepEqual(out, []);
+});
+
+test("buildSuggestions: never fakes intro confidence when no path is found", async () => {
+  // founderEntityId provided but intros module call will fail (stub env
+  // has no rel_edges table). Per spec, intro_hops/intro_predicted_pct
+  // must remain null — the route surfaces "no path" rather than fabricating.
+  const env = stubEnv({
+    existing: [],
+    candidates: [
+      { investor_entity_id: "ent_x", follow_on_rate_pct: 0.4, founder_nps: 20, term_aggressiveness_pct: 0.5, sample_size: 8, is_public: 1 },
+    ],
+    entities: [],
+  });
+  const out = await sug.buildSuggestions(env, "pipe_1", "ent_founder", 5);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].intro_hops, null);
+  assert.equal(out[0].intro_predicted_pct, null);
+});
 
 // ── reputation collectors ──
 

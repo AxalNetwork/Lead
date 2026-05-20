@@ -106,6 +106,40 @@
     board.querySelectorAll(".card select.stage").forEach((sel) => {
       sel.addEventListener("change", () => onStageChange(sel.dataset.id, sel.value, sel.dataset.from));
     });
+    board.querySelectorAll("button.edit-crm").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const card = btn.closest(".card");
+        card.querySelector(".crm").hidden = true;
+        card.querySelector(".edit-form").hidden = false;
+      });
+    });
+    board.querySelectorAll("button.cancel-crm").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const card = btn.closest(".card");
+        card.querySelector(".edit-form").hidden = true;
+        card.querySelector(".crm").hidden = false;
+      });
+    });
+    board.querySelectorAll("form.edit-form").forEach((form) => {
+      form.addEventListener("submit", (e) => { e.preventDefault(); onCrmSave(form); });
+    });
+  }
+
+  async function onCrmSave(form) {
+    const invId = form.dataset.id;
+    const f = new FormData(form);
+    const lt = f.get("last_touch_at");
+    const body = {
+      last_touch_at: lt ? new Date(String(lt)).toISOString() : null,
+      next_step: f.get("next_step") || null,
+      notes: f.get("notes") || null,
+    };
+    const r = await fetchJson(
+      `/api/founder-pipelines/${encodeURIComponent(pipelineId)}/investors/${encodeURIComponent(invId)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    );
+    if (!r.ok) { alert("Save failed: " + (r.body.error || r.status)); return; }
+    await renderPipeline();
   }
 
   function renderCard(c, rep) {
@@ -114,12 +148,25 @@
     const options = STAGES.map((s) =>
       `<option value="${s}"${s===c.stage?" selected":""}>${STAGE_LABELS[s]}</option>`,
     ).join("");
+    const lastTouch = c.last_touch_at ? new Date(c.last_touch_at).toLocaleDateString() : "—";
     return `
-      <div class="card">
+      <div class="card" data-id="${c.id}">
         <div class="name">${esc(name)}</div>
         <select class="stage" data-id="${c.id}" data-from="${c.stage}">${options}</select>
         <div class="badges">${badges}</div>
-        ${c.next_step ? `<div class="ads-muted" style="margin-top:4px">Next: ${esc(c.next_step)}</div>` : ""}
+        <div class="crm" style="margin-top:6px;font-size:12px">
+          <div><strong>Last touch:</strong> <span class="last-touch">${esc(lastTouch)}</span></div>
+          <div><strong>Next:</strong> <span class="next-step">${esc(c.next_step || "—")}</span></div>
+          <div><strong>Notes:</strong> <span class="notes">${esc(c.notes || "—")}</span></div>
+          <button type="button" class="edit-crm" data-id="${c.id}" style="margin-top:4px">Edit</button>
+        </div>
+        <form class="edit-form" data-id="${c.id}" hidden style="margin-top:6px;font-size:12px">
+          <label>Last touch <input type="date" name="last_touch_at" value="${c.last_touch_at ? String(c.last_touch_at).slice(0,10) : ""}"></label>
+          <label>Next step <input type="text" name="next_step" value="${esc(c.next_step || "")}"></label>
+          <label>Notes <textarea name="notes" rows="2">${esc(c.notes || "")}</textarea></label>
+          <button type="submit">Save</button>
+          <button type="button" class="cancel-crm">Cancel</button>
+        </form>
       </div>`;
   }
 

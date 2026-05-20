@@ -88,8 +88,8 @@ export async function buildSuggestions(
   const introMap = new Map<string, { hops: number | null; pct: number | null }>();
   if (founderEntityId && filtered.length) {
     try {
-      const { loadNeighborhood } = await import("../intros/graph");
-      const { buildAdjacency, findKShortestPaths } = await import("../intros/pathfinder");
+      const { loadNeighborhood } = await import("../intros/graph.js");
+      const { buildAdjacency, findKShortestPaths } = await import("../intros/pathfinder.js");
       for (const c of filtered) {
         try {
           const g = await loadNeighborhood(env, founderEntityId, c.investor_entity_id);
