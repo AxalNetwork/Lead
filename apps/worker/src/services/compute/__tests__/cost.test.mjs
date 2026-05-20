@@ -1,7 +1,7 @@
 // Task #9: cost-formula unit tests.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computeCostUsd } from "../cost.js";
+import { computeCostUsd } from "../../../../test-dist/services/compute/cost.js";
 
 test("runtime-only cost", () => {
   const c = computeCostUsd({ runtime_ms: 3_600_000, tokens_used: 0, cost_per_hour_usd: 0.4, cost_per_1k_tokens_usd: 0 });

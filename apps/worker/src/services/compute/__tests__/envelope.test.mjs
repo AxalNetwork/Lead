@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { signEnvelope, verifyEnvelope, ENVELOPE_TTL_MS } from "../envelope.js";
+import { signEnvelope, verifyEnvelope, ENVELOPE_TTL_MS } from "../../../../test-dist/services/compute/envelope.js";
 
 test("sign + verify round-trip", async () => {
   const secret = "s3cret";

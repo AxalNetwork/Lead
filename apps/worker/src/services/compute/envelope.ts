@@ -60,7 +60,7 @@ export async function signEnvelope(
   return { node_id: parts.node_id, timestamp, nonce, body_sha256, signature: hex(sig) };
 }
 
-export interface VerifyResult { ok: true } | { ok: false; reason: string }
+export type VerifyResult = { ok: true } | { ok: false; reason: string };
 export async function verifyEnvelope(
   secret: string,
   env: Envelope,

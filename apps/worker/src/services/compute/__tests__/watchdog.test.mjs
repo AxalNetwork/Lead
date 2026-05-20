@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { runComputeWatchdog, HEARTBEAT_FRESH_MS } from "../dispatcher.js";
+import { runComputeWatchdog, HEARTBEAT_FRESH_MS } from "../../../../test-dist/services/compute/dispatcher.js";
 
 function fakeDb(state) {
   return {

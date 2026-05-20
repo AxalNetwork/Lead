@@ -3,8 +3,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { mintRegistrationToken, readRegistrationToken, consumeRegistrationToken } from "../registration.js";
-import { kvNonceStore } from "../envelope.js";
+import { mintRegistrationToken, readRegistrationToken, consumeRegistrationToken } from "../../../../test-dist/services/compute/registration.js";
+import { kvNonceStore } from "../../../../test-dist/services/compute/envelope.js";
 
 function fakeKv() {
   const m = new Map();

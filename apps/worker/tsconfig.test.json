@@ -234,6 +234,11 @@
     "src/db/error_log.ts",
     "src/errors.ts",
     "src/entities/backfill.ts",
-    "src/routes/admin.ts"
+    "src/routes/admin.ts",
+    "src/services/compute/cost.ts",
+    "src/services/compute/routing.ts",
+    "src/services/compute/envelope.ts",
+    "src/services/compute/registration.ts",
+    "src/services/compute/dispatcher.ts"
   ]
 }

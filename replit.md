@@ -1081,5 +1081,83 @@ spec's "Cytoscape sub-graph" wording; click-to-expand fetches the
 next hop and merges into the live graph client-side. Edge colour
 encodes kind; edge width encodes `quality_score`.
 
+### Task #2 — External Worker Pool (GPU & 3rd-party servers): migration 378 + `source_kind` N/A (no fact mirroring) (ACCEPTED)
+Spec slotted the schema at migration 370, but slots 350–377 are
+all taken (per the Task #13/#14/#18/#2/#3/#4/#5/#6 contract-update
+precedent above; in particular 377 = Task #4 `rel_edges` evidence).
+The compute-pool schema lands at
+`apps/worker/migrations/378_compute_nodes.sql` (two tables:
+`compute_nodes` and `compute_job_assignments`). Future migrations
+should number from 379.
+
+**Routing matrix source of truth** (CONSTRAINT): default routing
+rules live in code at `apps/worker/src/services/compute/routing.ts`
+(`DEFAULT_ROUTING_MATRIX`). Per-deployment overrides ride on
+`compute_nodes.capabilities_json` (e.g., `allow_all_kinds`) — there
+is NO separate `compute_routing_rules` table. The spec offered
+both as alternatives; we picked the in-code matrix + JSON override
+because (a) it avoids another append-only D1 table for what is
+already a small, hand-curated decision tree and (b) per-node
+overrides are already needed for capability flags so the JSON path
+is the natural home.
+
+**Route-path deviations from spec** (intentional, documented):
+- Admin token mint: spec said `POST /api/compute/nodes/register-token`
+  → ships as `POST /api/ops/compute-nodes/register-token`. Reason:
+  admin endpoints live under `/api/ops/*` per the existing
+  `/api/ops/crawler/` page-gating convention (Task #2 ops-gating
+  precedent); mixing admin and runner endpoints under the same
+  `/api/compute/*` prefix would defeat the
+  `mount-before-accessGuard` trick that lets runners use HMAC
+  envelopes instead of CF Access JWT.
+- Runner endpoints flatten to `/api/compute/register-exchange`,
+  `/api/compute/heartbeat`, `/api/compute/pull`,
+  `/api/compute/complete` (spec proposed
+  `/nodes/:id/heartbeat`, `/jobs/:assignment_id/complete`). The
+  `node_id` and `assignment_id` arrive in the signed envelope body
+  rather than the URL path so we have a single signature-verify
+  middleware path for every runner request.
+
+Per-node HMAC secret lives in KV ONLY at `auth_secret_kv_key`;
+D1 stores the KV path. Registration response is the one and only
+time the secret crosses the wire (per environment-secrets posture).
+Cost rows live exclusively in `compute_job_assignments.cost_usd` —
+the existing Workers-AI cost ledger is NOT duplicated; the spend
+dashboard joins both ledgers on `(date, job_type)` for the unified
+breakdown.
+
+Watchdog piggybacks BOTH on dispatcher invocations
+(`runComputeWatchdog` is `waitUntil`-fired from
+`/api/compute/heartbeat`) AND on the consolidated `15 3 * * *`
+nightly slot (Free plan caps crons at 5/5 — same constraint as
+Task #4 angel sweep, Task #14 verification sweep, Task #18 term
+benchmarks, Task #2 fund-return sweep, Task #3 edge-quality sweep,
+Task #4 intro retrain). No new cron.
+
+**Consumer hook not yet wired** (KNOWN GAP, follow-up task):
+`dispatchExternalJob` exists and is unit-tested but is not yet
+called from any in-Workers job consumer (e.g., the scraper
+pipeline / AI helpers for `vision_ocr`, `embed_text`, etc.). The
+spec frames external dispatch as an additive routing layer; the
+plumbing is in place but each call site needs an explicit
+`pickNode` hook with a fallback to the existing in-Workers path.
+Will land in a follow-up keyed off the first heavy-job profile
+(likely document OCR per Task #13).
+
+Test infrastructure deviation: the pre-merge compute tests
+imported from `../foo.js` paths that never resolved because the
+compute source files weren't listed in `tsconfig.test.json`'s
+`include`. Fixed in this task by (a) adding the 5 compute source
+files to the `include` array and (b) rewriting test imports to the
+project's standard `../../../../test-dist/services/compute/foo.js`
+pattern (same as Task #4 intros tests). All 26 compute unit tests
+pass.
+
+Per the Task #4 static-routing constraint, the
+`/ops/compute-nodes` page uses `?id=` query strings, never `/:id`
+path segments. Page-level gating uses the Task #2
+`/ops/crawler/` pre-flight pattern — `#ops-content` hidden
+until `GET /api/ops/compute-nodes` returns 2xx.
+
 ## User preferences
 - (none recorded yet)

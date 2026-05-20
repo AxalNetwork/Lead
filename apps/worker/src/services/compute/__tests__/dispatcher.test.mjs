@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { pickNodeFromList, HEARTBEAT_FRESH_MS } from "../dispatcher.js";
+import { pickNodeFromList, HEARTBEAT_FRESH_MS } from "../../../../test-dist/services/compute/dispatcher.js";
 
 function node(over) {
   return {
