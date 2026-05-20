@@ -1,7 +1,7 @@
 {
   "page_classification": {
     "metric": "classification_f1",
-    "score": 0.0545,
+    "score": 0.6973,
     "n": 20
   },
   "csv_mapping": {
@@ -11,22 +11,22 @@
   },
   "role_inference": {
     "metric": "classification_f1",
-    "score": 0.2725,
+    "score": 0.8722,
     "n": 25
   },
   "deal_extraction": {
     "metric": "field_f1",
-    "score": 0.6,
+    "score": 0.7273,
     "n": 8
   },
   "entity_dedupe": {
     "metric": "pair_f1",
-    "score": 0,
+    "score": 0.8571,
     "n": 12
   },
   "founder_background": {
     "metric": "pair_f1",
-    "score": 0,
+    "score": 0.5714,
     "n": 10
   }
 }
