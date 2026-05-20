@@ -122,10 +122,43 @@ test("cold install: collectExternalApis returns one card per name w/ null fields
   assert.equal(r[0].success_rate_24h, null);
 });
 
-test("cold install: binding collectors do not throw on empty env", () => {
-  assert.ok(Array.isArray(collectR2({})));
-  assert.ok(Array.isArray(collectKV({})));
-  assert.ok(Array.isArray(collectVectorize({})));
+test("cold install: binding collectors do not throw on empty env", async () => {
+  assert.ok(Array.isArray(await collectR2({})));
+  assert.ok(Array.isArray(await collectKV({})));
+  assert.ok(Array.isArray(await collectVectorize({})));
+});
+
+test("collectR2: samples objects+bytes from a bound bucket", async () => {
+  const env = {
+    RAW_HTML: {
+      list: async () => ({
+        objects: [
+          { size: 1024, uploaded: "2026-05-20T00:00:00Z" },
+          { size: 2048, uploaded: "2026-05-20T01:00:00Z" },
+        ],
+        truncated: false,
+      }),
+    },
+  };
+  const r = await collectR2(env);
+  const rawHtml = r.find((x) => x.bucket === "RAW_HTML");
+  assert.equal(rawHtml.bound, true);
+  assert.equal(rawHtml.objects_sampled, 2);
+  assert.equal(rawHtml.bytes_sampled, 3072);
+  assert.equal(rawHtml.metric_source, "list_sample");
+  assert.equal(rawHtml.truncated, false);
+});
+
+test("collectVectorize: pulls describe() metrics when available", async () => {
+  const env = {
+    VEC_LEADS: { describe: async () => ({ vectorsCount: 42, dimensions: 384 }) },
+  };
+  const r = await collectVectorize(env);
+  const leads = r.find((x) => x.index === "VEC_LEADS");
+  assert.equal(leads.bound, true);
+  assert.equal(leads.vector_count, 42);
+  assert.equal(leads.dimensions, 384);
+  assert.equal(leads.metric_source, "describe");
 });
 
 // ---------- nodeStatus logic ----------------------------------------------

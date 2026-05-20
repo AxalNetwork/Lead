@@ -311,38 +311,177 @@ export async function collectD1(env: Env): Promise<D1Card> {
 }
 
 // ---------- R2 / KV / Vectorize --------------------------------------------
+//
+// Cloudflare does not expose binding-level usage counters to the
+// Worker itself (no `requests/sec` or `GB used` from the runtime).
+// The honest-degradation pattern (Task #14 / #18 / #6 precedent):
+// surface what we CAN measure cheaply and report `metric_source` so
+// the UI can label sampled values vs. unavailable ones. Sampling
+// reads one page per binding — bounded and cheap.
 
-export interface R2Card { bucket: string; bound: boolean; }
-export interface KvCard { binding: string; bound: boolean; }
-export interface VectorizeCard { index: string; bound: boolean; }
-
-export function collectR2(env: Env): R2Card[] {
-  return [
-    { bucket: "RAW_HTML", bound: !!env.RAW_HTML },
-    { bucket: "UPLOADS", bound: !!env.UPLOADS },
-    { bucket: "AI_CACHE", bound: !!env.AI_CACHE },
-    { bucket: "IMPORTS", bound: !!env.IMPORTS },
-    { bucket: "TRANSCRIPTS", bound: !!env.TRANSCRIPTS },
-  ];
+export interface R2Card {
+  bucket: string;
+  bound: boolean;
+  objects_sampled: number | null;
+  bytes_sampled: number | null;
+  truncated: boolean | null;
+  last_modified: string | null;
+  error: string | null;
+  metric_source: "list_sample" | "unavailable";
+}
+export interface KvCard {
+  binding: string;
+  bound: boolean;
+  keys_sampled: number | null;
+  truncated: boolean | null;
+  error: string | null;
+  metric_source: "list_sample" | "unavailable";
+}
+export interface VectorizeCard {
+  index: string;
+  bound: boolean;
+  vector_count: number | null;
+  dimensions: number | null;
+  error: string | null;
+  metric_source: "describe" | "unavailable";
 }
 
-export function collectKV(env: Env): KvCard[] {
-  return [
-    { binding: "SESSIONS", bound: !!env.SESSIONS },
-    { binding: "SCRAPE_CACHE", bound: !!env.SCRAPE_CACHE },
-  ];
+interface MaybeR2 {
+  list(opts?: { limit?: number }): Promise<{
+    objects: Array<{ size?: number; uploaded?: Date | string }>;
+    truncated: boolean;
+  }>;
+}
+interface MaybeKv {
+  list(opts?: { limit?: number }): Promise<{ keys: unknown[]; list_complete: boolean }>;
+}
+interface MaybeVectorize {
+  describe?: () => Promise<{ vectorsCount?: number; dimensions?: number }>;
 }
 
-export function collectVectorize(env: Env): VectorizeCard[] {
-  return [
-    { index: "VEC_LEADS", bound: !!env.VEC_LEADS },
-    { index: "VEC_FIRMS", bound: !!env.VEC_FIRMS },
-    { index: "VEC_COMPANIES", bound: !!env.VEC_COMPANIES },
-    { index: "VEC_ACCOUNTS", bound: !!env.VEC_ACCOUNTS },
-    { index: "VEC_PERSONAS", bound: !!env.VEC_PERSONAS },
-    { index: "VEC_PROJECTS", bound: !!env.VEC_PROJECTS },
-    { index: "VECTORIZE_ENTITIES", bound: !!env.VECTORIZE_ENTITIES },
-  ];
+const R2_BINDINGS: Array<keyof Env> = ["RAW_HTML", "UPLOADS", "AI_CACHE", "IMPORTS", "TRANSCRIPTS"];
+const KV_BINDINGS: Array<keyof Env> = ["SESSIONS", "SCRAPE_CACHE"];
+const VEC_BINDINGS: Array<keyof Env> = [
+  "VEC_LEADS", "VEC_FIRMS", "VEC_COMPANIES", "VEC_ACCOUNTS",
+  "VEC_PERSONAS", "VEC_PROJECTS", "VECTORIZE_ENTITIES",
+];
+
+export async function collectR2(env: Env): Promise<R2Card[]> {
+  const out: R2Card[] = [];
+  for (const name of R2_BINDINGS) {
+    const b = env[name] as unknown as MaybeR2 | undefined;
+    if (!b || typeof b.list !== "function") {
+      out.push({ bucket: String(name), bound: false, objects_sampled: null, bytes_sampled: null, truncated: null, last_modified: null, error: null, metric_source: "unavailable" });
+      continue;
+    }
+    try {
+      const r = await b.list({ limit: 1000 });
+      const bytes = r.objects.reduce((s, o) => s + (Number(o.size) || 0), 0);
+      const lm = r.objects
+        .map((o) => (o.uploaded ? new Date(o.uploaded as string).getTime() : 0))
+        .reduce((a, b2) => (b2 > a ? b2 : a), 0);
+      out.push({
+        bucket: String(name), bound: true,
+        objects_sampled: r.objects.length,
+        bytes_sampled: bytes,
+        truncated: !!r.truncated,
+        last_modified: lm ? new Date(lm).toISOString() : null,
+        error: null, metric_source: "list_sample",
+      });
+    } catch (e) {
+      out.push({ bucket: String(name), bound: true, objects_sampled: null, bytes_sampled: null, truncated: null, last_modified: null, error: (e as Error).message, metric_source: "unavailable" });
+    }
+  }
+  return out;
+}
+
+export async function collectKV(env: Env): Promise<KvCard[]> {
+  const out: KvCard[] = [];
+  for (const name of KV_BINDINGS) {
+    const b = env[name] as unknown as MaybeKv | undefined;
+    if (!b || typeof b.list !== "function") {
+      out.push({ binding: String(name), bound: false, keys_sampled: null, truncated: null, error: null, metric_source: "unavailable" });
+      continue;
+    }
+    try {
+      const r = await b.list({ limit: 1000 });
+      out.push({
+        binding: String(name), bound: true,
+        keys_sampled: r.keys.length,
+        truncated: !r.list_complete,
+        error: null, metric_source: "list_sample",
+      });
+    } catch (e) {
+      out.push({ binding: String(name), bound: true, keys_sampled: null, truncated: null, error: (e as Error).message, metric_source: "unavailable" });
+    }
+  }
+  return out;
+}
+
+export async function collectVectorize(env: Env): Promise<VectorizeCard[]> {
+  const out: VectorizeCard[] = [];
+  for (const name of VEC_BINDINGS) {
+    const b = env[name] as unknown as MaybeVectorize | undefined;
+    if (!b) {
+      out.push({ index: String(name), bound: false, vector_count: null, dimensions: null, error: null, metric_source: "unavailable" });
+      continue;
+    }
+    if (typeof b.describe !== "function") {
+      out.push({ index: String(name), bound: true, vector_count: null, dimensions: null, error: "describe_not_supported", metric_source: "unavailable" });
+      continue;
+    }
+    try {
+      const d = await b.describe();
+      out.push({
+        index: String(name), bound: true,
+        vector_count: typeof d.vectorsCount === "number" ? d.vectorsCount : null,
+        dimensions: typeof d.dimensions === "number" ? d.dimensions : null,
+        error: null, metric_source: "describe",
+      });
+    } catch (e) {
+      out.push({ index: String(name), bound: true, vector_count: null, dimensions: null, error: (e as Error).message, metric_source: "unavailable" });
+    }
+  }
+  return out;
+}
+
+// ---------- Cloudflare Worker self-card ------------------------------------
+//
+// The spec calls for "a card for each Cloudflare Worker" in the
+// compute strip. The Worker has no introspection API for itself; we
+// surface the things we DO know honestly: worker name, version (from
+// env if exposed), latest tick timestamp from cron_tick markers, and
+// a green/yellow status based on whether the hourly cron has run in
+// the last 90 minutes.
+
+export interface WorkerCard {
+  id: string;
+  name: string;
+  kind: "cloudflare_worker";
+  status: "green" | "yellow" | "red";
+  last_hourly_tick: string | null;
+  version: string | null;
+}
+
+export async function collectWorkerCards(env: Env): Promise<WorkerCard[]> {
+  const last = await safeQuery(async () => {
+    const r = await env.DB.prepare(
+      `SELECT MAX(bucket_start) AS t FROM health_snapshots
+        WHERE metric_name = 'cron.tick.0 * * * *'`,
+    ).first<{ t: string | null }>();
+    return r;
+  }, null as { t: string | null } | null);
+  const lastT = last?.t ? new Date(last.t.replace(" ", "T") + "Z").getTime() : 0;
+  const ageMin = lastT ? (Date.now() - lastT) / 60_000 : Infinity;
+  const status: WorkerCard["status"] = ageMin < 90 ? "green" : ageMin < 240 ? "yellow" : "red";
+  return [{
+    id: "cf_worker_self",
+    name: "aidatasignal-lead (worker)",
+    kind: "cloudflare_worker",
+    status,
+    last_hourly_tick: last?.t ?? null,
+    version: (env as unknown as { CF_VERSION_METADATA?: { id?: string } }).CF_VERSION_METADATA?.id ?? null,
+  }];
 }
 
 // ---------- errors ---------------------------------------------------------
@@ -399,9 +538,14 @@ export async function collectErrorRatePerMin(env: Env): Promise<number> {
 
 // ---------- crons ----------------------------------------------------------
 
+// Full list mirrored from wrangler.toml `[triggers].crons`. Keep in
+// sync when crons are added/removed (Free plan cap is 5/5).
 const KNOWN_CRONS: ReadonlyArray<{ name: string; cron_expr: string }> = [
   { name: "hourly dispatcher", cron_expr: "0 * * * *" },
+  { name: "6-hourly source sweep", cron_expr: "0 */6 * * *" },
   { name: "nightly consolidated", cron_expr: "15 3 * * *" },
+  { name: "daily 04:00 sweep", cron_expr: "0 4 * * *" },
+  { name: "daily 04:30 sweep", cron_expr: "30 4 * * *" },
 ];
 
 export async function collectCronStatus(env: Env): Promise<CronStatusRow[]> {

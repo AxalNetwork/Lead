@@ -10,7 +10,7 @@
 // hourly cron — no new cron slot.
 
 import type { Env } from "../../types";
-import { collectComputePool, collectQueues, collectD1, collectErrorRatePerMin, nodeStatus } from "./collectors";
+import { collectComputePool, collectQueues, collectD1, collectErrorRatePerMin, nodeStatus, collectRecentErrors } from "./collectors";
 import { deliverEmail } from "../../monitoring/channels/email";
 
 export interface Breach {
@@ -148,6 +148,31 @@ export async function runAlertEvaluator(env: Env): Promise<RunAlertsResult> {
   let opened = 0;
   let closed = 0;
 
+  // Capture a rich health snapshot ONCE when any incident is about to
+  // open. Per the Task #4 static-routing constraint, the timeline page
+  // must hydrate strictly from `context_json` captured at incident
+  // open — never re-query the underlying gauge tables. We bundle the
+  // current queue depths, compute-pool statuses, error rate, top error
+  // signatures, and the breach payload itself so the incident detail
+  // page has everything it needs locally.
+  let snapshotContext: Record<string, unknown> | null = null;
+  async function buildContextSnapshot(): Promise<Record<string, unknown>> {
+    if (snapshotContext) return snapshotContext;
+    const [queues, nodes, erate, d1, errs] = await Promise.all([
+      collectQueues(env).catch(() => []),
+      collectComputePool(env).catch(() => []),
+      collectErrorRatePerMin(env).catch(() => 0),
+      collectD1(env).catch(() => ({ reads_per_sec_estimate: 0, writes_per_sec_estimate: 0, errors_24h: 0, throttled_24h: 0 })),
+      collectRecentErrors(env, 20).catch(() => []),
+    ]);
+    snapshotContext = {
+      captured_at: new Date().toISOString(),
+      queues, compute_pool: nodes, errors_per_min: erate,
+      d1, top_errors: errs,
+    };
+    return snapshotContext;
+  }
+
   // 1) Open new incidents for breaches without an active row.
   for (const b of breaches) {
     const existing = await env.DB.prepare(
@@ -156,6 +181,8 @@ export async function runAlertEvaluator(env: Env): Promise<RunAlertsResult> {
     if (existing) continue;
     const id = "inc_" + crypto.randomUUID().replace(/-/g, "").slice(0, 16);
     const delivery = await notify(env, b);
+    const snap = await buildContextSnapshot();
+    const fullContext = { ...b.context, snapshot: snap, breach: b };
     // `OR IGNORE` cooperates with the partial unique index
     // `uq_ops_incidents_open_signature` to make the insert atomic
     // against concurrent evaluator ticks: a second tick that lost the
@@ -170,7 +197,7 @@ export async function runAlertEvaluator(env: Env): Promise<RunAlertsResult> {
       b.kind,
       b.signature,
       b.summary,
-      JSON.stringify(b.context),
+      JSON.stringify(fullContext),
       `email:${delivery.email},slack:${delivery.slack}`,
     ).run().catch((e) => {
       console.warn("ops_incidents insert failed", (e as Error).message);

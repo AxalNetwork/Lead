@@ -93,26 +93,37 @@
           '</div>' +
           (inc.delivery_status ? '<div class="ads-mono" style="margin-top:.25rem;font-size:.85em;color:#6b7280">delivery: ' + esc(inc.delivery_status) + '</div>' : '');
       }
+      // Per Task #4 static-routing/incident-hydration constraint:
+      // hydrate strictly from `data.context` (captured at incident
+      // open). Never re-query gauge tables here.
+      var ctx = data.context || {};
       var ctxEl = document.getElementById("ops-incident-context");
       if (ctxEl) {
-        try {
-          var ctx = inc.context_json ? JSON.parse(inc.context_json) : null;
-          ctxEl.textContent = ctx ? JSON.stringify(ctx, null, 2) : "(no context captured)";
-        } catch (e) {
-          ctxEl.textContent = inc.context_json || "(no context)";
-        }
+        ctxEl.textContent = ctx && Object.keys(ctx).length ? JSON.stringify(ctx, null, 2) : "(no context captured)";
       }
       var tb = document.querySelector("#ops-incident-timeline tbody");
       if (tb) {
-        var tl = data.timeline || [];
-        if (!tl.length) { tb.innerHTML = '<tr><td colspan="4" class="ads-sub">No rollup snapshots in this window.</td></tr>'; }
+        var rows = [];
+        if (ctx.snapshot) {
+          var snap = ctx.snapshot;
+          var cap = snap.captured_at || inc.opened_at;
+          (snap.queues || []).forEach(function (q) {
+            rows.push({ at: cap, name: "queue.depth." + q.queue_name, value: q.depth, detail: "oldest_age_seconds=" + (q.oldest_age_seconds == null ? "—" : q.oldest_age_seconds) + " failed_24h=" + (q.failed_24h || 0) });
+          });
+          (snap.compute_pool || []).forEach(function (n) {
+            rows.push({ at: cap, name: "node." + n.id, value: n.status, detail: "name=" + (n.name || "") + " last_error=" + (n.last_error || "") });
+          });
+          if (snap.errors_per_min != null) rows.push({ at: cap, name: "errors.per_min", value: snap.errors_per_min, detail: "" });
+          if (snap.d1) rows.push({ at: cap, name: "d1", value: "throttled_24h=" + snap.d1.throttled_24h, detail: "errors_24h=" + snap.d1.errors_24h });
+        }
+        if (!rows.length) { tb.innerHTML = '<tr><td colspan="4" class="ads-sub">No context snapshot stored for this incident.</td></tr>'; }
         else {
-          tb.innerHTML = tl.map(function (t) {
+          tb.innerHTML = rows.map(function (t) {
             return '<tr>' +
-              '<td class="ads-mono">' + esc(t.bucket_start) + '</td>' +
-              '<td class="ads-mono">' + esc(t.metric_name) + '</td>' +
-              '<td class="ads-mono">' + (t.value == null ? "—" : t.value) + '</td>' +
-              '<td class="ads-mono" style="max-width:20rem;overflow:hidden;text-overflow:ellipsis" title="' + esc(t.payload_json || "") + '">' + esc(t.payload_json || "") + '</td>' +
+              '<td class="ads-mono">' + esc(t.at) + '</td>' +
+              '<td class="ads-mono">' + esc(t.name) + '</td>' +
+              '<td class="ads-mono">' + (t.value == null ? "—" : esc(String(t.value))) + '</td>' +
+              '<td class="ads-mono" style="max-width:20rem;overflow:hidden;text-overflow:ellipsis" title="' + esc(t.detail) + '">' + esc(t.detail) + '</td>' +
               '</tr>';
           }).join("");
         }

@@ -23,6 +23,7 @@ import {
   collectErrorRatePerMin,
   collectCronStatus,
   collectExternalApis,
+  collectWorkerCards,
 } from "../services/systemHealth/collectors";
 import { writeHealthSnapshot } from "../services/systemHealth/snapshot";
 import { runProbe, runAllProbes, findProbe, writeProbe, PROBE_NAMES, PROBE_REGISTRY } from "../services/systemHealth/probes";
@@ -61,10 +62,14 @@ async function maybeWriteFreshSnapshot(env: Env): Promise<void> {
 // GET /api/ops/system-health — page-level pre-flight + full aggregator.
 opsSystemHealthRoute.get("/", async (c) => {
   await maybeWriteFreshSnapshot(c.env);
-  const [compute, queues, d1, errors, errorsPerMin, crons, externalApis, openIncidents] = await Promise.all([
+  const [compute, workers, queues, d1, r2, kv, vec, errors, errorsPerMin, crons, externalApis, openIncidents] = await Promise.all([
     collectComputePool(c.env),
+    collectWorkerCards(c.env),
     collectQueues(c.env),
     collectD1(c.env),
+    collectR2(c.env),
+    collectKV(c.env),
+    collectVectorize(c.env),
     collectRecentErrors(c.env, 100),
     collectErrorRatePerMin(c.env),
     collectCronStatus(c.env),
@@ -82,11 +87,12 @@ opsSystemHealthRoute.get("/", async (c) => {
   return c.json({
     generated_at: new Date().toISOString(),
     compute_pool: compute,
+    workers,
     queues,
     d1,
-    r2: collectR2(c.env),
-    kv: collectKV(c.env),
-    vectorize: collectVectorize(c.env),
+    r2,
+    kv,
+    vectorize: vec,
     external_apis: externalApis,
     crons,
     errors: { recent: errors, per_min: errorsPerMin },
@@ -172,19 +178,18 @@ opsSystemHealthRoute.get("/incidents/by-id", async (c) => {
     `SELECT * FROM ops_incidents WHERE id = ? LIMIT 1`,
   ).bind(id).first<Record<string, unknown>>().catch(() => null);
   if (!row) return c.json({ error: "not_found", id }, 404);
-  // Hydrate the snapshot of related health bucket points around the
-  // opened_at time so the timeline page has context.
-  const opened = String(row.opened_at);
-  const timeline = await c.env.DB.prepare(
-    `SELECT bucket_start, metric_name, value, payload_json
-       FROM health_snapshots
-      WHERE bucket_start >= datetime(?, '-30 minutes')
-        AND bucket_start <= datetime(?, '+30 minutes')
-      ORDER BY bucket_start ASC`,
-  ).bind(opened, opened).all<{ bucket_start: string; metric_name: string; value: number; payload_json: string | null }>()
-   .then((r) => r.results ?? [])
-   .catch(() => [] as Array<{ bucket_start: string; metric_name: string; value: number; payload_json: string | null }>);
-  return c.json({ incident: row, timeline });
+  // Per the Task #4 static-routing/incident-hydration constraint, the
+  // timeline page hydrates STRICTLY from the `context_json` payload
+  // captured at incident open — never re-queries the underlying gauge
+  // tables. This guarantees the displayed timeline reflects the actual
+  // platform state at the moment the alert fired, even if rollups have
+  // since been overwritten or pruned.
+  let context: Record<string, unknown> = {};
+  if (typeof row.context_json === "string" && row.context_json.length) {
+    try { context = JSON.parse(row.context_json) as Record<string, unknown>; }
+    catch { context = { parse_error: "context_json invalid JSON" }; }
+  }
+  return c.json({ incident: row, context });
 });
 
 // PATCH /api/ops/system-health/incidents/by-id?id=<id> — edit resolution_notes / ack.

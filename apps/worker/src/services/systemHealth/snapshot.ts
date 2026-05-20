@@ -8,11 +8,18 @@ import type { Env } from "../../types";
 import { collectComputePool, collectQueues, collectD1, collectErrorRatePerMin } from "./collectors";
 
 export function bucketStart(now: Date = new Date(), minutes = 5): string {
+  // SQLite-comparable timestamp: `YYYY-MM-DD HH:mm:ss` (no `T`, no `Z`)
+  // so `bucket_start >= datetime('now','-1 hour')` and `BETWEEN`
+  // comparisons work lexicographically the same way SQLite stores
+  // text-format datetimes. ISO output here previously caused the
+  // sparkline window query to misbehave because `2026-05-20T03:00:00Z`
+  // sorts before `2026-05-20 03:00:00`.
   const t = new Date(now);
   t.setSeconds(0, 0);
   const m = t.getMinutes();
   t.setMinutes(m - (m % minutes));
-  return t.toISOString().replace(/\.\d{3}Z$/, "Z");
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${t.getUTCFullYear()}-${pad(t.getUTCMonth() + 1)}-${pad(t.getUTCDate())} ${pad(t.getUTCHours())}:${pad(t.getUTCMinutes())}:00`;
 }
 
 async function put(env: Env, bucket: string, metric: string, value: number | null, payload?: Record<string, unknown>): Promise<void> {

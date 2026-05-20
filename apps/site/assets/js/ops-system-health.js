@@ -136,14 +136,40 @@
   function renderBindings(r2, kv, vec) {
     var el = document.getElementById("ops-bindings");
     if (!el) return;
-    function chip(name, bound) {
-      var c = bound ? "#1aa260" : "#6b7280";
-      return '<span style="display:inline-block;margin:.2rem;padding:.2rem .5rem;border-radius:1rem;border:1px solid ' + c + ';color:' + c + '">' + esc(name) + (bound ? " ✓" : " ✗") + '</span>';
+    function fmtBytes(n) {
+      if (n == null) return "—";
+      if (n < 1024) return n + " B";
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+      if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + " MB";
+      return (n / 1024 / 1024 / 1024).toFixed(2) + " GB";
+    }
+    function src(s) {
+      return '<span class="ads-sub" style="font-size:.8em">(' + esc(s || "unavailable") + ')</span>';
+    }
+    function r2Row(x) {
+      if (!x.bound) return '<li><strong>' + esc(x.bucket) + '</strong>: <span style="color:#6b7280">not bound</span></li>';
+      var n = x.objects_sampled == null ? "—" : (x.objects_sampled + (x.truncated ? "+" : ""));
+      var err = x.error ? ' <span style="color:#c0392b">err: ' + esc(x.error) + '</span>' : '';
+      return '<li><strong>' + esc(x.bucket) + '</strong>: objects ' + n + ' · bytes ' + fmtBytes(x.bytes_sampled) +
+        ' · last_mod ' + esc(x.last_modified || "—") + ' ' + src(x.metric_source) + err + '</li>';
+    }
+    function kvRow(x) {
+      if (!x.bound) return '<li><strong>' + esc(x.binding) + '</strong>: <span style="color:#6b7280">not bound</span></li>';
+      var n = x.keys_sampled == null ? "—" : (x.keys_sampled + (x.truncated ? "+" : ""));
+      var err = x.error ? ' <span style="color:#c0392b">err: ' + esc(x.error) + '</span>' : '';
+      return '<li><strong>' + esc(x.binding) + '</strong>: keys ' + n + ' ' + src(x.metric_source) + err + '</li>';
+    }
+    function vRow(x) {
+      if (!x.bound) return '<li><strong>' + esc(x.index) + '</strong>: <span style="color:#6b7280">not bound</span></li>';
+      var vc = x.vector_count == null ? "—" : x.vector_count;
+      var d = x.dimensions == null ? "—" : x.dimensions;
+      var err = x.error ? ' <span style="color:#c0392b">err: ' + esc(x.error) + '</span>' : '';
+      return '<li><strong>' + esc(x.index) + '</strong>: vectors ' + vc + ' · dim ' + d + ' ' + src(x.metric_source) + err + '</li>';
     }
     el.innerHTML =
-      '<div><strong>R2:</strong> ' + r2.map(function (x) { return chip(x.bucket, x.bound); }).join("") + '</div>' +
-      '<div><strong>KV:</strong> ' + kv.map(function (x) { return chip(x.binding, x.bound); }).join("") + '</div>' +
-      '<div><strong>Vectorize:</strong> ' + vec.map(function (x) { return chip(x.index, x.bound); }).join("") + '</div>';
+      '<div><strong>R2</strong><ul style="margin:.25rem 0 .5rem 1rem">' + r2.map(r2Row).join("") + '</ul></div>' +
+      '<div><strong>KV</strong><ul style="margin:.25rem 0 .5rem 1rem">' + kv.map(kvRow).join("") + '</ul></div>' +
+      '<div><strong>Vectorize</strong><ul style="margin:.25rem 0 .5rem 1rem">' + vec.map(vRow).join("") + '</ul></div>';
   }
 
   function renderExternal(list) {
@@ -203,7 +229,11 @@
       revealContent();
       document.getElementById("ops-generated-at").textContent = "snapshot " + ago(data.generated_at);
       renderIncidents(data.open_incidents || []);
-      renderCompute(data.compute_pool || []);
+      // Compute strip: external nodes + Cloudflare Worker self-cards.
+      var workers = (data.workers || []).map(function (w) {
+        return { id: w.id, name: w.name, status: w.status, last_heartbeat_at: w.last_hourly_tick, last_error: null, last_p95_latency_ms: null, enabled: 1, drain: 0, kind: "cloudflare_worker" };
+      });
+      renderCompute(workers.concat(data.compute_pool || []));
       renderQueues(data.queues || []);
       renderD1(data.d1);
       renderBindings(data.r2 || [], data.kv || [], data.vectorize || []);
