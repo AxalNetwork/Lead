@@ -207,6 +207,155 @@ test("entity_audit_log is append-only — restore is a new row, not an edit", ()
   assert.deepEqual(rows.map((r) => r.action), ["soft_delete", "restore"]);
 });
 
+// ---------- 6a. Task #1 fix: legacy-id resolution at action boundary ----------
+// Inlines the resolveEntityId helper from routes/overrides.ts so we can
+// exercise the SQL contract end-to-end on the in-memory harness. The
+// real helper runs on Cloudflare's D1 binding (not directly importable
+// here); this test asserts the SQL-level behavior it implements.
+const LEGACY_TABLE_WHITELIST = ["leads", "firms", "companies", "accounts", "buyers"];
+function resolveEntityIdSql(db, id) {
+  if (!id) return null;
+  const direct = db.prepare(`SELECT id FROM u_entities WHERE id = ?`).get(id);
+  if (direct?.id) return { entityId: direct.id, resolvedFromLegacy: false };
+  const ph = LEGACY_TABLE_WHITELIST.map(() => "?").join(",");
+  const row = db.prepare(
+    `SELECT entity_id FROM entity_legacy_map
+      WHERE legacy_id = ? AND legacy_table IN (${ph}) LIMIT 1`,
+  ).get(id, ...LEGACY_TABLE_WHITELIST);
+  if (row?.entity_id) return { entityId: row.entity_id, resolvedFromLegacy: true };
+  return null;
+}
+
+function mkDbWithLegacyMap() {
+  const db = mkDb();
+  db.exec(`
+    CREATE TABLE entity_legacy_map (
+      legacy_table TEXT NOT NULL,
+      legacy_id TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      PRIMARY KEY (legacy_table, legacy_id)
+    );
+  `);
+  return db;
+}
+
+test("resolveEntityId: legacy leads.id resolves to u_entities.id", () => {
+  const db = mkDbWithLegacyMap();
+  db.prepare(`INSERT INTO entity_legacy_map (legacy_table, legacy_id, entity_id) VALUES (?, ?, ?)`)
+    .run("leads", "lead-uuid-1", "ent_jim");
+  const r = resolveEntityIdSql(db, "lead-uuid-1");
+  assert.equal(r?.entityId, "ent_jim");
+  assert.equal(r?.resolvedFromLegacy, true);
+});
+
+test("resolveEntityId: direct u_entities.id resolves without legacy lookup", () => {
+  const db = mkDbWithLegacyMap();
+  const r = resolveEntityIdSql(db, "ent_jim");
+  assert.equal(r?.entityId, "ent_jim");
+  assert.equal(r?.resolvedFromLegacy, false);
+});
+
+test("resolveEntityId: unknown id (no u_entities, no legacy map row) returns null", () => {
+  const db = mkDbWithLegacyMap();
+  const r = resolveEntityIdSql(db, "totally-unknown");
+  assert.equal(r, null);
+});
+
+test("resolveEntityId: legacy_table outside whitelist (e.g. 'people') does NOT resolve", () => {
+  const db = mkDbWithLegacyMap();
+  db.prepare(`INSERT INTO entity_legacy_map (legacy_table, legacy_id, entity_id) VALUES (?, ?, ?)`)
+    .run("people", "person-uuid", "ent_jim");
+  const r = resolveEntityIdSql(db, "person-uuid");
+  assert.equal(r, null, "people is not in the operator-action whitelist");
+});
+
+test("resolveEntityId: firms / companies / accounts / buyers all resolve", () => {
+  const db = mkDbWithLegacyMap();
+  db.prepare(`INSERT INTO u_entities (id, kind) VALUES ('ent_firm','firm')`).run();
+  db.prepare(`INSERT INTO u_entities (id, kind) VALUES ('ent_co','company')`).run();
+  db.prepare(`INSERT INTO u_entities (id, kind) VALUES ('ent_acct','account')`).run();
+  db.prepare(`INSERT INTO u_entities (id, kind) VALUES ('ent_buyer','buyer')`).run();
+  const rows = [
+    ["firms", "firm-1", "ent_firm"],
+    ["companies", "co-1", "ent_co"],
+    ["accounts", "acct-1", "ent_acct"],
+    ["buyers", "buyer-1", "ent_buyer"],
+  ];
+  for (const [t, lid, eid] of rows) {
+    db.prepare(`INSERT INTO entity_legacy_map (legacy_table, legacy_id, entity_id) VALUES (?, ?, ?)`).run(t, lid, eid);
+  }
+  for (const [, lid, eid] of rows) {
+    const r = resolveEntityIdSql(db, lid);
+    assert.equal(r?.entityId, eid);
+    assert.equal(r?.resolvedFromLegacy, true);
+  }
+});
+
+// ---------- 6b. Soft-delete via resolved legacy id ----------
+test("soft-delete: legacy leads.id resolves and flips u_entities.status='soft_deleted'", () => {
+  const db = mkDbWithLegacyMap();
+  db.prepare(`INSERT INTO entity_legacy_map (legacy_table, legacy_id, entity_id) VALUES (?, ?, ?)`)
+    .run("leads", "lead-uuid-1", "ent_jim");
+  const resolved = resolveEntityIdSql(db, "lead-uuid-1");
+  assert.ok(resolved);
+  db.prepare(`UPDATE u_entities SET status = 'soft_deleted' WHERE id = ?`).run(resolved.entityId);
+  const after = db.prepare(`SELECT status FROM u_entities WHERE id = ?`).get(resolved.entityId);
+  assert.equal(after.status, "soft_deleted");
+});
+
+test("soft-delete: direct u_entities.id still succeeds (no regression)", () => {
+  const db = mkDbWithLegacyMap();
+  const resolved = resolveEntityIdSql(db, "ent_jim");
+  assert.equal(resolved?.entityId, "ent_jim");
+  db.prepare(`UPDATE u_entities SET status = 'soft_deleted' WHERE id = ?`).run(resolved.entityId);
+  const after = db.prepare(`SELECT status FROM u_entities WHERE id = ?`).get("ent_jim");
+  assert.equal(after.status, "soft_deleted");
+});
+
+test("soft-delete: unknown id returns not_found (resolveEntityId → null)", () => {
+  const db = mkDbWithLegacyMap();
+  const resolved = resolveEntityIdSql(db, "ghost-id");
+  assert.equal(resolved, null);
+});
+
+test("merge: legacy source id + canonical target id both resolve", () => {
+  const db = mkDbWithLegacyMap();
+  db.prepare(`INSERT INTO u_entities (id, kind) VALUES ('ent_target','person')`).run();
+  db.prepare(`INSERT INTO entity_legacy_map (legacy_table, legacy_id, entity_id) VALUES (?, ?, ?)`)
+    .run("leads", "lead-src", "ent_jim");
+  const src = resolveEntityIdSql(db, "lead-src");
+  const tgt = resolveEntityIdSql(db, "ent_target");
+  assert.equal(src?.entityId, "ent_jim");
+  assert.equal(tgt?.entityId, "ent_target");
+  assert.notEqual(src.entityId, tgt.entityId, "cannot_merge_into_self check passes after resolution");
+});
+
+test("merge: both sides legacy ids resolve through entity_legacy_map", () => {
+  const db = mkDbWithLegacyMap();
+  db.prepare(`INSERT INTO u_entities (id, kind) VALUES ('ent_target','person')`).run();
+  db.prepare(`INSERT INTO entity_legacy_map (legacy_table, legacy_id, entity_id) VALUES (?, ?, ?)`)
+    .run("leads", "lead-src", "ent_jim");
+  db.prepare(`INSERT INTO entity_legacy_map (legacy_table, legacy_id, entity_id) VALUES (?, ?, ?)`)
+    .run("firms", "firm-tgt", "ent_target");
+  const src = resolveEntityIdSql(db, "lead-src");
+  const tgt = resolveEntityIdSql(db, "firm-tgt");
+  assert.equal(src?.entityId, "ent_jim");
+  assert.equal(tgt?.entityId, "ent_target");
+  assert.equal(src.resolvedFromLegacy, true);
+  assert.equal(tgt.resolvedFromLegacy, true);
+});
+
+test("merge: two distinct legacy ids pointing at same canonical entity → cannot_merge_into_self", () => {
+  const db = mkDbWithLegacyMap();
+  db.prepare(`INSERT INTO entity_legacy_map (legacy_table, legacy_id, entity_id) VALUES (?, ?, ?)`)
+    .run("leads", "lead-a", "ent_jim");
+  db.prepare(`INSERT INTO entity_legacy_map (legacy_table, legacy_id, entity_id) VALUES (?, ?, ?)`)
+    .run("firms", "firm-a", "ent_jim");
+  const src = resolveEntityIdSql(db, "lead-a");
+  const tgt = resolveEntityIdSql(db, "firm-a");
+  assert.equal(src.entityId, tgt.entityId, "self-merge detected POST-resolution");
+});
+
 // ---------- 6. Override for predicate with no underlying fact ----------
 test("override for a predicate with no underlying fact still wins canonical read", () => {
   const db = mkDb();

@@ -58,6 +58,38 @@ function redactEmail(email: string, isAdmin: boolean): string {
   return isAdmin ? email : "<redacted>";
 }
 
+// Task #1 (fix investor Delete returning not_found):
+// Operator action bar (Delete / Restore / Merge) passes the ?id= from
+// the detail-page URL — for investor / firm / company / account / buyer
+// pages that's a legacy table id (leads.id, firms.id, …), not a
+// u_entities.id. Resolve it to the canonical entity at the action
+// boundary. Mirrors the read-side resolution in routes/entities.ts:45-69
+// but centralized for reuse by the three mutation handlers below.
+//
+// Whitelist is fixed to the five legacy tables the action bar can target.
+// Per the entity_legacy_map invariant in entities/roles.ts:130-155, we
+// do NOT auto-mint a u_entities row on miss — if the legacy row exists
+// but has no mapping yet, the caller still gets not_found and the
+// sanctioned backfill path remains the only writer.
+const LEGACY_TABLE_WHITELIST = ["leads", "firms", "companies", "accounts", "buyers"] as const;
+
+async function resolveEntityId(
+  env: Env,
+  id: string,
+): Promise<{ entityId: string; resolvedFromLegacy: boolean } | null> {
+  if (!id) return null;
+  const direct = await env.DB.prepare(`SELECT id FROM u_entities WHERE id = ?`).bind(id).first<{ id: string }>();
+  if (direct?.id) return { entityId: direct.id, resolvedFromLegacy: false };
+  const placeholders = LEGACY_TABLE_WHITELIST.map(() => "?").join(",");
+  const row = await env.DB.prepare(
+    `SELECT entity_id FROM entity_legacy_map
+      WHERE legacy_id = ? AND legacy_table IN (${placeholders})
+      LIMIT 1`,
+  ).bind(id, ...LEGACY_TABLE_WHITELIST).first<{ entity_id: string }>();
+  if (row?.entity_id) return { entityId: row.entity_id, resolvedFromLegacy: true };
+  return null;
+}
+
 // ---------- POST /api/entities/:id/overrides ----------
 overridesRoute.post("/entities/:id/overrides", async (c) => {
   const entityId = c.req.param("id");
@@ -290,11 +322,14 @@ overridesRoute.post("/entities", async (c) => {
 
 // ---------- POST /api/entities/:id/soft-delete ----------
 overridesRoute.post("/entities/:id/soft-delete", async (c) => {
-  const entityId = c.req.param("id");
+  const rawId = c.req.param("id");
   let body: Record<string, unknown> = {};
   try { body = await c.req.json(); } catch { /* optional */ }
   const reason = typeof body.reason === "string" ? body.reason.trim() : "";
   if (!reason) return c.json({ error: "reason_required" }, 400);
+  const resolved = await resolveEntityId(c.env, rawId);
+  if (!resolved) return c.json({ error: "not_found" }, 404);
+  const entityId = resolved.entityId;
   const ent = await c.env.DB.prepare(`SELECT id, status FROM u_entities WHERE id = ?`).bind(entityId).first<{ id: string; status: string }>();
   if (!ent) return c.json({ error: "not_found" }, 404);
   if (ent.status === "soft_deleted") return c.json({ error: "already_soft_deleted" }, 409);
@@ -313,7 +348,10 @@ overridesRoute.post("/entities/:id/soft-delete", async (c) => {
 
 // ---------- POST /api/entities/:id/restore ----------
 overridesRoute.post("/entities/:id/restore", async (c) => {
-  const entityId = c.req.param("id");
+  const rawId = c.req.param("id");
+  const resolved = await resolveEntityId(c.env, rawId);
+  if (!resolved) return c.json({ error: "not_found" }, 404);
+  const entityId = resolved.entityId;
   const ent = await c.env.DB.prepare(`SELECT id, status FROM u_entities WHERE id = ?`).bind(entityId).first<{ id: string; status: string }>();
   if (!ent) return c.json({ error: "not_found" }, 404);
   if (ent.status !== "soft_deleted") return c.json({ error: "not_soft_deleted" }, 409);
@@ -334,12 +372,22 @@ overridesRoute.post("/entities/:id/restore", async (c) => {
 // is kept as a deprecated synonym for any client that already adopted
 // it during the rejected review cycles.
 async function handleMerge(c: import("hono").Context<{ Bindings: Env; Variables: Vars }>) {
-  const sourceId = c.req.param("id") ?? "";
-  if (!sourceId) return c.json({ error: "id_required" }, 400);
+  const rawSourceId = c.req.param("id") ?? "";
+  if (!rawSourceId) return c.json({ error: "id_required" }, 400);
   let body: Record<string, unknown>;
   try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
-  const targetId = typeof body.target_entity_id === "string" ? body.target_entity_id : "";
-  if (!targetId) return c.json({ error: "target_entity_id_required" }, 400);
+  const rawTargetId = typeof body.target_entity_id === "string" ? body.target_entity_id : "";
+  if (!rawTargetId) return c.json({ error: "target_entity_id_required" }, 400);
+  // Resolve both sides — operator may paste either a legacy id or a
+  // u_entities.id for either argument. cannot_merge_into_self is
+  // checked AFTER resolution so two distinct legacy ids that both
+  // point at the same canonical entity are still rejected.
+  const resolvedSource = await resolveEntityId(c.env, rawSourceId);
+  if (!resolvedSource) return c.json({ error: "not_found" }, 404);
+  const resolvedTarget = await resolveEntityId(c.env, rawTargetId);
+  if (!resolvedTarget) return c.json({ error: "not_found", which: "target" }, 404);
+  const sourceId = resolvedSource.entityId;
+  const targetId = resolvedTarget.entityId;
   if (targetId === sourceId) return c.json({ error: "cannot_merge_into_self" }, 400);
   try {
     const result = await mergeEntities(c.env, sourceId, targetId);
