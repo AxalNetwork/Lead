@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Watchlists
-permalink: /dashboard/watchlists.html
+permalink: /dashboard/watchlists/
 ---
 
 <h1 class="ads-page-title">Watchlists</h1>
@@ -170,7 +170,7 @@ permalink: /dashboard/watchlists.html
         document.getElementById("ads-wl-detail-mcount").textContent = w.member_count || 0;
         var ml = document.getElementById("ads-wl-detail-members");
         ml.innerHTML = (w.members || []).map(function (m) {
-          return '<li><a href="/dashboard/profile/?entity=' + encodeURIComponent(m.entity_id) + '">'
+          return '<li><a href="/dashboard/profile/?id=' + encodeURIComponent(m.entity_id) + '">'
             + esc(m.display_name || m.entity_id) + '</a> <span style="color:#6b7280">' + esc(m.entity_kind || '') + '</span></li>';
         }).join("") || '<li style="color:#6b7280">No members yet.</li>';
         var rl = document.getElementById("ads-wl-detail-rules");
@@ -188,7 +188,7 @@ permalink: /dashboard/watchlists.html
       });
   }
 
-  // Deep-link: /dashboard/watchlists.html?wl=<id> auto-opens the detail.
+  // Deep-link: /dashboard/watchlists/?wl=<id> auto-opens the detail.
   try {
     var qp = new URLSearchParams(window.location.search);
     var wlParam = qp.get("wl");
