@@ -112,11 +112,8 @@ pages in this task beyond the People list").
     <a class="ads-rail__link {% if p contains '/dashboard/sources' %}active{% endif %}" href="/dashboard/sources/" data-cmdk-nav="Sources">
       <span class="ads-rail__icon">⟳</span><span>Sources</span>
     </a>
-    <a class="ads-rail__link {% if p contains '/dashboard/review' %}active{% endif %}" href="/dashboard/review/" data-cmdk-nav="Review queue">
-      <span class="ads-rail__icon">✓</span><span>Review</span>
-    </a>
-    <a class="ads-rail__link" href="/dashboard/review/" data-cmdk-nav="Dedupe Review">
-      <span class="ads-rail__icon">⇌</span><span>Dedupe Review</span>
+    <a class="ads-rail__link {% if p contains '/dashboard/merge-review' or p contains '/dashboard/review' %}active{% endif %}" href="/dashboard/merge-review/" data-cmdk-nav="Merge Review">
+      <span class="ads-rail__icon">⇌</span><span>Merge Review</span>
     </a>
     <a class="ads-rail__link" href="/ops/quality/" data-cmdk-nav="Quality Console">
       <span class="ads-rail__icon">◑</span><span>Quality Console</span>

@@ -1,14 +1,25 @@
 ---
 layout: default
-title: Dedupe Review
+title: Merge Review
 permalink: /dashboard/review/
+sitemap: false
 ---
 
-<h1 class="ads-page-title">Dedupe Review</h1>
-<p class="ads-page-sub">Resolve borderline matches between newly scraped leads and existing rows.</p>
+<!-- Task #11: /dashboard/review/ has been consolidated into the
+     canonical /dashboard/merge-review/ page. GitHub Pages cannot
+     emit a real server-side 301, so we use the same client-side
+     location.replace() pattern as /dashboard/coming-soon/ — any
+     query string is preserved. -->
 
-<div class="ads-card">
-  <div id="ads-review-list"><div class="ads-loading">Loading…</div></div>
-</div>
+<h1 class="ads-page-title">Merge Review has moved</h1>
+<p class="ads-page-sub">This page is now at <a href="/dashboard/merge-review/">/dashboard/merge-review/</a>. Redirecting…</p>
 
-<script src="/assets/js/review.js"></script>
+<script>
+(function () {
+  var qs = location.search || "";
+  location.replace("/dashboard/merge-review/" + qs);
+})();
+</script>
+<noscript>
+  <meta http-equiv="refresh" content="0; url=/dashboard/merge-review/">
+</noscript>
