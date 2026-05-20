@@ -19,6 +19,10 @@ Jekyll site (`apps/site`) on GitHub Pages at aidatasignal.com + Cloudflare Worke
   pushed yet); otherwise reconcile with `git pull --rebase origin main`. The
   main agent cannot run destructive git commands (push/rebase/reset/merge)
   and must delegate to a background project task.
+  - 2026-05-20: reconciled via Task #12. `origin/main` was already an
+    ancestor of local `HEAD` (9 ahead / 0 behind — the duplicate-
+    "Task #8" checkpoint pattern), so a plain push sufficed; no
+    `pull --rebase` was needed this round.
 
 ## Architecture decisions
 
