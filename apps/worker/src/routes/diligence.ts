@@ -16,7 +16,7 @@
 
 import { Hono } from "hono";
 import type { Env } from "../types";
-import { startRun, rerunFailed, ensureDefaultTemplate } from "../services/diligence/runner";
+import { createRun, executeRunLoop, createRerunFailedPlan, ensureDefaultTemplate } from "../services/diligence/runner";
 import { DEFAULT_TEMPLATE_KEYS, getCheck } from "../services/diligence/registry";
 import { buildMarkdownReport, buildJsonBundle, buildPdfInputs, type PersistedResult, type PersistedRun } from "../services/diligence/report";
 import { pdfResponse } from "./dashboards_pdf";
@@ -89,8 +89,18 @@ diligenceRoute.post("/runs", async (c) => {
     return c.json({ error: "forbidden_template" }, 403);
   }
   try {
-    const summary = await startRun(c.env, { template_id: templateId, target_entity_id: body.target_entity_id, triggered_by: c.var.email });
-    return c.json(summary);
+    // Create the run row synchronously so the client gets a run_id immediately
+    // and can navigate to the detail page (which polls for live progress
+    // while status is queued|running). The heavy per-check loop runs in the
+    // background via ctx.waitUntil so the POST returns in <100ms regardless
+    // of how many checks the template carries.
+    const plan = await createRun(c.env, { template_id: templateId, target_entity_id: body.target_entity_id, triggered_by: c.var.email });
+    c.executionCtx.waitUntil(
+      executeRunLoop(c.env, plan).then(() => undefined).catch((e) => {
+        console.warn("diligence run loop failed", plan.run_id, (e as Error).message);
+      }),
+    );
+    return c.json({ run_id: plan.run_id, status: "queued", checks_total: plan.check_keys.length }, 202);
   } catch (e) {
     return c.json({ error: "run_failed", message: (e as Error).message }, 500);
   }
@@ -222,7 +232,12 @@ diligenceRoute.patch("/runs/:id/results/:rid", async (c) => {
 diligenceRoute.post("/runs/:id/rerun-failed", async (c) => {
   const got = await loadRun(c.env, c.req.param("id"), c.var.email);
   if ("error" in got) return c.json({ error: got.error }, got.error === "not_found" ? 404 : 403);
-  const summary = await rerunFailed(c.env, { parent_run_id: c.req.param("id"), triggered_by: c.var.email });
-  if (!summary) return c.json({ error: "nothing_to_rerun" }, 400);
-  return c.json(summary);
+  const plan = await createRerunFailedPlan(c.env, { parent_run_id: c.req.param("id"), triggered_by: c.var.email });
+  if (!plan) return c.json({ error: "nothing_to_rerun" }, 400);
+  c.executionCtx.waitUntil(
+    executeRunLoop(c.env, plan).then(() => undefined).catch((e) => {
+      console.warn("diligence rerun loop failed", plan.run_id, (e as Error).message);
+    }),
+  );
+  return c.json({ run_id: plan.run_id, status: "queued", checks_total: plan.check_keys.length }, 202);
 });

@@ -65,17 +65,20 @@
     var t = (target.value || "").trim();
     if (!t) { startStatus.textContent = "Target entity ID required."; return; }
     startBtn.disabled = true;
-    startStatus.textContent = "Running…";
+    startStatus.textContent = "Queueing…";
+    // POST now returns immediately (202) with the new run_id while the worker
+    // executes the checks in the background. Jump straight to the run detail
+    // page; it polls and animates the progress bar as checks land.
     api("/api/diligence/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ template_id: tmplSel.value || undefined, target_entity_id: t }),
     }).then(function (summary) {
-      startStatus.innerHTML = 'Completed. <a href="/dashboard/diligence/run/?id=' + encodeURIComponent(summary.run_id) + '">Open run</a>';
-      loadList();
+      location.href = "/dashboard/diligence/run/?id=" + encodeURIComponent(summary.run_id);
     }).catch(function (e) {
       startStatus.textContent = "Failed: " + e.message;
-    }).finally(function () { startBtn.disabled = false; });
+      startBtn.disabled = false;
+    });
   });
 
   loadTemplates().then(loadList);

@@ -35,10 +35,14 @@ function makeEnv() {
           return Promise.resolve();
         }
         if (/INSERT INTO diligence_runs/.test(s)) {
+          // New runner binds: id, template_id, target_entity_id, triggered_by,
+          // checks_total, by_status_json, [parent_run_id]. Rerun adds the
+          // 7th positional arg.
           tables.diligence_runs.push({
             id: args[0], template_id: args[1], target_entity_id: args[2],
             triggered_by: args[3], checks_total: args[4],
-            parent_run_id: args[5] ?? null,
+            by_status_json: args[5] ?? null,
+            parent_run_id: args[6] ?? null,
           });
           return Promise.resolve();
         }

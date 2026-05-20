@@ -111,20 +111,30 @@
     });
   }
 
-  function showExports() {
+  function showExports(run) {
     var base = API + "/api/diligence/runs/" + encodeURIComponent(id);
-    lnkMd.href = base + "/report.md"; lnkMd.style.display = "";
-    lnkJson.href = base + "/report.json"; lnkJson.style.display = "";
-    lnkPdf.href = base + "/report.pdf"; lnkPdf.style.display = "";
-    btnRerun.style.display = "";
+    // Exports + re-run only make sense once the run has results to act on.
+    var done = run && run.status === "completed";
+    lnkMd.href = base + "/report.md"; lnkMd.style.display = done ? "" : "none";
+    lnkJson.href = base + "/report.json"; lnkJson.style.display = done ? "" : "none";
+    lnkPdf.href = base + "/report.pdf"; lnkPdf.style.display = done ? "" : "none";
+    btnRerun.style.display = done ? "" : "none";
   }
 
-  function load() {
+  var POLL_MS = 1500;
+  var pollTimer = null;
+
+  function tick() {
     return api("/api/diligence/runs/" + encodeURIComponent(id)).then(function (body) {
       setHeader(body.run);
       setProgress(body.run);
       renderSections(body.results || []);
-      showExports();
+      showExports(body.run);
+      // Keep polling while the run is still in flight; stop on terminal states.
+      var live = body.run && (body.run.status === "queued" || body.run.status === "running");
+      if (live) {
+        pollTimer = setTimeout(tick, POLL_MS);
+      }
     }).catch(function (e) {
       subEl.textContent = "Failed: " + e.message;
     });
@@ -137,5 +147,7 @@
       .catch(function (e) { alert("Re-run failed: " + e.message); btnRerun.disabled = false; });
   });
 
-  load();
+  window.addEventListener("beforeunload", function () { if (pollTimer) clearTimeout(pollTimer); });
+
+  tick();
 })();
