@@ -2073,28 +2073,13 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
         error_code: "workflow_step_failed", reason: "budget_exceeded",
         budget_ms: budgetMs,
       }));
-      // Task #2: emit an error_log row so analytics/alerts count
-      // in-run timeouts the same way they count sweep-path timeouts.
-      try {
-        const { AppError } = await import("../errors.js");
-        const { logError } = await import("../db/error_log.js");
-        await logError(env, {
-          err: new AppError({
-            code: "workflow_step_failed",
-            kind: "permanent",
-            message: "job exceeded budget_ms; in-run deadline fired",
-            retryable: false,
-            context: {
-              reason: "budget_exceeded",
-              swept_by: "in_run_deadline",
-              token: "workflow.step_failed",
-              budget_ms: budgetMs,
-            },
-          }),
-          job_id: jobId,
-          step: "pipeline.deadline",
-        });
-      } catch { /* swallow */ }
+      // Task #7: the in-run deadline used to write its own
+      // `workflow_step_failed` row here for analytics parity, but
+      // the architectural constraint is that **sweeper is the sole
+      // writer of workflow_step_failed rows**. The deadline path now
+      // just transitions the job (above) and emits the queue.step_deadline
+      // observability log; the nightly sweeper picks up timed_out jobs
+      // and is the only path that writes to `error_log` with that code.
     } catch { /* swallow — sweeper is a backstop */ }
     return true;
   };

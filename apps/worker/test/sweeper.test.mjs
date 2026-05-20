@@ -96,6 +96,7 @@ test("sweepStuckJobs: writes heartbeat step from workflow_step_log into error_lo
         { id: "jobB", kind: "firm_team_crawl", budget_ms: 90_000, running_started_at: startedB },
       ],
     }),
+    "FROM jobs j\n        WHERE j.status = 'timed_out'": () => ({ results: [] }),
     "UPDATE jobs\n          SET status = 'timed_out'": () => ({ meta: { changes: 1 } }),
     "INSERT INTO job_state_transitions": () => ({ meta: { changes: 1 } }),
     // Heartbeat lookup: still-running step exists for jobA.
@@ -132,6 +133,7 @@ test("sweepStuckJobs: evaluates legacy null-budget rows against the default (reg
     "FROM jobs\n      WHERE status = 'running'": () => ({
       results: [{ id: "jobNull", kind: "url", budget_ms: null, running_started_at: startedOld }],
     }),
+    "FROM jobs j\n        WHERE j.status = 'timed_out'": () => ({ results: [] }),
     "UPDATE jobs\n          SET status = 'timed_out'": () => ({ meta: { changes: 1 } }),
     "INSERT INTO job_state_transitions": () => ({ meta: { changes: 1 } }),
     "FROM workflow_step_log": () => null,
@@ -154,6 +156,7 @@ test("sweepStuckJobs: falls back to admin.sweep when no heartbeat row exists", a
     "FROM jobs\n      WHERE status = 'running'": () => ({
       results: [{ id: "jobZ", kind: "url", budget_ms: 90_000, running_started_at: startedA }],
     }),
+    "FROM jobs j\n        WHERE j.status = 'timed_out'": () => ({ results: [] }),
     "UPDATE jobs\n          SET status = 'timed_out'": () => ({ meta: { changes: 1 } }),
     "INSERT INTO job_state_transitions": () => ({ meta: { changes: 1 } }),
     // Both heartbeat lookups return null (no rows in workflow_step_log).
@@ -199,6 +202,58 @@ test("routeFromUrl: collapses uuid/numeric path segments to :id", () => {
   assert.equal(routeFromUrl("/api/jobs/12345"), "/api/jobs/:id");
   assert.equal(routeFromUrl(null), "(unknown)");
   assert.equal(routeFromUrl("/api/foo"), "/api/foo");
+});
+
+test("sweepStuckJobs: writes orphan workflow_step_failed rows for in-run-deadline timed_out jobs", async () => {
+  // Architectural constraint: sweeper is the SOLE writer of
+  // workflow_step_failed rows. The in-run deadline path now only
+  // transitions the job to timed_out and emits a queue.step_deadline
+  // log; the sweeper picks those orphans up and writes the row.
+  const errorLogInserts = [];
+  const db = mockDb({
+    // No `running` candidates this tick.
+    "FROM jobs\n      WHERE status = 'running'": () => ({ results: [] }),
+    // One orphan: timed_out, no existing workflow_step_failed row.
+    "FROM jobs j\n        WHERE j.status = 'timed_out'": () => ({
+      results: [{ id: "jobOrphan", kind: "firm_team_crawl" }],
+    }),
+    "FROM workflow_step_log": () => ({ step: "pipeline:crawl" }),
+    "INSERT INTO error_log": ({ args }) => {
+      errorLogInserts.push(args);
+      return { meta: { last_row_id: 1 } };
+    },
+  });
+  const env = { DB: db, ANALYTICS: null };
+  const swept = await sweepStuckJobs(env);
+  // `swept` only counts running→timed_out transitions, not orphan rows.
+  assert.equal(swept, 0);
+  assert.equal(errorLogInserts.length, 1, "exactly one workflow_step_failed row for the orphan");
+  assert.equal(errorLogInserts[0][1], "jobOrphan");
+  assert.equal(errorLogInserts[0][2], "pipeline:crawl",
+    "orphan row carries the heartbeat step the in-run deadline interrupted");
+});
+
+test("pipeline.ts in-run deadline does NOT write workflow_step_failed directly (sole-writer constraint)", async () => {
+  // The architectural constraint is that `sweepStuckJobs` is the only
+  // path that writes workflow_step_failed rows. Lock that at the
+  // source level: the in-run deadline branch in scraper/pipeline.ts
+  // must not call logError or insert into error_log with the
+  // workflow_step_failed code.
+  const fs = await import("node:fs/promises");
+  const src = await fs.readFile(new URL("../src/scraper/pipeline.ts", import.meta.url), "utf8");
+  const deadlineStart = src.indexOf("queue.step_deadline");
+  assert.ok(deadlineStart > 0, "in-run deadline branch must exist in pipeline.ts");
+  // Scan from queue.step_deadline forward to the end of the
+  // enforceDeadline arrow function (`};` at column 0 of the closing).
+  const deadlineEnd = src.indexOf("\n  };", deadlineStart);
+  const branch = src.slice(deadlineStart, deadlineEnd);
+  assert.doesNotMatch(branch, /\blogError\(/,
+    "in-run deadline must not call logError — sweeper is the sole writer");
+  assert.doesNotMatch(branch, /INSERT\s+INTO\s+error_log/i,
+    "in-run deadline must not insert into error_log directly");
+  // (the queue.step_deadline console.log still references the literal
+  // string "workflow_step_failed" as observability metadata — that's
+  // intentional and not a write to error_log.)
 });
 
 test("/db-errors route: source query uses occurred_at, not created_at (schema regression)", async () => {

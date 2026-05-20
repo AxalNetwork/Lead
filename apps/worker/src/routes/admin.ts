@@ -132,6 +132,54 @@ export async function sweepStuckJobs(env: Env): Promise<number> {
       step: lastStep ?? "admin.sweep",
     }).catch(() => undefined);
   }
+
+  // Task #7: also write workflow_step_failed rows for jobs that were
+  // already transitioned to `timed_out` by the in-run deadline path
+  // in scraper/pipeline.ts. That path no longer writes its own
+  // error_log row (architectural constraint: sweeper is the SOLE
+  // writer of workflow_step_failed). Look back 24h for timed_out jobs
+  // with no existing workflow_step_failed row and write one each.
+  try {
+    const orphans = await env.DB.prepare(
+      `SELECT j.id, j.kind FROM jobs j
+        WHERE j.status = 'timed_out'
+          AND j.finished_at >= datetime('now', '-1 day')
+          AND NOT EXISTS (
+            SELECT 1 FROM error_log e
+             WHERE e.job_id = j.id AND e.code = 'workflow_step_failed'
+          )
+        LIMIT 200`,
+    ).all<{ id: string; kind: string | null }>();
+    for (const job of orphans.results ?? []) {
+      let lastStep: string | null = null;
+      try {
+        const r = await env.DB.prepare(
+          `SELECT step FROM workflow_step_log WHERE job_id = ?
+            ORDER BY id DESC LIMIT 1`,
+        ).bind(job.id).first<{ step: string | null }>();
+        lastStep = r?.step ?? null;
+      } catch { /* missing table — fall through */ }
+      await logError(env, {
+        err: new AppError({
+          code: "workflow_step_failed",
+          kind: "permanent",
+          message: "job exceeded budget_ms; in-run deadline fired",
+          retryable: false,
+          context: {
+            reason: "budget_exceeded",
+            swept_by: "admin.sweep",
+            source: "in_run_deadline",
+            token: "workflow.step_failed",
+            pipeline_kind: job.kind ?? null,
+            heartbeat_step: lastStep,
+          },
+        }),
+        job_id: job.id,
+        step: lastStep ?? "pipeline.deadline",
+      }).catch(() => undefined);
+    }
+  } catch { /* error_log/jobs absent in fresh env — fall through */ }
+
   return swept;
 }
 
