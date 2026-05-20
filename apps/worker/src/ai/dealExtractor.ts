@@ -259,5 +259,22 @@ export function toCandidate(raw: RawDealExtraction, input: DealExtractInput): De
     source_type: input.source_type,
     source_published_at: input.source_published_at ?? null,
     confidence: Math.min(0.95, conf),
+    // Task #8: stamp the evidence trail so the hallucination verifier
+    // can run on every derived fact in services/deals/persist.ts.
+    // source_span = the article body slice containing the company name
+    // (the strongest pivot back to the AI claim); source_text = the
+    // full article body the extractor read.
+    source_text: input.text ?? null,
+    source_span: spanAroundCompany(input.text ?? "", company, 400),
   };
+}
+
+/** Pull a window of ±N chars around the first occurrence of `needle`
+ *  in `text`. Falls back to the leading window when `needle` is absent
+ *  so the verifier still has SOMETHING to fuzzy-match against. */
+function spanAroundCompany(text: string, needle: string, radius: number): string {
+  if (!text) return "";
+  const i = needle ? text.toLowerCase().indexOf(needle.toLowerCase()) : -1;
+  if (i < 0) return text.slice(0, radius * 2);
+  return text.slice(Math.max(0, i - radius), Math.min(text.length, i + needle.length + radius));
 }

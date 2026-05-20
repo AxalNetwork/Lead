@@ -52,12 +52,25 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      # Task #8: ML Quality Ops regression gate. Compares the two most
-      # recent `ok` eval runs per dataset against the deployed worker
-      # and fails the deploy when any task regresses more than 5%.
-      # Soft-passes on HTTP / network errors so the first deploy
-      # after a cold-start (no baseline) doesn't block.
-      - name: ML eval regression gate
+      # Task #8: ML Quality Ops regression gate — LOCAL pass.
+      # Runs the bundled heuristic predictors against the committed
+      # gold-set fixtures for the CANDIDATE commit and compares to
+      # scripts/eval-baseline.json. Fails the deploy when any task
+      # regresses more than 5pp. This is the primary gate — it
+      # measures the commit being deployed, not the live worker.
+      # Bypass with EVAL_LOCAL_SKIP=1 for emergency deploys.
+      - name: ML eval regression gate (local — candidate commit)
+        env:
+          EVAL_LOCAL_THRESHOLD: "5"
+        run: node scripts/eval-local.mjs
+
+      # Task #8: ML Quality Ops regression gate — REMOTE belt-and-
+      # suspenders pass. Queries the deployed worker's
+      # /api/ml/eval/gate (which compares the two most recent `ok`
+      # eval_runs per active dataset) and fails on >5% drift. Hard-
+      # fails on 4xx/5xx (except 404 for first-deploy), soft-passes
+      # on network error.
+      - name: ML eval regression gate (remote — production drift)
         env:
           GATE_BASE_URL: https://api.aidatasignal.com
           GATE_THRESHOLD: "5"

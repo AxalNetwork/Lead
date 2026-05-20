@@ -762,5 +762,33 @@ write/mutation endpoints (`POST /api/ml/eval/run`, `/run-all`,
 `c.var.is_admin` populated by the existing `accessGuard`
 middleware (per Task #14 inline-admin pattern).
 
+### Task #8 — ML Quality Ops follow-up (extractor wiring + dual gate)
+Code-review round 2 surfaced three blockers that landed before
+ACCEPTED:
+1. `DealCandidate` now carries `source_span` + `source_text`;
+   `dealExtractor.toCandidate` populates them from the article body
+   (span = ±400 chars around the company name). `writeDerivedFacts`
+   in `services/deals/persist.ts` routes the four AI-derived
+   business facts (`last_round_usd|name|date|valuation_usd`) through
+   `guardedInsertFact` when `source_text` is present; non-AI
+   candidates (SEC Form D / manual import) keep the direct
+   `insertFact` path because they have no `source_text` to verify
+   and the guard would otherwise fail-closed.
+2. `pageClassifier.classifyPageAi` and `profileFiller.runAiJson`
+   now resolve their system prompts via
+   `getPrompt(env, key, { fallbackBody })` — same wiring as
+   `dealExtractor`. Three highest-traffic LLM call sites now log
+   `prompt_version_id` per non-cached call. Remaining 15+ LLM
+   sites use direct strings; migration tracked as a follow-up.
+3. CI now runs a LOCAL gate FIRST (`scripts/eval-local.mjs` against
+   the candidate commit's bundled gold sets + heuristic predictors,
+   compared to `scripts/eval-baseline.json`) and only then runs the
+   REMOTE gate against the deployed worker. The local gate fails
+   the deploy on >5pp regression on the commit being shipped — the
+   remote gate is now a belt-and-suspenders production-drift check.
+   Baseline is checked into the repo and refreshed with
+   `EVAL_LOCAL_UPDATE=1 node scripts/eval-local.mjs`; bypass with
+   `EVAL_LOCAL_SKIP=1` (logs loud).
+
 ## User preferences
 - (none recorded yet)

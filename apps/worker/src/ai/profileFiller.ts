@@ -19,6 +19,7 @@ import { trackAi } from "../analytics/events";
 import { fetchPage } from "../scraper/fetcher";
 import { insertFact, insertFactsBatch } from "../entities/facts";
 import { addTag } from "../entities/tags";
+import { getPrompt } from "../services/mlOps/prompts";
 
 export const PROFILE_FILLER_VERSION = "ai_profile_filler:v1";
 const SUBPATHS = [
@@ -161,7 +162,19 @@ async function runAiJson<T>(
   schema: unknown,
   cacheKeyMaterial: string,
   jobId?: string,
+  promptKey?: string,
 ): Promise<T | null> {
+  // Task #8: when a promptKey is supplied, prefer the prompt_versions
+  // registry body over the caller's hardcoded string. The caller's
+  // string remains the cold-install fallback so the worker never
+  // crashes on a fresh DB.
+  if (promptKey) {
+    const row = await getPrompt(env, promptKey, { salt: cacheKeyMaterial, fallbackBody: systemPrompt });
+    if (row?.body) {
+      if (row.id) console.log("profile_filler.prompt", { prompt_key: promptKey, prompt_version_id: row.id });
+      systemPrompt = row.body;
+    }
+  }
   const model = env.AI_EXTRACT_MODEL ?? "@cf/meta/llama-3.1-8b-instruct-fast";
   const cacheKey = await sha256Hex(`${model}:${PROFILE_FILLER_VERSION}:${cacheKeyMaterial}`);
   const cached = await aiCacheGet<T>(env, cacheKey);

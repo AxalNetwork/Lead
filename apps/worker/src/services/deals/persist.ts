@@ -13,6 +13,7 @@
 
 import type { Env } from "../../types";
 import { insertFact } from "../../entities/facts";
+import { guardedInsertFact } from "../mlOps/hallucination";
 import { createEntity, addRole } from "../../entities/roles";
 import { resolveInvestor } from "./investorResolver";
 import {
@@ -409,17 +410,39 @@ async function writeDerivedFacts(
     entity_id: company_entity_id, source_kind: "scrape" as const, source,
     evidence_url: c.source_url, confidence: c.confidence,
   };
+  // Task #8: when the candidate is AI-extracted (source_text present),
+  // every derived business fact flows through guardedInsertFact so
+  // the hallucination verifier intercepts fabrications before they
+  // reach the canonical ledger. Non-AI candidates (SEC Form D /
+  // manual import / press-wire RSS without LLM extraction) keep the
+  // direct insertFact path — they don't have a `source_text` to
+  // verify against and the verifier would otherwise fail-closed.
+  const isAi = !!(c.source_text && c.source_text.trim().length > 0);
+  const writeFact = async (input: Parameters<typeof insertFact>[1]) => {
+    if (!isAi) { await insertFact(env, input); return; }
+    await guardedInsertFact(env, {
+      ...input,
+      source_span: c.source_span ?? null,
+      source_text: c.source_text ?? null,
+      extractor: "deal_extractor",
+      claim_text: input.value_text != null ? String(input.value_text)
+        : input.value_number != null ? String(input.value_number) : undefined,
+      raw_extraction: {
+        company: c.company_name_raw, round: c.round_name, amount_usd: c.amount_usd,
+      },
+    });
+  };
   if (c.amount_usd != null) {
-    await insertFact(env, { ...factCtx, predicate: "last_round_usd", value_number: c.amount_usd });
+    await writeFact({ ...factCtx, predicate: "last_round_usd", value_number: c.amount_usd });
   }
   if (c.round_name) {
-    await insertFact(env, { ...factCtx, predicate: "last_round_name", value_text: c.round_name });
+    await writeFact({ ...factCtx, predicate: "last_round_name", value_text: c.round_name });
   }
   if (c.announcement_date) {
-    await insertFact(env, { ...factCtx, predicate: "last_round_date", value_text: c.announcement_date });
+    await writeFact({ ...factCtx, predicate: "last_round_date", value_text: c.announcement_date });
   }
   if (c.valuation_usd != null) {
-    await insertFact(env, { ...factCtx, predicate: "last_round_valuation_usd", value_number: c.valuation_usd });
+    await writeFact({ ...factCtx, predicate: "last_round_valuation_usd", value_number: c.valuation_usd });
   }
   // Tag the company fact with the deal id so /api/companies/:id/deal-history
   // has a fact-only fallback when the deal_events index is being rebuilt.

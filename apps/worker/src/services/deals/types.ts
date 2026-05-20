@@ -65,4 +65,12 @@ export interface DealCandidate {
   /** 0..1 extractor confidence. < 0.2 means schema-strict gate failed and
    *  the row MUST NOT be persisted (spec: "no silent coercion"). */
   confidence: number;
+  /** Task #8: AI-extractor evidence trail. `source_text` is the full
+   *  article body the extractor read; `source_span` is a snippet from
+   *  that body that cites the asserted facts. Both null for non-AI
+   *  candidates (SEC Form D, manual import, …) — the hallucination
+   *  guard short-circuits to direct insertFact when source_text is
+   *  absent (`source_kind!="enrichment"`/non-AI paths). */
+  source_span?: string | null;
+  source_text?: string | null;
 }

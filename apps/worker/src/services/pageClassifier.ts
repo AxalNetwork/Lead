@@ -23,6 +23,7 @@ import { aiCacheGet, aiCachePut, sha256Hex } from "../ai/cache";
 import { assertBudget } from "../ai/budget";
 import { limitAi } from "../scraper/rateLimit";
 import { trackAi } from "../analytics/events";
+import { getPrompt } from "./mlOps/prompts";
 
 export type PageType =
   | "news_article"
@@ -276,13 +277,21 @@ async function classifyPageAi(env: Env, url: string, html: string, jobId?: strin
     }
     const t0 = Date.now();
     try {
+      // Task #8: prompt body comes from the prompt_versions registry.
+      const PAGE_CLASS_PROMPT_KEY = "page_classifier:v1";
+      const DEFAULT_PAGE_SYS = "Classify a web page into one of: news_article, blog_post, press_release, directory, company_home, team_page, profile, other. A news_article is a third-party news report about people/companies. A press_release is a company's own announcement. Directories list many entities. Reply strict JSON {page_type, confidence:0..1, reason}.";
+      const promptRow = await getPrompt(env, PAGE_CLASS_PROMPT_KEY, { salt: url, fallbackBody: DEFAULT_PAGE_SYS });
+      const systemPrompt = promptRow?.body ?? DEFAULT_PAGE_SYS;
       const res = (await runAiWithTimeout(env.AI.run(model, {
         messages: [
-          { role: "system", content: "Classify a web page into one of: news_article, blog_post, press_release, directory, company_home, team_page, profile, other. A news_article is a third-party news report about people/companies. A press_release is a company's own announcement. Directories list many entities. Reply strict JSON {page_type, confidence:0..1, reason}." },
+          { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
         response_format: { type: "json_schema", json_schema: PAGE_CLASS_SCHEMA },
       }), AI_TIMEOUT_MS, "page_classify")) as { response?: string };
+      if (promptRow?.id) {
+        console.log("page_classifier.prompt", { prompt_key: PAGE_CLASS_PROMPT_KEY, prompt_version_id: promptRow.id, url });
+      }
       const parsed = parseClassifierResponse(res);
       trackAi(env, { purpose: "classify_types", model, ms: Date.now() - t0, neurons: 0.05, jobId });
       if (parsed) {
