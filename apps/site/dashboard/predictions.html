@@ -1,0 +1,185 @@
+---
+layout: default
+title: Predictions
+permalink: /dashboard/predictions/
+---
+
+<h1 class="ads-page-title">Predictions</h1>
+<p class="ads-page-sub">Read-only window onto the platform's predictive models — intro-routing conversion, fund-return projections, and influence rankings. Refreshed nightly by the consolidated 03:15 UTC sweep.</p>
+
+<div id="ads-pr-strip" class="ads-strip"><div class="ads-loading">Loading…</div></div>
+
+<div class="ads-tabs" role="tablist" style="margin-top:16px">
+  <button type="button" class="ads-tab active" data-tab="intros" role="tab">Intro routing</button>
+  <button type="button" class="ads-tab" data-tab="funds" role="tab">Fund returns</button>
+  <button type="button" class="ads-tab" data-tab="influence" role="tab">Influence</button>
+</div>
+
+<div class="ads-tab-panel active" data-panel="intros">
+  <p class="ads-muted" style="font-size:12px;margin:8px 0">
+    Top targets ranked by predicted conversion %. Rows in
+    <span class="ads-pill">limited signal</span> mode were scored in
+    hop-count-only fallback — their conversion % is intentionally blank
+    rather than faked. Click a name to open the Outreach tab on that
+    profile.
+  </p>
+  <div id="ads-pr-intros"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<div class="ads-tab-panel" data-panel="funds">
+  <p class="ads-muted" style="font-size:12px;margin:8px 0">
+    Latest modeled DPI / TVPI / MOIC / Net IRR per fund. Confidence
+    is the model's own coverage band: <span class="ads-pill">high</span>
+    ≥70% positions resolved, <span class="ads-pill">medium</span>
+    40–70%, <span class="ads-pill">low</span> &lt;40%. Low-confidence
+    rows are shown but flagged so they don't masquerade as a
+    high-confidence ranking signal.
+  </p>
+  <div id="ads-pr-funds"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<div class="ads-tab-panel" data-panel="influence">
+  <p class="ads-muted" style="font-size:12px;margin:8px 0">
+    Top entities by global PageRank from the edge-quality sweep. The
+    <span class="ads-pill">power node</span> badge marks entities in
+    the top of their primary sector. For sector-filtered ranking, use
+    the <a href="/dashboard/power-nodes/">Power Nodes page</a>.
+  </p>
+  <div id="ads-pr-influence"><div class="ads-loading">Loading…</div></div>
+</div>
+
+<script>
+(function () {
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]; }); }
+  function fmtInt(n) { return (n == null || isNaN(+n)) ? "—" : (+n).toLocaleString(); }
+  function fmtNum(n, d) { return (n == null || isNaN(+n)) ? "—" : Number(n).toFixed(d == null ? 4 : d); }
+  function fmtPct(n) { return (n == null || isNaN(+n)) ? "—" : (Number(n) * 100).toFixed(1) + "%"; }
+  function fmtTs(t) { if (!t) return "—"; try { return new Date(t).toISOString().replace("T", " ").slice(0, 19) + "Z"; } catch (e) { return String(t); } }
+
+  // Tab switching.
+  var tabs = document.querySelectorAll(".ads-tab");
+  var panels = document.querySelectorAll(".ads-tab-panel");
+  tabs.forEach(function (t) {
+    t.addEventListener("click", function () {
+      var key = t.getAttribute("data-tab");
+      tabs.forEach(function (x) { x.classList.toggle("active", x === t); });
+      panels.forEach(function (p) { p.classList.toggle("active", p.getAttribute("data-panel") === key); });
+      try { history.replaceState(null, "", location.pathname + "?tab=" + encodeURIComponent(key)); } catch (e) { /* no-op */ }
+    });
+  });
+  // Restore tab from URL on first load.
+  try {
+    var qs = new URLSearchParams(location.search);
+    var initial = qs.get("tab");
+    if (initial) {
+      var target = document.querySelector('.ads-tab[data-tab="' + initial.replace(/"/g, "") + '"]');
+      if (target) target.click();
+    }
+  } catch (e) { /* no-op */ }
+
+  function renderStrip(data) {
+    var strip = document.getElementById("ads-pr-strip");
+    strip.innerHTML =
+      '<strong>' + fmtInt((data.intros && data.intros.items || []).length) + '</strong> intro paths · ' +
+      '<strong>' + fmtInt((data.funds && data.funds.items || []).length) + '</strong> modeled funds · ' +
+      '<strong>' + fmtInt((data.influence && data.influence.items || []).length) + '</strong> influence rows · ' +
+      'last refreshed: <span class="ads-mono">' + esc(fmtTs(data.last_refreshed)) + '</span>';
+  }
+
+  function badge(label, cls) {
+    return '<span class="ads-pill' + (cls ? ' ' + cls : '') + '">' + esc(label) + '</span>';
+  }
+
+  function renderIntros(items) {
+    var el = document.getElementById("ads-pr-intros");
+    if (!items.length) {
+      el.innerHTML = '<div class="ads-empty">No intro-routing predictions yet. The model retrains nightly — log a few intro outcomes from any profile to seed it.</div>';
+      return;
+    }
+    var rows = items.map(function (r) {
+      var name = r.display_name || r.entity_id;
+      var pct = r.degraded ? badge("limited signal", "ads-pill--warn") : fmtPct(r.predicted_conversion_pct);
+      return '<tr>' +
+        '<td><a href="/dashboard/profile/?id=' + encodeURIComponent(r.entity_id) + '#outreach">' + esc(name) + '</a></td>' +
+        '<td class="ads-mono">' + pct + '</td>' +
+        '<td class="ads-mono">' + fmtInt(r.hops) + '</td>' +
+        '<td class="ads-mono">' + fmtNum(r.weakest_edge_quality, 3) + '</td>' +
+        '<td>' + esc(r.ranking_mode || "—") + '</td>' +
+        '<td class="ads-mono ads-muted" style="font-size:12px">' + esc(fmtTs(r.created_at)) + '</td>' +
+      '</tr>';
+    }).join("");
+    el.innerHTML = '<table class="ads-table"><thead><tr>' +
+      '<th>Target</th><th>Predicted conversion</th><th>Hops</th>' +
+      '<th>Weakest edge</th><th>Ranking mode</th><th>Last scored</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  function renderFunds(items) {
+    var el = document.getElementById("ads-pr-funds");
+    if (!items.length) {
+      el.innerHTML = '<div class="ads-empty">No modeled fund returns yet. The fund-return sweep runs nightly at 03:15 UTC against every active / harvesting / wound-down fund.</div>';
+      return;
+    }
+    var rows = items.map(function (r) {
+      var name = r.fund_name || r.fund_id;
+      var cls = r.confidence === "high" ? "ads-pill--ok"
+              : r.confidence === "low"  ? "ads-pill--warn" : "";
+      return '<tr>' +
+        '<td><a href="/dashboard/funds/detail/?id=' + encodeURIComponent(r.fund_id) + '">' + esc(name) + '</a></td>' +
+        '<td class="ads-mono">' + fmtNum(r.dpi, 2) + '</td>' +
+        '<td class="ads-mono">' + fmtNum(r.tvpi, 2) + '</td>' +
+        '<td class="ads-mono">' + fmtNum(r.moic, 2) + '</td>' +
+        '<td class="ads-mono">' + (r.net_irr_pct == null ? "—" : Number(r.net_irr_pct).toFixed(1) + "%") + '</td>' +
+        '<td>' + badge(r.confidence || "—", cls) + '</td>' +
+        '<td class="ads-mono">' + (r.resolved_coverage_pct == null ? "—" : (Number(r.resolved_coverage_pct) * 100).toFixed(0) + "%") + '</td>' +
+        '<td class="ads-mono ads-muted" style="font-size:12px">' + esc(fmtTs(r.created_at)) + '</td>' +
+      '</tr>';
+    }).join("");
+    el.innerHTML = '<table class="ads-table"><thead><tr>' +
+      '<th>Fund</th><th>DPI</th><th>TVPI</th><th>MOIC</th><th>Net IRR</th>' +
+      '<th>Confidence</th><th>Coverage</th><th>Last modeled</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  function renderInfluence(items) {
+    var el = document.getElementById("ads-pr-influence");
+    if (!items.length) {
+      el.innerHTML = '<div class="ads-empty">No influence rankings yet. The edge-quality sweep runs nightly at 03:15 UTC.</div>';
+      return;
+    }
+    var rows = items.map(function (r) {
+      var name = r.display_name || r.entity_id;
+      return '<tr>' +
+        '<td><a href="/dashboard/profile/?id=' + encodeURIComponent(r.entity_id) + '">' + esc(name) + '</a>' +
+          (r.is_power_node ? ' ' + badge("power node", "ads-pill--ok") : '') + '</td>' +
+        '<td>' + esc(r.primary_sector || "—") + '</td>' +
+        '<td class="ads-mono">' + fmtNum(r.pagerank_score, 5) + '</td>' +
+        '<td class="ads-mono">' + fmtNum(r.broker_score, 3) + '</td>' +
+        '<td class="ads-mono">' + fmtInt(r.total_degree) + '</td>' +
+        '<td class="ads-mono ads-muted" style="font-size:12px">' + esc(fmtTs(r.computed_at)) + '</td>' +
+      '</tr>';
+    }).join("");
+    el.innerHTML = '<table class="ads-table"><thead><tr>' +
+      '<th>Entity</th><th>Sector</th><th>PageRank</th>' +
+      '<th>Broker</th><th>Degree</th><th>Last refresh</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  fetch("/api/predictions/summary?limit=50", { credentials: "include" })
+    .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(function (data) {
+      renderStrip(data);
+      renderIntros((data.intros && data.intros.items) || []);
+      renderFunds((data.funds && data.funds.items) || []);
+      renderInfluence((data.influence && data.influence.items) || []);
+    })
+    .catch(function (e) {
+      document.getElementById("ads-pr-strip").innerHTML =
+        '<div class="ads-card"><p>Failed to load predictions: ' + esc(e.message) + '</p></div>';
+      ["intros", "funds", "influence"].forEach(function (k) {
+        var el = document.getElementById("ads-pr-" + k);
+        if (el) el.innerHTML = '<div class="ads-empty">Could not load.</div>';
+      });
+    });
+})();
+</script>

@@ -71,6 +71,7 @@ import { fundsRoute, firmsFundsRoute } from "./routes/funds";
 import { fundReturnsRoute } from "./routes/fund_returns";
 import { influenceRoute } from "./routes/influence";
 import { introsRoute } from "./routes/intros";
+import { predictionsRoute } from "./routes/predictions";
 import { angelsRoute, syndicatesRoute } from "./routes/angels";
 import { dashboards as dashboardsRoute } from "./routes/dashboards";
 import { capTableRoute } from "./routes/cap_table";
@@ -250,6 +251,10 @@ api.route("/api", influenceRoute);
 // POST /api/intros/:path_id/log-outcome, GET /api/intros/model/current,
 // GET /api/intros/by-target/:id.
 api.route("/api/intros", introsRoute);
+// Task #9: Predictions dashboard aggregator — single read endpoint
+// that pulls top-N from intro_paths / fund_return_models /
+// entity_influence in one round trip for the dashboard page.
+api.route("/api/predictions", predictionsRoute);
 // Task #6: Diligence Checklist Runner.
 api.route("/api/diligence", diligenceRoute);
 // Task #5: Investor Reputation + Founder CRM. Mounted at /api so the
