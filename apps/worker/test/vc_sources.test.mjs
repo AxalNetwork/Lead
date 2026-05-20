@@ -96,7 +96,7 @@ test("348 seed: idempotent — every INSERT uses INSERT OR REPLACE", () => {
 });
 
 // ---- services/sourceSelector.ts contract ------------------------------------
-const { selectSourcesFor, selectBestSourceFor } = await import("../src/services/sourceSelector.ts");
+const { selectSourcesFor, selectBestSourceFor } = await import("../test-dist/services/sourceSelector.js");
 
 function makeEnv(rows) {
   const queries = [];

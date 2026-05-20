@@ -122,6 +122,7 @@
     "src/crawler/adapters/lpDisclosures/endowment990.ts",
     "src/crawler/adapters/lpDisclosures/sovereign.ts",
     "src/services/fundResolver.ts",
+    "src/services/sourceSelector.ts",
     "src/services/lpDisclosures/persist.ts",
     "src/services/deals/types.ts",
     "src/services/deals/dedupe.ts",
