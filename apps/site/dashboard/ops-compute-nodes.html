@@ -1,0 +1,129 @@
+---
+layout: default
+title: External Worker Pool
+permalink: /ops/compute-nodes/
+---
+
+<section class="ads-section" id="ops-root">
+  <h1 class="ads-h1">External Worker Pool</h1>
+
+  <div id="ops-auth-check" class="ads-card">
+    <strong>Verifying admin access…</strong>
+  </div>
+
+  <div id="ops-forbidden" hidden class="ads-card ads-card--err">
+    <strong>403 Forbidden.</strong> You are not on the ops admin allowlist.
+    Compute-node controls are not loaded.
+  </div>
+
+  <div id="ops-content" hidden>
+    <p class="ads-sub">
+      Operator-managed GPU / 3rd-party compute. Workers stays the
+      orchestrator; heavy jobs (vision OCR, embeddings, large LLM
+      passes) route here. Per Task #9 the per-node HMAC secret is
+      shown <strong>once</strong> at registration and never readable
+      again — copy the install command immediately.
+    </p>
+
+    <h2 class="ads-h2">Add a node</h2>
+    <div class="ads-card">
+      <form id="ops-add-node" style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
+        <label>Name <input class="ads-input" name="name" required placeholder="runpod-a100-1"></label>
+        <label>Provider
+          <select class="ads-input" name="provider">
+            <option value="runpod">runpod</option>
+            <option value="hetzner">hetzner</option>
+            <option value="aws">aws</option>
+            <option value="modal">modal</option>
+            <option value="fly">fly</option>
+            <option value="self">self</option>
+            <option value="other">other</option>
+          </select>
+        </label>
+        <label>Kind
+          <select class="ads-input" name="kind">
+            <option value="cpu">cpu</option>
+            <option value="gpu">gpu</option>
+            <option value="browser">browser</option>
+          </select>
+        </label>
+        <label>Max concurrent <input class="ads-input" name="max_concurrent_jobs" type="number" min="1" max="64" value="2"></label>
+        <label>$ / hour <input class="ads-input" name="cost_per_hour_usd" type="number" step="0.0001" min="0" value="0.40"></label>
+        <label>$ / 1k tokens <input class="ads-input" name="cost_per_1k_tokens_usd" type="number" step="0.0001" min="0" value="0"></label>
+        <label style="grid-column:1/-1">Supported job types (comma-separated)
+          <input class="ads-input" name="supported_job_types" value="vision_ocr,embed_text,llm_classify" required>
+        </label>
+        <div style="grid-column:1/-1">
+          <button class="ads-btn" type="submit">Mint registration token</button>
+        </div>
+      </form>
+      <div id="ops-register-result" class="ads-card" hidden style="margin-top:.75rem">
+        <h4 style="margin-top:0">Registration token (10 minute TTL)</h4>
+        <p class="ads-sub">Run this on the external box. The HMAC secret
+          is returned only on the runner's first call and never re-readable.</p>
+        <pre id="ops-register-cmd" class="ads-mono" style="white-space:pre-wrap;word-break:break-all"></pre>
+        <div class="ads-sub" id="ops-register-meta"></div>
+      </div>
+    </div>
+
+    <h2 class="ads-h2">Live nodes</h2>
+    <div class="ads-card">
+      <div class="ads-table-wrap">
+        <table class="ads-table" id="ops-nodes">
+          <thead><tr>
+            <th></th><th>Node</th><th>Provider / Kind</th>
+            <th>Active / Max</th><th>$/hr</th><th>Last heartbeat</th>
+            <th>State</th><th>Last error</th><th>Actions</th>
+          </tr></thead>
+          <tbody><tr><td colspan="9">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <h2 class="ads-h2">Spend (24h)</h2>
+    <div class="ads-card">
+      <div id="ops-spend-total" class="ads-mono"></div>
+      <div class="ads-table-wrap">
+        <table class="ads-table" id="ops-spend">
+          <thead><tr>
+            <th>Node</th><th>Provider</th><th>Kind</th>
+            <th>Jobs</th><th>OK</th><th>Fail</th><th>Timeout</th>
+            <th>Runtime ms</th><th>Cost</th>
+          </tr></thead>
+          <tbody><tr><td colspan="9">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <h2 class="ads-h2">Recent assignments</h2>
+    <div class="ads-card">
+      <div class="ads-table-wrap">
+        <table class="ads-table" id="ops-assignments">
+          <thead><tr>
+            <th>When</th><th>Node</th><th>Job type</th><th>Job id</th>
+            <th>Status</th><th>Runtime ms</th><th>Cost</th><th>Error</th>
+          </tr></thead>
+          <tbody><tr><td colspan="8">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <h2 class="ads-h2">Routing matrix (defaults)</h2>
+    <div class="ads-card">
+      <p class="ads-sub">Per Task #9 the code defaults are the single
+        source of truth; per-deployment overrides live in
+        <code>compute_nodes.capabilities_json</code>.</p>
+      <div class="ads-table-wrap">
+        <table class="ads-table" id="ops-routing">
+          <thead><tr>
+            <th>Job type</th><th>Preferred kinds</th>
+            <th>Prefer external</th><th>External OK</th><th>Deadline ms</th>
+          </tr></thead>
+          <tbody><tr><td colspan="5">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script src="/assets/js/ops-compute-nodes.js"></script>

@@ -1,0 +1,26 @@
+{
+  "name": "@axal/worker-runner",
+  "version": "0.1.0",
+  "description": "External compute runner for the AI Data Signal worker pool (Task #9).",
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "dist/cli.js",
+  "bin": {
+    "worker-runner": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test test/*.test.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "@types/node": "^22.10.0"
+  }
+}

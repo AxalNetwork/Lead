@@ -682,6 +682,25 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         console.error("nightly garbage sweep failed", (e as Error).message);
       }
 
+      // Task #9: External Worker Pool watchdog. Cheap (single SELECT +
+      // small UPDATEs). Marks compute_nodes with no fresh heartbeat
+      // (>90s) disabled, reassigns their open assignments, and
+      // times out any deadline-elapsed in-flight rows. Piggybacks
+      // dispatcher invocations + this nightly slot — no new cron
+      // (Free plan caps crons at 5/5; same constraint as Task #4
+      // angel sweep / Task #14 verification / Task #18 benchmarks /
+      // Task #2 fund returns / Task #3 edge quality / Task #4 intro
+      // retrain / Task #5 reputation / Task #1 garbage sweep).
+      try {
+        const { runComputeWatchdog } = await import("./services/compute/dispatcher");
+        const r = await runComputeWatchdog(env);
+        if (r.nodes_disabled || r.assignments_reassigned || r.assignments_timed_out) {
+          console.log("compute watchdog done", JSON.stringify(r));
+        }
+      } catch (e) {
+        console.error("nightly compute watchdog failed", (e as Error).message);
+      }
+
       // 5. Project match refresh
       try {
         const r = await env.DB.prepare(`SELECT id FROM projects WHERE deleted_at IS NULL AND status = 'active' ORDER BY last_modified DESC LIMIT 200`).all<{ id: string }>();

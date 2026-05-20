@@ -53,6 +53,8 @@ import { profilers as profilersRoute } from "./routes/profilers";
 import { profileComments as profileCommentsRoute } from "./routes/profile_comments";
 import { opsCrawlerRoute } from "./routes/ops_crawler";
 import { opsGarbageRoute } from "./routes/ops_garbage";
+import { opsComputeNodesRoute } from "./routes/ops_compute_nodes";
+import { computeRunnerRoute } from "./routes/compute";
 import { peopleRoute } from "./routes/people";
 import { leadsPromote } from "./routes/leads_promote";
 import { bulk } from "./routes/bulk";
@@ -119,6 +121,11 @@ api.use(
 api.route("/health", health);
 api.route("/api/health", health);
 api.route("/api/webhooks/campaigns", campaignsWebhook);
+// Task #9: Runner-facing compute endpoints authenticate via per-node
+// HMAC envelope, NOT the Cloudflare Access JWT — mount BEFORE the
+// /api/* accessGuard so external runners (non-browser clients) can
+// reach /api/compute/* without an Access cookie.
+api.route("/api/compute", computeRunnerRoute);
 api.use("/api/*", accessGuard);
 api.use("/api/ops/*", adminOnly);
 api.use("/api/leads/:id", piiAuditOnLeadGet);
@@ -177,6 +184,8 @@ api.route("/api/osint", osintRoute);
 api.route("/api/profilers", profilersRoute);
 api.route("/api/profile-comments", profileCommentsRoute);
 api.route("/api/ops/crawler", opsCrawlerRoute);
+// Task #9: External Worker Pool admin console.
+api.route("/api/ops/compute-nodes", opsComputeNodesRoute);
 // Task #1: Garbage entity review console (admin-only via the
 // /api/ops/* parent mount above).
 api.route("/api/ops/garbage-review", opsGarbageRoute);
