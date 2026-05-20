@@ -43,6 +43,7 @@ async function ensureCompanyEntity(env: Env, c: ValuationMarkInput): Promise<str
     primary_domain: null,
     suppressAutoProfileFill: true,
   });
+  if (!row) return null; // Task #9: rejected by garbage detector
   await addRole(env, row.id, "company", { is_primary: true, source: SOURCE_TAG, confidence: 0.6 });
   const normalized = normalizeCompanyName(c.company_name_raw);
   if (normalized) {

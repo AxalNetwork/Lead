@@ -61,6 +61,7 @@ async function ensureLpEntity(env: Env, payload: LpDisclosurePayload, source: st
     display_name: payload.lp_display_name,
     suppressAutoProfileFill: true,
   });
+  if (!row) return null; // Task #9: rejected by garbage detector
   await addRole(env, row.id, "lp", { is_primary: true, source, confidence: 0.95 });
   const ctx = {
     entity_id: row.id, source_kind: "scrape" as const, source,

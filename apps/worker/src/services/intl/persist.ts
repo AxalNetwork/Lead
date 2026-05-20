@@ -77,6 +77,7 @@ export async function resolveIntlEntity(env: Env, hit: IntlEntityHit, source: st
     display_name: hit.display_name,
     suppressAutoProfileFill: true,
   });
+  if (!row) return null; // Task #9: rejected by garbage detector
   const role = hit.kind === "fund" ? "fund"
     : hit.kind === "person" ? "founder"
     : "firm";

@@ -124,6 +124,7 @@ export async function resolveInvestor(
     display_name: name.slice(0, 200),
     suppressAutoProfileFill: true,
   });
+  if (!row) return null; // Task #9: rejected by garbage detector
   await addRole(env, row.id, "investor_firm", {
     is_primary: true, source: ctx.source, confidence: 0.5,
   });

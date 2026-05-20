@@ -203,6 +203,7 @@ export async function resolveFundName(
     // No website yet → createEntity's auto profile-fill won't fire.
     suppressAutoProfileFill: true,
   });
+  if (!row) return null; // Task #9: rejected by garbage detector
   await addRole(env, row.id, "fund", {
     is_primary: true, source: input.source, confidence: 0.7,
   });

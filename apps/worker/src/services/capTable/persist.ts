@@ -69,6 +69,7 @@ async function ensureCompanyEntity(env: Env, c: CapTableSnapshotInput): Promise<
     primary_domain: null,
     suppressAutoProfileFill: true,
   });
+  if (!row) return null; // Task #9: rejected by garbage detector
   await addRole(env, row.id, "company", { is_primary: true, source: SOURCE_TAG, confidence: 0.6 });
   const normalized = normalizeCompanyName(c.company_name_raw);
   if (normalized) {
@@ -107,6 +108,7 @@ async function resolveHolderEntity(env: Env, h: CapTableHolderInput): Promise<st
       primary_url: null, primary_domain: null,
       suppressAutoProfileFill: true,
     });
+    if (!row) return null; // Task #9: rejected by garbage detector
     await addRole(env, row.id, kind === "org" ? "investor" : "operator", {
       is_primary: true, source: SOURCE_TAG, confidence: 0.55,
     });

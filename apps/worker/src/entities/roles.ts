@@ -1,5 +1,6 @@
 import type { Env } from "../types";
 import type { EntityKind, EntityRole, EntityRow } from "./model";
+import { isGarbage, logDataQuality } from "./garbage";
 
 export async function createEntity(
   env: Env,
@@ -22,7 +23,35 @@ export async function createEntity(
      */
     suppressAutoProfileFill?: boolean;
   },
-): Promise<EntityRow> {
+): Promise<EntityRow | null> {
+  // Task #9: pre-insert garbage guard. The pure heuristic detector
+  // (no AI call here — keep createEntity synchronous and cheap on the
+  // hot write path) rejects HTML page titles / nav strings / UI
+  // labels that the crawler may have mistaken for entity names.
+  // Returns null + audit row instead of throwing so callers can
+  // skip without crashing the broader import. The AI second opinion
+  // runs only in the cron sweep, NOT inline on every write.
+  const verdict = isGarbage({
+    kind: init.kind,
+    display_name: init.display_name ?? null,
+    primary_url: init.primary_url ?? null,
+    primary_domain: init.primary_domain ?? null,
+    primary_email_key: init.primary_email_key ?? null,
+    primary_linkedin_key: init.primary_linkedin_key ?? null,
+  });
+  if (verdict.is_garbage) {
+    console.log("garbage.pre_insert_rejected", JSON.stringify({
+      kind: init.kind, display_name: init.display_name, reasons: verdict.reasons,
+    }));
+    // Log to data_quality_log with a synthetic entity_id so operators
+    // can audit rejected writes too. We use a `rejected:` prefix to
+    // distinguish from soft-deleted entities (which carry real ids).
+    void logDataQuality(
+      env, "rejected:" + (init.display_name ?? "<empty>").slice(0, 100),
+      "pre_insert_rejected", verdict.reasons, "pre_insert_guard", null,
+    ).catch(() => undefined);
+    return null;
+  }
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   await env.DB.prepare(

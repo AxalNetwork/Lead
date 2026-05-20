@@ -175,6 +175,7 @@ async function resolveOrCreate(
   }
   try {
     const created = await createEntity(env, { kind, ...init });
+    if (!created) return null; // Task #9: rejected by garbage detector
     await setLegacyEntityId(env, table, legacyId, created.id);
     return created.id;
   } catch (e) {

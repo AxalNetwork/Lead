@@ -413,6 +413,7 @@ async function findOrCreatePortfolioEntity(env: Env, name: string, website: stri
       // portfolio company), each potentially discovering more orgs.
       suppressAutoProfileFill: true,
     });
+    if (!ent) return null; // Task #9: rejected by garbage detector
     await addRole(env, ent.id, "company", { source }).catch(() => undefined);
     await insertFact(env, {
       entity_id: ent.id, predicate: "name", value_text: trimmed,
@@ -464,6 +465,7 @@ async function findOrCreatePersonEntity(env: Env, name: string, linkedin: string
       display_name: trimmed,
       primary_linkedin_key: linkedinKey,
     });
+    if (!ent) return null; // Task #9: rejected by garbage detector
     await insertFact(env, {
       entity_id: ent.id, predicate: "name", value_text: trimmed,
       source_kind: "ai", source, confidence: 0.7,

@@ -106,6 +106,7 @@ async function resolveCompany(
     primary_domain: c.company_website ? safeHost(c.company_website) : null,
     suppressAutoProfileFill: !c.company_website,
   });
+  if (!row) return null; // Task #9: rejected by garbage detector
   await addRole(env, row.id, "company", { is_primary: true, source, confidence: 0.6 });
   const factCtx = {
     entity_id: row.id, source_kind: "scrape" as const, source,

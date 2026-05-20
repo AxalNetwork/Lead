@@ -193,6 +193,7 @@ async function resolvePersonEntity(env: Env, args: {
       primary_url: args.profile_url ?? null,
       primary_linkedin_key: lk ?? null,
     });
+    if (!created) return null; // Task #9: rejected by garbage detector
     await addRole(env, created.id, "investor", { source: "movements:firm_team_snapshot" });
     return created.id;
   } catch (e) {
