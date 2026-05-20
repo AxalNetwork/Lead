@@ -175,16 +175,22 @@ errors.get("/job/:jobId", async (c) => {
   const jobId = c.req.param("jobId");
   const job = await c.env.DB.prepare(`SELECT * FROM jobs WHERE id = ?`).bind(jobId).first();
   if (!job) return c.json({ error: "not_found" }, 404);
+  // Task #7: each auxiliary table (workflow_step_log,
+  // job_state_transitions, and even error_log in a fresh env) may be
+  // absent in some environments and was a primary source of opaque
+  // `db_error` rows on this route. Wrap each read individually so a
+  // single missing table degrades to an empty list rather than 500-ing
+  // the whole endpoint and adding another `db_error` log entry.
   const steps = await c.env.DB.prepare(
     `SELECT * FROM workflow_step_log WHERE job_id = ? ORDER BY started_at ASC LIMIT 500`,
-  ).bind(jobId).all();
+  ).bind(jobId).all().catch(() => ({ results: [] as unknown[] }));
   const errs = await c.env.DB.prepare(
     `SELECT id, occurred_at, step, code, kind, status, message, context_json, host, retry_count, resolved_at
      FROM error_log WHERE job_id = ? ORDER BY occurred_at ASC LIMIT 500`,
-  ).bind(jobId).all<ErrorRow>();
+  ).bind(jobId).all<ErrorRow>().catch(() => ({ results: [] as ErrorRow[] }));
   const transitions = await c.env.DB.prepare(
     `SELECT * FROM job_state_transitions WHERE job_id = ? ORDER BY changed_at ASC LIMIT 200`,
-  ).bind(jobId).all();
+  ).bind(jobId).all().catch(() => ({ results: [] as unknown[] }));
   return c.json({
     job,
     steps: steps.results ?? [],

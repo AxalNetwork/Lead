@@ -2032,10 +2032,13 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
   ).bind(jobId).first<{ budget_ms: number | null }>().catch(() => null);
   // Task #7: per-pipeline budget overrides. The override only LIFTS
   // a too-tight default; an operator-set jobs.budget_ms still wins
-  // when it's larger. See src/queue/pipelineBudgets.ts for the map.
+  // when it's larger. NOTE: the actual budget number is computed
+  // BELOW, after queue-kind aliases (`enrich_lead` → `profile_list`,
+  // `crawl_url` → `url`) are normalized — otherwise overrides keyed
+  // on the canonical kind would silently miss aliased messages.
   const { effectiveBudgetMs } = await import("../queue/pipelineBudgets.js");
-  const budgetMs = effectiveBudgetMs(budgetRow?.budget_ms ?? null, msg.kind);
-  const deadline = start + budgetMs;
+  let budgetMs = effectiveBudgetMs(budgetRow?.budget_ms ?? null, msg.kind);
+  let deadline = start + budgetMs;
   const enforceDeadline = async (): Promise<boolean> => {
     if (Date.now() <= deadline) return false;
     // Transition to terminal `timed_out` and stamp finished_at. The
@@ -2118,6 +2121,15 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
     msg = { ...msg, kind: "profile_list", config: { ...(msg.config ?? {}), enrich_kind: "investor", lead_id: msg.target } };
   } else if (aliasedKind === "crawl_url") {
     msg = { ...msg, kind: "url" };
+  }
+  // Task #7: re-evaluate budget against the canonical kind now that
+  // aliases are resolved. Only lift (never lower) what was computed
+  // up-front so the in-run deadline never gets shorter than the
+  // pre-alias estimate.
+  const aliasedBudget = effectiveBudgetMs(budgetRow?.budget_ms ?? null, msg.kind);
+  if (aliasedBudget > budgetMs) {
+    budgetMs = aliasedBudget;
+    deadline = start + budgetMs;
   }
   // ----- Task #6: queue-level preflight (proxy/circuit/tos/gated) ----------
   // Short-circuits jobs that would obviously fail (missing PROXY_URL,
