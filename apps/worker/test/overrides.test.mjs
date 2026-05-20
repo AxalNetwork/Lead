@@ -189,6 +189,51 @@ test("UI helper uses ?id= query strings, never /:id segments", () => {
   assert.doesNotMatch(fieldEditJs, /\/dashboard\/people\/\$\{?[^?]*\}?\//);
 });
 
+// ---------- 12b. UI wiring shape ----------
+import { readFileSync as _rfs } from "node:fs";
+const fieldEditSrc = _rfs("../site/assets/js/field-edit.js", "utf8");
+const peopleHtml = _rfs("../site/dashboard/people.html", "utf8");
+const companiesHtml = _rfs("../site/dashboard/companies.html", "utf8");
+const investorsHtml = _rfs("../site/dashboard/investors.html", "utf8");
+const firmsHtml = _rfs("../site/dashboard/firms.html", "utf8");
+
+test("field-edit.js detects entity id from ?id= on any /dashboard/ page", () => {
+  // The earlier path-regex carve-out (`/people/?$`) blocked the People
+  // dossier. This assertion guarantees the fix sticks.
+  assert.doesNotMatch(fieldEditSrc, /!\s*\/\\bpeople\\\/\?\$\//);
+  assert.match(fieldEditSrc, /detectEntityId/);
+  assert.match(fieldEditSrc, /\/\\\/dashboard\\\//);
+});
+
+test("field-edit.js auto-decorates [data-k] fields via key→predicate map", () => {
+  assert.match(fieldEditSrc, /DATA_K_PREDICATE_MAP/);
+  assert.match(fieldEditSrc, /autoDecorateByDataK/);
+  // The map covers the canonical detail-page keys.
+  for (const k of ["name", "hq", "founded", "website", "thesis", "stages", "sectors", "title", "role", "summary"]) {
+    assert.match(fieldEditSrc, new RegExp(`\\b${k}:`));
+  }
+});
+
+test("field-edit.js inline editor never calls prompt() for the value", () => {
+  // True inline editing — the input lives in the DOM. Reason / ad-hoc
+  // predicate prompts are allowed; the per-field VALUE input is not.
+  const openInline = fieldEditSrc.split("openInlineEditor")[2] || "";
+  const firstBlock = openInline.split("function ")[0];
+  assert.doesNotMatch(firstBlock, /window\.prompt|prompt\(/);
+});
+
+test("Every list page includes field-edit.js so toolbar + create button render", () => {
+  for (const html of [peopleHtml, companiesHtml, investorsHtml, firmsHtml]) {
+    assert.match(html, /field-edit\.js/);
+  }
+});
+
+test("Person dossier exposes data-k on name/role/summary for auto-decoration", () => {
+  assert.match(peopleHtml, /id="ads-person-name"[^>]*data-k="name"/);
+  assert.match(peopleHtml, /id="ads-person-role"[^>]*data-k="role"/);
+  assert.match(peopleHtml, /id="ads-person-summary"[^>]*data-k="summary"/);
+});
+
 // ---------- 13. Acceptance scenario (Jim Murphy) — logical assertions ----------
 test("acceptance: override row beats subsequent AI fact at read time", () => {
   // 1. POST override row is inserted with locked=1.

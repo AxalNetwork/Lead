@@ -231,15 +231,71 @@
   }
 
   // ---------- Actions menu (auto-injected on profile pages) ----------
+  // Detect "we are viewing a single entity" by the URL ?id= on any
+  // /dashboard/ page. Earlier versions had a path-regex carve-out that
+  // accidentally excluded /dashboard/people/?id=... — fixed here. We
+  // also auto-stamp body[data-entity-id] so other scripts can read it.
   function detectEntityId() {
     var b = document.body;
     if (b && b.dataset.entityId) return b.dataset.entityId;
     var marker = document.querySelector("[data-ads-entity-id]");
     if (marker) return marker.getAttribute("data-ads-entity-id");
+    if (!/\/dashboard\//.test(location.pathname)) return null;
     var qs = new URLSearchParams(location.search);
     var id = qs.get("id");
-    if (id && /\/dashboard\//.test(location.pathname) && !/\bpeople\/?$/.test(location.pathname)) return id;
-    return null;
+    if (!id) return null;
+    // The /dashboard/ list pages (people/, companies/, investors/,
+    // firms/) never use ?id= — they use ?q=, ?sector=, etc. So an
+    // ?id= present on any /dashboard/ path is a per-entity dossier.
+    if (b) b.dataset.entityId = id;
+    return id;
+  }
+
+  // ---------- data-k → predicate mapping (auto-decoration) ----------
+  // The existing detail-page templates (firm-detail, company-detail,
+  // investor-detail) tag every rendered field with `data-k="<key>"`.
+  // This table maps those keys to canonical predicates so the inline
+  // editor lights up on every visible field WITHOUT having to refactor
+  // each renderer to emit data-predicate inline.
+  var DATA_K_PREDICATE_MAP = {
+    name: "display_name",
+    hq: "hq_location",
+    founded: "founded_year",
+    aum: "aum_usd",
+    lead_or_co: "lead_or_co",
+    website: "website",
+    thesis: "thesis",
+    stages: "stages",
+    sectors: "sectors",
+    geo_focus: "geo_focus",
+    check_typical: "check_size_typical_usd",
+    check_range: "check_size_range",
+    contact_email: "contact_email",
+    description: "description",
+    title: "title",
+    role: "title",
+    stage: "stage",
+    sector: "sector",
+    country: "country_iso2",
+    city: "location_city",
+    region: "location_region",
+    headline: "headline",
+    summary: "summary",
+  };
+  function autoDecorateByDataK(entityId) {
+    if (!entityId) return;
+    document.querySelectorAll("[data-k]").forEach(function (el) {
+      if (el.dataset.adsFieldEditDecorated) return;
+      var key = el.getAttribute("data-k");
+      var pred = DATA_K_PREDICATE_MAP[key];
+      if (!pred) return;
+      // Don't decorate <img>, <a> (anchor handled below), <input>.
+      var tag = el.tagName.toLowerCase();
+      if (tag === "img" || tag === "input" || tag === "select") return;
+      el.dataset.predicate = pred;
+      el.dataset.entityId = entityId;
+      decorate(el);
+    });
   }
 
   function injectActionsMenu() {
@@ -382,6 +438,11 @@
 
   function scan(root) {
     (root || document).querySelectorAll("[data-predicate][data-entity-id]").forEach(decorate);
+    // Auto-wire every rendered profile field via the data-k → predicate
+    // map so inline editing lights up on detail pages without each
+    // renderer having to emit data-predicate inline (Task #3 acceptance:
+    // "Every field on every profile page is inline-editable").
+    autoDecorateByDataK(detectEntityId());
     injectActionsMenu();
     injectListToolbar();
   }
