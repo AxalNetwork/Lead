@@ -201,6 +201,21 @@
     "src/services/intros/model.ts",
     "src/services/intros/opener.ts",
     "src/services/intros/authz.ts",
-    "src/services/intros/train.ts"
+    "src/services/intros/train.ts",
+    "src/services/diligence/types.ts",
+    "src/services/diligence/_util.ts",
+    "src/services/diligence/score.ts",
+    "src/services/diligence/registry.ts",
+    "src/services/diligence/runner.ts",
+    "src/services/diligence/report.ts",
+    "src/services/diligence/checks/corporate.ts",
+    "src/services/diligence/checks/founders.ts",
+    "src/services/diligence/checks/market.ts",
+    "src/services/diligence/checks/product.ts",
+    "src/services/diligence/checks/traction.ts",
+    "src/services/diligence/checks/team.ts",
+    "src/services/diligence/checks/regulatory.ts",
+    "src/services/diligence/checks/financial.ts",
+    "src/services/diligence/checks/ip.ts"
   ]
 }

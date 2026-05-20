@@ -1,0 +1,36 @@
+---
+layout: default
+title: Diligence run
+permalink: /dashboard/diligence/run/
+---
+<section class="ads-section">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+    <div>
+      <h1 class="ads-page-title" id="d-title" style="margin:0">Diligence run</h1>
+      <p class="ads-page-sub" id="d-sub" style="margin:4px 0 0">Loading…</p>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <a id="d-export-md"   class="ads-btn" target="_blank" rel="noopener" style="padding:6px 12px;display:none">Markdown</a>
+      <a id="d-export-json" class="ads-btn" target="_blank" rel="noopener" style="padding:6px 12px;display:none">JSON</a>
+      <a id="d-export-pdf"  class="ads-btn" target="_blank" rel="noopener" style="padding:6px 12px;display:none">PDF</a>
+      <button type="button" id="d-rerun" class="ads-btn" style="padding:6px 12px;display:none">Re-run failed</button>
+    </div>
+  </div>
+
+  <div class="ads-card" style="margin-top:14px">
+    <div id="d-progress-wrap" style="margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:#666">
+        <span id="d-progress-label">—</span>
+        <span id="d-progress-score">—</span>
+      </div>
+      <div style="height:8px;background:#eef;border-radius:4px;overflow:hidden;margin-top:4px">
+        <div id="d-progress-bar" style="height:100%;width:0%;background:#2c6eb5;transition:width .25s"></div>
+      </div>
+    </div>
+    <div id="d-tally" class="ads-mono" style="font-size:12px">—</div>
+  </div>
+
+  <div id="d-sections" style="margin-top:14px">Loading…</div>
+</section>
+
+<script src="/assets/js/diligence-run.js" defer></script>

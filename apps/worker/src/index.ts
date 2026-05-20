@@ -71,6 +71,7 @@ import { valuationCompaniesRoute, compPanelsRoute } from "./routes/valuation";
 import { documentsRoute } from "./routes/documents";
 import { dataRoomsRoute } from "./routes/data_rooms";
 import { personsVerificationRoute } from "./routes/verification";
+import { diligenceRoute } from "./routes/diligence";
 export { EntityLock } from "./do/EntityLock";
 export { HostThrottle } from "./do/HostThrottle";
 export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, PersonaEntityMatchWorkflow, PersonaMatchRefreshWorkflow, PersonaMatchEntityWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, AIProfileFillerWorkflow, AIProfileFillerBatchWorkflow, RefreshGovernmentWorkflow, DiscoverFromSeedWorkflow, CrawlFrontierWorkflow, MonitorEntityWorkflow, MonitorBatchWorkflow, DigestWorkflow, IndividualProfilerWorkflow } from "./ai/workflows";
@@ -212,6 +213,8 @@ api.route("/api", influenceRoute);
 // POST /api/intros/:path_id/log-outcome, GET /api/intros/model/current,
 // GET /api/intros/by-target/:id.
 api.route("/api/intros", introsRoute);
+// Task #6: Diligence Checklist Runner.
+api.route("/api/diligence", diligenceRoute);
 
 api.notFound((c) => c.json({ error: "not_found", request_id: c.var.request_id }, 404));
 api.onError((err, c) => {

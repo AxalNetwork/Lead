@@ -534,5 +534,56 @@ fund-return sweep). Runs AFTER the existing relationship
 derivation step so freshly-derived edges get scored in the same
 tick.
 
+### Task #6 — Diligence Checklist Runner: migration 371 + source_kind="enrichment" for derived diligence facts (ACCEPTED)
+Spec slotted the schema at migration 360, but slots 360-370 are all
+taken (per the Task #13/#14/#18/#2/#3/#4/#5 contract-update precedent
+above). The schema lands at `apps/worker/migrations/371_diligence.sql`
+(three tables: `diligence_templates`, `diligence_runs` append-only
+per run with `parent_run_id` for the re-run chain, and
+`diligence_check_results` append-only per (run_id, check_key)).
+Future migrations should number from 372.
+
+Per the Task #1 canonical write contract, every derived diligence
+fact (`diligence.corporate.delaware_confirmed`,
+`diligence.founder.education_verified`,
+`diligence.founder.sanctions_clean`, …) flows through `insertFact`
+with `source_kind="enrichment"` (the existing enum value that best
+matches operator-driven enrichment) and `source="diligence:<check_key>"`
+so provenance is unambiguous. There is no dedicated `"diligence"`
+source_kind; adding one would force a registry change in the rich
+PERSON profile path. Derived facts are mirrored ONLY for verdict
+results (pass | fail | caution) — `needs_human` and `n/a` rows are
+audit-only and never mint a fact (would otherwise pollute the
+ledger with non-verdicts).
+
+PDF export reuses the canonical `buildPdf` / `pdfResponse` from
+`routes/dashboards_pdf.ts` per the Task #4 PDF-pipeline decision
+above. `services/diligence/report.ts::buildPdfInputs` returns
+`{headers, rows, filename, title, subtitle}` matching the
+`pdfResponse(rows, headers, filename, title, subtitle)` signature
+exactly; markdown is stripped + clipped to 140 chars per row so
+the canonical Helvetica/Type1 page fits the column budget. No
+parallel PDF implementation is introduced.
+
+Append-only semantics: re-running checks inserts a NEW
+`diligence_runs` row with `parent_run_id` pointing at the prior
+run; only fail-like (`fail|caution|needs_human`) check_keys are
+re-dispatched into the new run. Existing `diligence_check_results`
+rows are NEVER mutated — the only in-place flag is
+`flagged_for_human` toggled from the UI for operator triage.
+
+Each check executor wraps its source-table query in `safeQuery`
+(`services/diligence/_util.ts`) and degrades to a `needs_human`
+result with an explicit reason code on missing-table / throw,
+matching the Task #14 honest-degradation pattern. The runner
+adds an outer try/catch around every executor so a thrown error
+becomes one `needs_human` row (reason `executor_threw`) rather
+than poisoning the whole run.
+
+Per the Task #4 static-routing constraint, the diligence list lives
+at `/dashboard/diligence/` and the run detail at
+`/dashboard/diligence/run/?id=<run_id>` (query string, not path
+segment).
+
 ## User preferences
 - (none recorded yet)
