@@ -22,140 +22,52 @@ Jekyll site (`apps/site`) on GitHub Pages at aidatasignal.com + Cloudflare Worke
 
 ## Architecture decisions
 
-### Task #1 — fact write path: insertFact is canonical (ACCEPTED, contract update)
-Task #1 spec note (line 48) says workflows should use the existing
-`EntityService` write path in `apps/worker/src/entities/profile.ts` until
-the predicate router lands. That file's public surface is a set of
-*typed* helpers (`setPersonIdentity`, `addCareerEntry`, `addBoardSeat`, …)
-whose private `mirrorFact` validates every predicate against
-`PREDICATE_REGISTRY` — a registry scoped to the rich PERSON profile
-(Task #4). Per-profile-type workflows emit type-general predicates
-across many entity shapes (`firm.aum_usd`, `firm.stages`,
-`founder.company_founded`, `firm.corporate_parent`, etc.), so they
-cannot route through that registry without forcing every workflow
-predicate into a PERSON-only registry.
+### Established conventions (Tasks #1–#4, condensed)
+These are durable rules referenced by later task notes:
 
-Accepted resolution: workflows write through
-`apps/worker/src/entities/facts.insertFact` — the same low-level write
-that `mirrorFact` itself wraps. `insertFact` already provides the
-provenance, supersedes-chain, summary-rebuild enqueue, and persona
-match-refresh side-effects the spec requires; in addition,
-`_shared.persist` stamps the new `facts.verified` column post-insert
-when crossRef promotes a row. When the predicate router lands
-(source Task 78), workflows swap one helper without changing their
-contract.
-
-### Task #3 — smart_frontier staging (ACCEPTED, not a deviation)
-Task #3 spec text says "candidates land in crawl_frontier". Task #2 already
-owns `crawl_frontier` with a url_id-keyed work-queue schema (see
-`migrations/250_link_discovery.sql`). Re-shaping that table to also carry
-discovery_reason / priority / profile_type_id would mutate Task #2's
-contract.
-
-Accepted resolution: `smart_frontier` is a typed, priority-ranked STAGING
-area introduced in migration 342. The hourly cron drains it into Task #2's
-`crawl_frontier` queue via `services/frontier/drain.ts`
-(`upsertDiscoveredUrl` + `enqueueFrontier`).
-
-Status mapping (`smart_frontier.status` → `crawl_frontier`):
-- `queued`    — emitted by `expandFrontier`, not yet drained.
-- `enqueued`  — drained; corresponding row exists in `crawl_frontier`
-                (keyed by `discovered_urls.id`) for the crawler to pop.
-- `rejected`  — drain rejected by canonical/obvious-reject filters; no
-                `crawl_frontier` row, will not be retried.
-
-Operators inspect the per-type funnel in `smart_frontier`; the crawler
-still pulls work from the single Task #2 queue.
-
-### Task #2 — LP disclosure crawler: lp_slug → entity registry (ACCEPTED)
-The spec says "every adapter calls fundResolver.ts" but is silent on how
-adapters bind to LP entities. Each adapter is bound to one LP (CalPERS,
-Harvard, ADIA, …) by a stable `lp_slug` string; the persist layer
-(`services/lpDisclosures/persist.ts`) maps slug → `u_entities.id` via a
-`lp.slug` fact lookup, minting the LP entity through the canonical
-`createEntity` + `addRole('lp')` path on first encounter. All
-identifier facts (`lp.slug`, `lp.class`, `lp.display_name`) and
-corroborating facts (`fund.lp_commitment_usd`,
-`firm.lp_committed_usd`) flow through `insertFact` per the Task #1
-canonical write decision. Adapters never INSERT into `u_entities`,
-`facts`, or `lp_fund_commitments` directly.
-
-Idempotency lives in the migration: `UNIQUE(lp_entity_id,
-fund_name_raw, as_of_date)` + `INSERT OR REPLACE` semantics in the
-persist `ON CONFLICT` clause. Re-running the same disclosure overwrites
-the same rows.
-
-### Task #1 — Deal dedupe key includes event_type (ACCEPTED, contract update)
-The task spec documents the dedupe formula as
-`sha256(normalized_company_name + round_name + month_bucket)`.
-Implementation uses
-`sha256(normalized_company + "|" + event_type + "|" + round + "|" + month_bucket)`.
-Reason: without `event_type` in the key, a Series B funding_round and an
-unrelated 8-K acquisition for the same company in the same month would
-collide on one `deal_events` row. `event_type` is therefore required at
-the typed signature of `dealDedupeKey()` and the function returns null
-when it is missing/empty. SEC Form D synthesis (which emits
-`round_name=null`) still corroborates with press-wire rows that have
-`round_name="Series X"` via the persist layer's secondary
-"round-flexible" lookup in `services/deals/persist.ts`, not via the key
-itself. AI extractor (`ai/dealExtractor.ts`) rejects rows with missing
-or unrecognized `event_type` rather than defaulting to `funding_round`,
-preserving the spec's "no silent coercion" contract.
-
-### Task #2 — /ops/crawler/ page-level gating (CONSTRAINT, not a deviation)
-The Jekyll site is statically hosted on GitHub Pages; there is no
-edge function or origin worker on aidatasignal.com to intercept page
-routes. True server-side 403 for `/ops/crawler/` is therefore not
-possible at the page-route layer.
-
-Implemented gate: the rendered HTML contains an `#ops-content`
-wrapper that is `hidden` by default. `ops-crawler.js` pre-flights
-`GET /api/ops/crawler/` (gated by accessGuard + adminOnly on the
-worker) before revealing or polling anything; on 403 the content
-wrapper is wiped and a forbidden card is shown. All operational
-data, mutations, and controls live behind the worker's adminOnly
-guard — the page itself never holds operational data for
-unauthenticated viewers.
-
-### Task #4 — dashboards_pdf.ts IS the canonical PDF path (ACCEPTED)
-The Task #4 spec asks PDF exports to "go through the existing
-report-renderer pipeline." A repo-wide audit
-(`rg "application/pdf|generate.*pdf|pdf.*render" apps/worker/src/`)
-found no shared report-renderer service — the only existing PDF code
-is `imports/pdf_parser.ts` / `scraper/parsers/pdf.ts` (PDF *parsing*,
-input direction) and `projects/pitch.ts` (notes on PDF text
-extraction). There is no PDF *render* pipeline to route through.
-
-Accepted resolution: `routes/dashboards_pdf.ts` (handwritten PDF 1.4,
-Helvetica, accurate xref offsets, X-Total-Rows parity header) IS the
-canonical product PDF path going forward. All 11 dashboard endpoints
-plus `/kpi.pdf` go through `pdfResponse()`; any future product feature
-that needs PDF output (digest exports, reports, etc.) should import
-`buildPdf` / `pdfResponse` from this module rather than spawning a
-parallel implementation.
-
-### Task #4 — Snapshot URL contract uses ?id= not /:id (CONSTRAINT, not deviation)
-The Task #4 spec specifies immutable snapshot URLs at
-`/dashboard/<page>/snapshot/:id`. Jekyll on GitHub Pages serves only
-prebuilt static paths and has no edge router to bind a dynamic `:id`
-path segment (same constraint as the `/ops/crawler/` page-level gating
-note above). The implemented form is
-`/dashboard/<page>/snapshot/?id=<snapshot_id>`. Each of the 8 dashboard
-pages exposes a "Save snapshot" button that POSTs the current payload
-to `/api/dashboards/snapshots` and surfaces the link in that shape.
-Hydration is STRICTLY from the stored payload — `snapshot-viewer.js`
-never re-queries the underlying ledger tables — so immutability is
-preserved.
-
-### Task #4 — Angel sweep on nightly cron, not weekly (ACCEPTED)
-The Task #4 spec says "weekly angel refresh + nightly syndicate
-rebuild". Free plan caps crons at 5 and all five slots are already
-occupied (per Task #2 operational note); the consolidated nightly slot
-"15 3 * * *" is the only place new sweeps can land. Implemented
-resolution: both `refreshAllAngels` and `refreshAllSyndicateAnalytics`
-run in the nightly tick. Running the angel sweep more frequently than
-weekly is strictly safe (bounded at 500 angels/tick, idempotent
-upsert) — it only increases freshness.
+- **Canonical fact write path**: all derived facts flow through
+  `apps/worker/src/entities/facts.insertFact` (NOT the typed
+  `EntityService` helpers in `entities/profile.ts` — those validate
+  against `PREDICATE_REGISTRY`, which is PERSON-scoped). `insertFact`
+  provides provenance, supersedes-chain, summary-rebuild enqueue, and
+  persona match-refresh; `_shared.persist` stamps `facts.verified`
+  post-insert when crossRef promotes a row.
+- **Deal dedupe key** (Task #1): `sha256(normalized_company + "|" +
+  event_type + "|" + round + "|" + month_bucket)`. `event_type` is
+  required; `dealDedupeKey()` returns null when missing. AI extractor
+  rejects rows with unrecognized `event_type` rather than coercing to
+  `funding_round`. SEC Form D rows (round_name=null) corroborate with
+  press-wire rows via the persist layer's "round-flexible" lookup.
+- **smart_frontier staging** (Task #3): typed priority-ranked staging
+  area (migration 342); hourly cron drains into Task #2's
+  `crawl_frontier` queue via `services/frontier/drain.ts`. Status
+  values: `queued` (emitted, not drained), `enqueued` (drained →
+  `crawl_frontier` row exists), `rejected` (filter rejection, no retry).
+- **LP adapter binding** (Task #2): each LP adapter bound by stable
+  `lp_slug`; `services/lpDisclosures/persist.ts` maps slug →
+  `u_entities.id` via `lp.slug` fact lookup. Adapters never INSERT
+  into `u_entities` / `facts` / `lp_fund_commitments` directly.
+  Idempotency: `UNIQUE(lp_entity_id, fund_name_raw, as_of_date)`.
+- **/ops/crawler/ gating** (Task #2 constraint): Jekyll on GH Pages
+  has no edge router → true server-side 403 impossible at page
+  layer. `#ops-content` is hidden by default; `ops-crawler.js`
+  pre-flights `GET /api/ops/crawler/` (worker-side adminOnly) before
+  revealing. Same constraint drives the `?id=` query-string pattern
+  used by all dashboard snapshot / detail URLs.
+- **Canonical PDF path** (Task #4): `routes/dashboards_pdf.ts`
+  (`buildPdf` / `pdfResponse`) IS the product PDF renderer — no
+  shared report-renderer pipeline exists. Any future PDF feature
+  imports from this module.
+- **Snapshot URL contract** (Task #4 constraint): URLs are
+  `/dashboard/<page>/snapshot/?id=<snapshot_id>` (query string, not
+  path segment — Jekyll static-routing constraint). Hydration is
+  STRICTLY from the stored payload via `snapshot-viewer.js`; never
+  re-queries underlying tables.
+- **Cron budget**: CF Free plan caps at 5 crons (all slots filled).
+  Consolidated nightly slot is `15 3 * * *`; all new sweeps
+  (Task #4 angels + syndicates, Task #14 verification, Task #18 term
+  benchmarks, Task #2 fund returns, Task #3 edge quality, Task #4
+  intro retrain) piggyback this single slot.
 
 ### Task #13 — Document intelligence: migration 361 + source_kind="import" for document facts (ACCEPTED)
 The Task #13 spec slots above #14 in the queue but migrations 358/359/360
