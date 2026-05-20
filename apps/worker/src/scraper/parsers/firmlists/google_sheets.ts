@@ -937,7 +937,7 @@ async function tryVectorizeFirmHit(
   nameKeyByNorm: Map<string, string>,
 ): Promise<{ key: string; candidateNorm: string; score: number } | null> {
   try {
-    const idx = (env as Env & { VEC_FIRMS?: { query: Function } }).VEC_FIRMS;
+    const idx = (env as Env & { VEC_FIRMS?: { query: (...args: unknown[]) => Promise<unknown> } }).VEC_FIRMS;
     if (!idx) return null;
     const { aiEmbed } = await import("../../../ai/extract");
     const { assertBudget } = await import("../../../ai/budget");

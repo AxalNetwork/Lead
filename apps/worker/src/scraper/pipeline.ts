@@ -1967,6 +1967,7 @@ function mapTagTaxonomy(prefix: string): Taxonomy | null {
     // Task #2: NYC Founder Guide tags every firm `geo_metro:new_york`
     // (spec requirement). Route the `geo_metro` prefix to the same
     // `geo` taxonomy used by other geo-flavored tags.
+    // falls through
     case "geo_metro":
     case "region":
     case "country":    return "geo";
@@ -1977,10 +1978,12 @@ function mapTagTaxonomy(prefix: string): Taxonomy | null {
     // `collection:explore.{slug}` so the dashboard can filter "all
     // underrepresented-founder investors", etc. We store them under
     // the generic `tag` taxonomy.
+    // falls through
     case "collection":
     // Task #3: JVCA stamps `lang:ja` on every Japanese firm so the
     // dashboard can filter by language without a separate column.
     // Stored under the generic `tag` taxonomy.
+    // falls through
     case "lang":       return "tag";
     default:           return null;
   }

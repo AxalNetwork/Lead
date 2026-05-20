@@ -63,7 +63,7 @@ uploadsCsv.post("/", async (c) => {
           running += value.byteLength;
           if (running > MAX_BYTES) {
             aborted = true;
-            try { reader.cancel(); } catch { /* noop */ }
+            try { void reader.cancel(); } catch { /* noop */ }
             break;
           }
         }
@@ -91,7 +91,7 @@ uploadsCsv.post("/", async (c) => {
           const { done, value } = await reader.read();
           if (done) break;
           running += value.byteLength;
-          if (running > MAX_BYTES) { aborted = true; try { reader.cancel(); } catch { /* noop */ } break; }
+          if (running > MAX_BYTES) { aborted = true; try { void reader.cancel(); } catch { /* noop */ } break; }
         }
       })();
       await c.env.IMPORTS.put(r2Key, a, { httpMetadata: { contentType: "text/csv" } });

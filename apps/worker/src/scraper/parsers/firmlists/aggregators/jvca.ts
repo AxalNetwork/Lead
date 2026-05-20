@@ -87,6 +87,7 @@ export async function importFirms(url: string, env: Env, hints?: AggregatorHints
  */
 function splitJapaneseName(text: string): { jpName: string | null; romName: string | null } {
   const trimmed = text.trim();
+  // eslint-disable-next-line no-control-regex -- ASCII boundary detector for JP/Roman script split
   const jp = trimmed.match(/^[^\x00-\x7F]+/);
   const rom = trimmed.match(/[A-Za-z][A-Za-z0-9 .,&'\-()]+/);
   return {
