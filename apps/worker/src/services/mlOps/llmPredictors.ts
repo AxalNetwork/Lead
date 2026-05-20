@@ -41,10 +41,22 @@ function readOpenAiKey(env: Env): string {
   return (env as unknown as { OPENAI_API_KEY?: string }).OPENAI_API_KEY ?? "";
 }
 
+// Prompt-key naming MUST match the runtime call sites exactly so that
+// production-mode eval looks up the same prompt_versions row the live
+// extractor uses. Runtime convention is the colon form:
+//   - apps/worker/src/ai/dealExtractor.ts    DEAL_EXTRACTOR_PROMPT_KEY = "deal_extractor:v1"
+//   - apps/worker/src/services/pageClassifier.ts PAGE_CLASS_PROMPT_KEY = "page_classifier:v1"
+// founder_background has no live LLM call site that registers a key
+// yet (profileFiller accepts an optional promptKey but no caller
+// passes one); the colon form "founder_background:v1" is the
+// convention reserved for the upcoming call-site migration tracked
+// by follow-up #10. Until that lands, production-mode eval for
+// founder_background will return `unconfigured` with reason
+// `prompt_not_registered:founder_background:v1`.
 const PROMPT_KEY_FOR_TASK: Partial<Record<TaskKey, string>> = {
-  deal_extraction: "deal_extractor.v1",
-  page_classification: "page_classifier.v1",
-  founder_background: "founder_background.v1",
+  deal_extraction: "deal_extractor:v1",
+  page_classification: "page_classifier:v1",
+  founder_background: "founder_background:v1",
 };
 
 export function llmPredictorFor(env: Env, task: TaskKey): Predictor {

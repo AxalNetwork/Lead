@@ -74,10 +74,13 @@ mlRoute.get("/eval/runs/:id", async (c) => {
 //     OPENAI_API_KEY is missing or no prompt is registered for the
 //     task's prompt_key (Task #14 honest-degradation pattern).
 async function resolveProvenance(env: Env, task: TaskKey): Promise<{ prompt_key: string | null; prompt_version: string | null; prompt_version_id: string | null; model_version: string | null }> {
+  // Keep in sync with the colon-keyed map in
+  // services/mlOps/llmPredictors.ts — must match the runtime call
+  // sites' PROMPT_KEY constants exactly.
   const PROMPT_KEY_FOR_TASK: Partial<Record<TaskKey, string>> = {
-    deal_extraction: "deal_extractor.v1",
-    page_classification: "page_classifier.v1",
-    founder_background: "founder_background.v1",
+    deal_extraction: "deal_extractor:v1",
+    page_classification: "page_classifier:v1",
+    founder_background: "founder_background:v1",
   };
   const key = PROMPT_KEY_FOR_TASK[task];
   if (!key) return { prompt_key: null, prompt_version: null, prompt_version_id: null, model_version: null };

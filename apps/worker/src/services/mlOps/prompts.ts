@@ -116,7 +116,15 @@ export async function promotePrompt(
   ).bind(args.prompt_key).first<{ id: string }>();
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
+  // D1 batches run sequentially. The `uq_prompt_versions_active`
+  // partial unique index (one active=1 row per prompt_key) means we
+  // MUST deactivate the prior active row BEFORE inserting the new
+  // active=1 row, otherwise the second promotion for any key fails
+  // with a uniqueness violation. Order matters here.
   await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE prompt_versions SET active = 0 WHERE prompt_key = ? AND active = 1`,
+    ).bind(args.prompt_key),
     env.DB.prepare(
       `INSERT INTO prompt_versions
          (id, prompt_key, version, body, model_hint, notes, active, rollout_pct, previous_id, created_by, created_at, promoted_at)
@@ -127,9 +135,6 @@ export async function promotePrompt(
       Math.max(0, Math.min(100, args.rollout_pct ?? 100)),
       prior?.id ?? null, args.created_by ?? null, now, now,
     ),
-    env.DB.prepare(
-      `UPDATE prompt_versions SET active = 0 WHERE prompt_key = ? AND id != ?`,
-    ).bind(args.prompt_key, id),
   ]);
   const row = await env.DB.prepare(`SELECT * FROM prompt_versions WHERE id = ?`)
     .bind(id).first<PromptRow>();
