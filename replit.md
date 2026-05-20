@@ -694,5 +694,59 @@ and either renders the create form (no pipelines yet) or the
 kanban for the selected pipeline; deep links carry the pipeline id
 in the query string.
 
+### Task #6 — Stop avoidable crawler error spam: migration 372 + skipped terminal status (ACCEPTED)
+Spec slotted at "next available" but slots 350-371 are all taken
+(per the Task #13/#14/#18/#2/#3/#4 contract-update precedent above).
+The schema lands at `apps/worker/migrations/372_jobs_skipped_status.sql`
+(adds `skipped` as a terminal status reachable from `running`,
+`jobs.skip_reason` column, and `discovered_urls.tos_blocked_at`
+column; recreates the migration-193 `trg_jobs_status_transition`
+trigger to admit `running -> skipped` and `queued -> skipped`).
+Future migrations should number from 373.
+
+Per spec, skipped jobs are NOT errors — `markSkipped` (defined in
+`apps/worker/src/scraper/pipeline.ts`) writes the reason ONCE on
+the job row (`status='skipped', skip_reason=<code>, error=<reason>`)
+and emits a `job_state_transitions` row with
+`changed_by='queue.preflight'`. It DOES NOT call `logError`. A
+source-introspection test (`test/preflight.test.mjs::source: pipeline
+preflight handler never calls logError`) enforces this invariant
+so future edits to the preflight block can't reintroduce error_log
+writes on the skip path. The fetcher's internal blocks
+(`scraper/fetcher.ts` proxy + tos + circuit checks) remain as a
+defense-in-depth backstop.
+
+Preflight (`apps/worker/src/scraper/preflight.ts`) runs in `runJob`
+AFTER the crawl_url/enrich_lead alias normalization but BEFORE the
+file-import lifecycle short-circuits. It returns one of four
+stable skip codes: `proxy_not_configured`, `tos_blocked`,
+`circuit_open`, `gated_source_use_manual_paste`. The proxy gate
+is allow-listed to job kinds that route through `tier2Proxy`
+(`url`, `crawl_url`, `linktree`, `profile_list`, `discover`,
+`firmlist`, `firm_team_crawl`); `csv_import`/`parse_file`/
+`import_file` and `profile_list` jobs with `enrich_kind` set
+(lead/company-id targets, not URLs) bypass the gate.
+
+ToS-sink (`apps/worker/src/services/frontier/tosSink.ts`) fires
+inline from the preflight when a job hits the ToS gate:
+`markUrlTosBlocked` stamps `discovered_urls.tos_blocked_at`,
+sets `status='rejected'`, and DELETEs the matching `crawl_frontier`
+rows (host-scoped, so the entire host evacuates, not just the one
+URL). `cleanupTosBlockedFrontier` is the one-shot backlog sweep
+exposed at `POST /api/ops/crawler/cleanup-tos-blocked` (admin,
+audited). Both wrap every per-host query in try/catch so a
+legacy DB without the migration-372 columns/tables degrades
+gracefully — the fetcher backstop still wins.
+
+Per the Task #4 static-routing constraint, the ops surface lives
+inside the existing `/ops/crawler/` page (Jekyll permalink). The
+new "Proxy unconfigured" banner reads `proxy_configured` off the
+root `/api/ops/crawler/` JSON (added in the same task), and the
+"Skipped jobs — last 24h, by reason" table hits
+`GET /api/ops/crawler/skipped` (admin-gated like the rest of
+ops_crawler). The gated-source queue is at
+`GET /api/ops/crawler/skipped/gated-paste`. The "Open Secrets"
+deep link uses `?id=PROXY_URL` per the query-string convention.
+
 ## User preferences
 - (none recorded yet)

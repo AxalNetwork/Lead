@@ -96,6 +96,44 @@ async function markRunning(env: Env, jobId: string): Promise<void> {
   }
 }
 
+/**
+ * Task #6: terminal `skipped` transition for queue-preflight short-circuits.
+ *
+ * Skipped jobs are NOT errors — the caller must NOT also write to
+ * `error_log`. The reason is recorded once on the job row (skip_reason
+ * + a human-readable error field for debugging). Status guard mirrors
+ * `markFailed` so a sweep/operator-set terminal state can't be clobbered.
+ */
+async function markSkipped(
+  env: Env,
+  jobId: string,
+  skipCode: string,
+  reason: string,
+  costMs: number,
+): Promise<void> {
+  const now = new Date().toISOString();
+  const upd = await env.DB.prepare(
+    `UPDATE jobs SET status = 'skipped',
+                     skip_reason = ?,
+                     error = COALESCE(error, ?),
+                     finished_at = ?,
+                     cost_ms = COALESCE(cost_ms,0) + ?
+       WHERE id = ? AND status IN ('queued','running')`,
+  )
+    .bind(skipCode, reason.slice(0, 1000), now, costMs, jobId)
+    .run();
+  // Only journal the transition when the UPDATE actually flipped a row —
+  // otherwise a sweeper/operator-set terminal state would get a phantom
+  // running->skipped entry that contradicts the real status.
+  const changed = (upd as { meta?: { changes?: number } })?.meta?.changes ?? 0;
+  if (changed > 0) {
+    await env.DB.prepare(
+      `INSERT INTO job_state_transitions (job_id, from_state, to_state, reason, changed_by)
+       VALUES (?, 'running', 'skipped', ?, 'queue.preflight')`,
+    ).bind(jobId, skipCode).run().catch(() => undefined);
+  }
+}
+
 async function markFailed(env: Env, jobId: string, error: string, costMs: number): Promise<void> {
   // Task #2: never overwrite a terminal state set by the sweeper or
   // operator (timed_out / cancelled / dead_letter). The status filter
@@ -2076,6 +2114,36 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
     msg = { ...msg, kind: "profile_list", config: { ...(msg.config ?? {}), enrich_kind: "investor", lead_id: msg.target } };
   } else if (aliasedKind === "crawl_url") {
     msg = { ...msg, kind: "url" };
+  }
+  // ----- Task #6: queue-level preflight (proxy/circuit/tos/gated) ----------
+  // Short-circuits jobs that would obviously fail (missing PROXY_URL,
+  // open circuit breaker, ToS-blocked host, gated source needing
+  // operator paste) into the `skipped` terminal status. Skipped jobs
+  // do NOT write to `error_log` (cluster surface is reserved for
+  // unexpected failures). The fetcher's internal blocks remain as a
+  // defense-in-depth backstop.
+  try {
+    const { preflight } = await import("./preflight.js");
+    const pf = await preflight(env, msg);
+    if (pf.action === "skip") {
+      await markSkipped(env, jobId, pf.skip_code, pf.reason, Date.now() - start);
+      if (pf.skip_code === "tos_blocked" && pf.url) {
+        try {
+          const { markUrlTosBlocked } = await import("../services/frontier/tosSink.js");
+          await markUrlTosBlocked(env, pf.url, pf.reason);
+        } catch { /* best-effort; fetcher backstop wins */ }
+      }
+      console.log("queue.preflight_skip", JSON.stringify({
+        job_id: jobId, kind: msg.kind, skip_code: pf.skip_code,
+        host: pf.host, reason: pf.reason,
+      }));
+      return;
+    }
+  } catch (e) {
+    // Preflight must never crash dispatch — fall through to the
+    // executor and let the fetcher's internal gates catch the same
+    // condition.
+    console.warn("queue.preflight_error", (e as Error).message);
   }
   // ----- Task #22: file-import lifecycle ------------------------------------
   // parse_file / import_file jobs don't produce leads/pages metrics. Their

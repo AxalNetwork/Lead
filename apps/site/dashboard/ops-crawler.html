@@ -25,6 +25,44 @@ permalink: /ops/crawler/
 
   <div id="ops-drift-banner"></div>
 
+  <!-- Task #6: proxy-unconfigured banner + skipped-by-reason tally.
+       Both are hidden until ops-crawler.js fetches /api/ops/crawler/
+       and /api/ops/crawler/skipped and discovers there's something
+       to surface. Skipped jobs are NOT errors; this surface is the
+       canonical place to see the difference between "broken" and
+       "intentionally skipped." -->
+  <div id="ops-proxy-banner" hidden class="ads-card ads-card--err" style="margin-bottom:1rem">
+    <strong>Proxy unconfigured.</strong>
+    <span id="ops-proxy-banner-detail">PROXY_URL secret is unset — proxy-tier fetches are being short-circuited.</span>
+    <a class="ads-btn" href="/dashboard/secrets/?id=PROXY_URL" style="margin-left:.5rem">Open Secrets</a>
+  </div>
+
+  <h2 class="ads-h2">Skipped jobs — last 24h, by reason</h2>
+  <div class="ads-card">
+    <p class="ads-sub" style="margin:0 0 .5rem">
+      Skipped jobs are pre-flighted out of the queue before they reach
+      the fetcher. They are <em>not</em> errors and do not appear in
+      the cluster table — compare with <code>errors_by_code</code>.
+    </p>
+    <div class="ads-table-wrap">
+      <table class="ads-table" id="ops-skipped">
+        <thead><tr><th>Skip reason</th><th>Count</th><th>Notes</th></tr></thead>
+        <tbody><tr><td colspan="3">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div style="margin-top:.5rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+      <button class="ads-btn" data-action="cleanup-tos-blocked">Flush ToS backlog from frontier</button>
+      <span class="ads-mono" id="ops-cleanup-status" style="font-size:.85em"></span>
+    </div>
+    <h4 style="margin-top:.75rem">Gated sources awaiting manual paste (7d)</h4>
+    <div class="ads-table-wrap">
+      <table class="ads-table" id="ops-gated-paste">
+        <thead><tr><th>URL</th><th>Attempts</th><th>Last seen</th></tr></thead>
+        <tbody><tr><td colspan="3">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
   <div class="ads-card" id="ops-global-controls" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
     <strong>Global:</strong>
     <span id="ops-pause-state" class="ads-pill">…</span>

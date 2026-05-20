@@ -105,6 +105,71 @@
   }
 
   // ---- renderers ---------------------------------------------------------
+  // Task #6 — proxy-unconfigured banner + skipped-by-reason tally.
+  async function loadProxyBanner() {
+    try {
+      var r = await api("/");
+      var banner = document.getElementById("ops-proxy-banner");
+      if (!banner) return;
+      if (r && r.proxy_configured === false) {
+        banner.hidden = false;
+        // Augment the static copy with today's skipped count once
+        // /skipped has loaded; refreshed by loadSkipped below.
+      } else {
+        banner.hidden = true;
+      }
+    } catch (e) { /* ignore */ }
+  }
+  async function loadSkipped() {
+    try {
+      var r = await api("/skipped");
+      var tbody = document.querySelector("#ops-skipped tbody");
+      if (!tbody) return;
+      var rows = (r && r.by_reason) || [];
+      if (!rows.length) {
+        tbody.innerHTML = '<tr><td colspan="3" class="ads-sub">No skipped jobs in the last 24h.</td></tr>';
+      } else {
+        var notes = {
+          proxy_not_configured: "PROXY_URL secret is unset",
+          circuit_open: "host breaker tripped (1h cooldown)",
+          tos_blocked: "host is on data/tos-flags.json denylist",
+          gated_source_use_manual_paste: "source requires operator paste"
+        };
+        tbody.innerHTML = rows.map(function (row) {
+          var note = notes[row.reason] || "";
+          return "<tr><td><code>" + esc(row.reason || "(unknown)") + "</code></td>"
+               + "<td>" + esc(String(row.n || 0)) + "</td>"
+               + '<td class="ads-sub">' + esc(note) + "</td></tr>";
+        }).join("");
+      }
+      // Augment proxy banner with today's count if visible.
+      var det = document.getElementById("ops-proxy-banner-detail");
+      if (det && r && r.proxy_configured === false) {
+        var proxyRow = rows.filter(function (x) { return x.reason === "proxy_not_configured"; })[0];
+        var n = proxyRow ? Number(proxyRow.n || 0) : 0;
+        det.textContent = "PROXY_URL secret is unset — " + n + " job" + (n === 1 ? "" : "s")
+          + " skipped in the last 24h.";
+      }
+    } catch (e) { /* ignore */ }
+  }
+  async function loadGatedPaste() {
+    try {
+      var r = await api("/skipped/gated-paste");
+      var tbody = document.querySelector("#ops-gated-paste tbody");
+      if (!tbody) return;
+      var items = (r && r.items) || [];
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="3" class="ads-sub">No gated-source jobs awaiting paste.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = items.map(function (it) {
+        return "<tr><td><code>" + esc(it.url || "") + "</code></td>"
+             + "<td>" + esc(String(it.attempts || 0)) + "</td>"
+             + "<td>" + esc(ago(it.last_seen)) + "</td></tr>";
+      }).join("");
+    } catch (e) { /* ignore */ }
+  }
+
   async function loadDriftBanner() {
     try {
       var r = await api("/drift-alerts");
@@ -361,7 +426,8 @@
   async function refreshAll() {
     var stamp = new Date().toLocaleTimeString();
     $("#ops-last-refresh").textContent = "last refresh " + stamp;
-    var jobs = [loadDriftBanner(), loadPauseState(), loadThroughput(), loadHosts(),
+    var jobs = [loadDriftBanner(), loadProxyBanner(), loadSkipped(), loadGatedPaste(),
+                loadPauseState(), loadThroughput(), loadHosts(),
                 loadFrontier(), loadAiSpend(), loadAdapters(), loadCompliance(),
                 loadSeeds(), loadExtractions(), loadAudit()];
     await Promise.allSettled(jobs);
@@ -373,6 +439,22 @@
     if (!t || t.tagName !== "BUTTON") return;
     try {
       if (t.dataset.action === "refresh")        { await refreshAll(); return; }
+      if (t.dataset.action === "cleanup-tos-blocked") {
+        if (!confirm("Flush all ToS-blocked URLs from the discovery frontier?\n\nThis is idempotent and safe.")) return;
+        var statusEl = document.getElementById("ops-cleanup-status");
+        t.disabled = true; if (statusEl) statusEl.textContent = "running…";
+        try {
+          var resp = await post("/cleanup-tos-blocked", {});
+          if (statusEl) statusEl.textContent =
+            "marked " + (resp.marked_discovered || 0) + " URLs, "
+            + "cleared " + (resp.cleared_crawl_frontier || 0) + " crawl_frontier, "
+            + (resp.cleared_smart_frontier || 0) + " smart_frontier.";
+          await loadSkipped(); await loadAudit();
+        } catch (err) {
+          if (statusEl) statusEl.textContent = "failed: " + err.message;
+        } finally { t.disabled = false; }
+        return;
+      }
       if (t.dataset.action === "pause-global")   {
         var reason = prompt("Reason for pausing the crawler? (optional)") || "";
         await post("/pause", { scope: "all", reason: reason }); await refreshAll(); return;

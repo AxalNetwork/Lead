@@ -76,19 +76,97 @@ function pct(sorted: number[], p: number): number {
 }
 
 opsCrawlerRoute.get("/", (c) =>
-  c.json({ ok: true, message: "ops crawler", endpoints: [
-    "GET /throughput", "GET /hosts", "GET /frontier", "GET /seeds",
-    "GET /seeds/raw", "GET /adapters", "GET /ai-spend?window=day|month",
-    "GET /compliance", "GET /extractions", "GET /audit",
-    "GET /drift-alerts", "GET /pause-status",
-    "POST /pause {scope,target?}", "POST /resume {scope,target?}",
-    "POST /hosts/:host/test", "POST /hosts/:host/quarantine",
-    "POST /hosts/:host/unquarantine", "POST /hosts/:host/whitelist",
-    "POST /hosts/:host/rps", "POST /hosts/:host/clear-robots",
-    "POST /seeds", "POST /recrawl-entity",
-    "POST /extractions/:id/replay", "POST /test-url",
-  ] }),
+  c.json({
+    ok: true,
+    message: "ops crawler",
+    // Task #6: expose proxy_configured at the root so the ops page
+    // can render the "Proxy unconfigured" banner on its initial
+    // 200-OK gate probe, without a second round trip.
+    proxy_configured: Boolean(c.env.PROXY_URL),
+    endpoints: [
+      "GET /throughput", "GET /hosts", "GET /frontier", "GET /seeds",
+      "GET /seeds/raw", "GET /adapters", "GET /ai-spend?window=day|month",
+      "GET /compliance", "GET /extractions", "GET /audit",
+      "GET /drift-alerts", "GET /pause-status",
+      "GET /skipped", "GET /skipped/gated-paste",
+      "POST /pause {scope,target?}", "POST /resume {scope,target?}",
+      "POST /hosts/:host/test", "POST /hosts/:host/quarantine",
+      "POST /hosts/:host/unquarantine", "POST /hosts/:host/whitelist",
+      "POST /hosts/:host/rps", "POST /hosts/:host/clear-robots",
+      "POST /seeds", "POST /recrawl-entity",
+      "POST /extractions/:id/replay", "POST /test-url",
+      "POST /cleanup-tos-blocked",
+    ],
+  }),
 );
+
+// SKIPPED-BY-REASON (Task #6) — last 24h tally of queue-preflight skips.
+// Skipped jobs are NOT errors and never write to error_log; this is
+// the canonical surface to see them. Returns counts grouped by
+// skip_reason + total + a small sample of recent rows.
+opsCrawlerRoute.get("/skipped", async (c) => {
+  const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  const byReason = await c.env.DB.prepare(
+    `SELECT skip_reason AS reason, COUNT(*) AS n
+       FROM jobs
+      WHERE status = 'skipped' AND finished_at >= ?
+      GROUP BY skip_reason
+      ORDER BY n DESC`,
+  ).bind(since).all<{ reason: string; n: number }>().catch(() => ({ results: [] as { reason: string; n: number }[] }));
+  const recent = await c.env.DB.prepare(
+    `SELECT id, name, source, kind, target, skip_reason, error, finished_at
+       FROM jobs
+      WHERE status = 'skipped' AND finished_at >= ?
+      ORDER BY finished_at DESC
+      LIMIT 25`,
+  ).bind(since).all<{
+    id: string; name: string | null; source: string | null;
+    kind: string | null; target: string | null;
+    skip_reason: string | null; error: string | null; finished_at: string;
+  }>().catch(() => ({ results: [] as Array<Record<string, unknown>> }));
+  const rows = (byReason as { results?: { reason: string; n: number }[] }).results ?? [];
+  const total = rows.reduce((s, r) => s + Number(r.n ?? 0), 0);
+  return c.json({
+    window_hours: 24,
+    proxy_configured: Boolean(c.env.PROXY_URL),
+    total,
+    by_reason: rows,
+    recent: (recent as { results?: Array<Record<string, unknown>> }).results ?? [],
+  });
+});
+
+// GATED-SOURCE QUEUE (Task #6) — distinct URLs the preflight has
+// rejected with `gated_source_use_manual_paste`, grouped by host so
+// operators can see what needs a manual paste. Last 7d.
+opsCrawlerRoute.get("/skipped/gated-paste", async (c) => {
+  const since = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+  const rows = await c.env.DB.prepare(
+    `SELECT target AS url, COUNT(*) AS attempts, MAX(finished_at) AS last_seen
+       FROM jobs
+      WHERE status = 'skipped'
+        AND skip_reason = 'gated_source_use_manual_paste'
+        AND finished_at >= ?
+      GROUP BY target
+      ORDER BY last_seen DESC
+      LIMIT 200`,
+  ).bind(since).all<{ url: string; attempts: number; last_seen: string }>()
+    .catch(() => ({ results: [] as { url: string; attempts: number; last_seen: string }[] }));
+  return c.json({
+    window_hours: 24 * 7,
+    items: (rows as { results?: { url: string; attempts: number; last_seen: string }[] }).results ?? [],
+  });
+});
+
+// CLEANUP-TOS-BLOCKED (Task #6) — one-shot sweep of the existing
+// backlog of ToS-blocked URLs from crawl_frontier + smart_frontier.
+// Idempotent. Writes an ops_audit row BEFORE the mutation per the
+// file-header invariant.
+opsCrawlerRoute.post("/cleanup-tos-blocked", async (c) => {
+  await audit(c.env, c.var.email, "frontier.cleanup_tos_blocked", null, null, null);
+  const { cleanupTosBlockedFrontier } = await import("../services/frontier/tosSink");
+  const r = await cleanupTosBlockedFrontier(c.env);
+  return c.json({ ok: true, ...r });
+});
 
 // ============================================================ READS
 
