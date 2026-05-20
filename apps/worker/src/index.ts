@@ -72,6 +72,7 @@ import { documentsRoute } from "./routes/documents";
 import { dataRoomsRoute } from "./routes/data_rooms";
 import { personsVerificationRoute } from "./routes/verification";
 import { diligenceRoute } from "./routes/diligence";
+import { founderCrmRoute } from "./routes/founder_crm";
 export { EntityLock } from "./do/EntityLock";
 export { HostThrottle } from "./do/HostThrottle";
 export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, PersonaEntityMatchWorkflow, PersonaMatchRefreshWorkflow, PersonaMatchEntityWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, AIProfileFillerWorkflow, AIProfileFillerBatchWorkflow, RefreshGovernmentWorkflow, DiscoverFromSeedWorkflow, CrawlFrontierWorkflow, MonitorEntityWorkflow, MonitorBatchWorkflow, DigestWorkflow, IndividualProfilerWorkflow } from "./ai/workflows";
@@ -215,6 +216,13 @@ api.route("/api", influenceRoute);
 api.route("/api/intros", introsRoute);
 // Task #6: Diligence Checklist Runner.
 api.route("/api/diligence", diligenceRoute);
+// Task #5: Investor Reputation + Founder CRM. Mounted at /api so the
+// route owns /founder-feedback, /founder-pipelines/*, and
+// /investors/:id/reputation in one module. Mounted AFTER
+// investorsTermAggressivenessRoute so /:id/term-aggressiveness keeps
+// its handler; Hono falls through to this mount when the prior
+// sub-app returns no match.
+api.route("/api", founderCrmRoute);
 
 api.notFound((c) => c.json({ error: "not_found", request_id: c.var.request_id }, 404));
 api.onError((err, c) => {

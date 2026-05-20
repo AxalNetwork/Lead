@@ -1,0 +1,70 @@
+---
+layout: default
+title: Founder Pipeline
+permalink: /founder/pipeline/
+---
+
+<h1 class="ads-page-title">Fundraise pipeline</h1>
+<p class="ads-page-sub">
+  Track investor conversations from first contact through term sheet.
+  Reputation badges aggregate anonymous founder reviews (min 5 reviews
+  to publish) and SEC-derived term-aggressiveness signals.
+</p>
+
+<div id="fp-no-pipeline" class="ads-card" hidden>
+  <p>You don't have any pipelines yet.</p>
+  <form id="fp-create-form" class="ads-filter-grid ads-filter-grid--4" autocomplete="off">
+    <label class="ads-field"><span>Raise purpose</span>
+      <input name="raise_purpose" placeholder="Seed for AI infra co" required></label>
+    <label class="ads-field"><span>Target round</span>
+      <input name="target_round" placeholder="Seed / Series A"></label>
+    <label class="ads-field"><span>Target amount (USD)</span>
+      <input name="target_amount_usd" type="number" min="0" step="1"></label>
+    <label class="ads-field"><span>Founder entity ID (optional)</span>
+      <input name="founder_entity_id" placeholder="ent_…"></label>
+    <div><button type="submit" class="ads-btn">Create pipeline</button></div>
+  </form>
+</div>
+
+<div id="fp-header" class="ads-card" hidden style="margin-bottom:16px">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+    <div>
+      <strong id="fp-purpose"></strong>
+      <span class="ads-muted" id="fp-round"></span>
+      <span class="ads-muted" id="fp-amount"></span>
+    </div>
+    <div style="display:flex;gap:8px">
+      <select id="fp-picker"></select>
+      <button id="fp-add-investor" class="ads-btn">Add investor</button>
+    </div>
+  </div>
+</div>
+
+<div id="fp-kanban" class="ads-kanban" hidden></div>
+
+<div class="ads-card" id="fp-suggestions-card" hidden style="margin-top:16px">
+  <h3>Suggested next investors</h3>
+  <p class="ads-muted" id="fp-suggestions-meta"></p>
+  <div id="fp-suggestions"></div>
+</div>
+
+<style>
+  .ads-kanban { display:grid; grid-template-columns:repeat(9,minmax(220px,1fr));
+                gap:8px; overflow-x:auto; padding:8px 0 }
+  .ads-kanban .col { background:#f6f7f8; border-radius:8px; padding:8px;
+                     min-height:120px; font-size:13px }
+  .ads-kanban .col h4 { margin:0 0 8px; font-size:12px;
+                        text-transform:uppercase; color:#666; letter-spacing:.05em }
+  .ads-kanban .card { background:#fff; border:1px solid #e5e7eb;
+                      border-radius:6px; padding:8px; margin-bottom:6px }
+  .ads-kanban .card .name { font-weight:600; margin-bottom:4px }
+  .ads-kanban .card .badges { display:flex; flex-wrap:wrap; gap:4px;
+                              margin-top:4px; font-size:11px }
+  .ads-kanban .card .badge { background:#eef; padding:1px 6px; border-radius:10px }
+  .ads-kanban .card .badge.warn { background:#fef0c7 }
+  .ads-kanban .card .badge.muted { background:#eee; color:#666 }
+  .ads-kanban select { font-size:12px; width:100% }
+  .ads-low-sample { color:#666; font-style:italic }
+</style>
+
+<script src="/assets/js/founder-pipeline.js?v=1"></script>

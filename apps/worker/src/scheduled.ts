@@ -597,6 +597,21 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         console.error("nightly term-benchmarks rebuild failed", (e as Error).message);
       }
 
+      // Task #5: nightly investor-reputation recompute. Bounded at
+      // 1000 investors/tick. Piggybacks the consolidated nightly slot
+      // (Free plan caps crons at 5/5 — same constraint as Task #4
+      // angel sweep, Task #14 verification, Task #18 benchmarks,
+      // Task #2 fund returns, Task #3 edge quality, Task #4 intro
+      // retrain). Per-investor recompute is also triggered inline on
+      // POST /api/founder-feedback for the affected investor.
+      try {
+        const { runNightlyReputationSweep } = await import("./services/founderCrm/reputation");
+        const r = await runNightlyReputationSweep(env, 1000);
+        console.log("nightly investor reputation sweep done", JSON.stringify(r));
+      } catch (e) {
+        console.error("nightly investor reputation sweep failed", (e as Error).message);
+      }
+
       // 5. Project match refresh
       try {
         const r = await env.DB.prepare(`SELECT id FROM projects WHERE deleted_at IS NULL AND status = 'active' ORDER BY last_modified DESC LIMIT 200`).all<{ id: string }>();

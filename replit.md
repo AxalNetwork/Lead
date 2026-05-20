@@ -585,5 +585,106 @@ at `/dashboard/diligence/` and the run detail at
 `/dashboard/diligence/run/?id=<run_id>` (query string, not path
 segment).
 
+### Task #5 — Investor Reputation + Founder CRM: migration 370 + source_kind="inferred" for derived investor facts (ACCEPTED)
+Spec slotted the schema at migration 365, but slots 350–369 are all
+taken (per the Task #13/#14/#18/#2/#3/#4 contract-update precedent
+above; in particular 365 = preferred-stack from Task #18). The
+schema lands at `apps/worker/migrations/370_founder_crm.sql`
+(four tables: `investor_reputation` one-row-per-investor aggregate
+keyed by `investor_entity_id`; `founder_pipelines` private to
+`owner_email`; `founder_pipeline_investors` kanban cards with
+`UNIQUE(pipeline_id, investor_entity_id)`; `founder_pipeline_events`
+append-only stage-transition journal; `founder_feedback` anonymous
+reviews with `UNIQUE(submitter_hash)`). Future migrations should
+number from 371 (Task #6 diligence already took 371).
+
+Per the Task #1 canonical write contract, every derived investor
+reputation fact (`investor.speed_to_no_days_median`,
+`investor.follow_on_rate_pct`, `investor.term_aggressiveness_pct`,
+`investor.board_behavior_score`, `investor.founder_nps`) flows
+through `insertFact` with `source_kind="inferred"` — the existing
+enum value that best matches aggregated model output (same
+precedent as the Task #2 fund-return modeling, Task #3 edge
+quality, and Task #4 intro routing notes above). The `source`
+field is the literal string `"founder_crm:reputation"`. There is
+no dedicated `"reputation"` source_kind; adding one would force a
+registry change in the rich PERSON profile path.
+
+Min-sample gate: aggregates are written to the `investor_reputation`
+row regardless of sample size, but `is_public=0` and `low_sample=1`
+when feedback `sample_size < 5`. The public projection
+(`projectPublicReputation`) nulls every feedback-derived field
+(`speed_to_no_days_median`, `board_behavior_score`, `founder_nps`,
+`reneged_term_sheets_count`) below the gate and lists them in
+`redacted_fields` so the UI can render "needs more reviews" rather
+than misleading zeros. SEC-derived signals (`term_aggressiveness_pct`
+from Task #18 + `follow_on_rate_pct` from `deal_participants`)
+remain visible because they come from public data and are NOT
+bound to the feedback sample gate. Mirror facts onto `u_entities`
+are written ONLY when `is_public=1` — below the gate we hold the
+row but do not publish facts to the ledger. Admin callers
+(`c.var.is_admin`) bypass the projection redaction and see the raw
+row via the same endpoint.
+
+Anonymity guarantees: `POST /api/founder-feedback` runs every
+submission through `anonymizeFeedback(body, salt)` before persist.
+PII fields on the request body (`submitter_email`, `submitter_name`,
+`company_name`, `deal_id`) are STRIPPED — they never reach the DB.
+The submitter's identity survives only as a one-way
+`sha256(salt + email + investor + raise_year)` hash, narrow enough
+to gate ballot-stuffing (one founder rating the same investor
+twice in the same year is a no-op via `UNIQUE(submitter_hash)`)
+but useless for re-identification given the per-deployment
+`FOUNDER_FEEDBACK_SALT` secret. `scrubText` additionally strips
+emails/URLs from free-text fields and truncates to 2000 chars so
+a single review can't carry a hidden re-identification payload.
+When `FOUNDER_FEEDBACK_SALT` is unset the route returns 503
+`reason=salt_unconfigured` — never silently degrades to an empty
+or hardcoded salt that would weaken anonymity (Task #14 honest-
+degradation pattern).
+
+Stage transitions: 9-stage kanban
+(`not_contacted → intro_requested → first_meeting → diligence →
+partners_meeting → term_sheet → committed | passed | ghosted`).
+`isLegalTransition(from, to)` enforces: any active stage may move
+to any other active stage (forward or backward — founders re-engage
+stalled investors); any active stage may transition to a terminal
+(`committed`/`passed`/`ghosted`); terminal → active is allowed as
+an explicit reopen (caller journals it); same-stage transitions
+are rejected as no-ops so the events table only carries real
+changes. Every legal stage change writes an append-only row to
+`founder_pipeline_events` for later analytics on time-in-stage
+and conversion funnels.
+
+Suggested-investors integration: `GET
+/api/founder-pipelines/:id/suggestions` ranks public reputation
+rows (high NPS, high follow-on, low aggressiveness), filters out
+investors already on the pipeline, then attempts to attach a
+top intro path per candidate via the Task #4 intro routing engine
+(`loadNeighborhood` + `findKShortestPaths`, hop cap 3, neighbor
+cap 200). Per the Task #4 "never silently fakes a confidence
+number" rule, `intro_predicted_pct` is always null on suggestions
+(only the production `POST /api/intros/find` route runs the
+trained logistic model); `intro_hops` is null when no path exists
+or `founder_entity_id` is unresolved. The UI surfaces "no path"
+explicitly rather than hiding the missing signal.
+
+Nightly recompute (`runNightlyReputationSweep`) piggybacks the
+consolidated `15 3 * * *` slot (Free plan caps crons at 5/5 —
+same constraint as Task #4 angel sweep, Task #14 verification
+sweep, Task #18 term benchmarks, Task #2 fund returns,
+Task #3 edge quality, Task #4 intro retrain). Bounded at 1000
+investors/tick. Inline single-investor recompute also fires from
+`POST /api/founder-feedback` via `ctx.waitUntil` so a new review
+flips the public gate within seconds rather than waiting for the
+next night.
+
+Per the Task #4 static-routing constraint, the Founder Pipeline
+UI lives at `/founder/pipeline/?id=<pipeline_id>` (query string,
+not path segment). The page pre-flights `GET /api/founder-pipelines`
+and either renders the create form (no pipelines yet) or the
+kanban for the selected pipeline; deep links carry the pipeline id
+in the query string.
+
 ## User preferences
 - (none recorded yet)

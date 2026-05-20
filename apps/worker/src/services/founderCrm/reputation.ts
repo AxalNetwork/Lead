@@ -138,16 +138,31 @@ export function aggregateReputation(inp: ReputationInputs): ReputationAggregate 
 
 // ── DB-bound runner ─────────────────────────────────────────────────
 
+// Per Task #14 honest-degradation pattern: missing optional source tables
+// (deal_participants, preferred_series, …) on a fresh DB are expected
+// and degrade to empty results. Other errors are surfaced via console.warn
+// so a real schema/query bug doesn't blend in with expected misses.
+function isMissingTable(e: unknown): boolean {
+  const m = (e as Error)?.message || "";
+  return /no such table|no such column/i.test(m);
+}
+
 async function safeAll<T>(env: Env, sql: string, ...binds: unknown[]): Promise<T[]> {
   try {
     const r = await env.DB.prepare(sql).bind(...binds).all<T>();
     return r.results ?? [];
-  } catch { return []; }
+  } catch (e) {
+    if (!isMissingTable(e)) console.warn("reputation safeAll failed", (e as Error).message);
+    return [];
+  }
 }
 
 async function safeFirst<T>(env: Env, sql: string, ...binds: unknown[]): Promise<T | null> {
   try { return (await env.DB.prepare(sql).bind(...binds).first<T>()) ?? null; }
-  catch { return null; }
+  catch (e) {
+    if (!isMissingTable(e)) console.warn("reputation safeFirst failed", (e as Error).message);
+    return null;
+  }
 }
 
 /** Compute and persist the reputation aggregate for a single investor. */
@@ -201,7 +216,7 @@ export async function recomputeInvestorReputation(env: Env, investorEntityId: st
   let aggressivenessScore: number | null = null;
   let aggressivenessPeers: number[] = [];
   try {
-    const { computeInvestorAggressiveness } = await import("../termSheets/aggressiveness");
+    const { computeInvestorAggressiveness } = await import("../termSheets/aggressiveness.js");
     const r = await computeInvestorAggressiveness(env, investorEntityId);
     if (r.series_count > 0) aggressivenessScore = r.score;
     // Peer cohort: every investor with >=2 scored series. Bounded

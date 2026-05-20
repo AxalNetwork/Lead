@@ -216,6 +216,10 @@
     "src/services/diligence/checks/team.ts",
     "src/services/diligence/checks/regulatory.ts",
     "src/services/diligence/checks/financial.ts",
-    "src/services/diligence/checks/ip.ts"
+    "src/services/diligence/checks/ip.ts",
+    "src/services/founderCrm/stages.ts",
+    "src/services/founderCrm/anonymize.ts",
+    "src/services/founderCrm/projection.ts",
+    "src/services/founderCrm/reputation.ts"
   ]
 }

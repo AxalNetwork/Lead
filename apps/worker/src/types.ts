@@ -46,6 +46,12 @@ export interface Env {
   ACCESS_AUD: string;
   ACCESS_APP_AUD: string;
 
+  // Task #5: per-deployment secret salt for the anonymous founder
+  // feedback submitter_hash. When unset, POST /api/founder-feedback
+  // returns 503 (honest degradation — never fall back to a fake or
+  // empty salt that would weaken anonymity guarantees).
+  FOUNDER_FEEDBACK_SALT?: string;
+
   // ---- Task #25: Cloudflare-native AI stack (all optional; fallbacks exist) ----
   AI?: { run: (model: string, input: Record<string, unknown>) => Promise<unknown> };
   VEC_LEADS?: VectorizeIndex;
