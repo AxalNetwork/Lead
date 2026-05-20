@@ -61,8 +61,6 @@ export async function sweepStuckJobs(env: Env): Promise<number> {
     const budget = effectiveBudgetMs(row.budget_ms, row.kind);
     if (elapsedMs > budget) overdue.push({ id: row.id, kind: row.kind });
   }
-  if (overdue.length === 0) return 0;
-
   let swept = 0;
   for (const job of overdue) {
     const u = await env.DB.prepare(
