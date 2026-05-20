@@ -165,6 +165,7 @@ influenceRoute.get("/power-nodes", async (c) => {
   const joined = `
     SELECT i.entity_id, i.pagerank_score, i.broker_score, i.primary_sector,
            i.in_degree, i.out_degree, i.total_degree,
+           i.sector_pagerank_json, i.computed_at,
            u.display_name, u.role_default
       FROM entity_influence i
       LEFT JOIN u_entities u ON u.id = i.entity_id
@@ -201,6 +202,7 @@ influenceRoute.get("/power-nodes", async (c) => {
     const r = await c.env.DB.prepare(
       `SELECT entity_id, pagerank_score, broker_score, primary_sector,
               in_degree, out_degree, total_degree,
+              sector_pagerank_json, computed_at,
               NULL AS display_name, NULL AS role_default
          FROM entity_influence
         WHERE ${where.join(" AND ")}
@@ -210,7 +212,62 @@ influenceRoute.get("/power-nodes", async (c) => {
     rows = r.results ?? [];
   }
 
-  return c.json({ sector, persona, count: rows.length, power_nodes: rows });
+  // Task #7: surface per-row sector_pagerank score on the wire so the
+  // table column doesn't need a second round-trip. Parse the JSON
+  // payload server-side (cheap) and project the requested sector's
+  // score (or the entity's own primary_sector when no filter set).
+  const decorated = rows.map((r) => {
+    let sectorScore: number | null = null;
+    const sj = (r as { sector_pagerank_json?: string | null }).sector_pagerank_json ?? null;
+    if (sj) {
+      try {
+        const m = JSON.parse(sj) as Record<string, number>;
+        const key = (sector ?? r.primary_sector ?? "").toLowerCase();
+        if (key && typeof m[key] === "number") sectorScore = m[key];
+      } catch { /* leave null */ }
+    }
+    const { sector_pagerank_json: _drop, ...rest } = r as typeof r & { sector_pagerank_json?: string | null };
+    void _drop;
+    return { ...rest, sector_pagerank_score: sectorScore };
+  });
+
+  // Latest computed_at across the result set — surfaces in the page's
+  // "last sweep ran" line.
+  const lastComputedAt = decorated.reduce<string | null>((acc, r) => {
+    const t = (r as { computed_at?: string | null }).computed_at ?? null;
+    if (!t) return acc;
+    return acc == null || t > acc ? t : acc;
+  }, null);
+
+  return c.json({ sector, persona, count: decorated.length, last_computed_at: lastComputedAt, power_nodes: decorated });
+});
+
+// Task #7 (Power Nodes dashboard): summary for the page header strip.
+// Returns total power-node count, the sectors list (for the dropdown),
+// and the last_computed_at watermark across the table.
+influenceRoute.get("/power-nodes/summary", async (c) => {
+  try {
+    const total = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS n,
+              MAX(computed_at) AS last_computed_at
+         FROM entity_influence
+        WHERE is_power_node = 1`,
+    ).first<{ n: number; last_computed_at: string | null }>();
+    const sectorsRes = await c.env.DB.prepare(
+      `SELECT primary_sector AS sector, COUNT(*) AS n
+         FROM entity_influence
+        WHERE is_power_node = 1 AND primary_sector IS NOT NULL AND primary_sector <> ''
+        GROUP BY primary_sector
+        ORDER BY n DESC, primary_sector ASC`,
+    ).all<{ sector: string; n: number }>();
+    return c.json({
+      total: Number(total?.n ?? 0),
+      last_computed_at: total?.last_computed_at ?? null,
+      sectors: sectorsRes.results ?? [],
+    });
+  } catch (e) {
+    return c.json({ total: 0, last_computed_at: null, sectors: [], error: (e as Error).message }, 200);
+  }
 });
 
 // POST /api/entities/resolve

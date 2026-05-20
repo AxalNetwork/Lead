@@ -1,0 +1,167 @@
+---
+layout: default
+title: Power Nodes
+permalink: /dashboard/power-nodes/
+---
+
+<h1 class="ads-page-title">Power Nodes</h1>
+<p class="ads-page-sub">Top-ranked entities by network influence — global PageRank, per-sector PageRank, and broker score. Recomputed nightly by the edge-quality sweep.</p>
+
+<div id="ads-pn-strip" class="ads-strip"><div class="ads-loading">Loading…</div></div>
+
+<form id="ads-pn-filters" class="ads-filter-grid ads-filter-grid--6" autocomplete="off" style="margin-top:16px">
+  <label class="ads-form-field">
+    <span class="ads-form-label">Sector</span>
+    <select id="ads-pn-sector" name="sector"><option value="">All sectors</option></select>
+  </label>
+  <label class="ads-form-field">
+    <span class="ads-form-label">Persona</span>
+    <select id="ads-pn-persona" name="persona">
+      <option value="">All personas</option>
+      <option value="founder">Founder</option>
+      <option value="investor">Investor</option>
+      <option value="operator">Operator</option>
+      <option value="advisor">Advisor</option>
+    </select>
+  </label>
+  <label class="ads-form-field">
+    <span class="ads-form-label">Limit</span>
+    <select id="ads-pn-limit" name="limit">
+      <option value="50">50</option>
+      <option value="100">100</option>
+      <option value="200">200</option>
+      <option value="500">500</option>
+    </select>
+  </label>
+  <div class="ads-form-field" style="display:flex;align-items:end;gap:8px">
+    <button type="submit" class="ads-btn">Apply</button>
+    <button type="reset" class="ads-btn ads-btn--ghost">Reset</button>
+  </div>
+</form>
+
+<div id="ads-pn-list" style="margin-top:16px"><div class="ads-loading">Loading…</div></div>
+
+<script>
+(function () {
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]; }); }
+  function fmtInt(n) { return (n == null || isNaN(+n)) ? "—" : (+n).toLocaleString(); }
+  function fmtNum(n, d) { return (n == null || isNaN(+n)) ? "—" : Number(n).toFixed(d == null ? 4 : d); }
+  function fmtTs(t) { if (!t) return "—"; try { return new Date(t).toISOString().replace("T", " ").slice(0, 19) + "Z"; } catch (e) { return String(t); } }
+
+  var stripEl = document.getElementById("ads-pn-strip");
+  var sectorEl = document.getElementById("ads-pn-sector");
+  var personaEl = document.getElementById("ads-pn-persona");
+  var limitEl = document.getElementById("ads-pn-limit");
+  var listEl = document.getElementById("ads-pn-list");
+  var form = document.getElementById("ads-pn-filters");
+
+  // Sortable state — column key + direction.
+  var sort = { key: "pagerank_score", dir: "desc" };
+
+  function loadSummary() {
+    return fetch("/api/power-nodes/summary", { credentials: "include" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        if (!data) { stripEl.innerHTML = '<div class="ads-empty">Summary unavailable.</div>'; return; }
+        stripEl.innerHTML =
+          '<strong>' + fmtInt(data.total) + '</strong> power nodes · ' +
+          fmtInt((data.sectors || []).length) + ' sectors · ' +
+          'last sweep: <span class="ads-mono">' + esc(fmtTs(data.last_computed_at)) + '</span>';
+        // Populate sector dropdown.
+        sectorEl.innerHTML = '<option value="">All sectors</option>' +
+          (data.sectors || []).map(function (s) {
+            return '<option value="' + esc(s.sector) + '">' + esc(s.sector) + ' (' + fmtInt(s.n) + ')</option>';
+          }).join("");
+        // Restore from query string after options exist.
+        var qs = new URLSearchParams(location.search);
+        if (qs.get("sector")) sectorEl.value = qs.get("sector");
+        if (qs.get("persona")) personaEl.value = qs.get("persona");
+        if (qs.get("limit")) limitEl.value = qs.get("limit");
+      });
+  }
+
+  function renderRows(rows) {
+    if (!rows.length) {
+      listEl.innerHTML = '<div class="ads-empty">No power nodes match those filters. The nightly sweep populates this list — if you just deployed, check back after 03:15 UTC.</div>';
+      return;
+    }
+    // Apply client-side sort.
+    var sorted = rows.slice().sort(function (a, b) {
+      var av = a[sort.key]; var bv = b[sort.key];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (typeof av === "string") { return sort.dir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av); }
+      return sort.dir === "asc" ? (av - bv) : (bv - av);
+    });
+    var sortArrow = function (key) {
+      if (sort.key !== key) return "";
+      return sort.dir === "asc" ? " ▲" : " ▼";
+    };
+    var th = function (label, key) {
+      return '<th data-sort="' + esc(key) + '" style="cursor:pointer;user-select:none">' + esc(label) + sortArrow(key) + '</th>';
+    };
+    var headerRow = '<tr>' +
+      th("Name", "display_name") +
+      th("Sector", "primary_sector") +
+      th("Global PageRank", "pagerank_score") +
+      th("Sector PageRank", "sector_pagerank_score") +
+      th("Broker", "broker_score") +
+      th("In", "in_degree") +
+      th("Out", "out_degree") +
+      th("Total", "total_degree") +
+      th("Last refresh", "computed_at") +
+    '</tr>';
+    var body = sorted.map(function (r) {
+      var name = r.display_name || r.entity_id;
+      return '<tr>' +
+        '<td><a href="/dashboard/profile/?id=' + encodeURIComponent(r.entity_id) + '">' + esc(name) + '</a></td>' +
+        '<td>' + esc(r.primary_sector || "—") + '</td>' +
+        '<td class="ads-mono">' + esc(fmtNum(r.pagerank_score, 5)) + '</td>' +
+        '<td class="ads-mono">' + esc(fmtNum(r.sector_pagerank_score, 5)) + '</td>' +
+        '<td class="ads-mono">' + esc(fmtNum(r.broker_score, 3)) + '</td>' +
+        '<td class="ads-mono">' + esc(fmtInt(r.in_degree)) + '</td>' +
+        '<td class="ads-mono">' + esc(fmtInt(r.out_degree)) + '</td>' +
+        '<td class="ads-mono">' + esc(fmtInt(r.total_degree)) + '</td>' +
+        '<td class="ads-mono ads-muted" style="font-size:12px">' + esc(fmtTs(r.computed_at)) + '</td>' +
+      '</tr>';
+    }).join("");
+    listEl.innerHTML = '<table class="ads-table"><thead>' + headerRow + '</thead><tbody>' + body + '</tbody></table>';
+
+    // Wire header click → sort toggle.
+    listEl.querySelectorAll("th[data-sort]").forEach(function (h) {
+      h.addEventListener("click", function () {
+        var key = h.getAttribute("data-sort");
+        if (sort.key === key) sort.dir = sort.dir === "asc" ? "desc" : "asc";
+        else { sort.key = key; sort.dir = (key === "display_name" || key === "primary_sector") ? "asc" : "desc"; }
+        renderRows(rows);
+      });
+    });
+  }
+
+  var lastRows = [];
+  function load() {
+    var p = new URLSearchParams();
+    if (sectorEl.value) p.set("sector", sectorEl.value);
+    if (personaEl.value) p.set("persona", personaEl.value);
+    if (limitEl.value) p.set("limit", limitEl.value);
+    // Reflect filters into the URL so deep-links work.
+    history.replaceState(null, "", location.pathname + (p.toString() ? "?" + p.toString() : ""));
+    listEl.innerHTML = '<div class="ads-loading">Loading…</div>';
+    return fetch("/api/power-nodes?" + p.toString(), { credentials: "include" })
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function (data) {
+        lastRows = data.power_nodes || [];
+        renderRows(lastRows);
+      })
+      .catch(function (e) {
+        listEl.innerHTML = '<div class="ads-card"><p>Failed to load power nodes: ' + esc(e.message) + '</p></div>';
+      });
+  }
+
+  form.addEventListener("submit", function (e) { e.preventDefault(); load(); });
+  form.addEventListener("reset", function () { setTimeout(load, 0); });
+
+  loadSummary().then(load).catch(function () { load(); });
+})();
+</script>

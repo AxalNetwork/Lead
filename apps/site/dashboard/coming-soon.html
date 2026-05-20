@@ -16,6 +16,14 @@ permalink: /dashboard/coming-soon/
 (function () {
   var p = new URLSearchParams(location.search);
   var f = p.get("feature");
+  // Task #7: bookmark-preserving redirects for features that have
+  // shipped since this stub was first reached. Add an entry per
+  // graduated feature so existing deep-links keep working.
+  var REDIRECTS = {
+    "power-nodes": "/dashboard/power-nodes/",
+    "quality-console": "/ops/quality/"
+  };
+  if (f && REDIRECTS[f]) { location.replace(REDIRECTS[f]); return; }
   if (f) {
     var el = document.getElementById("ads-coming-soon-feature");
     var label = f.replace(/-/g, " ").replace(/\b\w/g, function (c) { return c.toUpperCase(); });
