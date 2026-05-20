@@ -8,6 +8,7 @@ import {
   runEval, runAllActive, type TaskKey,
 } from "../services/mlOps/runner";
 import { predictorFor } from "../services/mlOps/predictors";
+import { llmPredictorFor } from "../services/mlOps/llmPredictors";
 import { listPromptVersions, promotePrompt, setRolloutPct, getPrompt } from "../services/mlOps/prompts";
 import { runRegressionGate } from "../services/mlOps/regressionGate";
 import { runCalibrationGrade } from "../services/mlOps/calibration";
@@ -59,24 +60,81 @@ mlRoute.get("/eval/runs/:id", async (c) => {
   });
 });
 
+// `mode` selects the predictor path:
+//   "heuristic" (default) — deterministic reference predictors in
+//     `services/mlOps/predictors.ts`. Used by the nightly sweep and
+//     the CI candidate-commit gate so a missing OPENAI_API_KEY can
+//     never silently void a quality check.
+//   "production" — exercises the SAME prompt + model path the worker
+//     uses in production via `getPrompt(prompt_key)` + the active
+//     model_hint. Per the spec's "runs against current prompt/model
+//     version" criterion this is the path operators trigger when a
+//     prompt is promoted; runs are stamped with the resolved
+//     prompt_version + model_version. Returns `unconfigured` if
+//     OPENAI_API_KEY is missing or no prompt is registered for the
+//     task's prompt_key (Task #14 honest-degradation pattern).
+async function resolveProvenance(env: Env, task: TaskKey): Promise<{ prompt_key: string | null; prompt_version: string | null; prompt_version_id: string | null; model_version: string | null }> {
+  const PROMPT_KEY_FOR_TASK: Partial<Record<TaskKey, string>> = {
+    deal_extraction: "deal_extractor.v1",
+    page_classification: "page_classifier.v1",
+    founder_background: "founder_background.v1",
+  };
+  const key = PROMPT_KEY_FOR_TASK[task];
+  if (!key) return { prompt_key: null, prompt_version: null, prompt_version_id: null, model_version: null };
+  const p = await getPrompt(env, key);
+  if (!p) return { prompt_key: key, prompt_version: null, prompt_version_id: null, model_version: null };
+  return { prompt_key: key, prompt_version: p.version, prompt_version_id: p.id, model_version: p.model_hint };
+}
+
 mlRoute.post("/eval/run", async (c) => {
   if (!c.var.is_admin) return c.json({ error: "admin_required" }, 403);
-  const body = (await c.req.json().catch(() => ({}))) as { dataset_id?: string; task_key?: TaskKey; triggered_by?: "manual" | "nightly" | "ci" };
-  let ds = body.dataset_id ? await getDataset(c.env, body.dataset_id)
+  const body = (await c.req.json().catch(() => ({}))) as { dataset_id?: string; task_key?: TaskKey; triggered_by?: "manual" | "nightly" | "ci"; mode?: "heuristic" | "production" };
+  const ds = body.dataset_id ? await getDataset(c.env, body.dataset_id)
     : body.task_key ? await getDatasetByTaskKey(c.env, body.task_key)
     : null;
   if (!ds) return c.json({ error: "dataset_not_found" }, 404);
-  const result = await runEval(c.env, ds.id, predictorFor(ds.task_key as TaskKey), {
+  const mode = body.mode ?? "heuristic";
+  const task = ds.task_key as TaskKey;
+  if (mode === "production") {
+    const prov = await resolveProvenance(c.env, task);
+    const result = await runEval(c.env, ds.id, llmPredictorFor(c.env, task), {
+      triggered_by: body.triggered_by ?? "manual",
+      prompt_key: prov.prompt_key,
+      prompt_version: prov.prompt_version,
+      prompt_version_id: prov.prompt_version_id,
+      model_version: prov.model_version ?? "gpt-4o-mini",
+    });
+    return c.json({ run: result, mode });
+  }
+  const result = await runEval(c.env, ds.id, predictorFor(task), {
     triggered_by: body.triggered_by ?? "manual",
     model_version: "heuristic:v1",
   });
-  return c.json({ run: result });
+  return c.json({ run: result, mode });
 });
 
 mlRoute.post("/eval/run-all", async (c) => {
   if (!c.var.is_admin) return c.json({ error: "admin_required" }, 403);
-  const results = await runAllActive(c.env, predictorFor, { triggered_by: "manual", model_version: "heuristic:v1" });
-  return c.json({ runs: results });
+  const body = (await c.req.json().catch(() => ({}))) as { mode?: "heuristic" | "production"; triggered_by?: "manual" | "nightly" | "ci" };
+  const mode = body.mode ?? "heuristic";
+  if (mode === "production") {
+    const datasets = await listActiveDatasets(c.env);
+    const runs = [];
+    for (const ds of datasets) {
+      const task = ds.task_key as TaskKey;
+      const prov = await resolveProvenance(c.env, task);
+      runs.push(await runEval(c.env, ds.id, llmPredictorFor(c.env, task), {
+        triggered_by: body.triggered_by ?? "manual",
+        prompt_key: prov.prompt_key,
+        prompt_version: prov.prompt_version,
+        prompt_version_id: prov.prompt_version_id,
+        model_version: prov.model_version ?? "gpt-4o-mini",
+      }));
+    }
+    return c.json({ runs, mode });
+  }
+  const results = await runAllActive(c.env, predictorFor, { triggered_by: body.triggered_by ?? "manual", model_version: "heuristic:v1" });
+  return c.json({ runs: results, mode });
 });
 
 mlRoute.post("/eval/load-bundled", async (c) => {
