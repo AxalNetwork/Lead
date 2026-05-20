@@ -147,15 +147,26 @@
       var q = input.value.trim();
       if (q.length < 2) { popup.hidden = true; popup.innerHTML = ""; return; }
       t = setTimeout(function () {
-        api("/api/search?q=" + encodeURIComponent(q) + "&limit=10").then(function (j) {
-          var items = (j && j.items) || [];
+        // Constrain to entity-only results: rel_edges holds person/org
+        // u_entities ids, so personas/projects/views shouldn't appear.
+        // /api/search returns { items: [{ id, type, title, subtitle, kind }] }.
+        Promise.all([
+          api("/api/search?q=" + encodeURIComponent(q) + "&type=person&limit=10"),
+          api("/api/search?q=" + encodeURIComponent(q) + "&type=org&limit=10"),
+        ]).then(function (rs) {
+          var items = ((rs[0] && rs[0].items) || []).concat((rs[1] && rs[1].items) || []);
+          items.sort(function (a, b) { return (b.score || 0) - (a.score || 0); });
+          items = items.slice(0, 10);
           if (!items.length) { popup.innerHTML = "<button disabled style='color:#999'>No matches</button>"; }
           else {
             popup.innerHTML = items.map(function (it) {
-              var id = it.entity_id || it.id;
-              var name = it.display_name || it.name || id;
+              var id = it.id;
+              var name = it.title || id;
+              var sub = it.subtitle || it.type || "";
               return "<button data-id='" + esc(id) + "' data-name='" + esc(name) + "'>" +
-                "<strong>" + esc(name) + "</strong> <span style='color:#888'>· " + esc(it.kind || "") + "</span></button>";
+                "<strong>" + esc(name) + "</strong>" +
+                (sub ? " <span style='color:#888'>· " + esc(sub) + "</span>" : "") +
+                "</button>";
             }).join("");
           }
           popup.hidden = false;
