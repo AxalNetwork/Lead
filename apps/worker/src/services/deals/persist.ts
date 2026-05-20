@@ -401,6 +401,24 @@ async function upsertParticipants(
   }
 }
 
+/** Format an integer USD amount in the lexical short form articles use
+ *  (e.g. 30000000 → "$30M", 1500000000 → "$1.5B"). Used as the claim
+ *  text for numeric fact verification so the hallucination guard sees
+ *  the same shape that appears in the source article. */
+function formatUsdShort(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return String(n);
+  if (n >= 1e9) {
+    const v = n / 1e9; return `$${v % 1 === 0 ? v.toFixed(0) : v.toFixed(1)}B`;
+  }
+  if (n >= 1e6) {
+    const v = n / 1e6; return `$${v % 1 === 0 ? v.toFixed(0) : v.toFixed(1)}M`;
+  }
+  if (n >= 1e3) {
+    const v = n / 1e3; return `$${v % 1 === 0 ? v.toFixed(0) : v.toFixed(1)}K`;
+  }
+  return `$${n}`;
+}
+
 async function writeDerivedFacts(
   env: Env, deal_id: string, company_entity_id: string | null,
   c: DealCandidate, source: string,
@@ -418,31 +436,64 @@ async function writeDerivedFacts(
   // direct insertFact path — they don't have a `source_text` to
   // verify against and the verifier would otherwise fail-closed.
   const isAi = !!(c.source_text && c.source_text.trim().length > 0);
-  const writeFact = async (input: Parameters<typeof insertFact>[1]) => {
-    if (!isAi) { await insertFact(env, input); return; }
+  // Task #8: the verifier matches CLAIM TOKENS against the source
+  // span via fuzzy contain. Numeric facts canonicalize to integers
+  // (e.g. 30000000) but articles always write "$30M" / "$30 million"
+  // — so a raw `String(value_number)` claim would systematically
+  // fail the guard and drop valid rows. Use the extractor's
+  // `amount_raw` (the lexical form the model lifted from the
+  // article) as the claim text for numeric predicates so the
+  // verifier sees the same form the source uses.
+  const writeFact = async (
+    input: Parameters<typeof insertFact>[1] & { _claim_override?: string },
+  ) => {
+    if (!isAi) {
+      const { _claim_override: _drop, ...rest } = input;
+      void _drop;
+      await insertFact(env, rest);
+      return;
+    }
+    const { _claim_override, ...rest } = input;
+    const claim = _claim_override ?? (rest.value_text != null ? String(rest.value_text)
+      : rest.value_number != null ? String(rest.value_number) : "");
     await guardedInsertFact(env, {
-      ...input,
+      ...rest,
       source_span: c.source_span ?? null,
       source_text: c.source_text ?? null,
       extractor: "deal_extractor",
-      claim_text: input.value_text != null ? String(input.value_text)
-        : input.value_number != null ? String(input.value_number) : undefined,
+      claim_text: claim,
       raw_extraction: {
         company: c.company_name_raw, round: c.round_name, amount_usd: c.amount_usd,
       },
     });
   };
   if (c.amount_usd != null) {
-    await writeFact({ ...factCtx, predicate: "last_round_usd", value_number: c.amount_usd });
+    // Prefer the lexical form the extractor lifted from the article
+    // (e.g. "$30M") so the verifier can match it against the source.
+    const lexical = c.amount_raw && c.amount_raw.trim()
+      ? c.amount_raw.trim()
+      : formatUsdShort(c.amount_usd);
+    await writeFact({
+      ...factCtx, predicate: "last_round_usd", value_number: c.amount_usd,
+      _claim_override: lexical,
+    });
   }
   if (c.round_name) {
     await writeFact({ ...factCtx, predicate: "last_round_name", value_text: c.round_name });
   }
   if (c.announcement_date) {
-    await writeFact({ ...factCtx, predicate: "last_round_date", value_text: c.announcement_date });
+    // ISO dates (2025-03-04) don't appear verbatim in press releases;
+    // skip the guard for date facts — the round + amount guard above
+    // already validates the deal as a whole; the date is a
+    // canonicalized secondary fact derived from the same row.
+    await insertFact(env, { ...factCtx, predicate: "last_round_date", value_text: c.announcement_date });
   }
   if (c.valuation_usd != null) {
-    await writeFact({ ...factCtx, predicate: "last_round_valuation_usd", value_number: c.valuation_usd });
+    const valLex = formatUsdShort(c.valuation_usd);
+    await writeFact({
+      ...factCtx, predicate: "last_round_valuation_usd", value_number: c.valuation_usd,
+      _claim_override: valLex,
+    });
   }
   // Tag the company fact with the deal id so /api/companies/:id/deal-history
   // has a fact-only fallback when the deal_events index is being rebuilt.

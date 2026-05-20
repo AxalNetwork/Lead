@@ -170,7 +170,7 @@ const DATASETS = [
   { file: "page_classification.json", task: "page_classification", metric: "classification_f1",
     predict: (i) => predictPageClass({ url: i.url, text: `${i.title ?? ""} ${i.snippet ?? ""}` }),
     goldKey: (g) => g.label, predKey: (p) => p },
-  { file: "csv_column_mapping.json", task: "csv_column_mapping", metric: "classification_f1",
+  { file: "csv_mapping.json", task: "csv_mapping", metric: "classification_f1",
     predict: (i) => predictCsvColumn({ header: i.header ?? i.column ?? "" }),
     goldKey: (g) => g.field ?? g.label, predKey: (p) => p },
   { file: "role_inference.json", task: "role_inference", metric: "classification_f1",
