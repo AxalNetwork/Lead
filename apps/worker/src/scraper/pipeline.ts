@@ -2030,7 +2030,11 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
   const budgetRow = await env.DB.prepare(
     `SELECT budget_ms FROM jobs WHERE id = ?`,
   ).bind(jobId).first<{ budget_ms: number | null }>().catch(() => null);
-  const budgetMs = budgetRow?.budget_ms ?? 90_000;
+  // Task #7: per-pipeline budget overrides. The override only LIFTS
+  // a too-tight default; an operator-set jobs.budget_ms still wins
+  // when it's larger. See src/queue/pipelineBudgets.ts for the map.
+  const { effectiveBudgetMs } = await import("../queue/pipelineBudgets.js");
+  const budgetMs = effectiveBudgetMs(budgetRow?.budget_ms ?? null, msg.kind);
   const deadline = start + budgetMs;
   const enforceDeadline = async (): Promise<boolean> => {
     if (Date.now() <= deadline) return false;

@@ -213,7 +213,7 @@ export async function syncFirmToEntity(
     // investor_firm / customer / prospect get assigned without each
     // call-site having to know.
     try {
-      const { inferAndAssignRoles } = await import("../services/roleInference");
+      const { inferAndAssignRoles } = await import("../services/roleInference.js");
       await inferAndAssignRoles(env, entityId, {
         kind: "org",
         sourceKind,
@@ -286,7 +286,7 @@ export async function syncLeadToEntity(
     // entity_roles) picks up freshly-ingested people. Looks up the
     // person's company entity for partner-title inheritance.
     try {
-      const { inferAndAssignRoles } = await import("../services/roleInference");
+      const { inferAndAssignRoles } = await import("../services/roleInference.js");
       await inferAndAssignRoles(env, entityId, {
         kind: "person",
         sourceKind,

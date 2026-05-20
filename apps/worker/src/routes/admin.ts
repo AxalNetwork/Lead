@@ -35,51 +35,102 @@ export const admin = new Hono<{ Bindings: Env; Variables: { email: string } }>()
  */
 export async function sweepStuckJobs(env: Env): Promise<number> {
   const now = new Date().toISOString();
-  const r = await env.DB.prepare(
-    `UPDATE jobs
-       SET status = 'timed_out',
-           finished_at = ?,
-           error = COALESCE(error, 'budget_exceeded')
-     WHERE status = 'running'
-       AND running_started_at IS NOT NULL
-       AND budget_ms IS NOT NULL
-       AND (strftime('%s', ?) - strftime('%s', running_started_at)) * 1000 > budget_ms`,
-  ).bind(now, now).run();
-  const swept = Number(r.meta?.changes ?? 0);
-  if (swept > 0) {
-    // Log a state-transition row per swept job so /api/jobs/:id shows the
-    // sweep in its history. One bulk INSERT...SELECT keeps this cheap.
+  const nowMs = Date.parse(now);
+  // Task #7: per-pipeline budget overrides. We can no longer do the
+  // sweep as a single UPDATE because `effective_budget = max(
+  // jobs.budget_ms, PIPELINE_BUDGETS_MS[kind])` lives in JS, not SQL.
+  // Pattern: SELECT candidates → filter in JS → UPDATE qualifying ids
+  // → attribute step from each job's last workflow_step_log row →
+  // logError per swept job. Candidate set is small (running rows
+  // only), so the extra round-trip is cheap.
+  const { effectiveBudgetMs } = await import("../queue/pipelineBudgets.js");
+  const candidates = await env.DB.prepare(
+    // NOTE: we deliberately do NOT filter `budget_ms IS NOT NULL`
+    // here — null-budget legacy rows still get the default + any
+    // per-pipeline override applied by `effectiveBudgetMs`.
+    `SELECT id, kind, budget_ms, running_started_at
+       FROM jobs
+      WHERE status = 'running'
+        AND running_started_at IS NOT NULL`,
+  ).all<{ id: string; kind: string | null; budget_ms: number | null; running_started_at: string }>();
+  const overdue: Array<{ id: string; kind: string | null }> = [];
+  for (const row of candidates.results ?? []) {
+    const startedMs = Date.parse(row.running_started_at);
+    if (!Number.isFinite(startedMs)) continue;
+    const elapsedMs = nowMs - startedMs;
+    const budget = effectiveBudgetMs(row.budget_ms, row.kind);
+    if (elapsedMs > budget) overdue.push({ id: row.id, kind: row.kind });
+  }
+  if (overdue.length === 0) return 0;
+
+  let swept = 0;
+  for (const job of overdue) {
+    const u = await env.DB.prepare(
+      `UPDATE jobs
+          SET status = 'timed_out',
+              finished_at = ?,
+              error = COALESCE(error, 'budget_exceeded')
+        WHERE id = ? AND status = 'running'`,
+    ).bind(now, job.id).run();
+    if (Number(u.meta?.changes ?? 0) === 0) continue; // raced with another writer
+    swept += 1;
+
+    // Task #2: state-transition row for /api/jobs/:id history.
     await env.DB.prepare(
       `INSERT INTO job_state_transitions (job_id, from_state, to_state, reason, changed_by)
-       SELECT id, 'running', 'timed_out', 'budget_exceeded', 'admin.sweep'
-         FROM jobs WHERE status = 'timed_out' AND finished_at = ?`,
-    ).bind(now).run().catch(() => undefined);
-    // Task #2: also emit one error_log row per swept job so the
-    // existing failure-analytics/alerting (driven off error_log)
-    // surfaces sweep-induced timeouts at the same fidelity as a
-    // normal failed job.
-    const swept_rows = await env.DB.prepare(
-      `SELECT id FROM jobs WHERE status = 'timed_out' AND finished_at = ?`,
-    ).bind(now).all<{ id: string }>();
-    for (const row of swept_rows.results ?? []) {
-      await logError(env, {
-        err: new AppError({
-          code: "workflow_step_failed",
-          kind: "permanent",
-          message: "job exceeded budget_ms; swept by admin.sweep",
-          retryable: false,
-          // `token` is the normalized analytics key (`workflow.step_failed`);
-          // `code` stays in the closed ErrCode union (`workflow_step_failed`).
-          context: {
-            reason: "budget_exceeded",
-            swept_by: "admin.sweep",
-            token: "workflow.step_failed",
-          },
-        }),
-        job_id: row.id,
-        step: "admin.sweep",
-      }).catch(() => undefined);
-    }
+       VALUES (?, 'running', 'timed_out', 'budget_exceeded', 'admin.sweep')`,
+    ).bind(job.id).run().catch(() => undefined);
+
+    // Task #7: attribute the step that owned the deadline at sweep
+    // time. We read the LAST row in workflow_step_log for this job
+    // (latest by id; rows are append-only so id ASC = chronological).
+    // Prefer a still-running step (`status='started'`) when present —
+    // that's the actual heartbeat the deadline interrupted. Falls
+    // back to whatever the latest row is. When no heartbeat row
+    // exists (legacy/early job) the step field stays as the static
+    // `admin.sweep` sentinel so the UI never renders an empty cell.
+    let lastStep: string | null = null;
+    try {
+      const startedRow = await env.DB.prepare(
+        `SELECT step FROM workflow_step_log
+          WHERE job_id = ? AND status = 'started'
+          ORDER BY id DESC LIMIT 1`,
+      ).bind(job.id).first<{ step: string | null }>();
+      if (startedRow?.step) {
+        lastStep = startedRow.step;
+      } else {
+        const anyRow = await env.DB.prepare(
+          `SELECT step FROM workflow_step_log
+            WHERE job_id = ?
+            ORDER BY id DESC LIMIT 1`,
+        ).bind(job.id).first<{ step: string | null }>();
+        lastStep = anyRow?.step ?? null;
+      }
+    } catch { /* workflow_step_log absent in fresh env — fall through */ }
+
+    // Task #2: error_log row so analytics/alerts count sweep-induced
+    // timeouts at the same fidelity as a normal failed job. The
+    // `step` field now carries the heartbeat step (Task #7), not
+    // just `admin.sweep`.
+    await logError(env, {
+      err: new AppError({
+        code: "workflow_step_failed",
+        kind: "permanent",
+        message: "job exceeded budget_ms; swept by admin.sweep",
+        retryable: false,
+        // `token` is the normalized analytics key (`workflow.step_failed`);
+        // `code` stays in the closed ErrCode union (`workflow_step_failed`).
+        context: {
+          reason: "budget_exceeded",
+          swept_by: "admin.sweep",
+          token: "workflow.step_failed",
+          pipeline_kind: job.kind ?? null,
+          heartbeat_step: lastStep,
+        },
+      }),
+      job_id: job.id,
+      step: lastStep ?? "admin.sweep",
+    }).catch(() => undefined);
   }
   return swept;
 }

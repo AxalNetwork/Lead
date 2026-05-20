@@ -88,7 +88,7 @@ opsCrawlerRoute.get("/", (c) =>
       "GET /seeds/raw", "GET /adapters", "GET /ai-spend?window=day|month",
       "GET /compliance", "GET /extractions", "GET /audit",
       "GET /drift-alerts", "GET /pause-status",
-      "GET /skipped", "GET /skipped/gated-paste",
+      "GET /skipped", "GET /skipped/gated-paste", "GET /db-errors",
       "POST /pause {scope,target?}", "POST /resume {scope,target?}",
       "POST /hosts/:host/test", "POST /hosts/:host/quarantine",
       "POST /hosts/:host/unquarantine", "POST /hosts/:host/whitelist",
@@ -861,4 +861,44 @@ opsCrawlerRoute.post("/test-url", async (c) => {
     error = (e as Error).message;
   }
   return c.json({ ok: error === null, url, fetched, classification, extraction, error, duration_ms: Date.now() - t0 });
+});
+
+// Task #7: deduped DB-errors panel. Groups `error_log` rows with
+// code='db_error' from the last 7 days by (normalized SQLite message,
+// route) so operators can see what's actually breaking instead of an
+// opaque "223 db errors" counter.
+//
+// safeQuery pattern (matches Task #14): when the table is missing in
+// a fresh env we return an empty payload — never throw.
+opsCrawlerRoute.get("/db-errors", async (c) => {
+  const days = Math.max(1, Math.min(30, Number(c.req.query("days") ?? 7) || 7));
+  let rows: Array<{ message: string | null; cause_message: string | null; url: string | null; method: string | null }> = [];
+  let tableMissing = false;
+  try {
+    const r = await c.env.DB.prepare(
+      `SELECT message, cause_message, url, method
+         FROM error_log
+        WHERE code = 'db_error'
+          AND created_at >= datetime('now', ?)
+        ORDER BY created_at DESC
+        LIMIT 5000`,
+    ).bind(`-${days} days`).all<{ message: string | null; cause_message: string | null; url: string | null; method: string | null }>();
+    rows = r.results ?? [];
+  } catch (e) {
+    const msg = (e as Error).message || "";
+    if (/no such table|no such column/i.test(msg)) {
+      tableMissing = true;
+    } else {
+      return c.json({ ok: false, error: "db_error_query_failed", message: msg }, 500);
+    }
+  }
+  const { groupDbErrors } = await import("../db/dbErrorGrouper.js");
+  const groups = groupDbErrors(rows);
+  return c.json({
+    ok: true,
+    window_days: days,
+    table_missing: tableMissing,
+    total_rows: rows.length,
+    groups,
+  });
 });

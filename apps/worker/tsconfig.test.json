@@ -223,6 +223,12 @@
     "src/services/founderCrm/anonymize.ts",
     "src/services/founderCrm/projection.ts",
     "src/services/founderCrm/reputation.ts",
-    "src/services/founderCrm/suggestions.ts"
+    "src/services/founderCrm/suggestions.ts",
+    "src/queue/pipelineBudgets.ts",
+    "src/db/dbErrorGrouper.ts",
+    "src/db/error_log.ts",
+    "src/errors.ts",
+    "src/entities/backfill.ts",
+    "src/routes/admin.ts"
   ]
 }

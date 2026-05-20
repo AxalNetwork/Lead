@@ -423,10 +423,42 @@
     } catch (e) { /* ignore */ }
   }
 
+  // Task #7: deduped DB-errors panel.
+  async function loadDbErrors() {
+    try {
+      var r = await api("/db-errors?days=7");
+      var tbody = document.querySelector("#ops-db-errors tbody");
+      var summary = document.getElementById("ops-db-errors-summary");
+      if (!tbody) return;
+      var groups = (r && r.groups) || [];
+      if (r && r.table_missing) {
+        tbody.innerHTML = '<tr><td colspan="4" class="ads-sub">error_log table not present in this environment.</td></tr>';
+        if (summary) summary.textContent = "";
+        return;
+      }
+      if (!groups.length) {
+        tbody.innerHTML = '<tr><td colspan="4" class="ads-sub">No db_error rows in the last 7 days.</td></tr>';
+      } else {
+        tbody.innerHTML = groups.slice(0, 50).map(function (g) {
+          return "<tr><td>" + num(g.count) + "</td>"
+               + "<td><code class=\"ads-mono\">" + esc(g.route) + "</code></td>"
+               + "<td><code class=\"ads-mono\" style=\"white-space:pre-wrap\">" + esc(g.normalized_message) + "</code></td>"
+               + "<td><code class=\"ads-mono\" style=\"font-size:.8em;word-break:break-all\">" + esc(g.example_url || "") + "</code></td>"
+               + "</tr>";
+        }).join("");
+      }
+      if (summary) {
+        summary.textContent = "Total db_error rows (last " + (r.window_days || 7)
+          + "d): " + num(r.total_rows) + " in " + groups.length + " cluster(s).";
+      }
+    } catch (e) { /* ignore — surfaced by other panels */ }
+  }
+
   async function refreshAll() {
     var stamp = new Date().toLocaleTimeString();
     $("#ops-last-refresh").textContent = "last refresh " + stamp;
     var jobs = [loadDriftBanner(), loadProxyBanner(), loadSkipped(), loadGatedPaste(),
+                loadDbErrors(),
                 loadPauseState(), loadThroughput(), loadHosts(),
                 loadFrontier(), loadAiSpend(), loadAdapters(), loadCompliance(),
                 loadSeeds(), loadExtractions(), loadAudit()];

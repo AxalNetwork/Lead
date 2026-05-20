@@ -63,6 +63,22 @@ permalink: /ops/crawler/
     </div>
   </div>
 
+  <h2 class="ads-h2">DB errors — last 7 days, deduped</h2>
+  <div class="ads-card">
+    <p class="ads-sub" style="margin:.25rem 0 .5rem 0">
+      Groups <code>error_log</code> rows with <code>code='db_error'</code> by normalized
+      SQLite message + route so the underlying bug is visible instead of an opaque count.
+      Empty when the table is missing in a fresh environment.
+    </p>
+    <div class="ads-table-wrap">
+      <table class="ads-table" id="ops-db-errors">
+        <thead><tr><th>Count</th><th>Route</th><th>Normalized message</th><th>Example URL</th></tr></thead>
+        <tbody><tr><td colspan="4">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <p class="ads-sub" id="ops-db-errors-summary" style="margin-top:.5rem"></p>
+  </div>
+
   <div class="ads-card" id="ops-global-controls" style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
     <strong>Global:</strong>
     <span id="ops-pause-state" class="ads-pill">…</span>
