@@ -1,0 +1,31 @@
+---
+layout: default
+title: ML evals
+permalink: /dashboard/ml/evals/
+---
+<section class="ads-section">
+  <h1 class="ads-page-title" style="margin:0">ML evals</h1>
+  <p class="ads-page-sub" style="margin:4px 0 0">
+    Per-dataset gold-set metrics over time. Open a single dataset's
+    run history via <code>?id=&lt;dataset_id&gt;</code>.
+  </p>
+
+  <div class="ads-card" style="margin-top:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <h2 class="ads-h2" style="margin:0">Datasets</h2>
+      <div>
+        <button type="button" id="ml-load" class="ads-btn" style="padding:6px 12px">Load bundled fixtures</button>
+        <button type="button" id="ml-run-all" class="ads-btn" style="padding:6px 12px">Run all now</button>
+      </div>
+    </div>
+    <div id="ml-list" style="margin-top:10px">Loading…</div>
+  </div>
+
+  <div id="ml-detail" class="ads-card" style="margin-top:14px;display:none">
+    <h2 class="ads-h2" id="ml-detail-title" style="margin-top:0">—</h2>
+    <div id="ml-detail-meta" class="ads-muted" style="font-size:12px"></div>
+    <div id="ml-detail-runs" style="margin-top:10px">Loading…</div>
+  </div>
+</section>
+
+<script src="/assets/js/ml-evals.js" defer></script>

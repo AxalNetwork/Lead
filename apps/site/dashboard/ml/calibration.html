@@ -1,0 +1,25 @@
+---
+layout: default
+title: ML calibration
+permalink: /dashboard/ml/calibration/
+---
+<section class="ads-section">
+  <h1 class="ads-page-title" style="margin:0">Prediction calibration</h1>
+  <p class="ads-page-sub" style="margin:4px 0 0">
+    Per-prediction-type Brier-score history. Deep-link a single type
+    via <code>?id=&lt;prediction_type&gt;</code>.
+  </p>
+
+  <div class="ads-card" style="margin-top:14px">
+    <h2 class="ads-h2" style="margin-top:0">Prediction types</h2>
+    <div id="ml-cal-list">Loading…</div>
+  </div>
+
+  <div id="ml-cal-detail" class="ads-card" style="margin-top:14px;display:none">
+    <h2 class="ads-h2" id="ml-cal-title" style="margin-top:0">—</h2>
+    <div id="ml-cal-spark" style="margin-top:10px"></div>
+    <div id="ml-cal-table" style="margin-top:10px"></div>
+  </div>
+</section>
+
+<script src="/assets/js/ml-calibration.js" defer></script>

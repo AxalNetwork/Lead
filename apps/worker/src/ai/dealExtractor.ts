@@ -20,8 +20,19 @@ import { aiCacheGet, aiCachePut, sha256Hex } from "./cache";
 import { assertBudget } from "./budget";
 import { limitAi } from "../scraper/rateLimit";
 import { trackAi } from "../analytics/events";
+import { getPrompt } from "../services/mlOps/prompts";
 
 export const DEAL_EXTRACTOR_VERSION = "deal_extractor:v1";
+
+// Task #8: prompt registry key. The prompt body is loaded via
+// `getPrompt(env, DEAL_EXTRACTOR_PROMPT_KEY, { salt, fallbackBody })`
+// so prompt changes ride through `prompt_versions` (append-only,
+// A/B routable). Callers that persist the extractor's output to the
+// canonical fact ledger MUST go through
+// `services/mlOps/hallucination.guardedInsertFact` so the
+// source-span verifier intercepts fabricated rows before they hit
+// `insertFact`.
+export const DEAL_EXTRACTOR_PROMPT_KEY = "deal_extractor:v1";
 const AI_TIMEOUT_MS = 30_000;
 const TEXT_CAP = 8_000;
 
@@ -140,12 +151,24 @@ export async function runDealExtractor(
   if (!okBudget.ok) return null;
   if (!(await limitAi(env))) return null;
 
-  const sys =
+  // Task #8: prompt body comes from the prompt_versions registry so
+  // edits ride through promote + rollout (A/B routable). Falls back
+  // to the inline default when migration 374 hasn't applied yet
+  // (cold install) so the extractor never crashes on a fresh worker.
+  const DEFAULT_SYS =
     "You extract one funding round, M&A, or exit event from a press release or news article. " +
     "Return STRICT JSON matching the schema. Use \"\" or 0 for unknown fields — never invent values. " +
     "amount_usd must be in US dollars (convert if amount is in another currency); if you can't convert, leave it as 0. " +
     "round_name must be one of the listed enum values or \"\". " +
     "confidence is your 0..1 self-rated certainty that the extraction is correct.";
+  const resolvedPrompt = await getPrompt(env, DEAL_EXTRACTOR_PROMPT_KEY, {
+    salt: input.source_url,
+    fallbackBody: DEFAULT_SYS,
+    fallbackVersion: DEAL_EXTRACTOR_VERSION,
+  });
+  const sys = resolvedPrompt?.body ?? DEFAULT_SYS;
+  const promptVersionId = resolvedPrompt?.id ?? null;
+  const promptVersion = resolvedPrompt?.version ?? DEAL_EXTRACTOR_VERSION;
   const usr = `URL: ${input.source_url}\n\nArticle:\n${text}`;
 
   const t0 = Date.now();
@@ -181,6 +204,18 @@ export async function runDealExtractor(
   let raw = await attempt(0.1);
   if (!raw) raw = await attempt(0.0);
   trackAi(env, { purpose: "extraction", model, cacheHit: false, ms: Date.now() - t0 });
+  // Task #8: stamp prompt provenance on every non-cached extraction so
+  // forensic review can pivot to prompt_versions.id when chasing a
+  // regression. promptVersionId is null when the registry hasn't been
+  // populated yet (cold install / fallback).
+  if (raw) {
+    console.log("deal_extractor.prompt", {
+      prompt_key: DEAL_EXTRACTOR_PROMPT_KEY,
+      prompt_version_id: promptVersionId,
+      prompt_version: promptVersion,
+      source_url: input.source_url,
+    });
+  }
   if (!raw) return null;
   await aiCachePut(env, cacheKey, raw);
   return toCandidate(raw, input);

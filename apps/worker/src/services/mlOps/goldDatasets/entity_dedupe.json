@@ -1,0 +1,20 @@
+{
+  "task_key": "entity_dedupe",
+  "name": "Entity Dedupe — pair labeled as same/different entity",
+  "schema_version": 1,
+  "description": "Given two entity records, decide whether they refer to the same real-world entity.",
+  "examples": [
+    { "key": "same-1",  "input": { "a": { "name": "Acme Ventures", "domain": "acme.vc" }, "b": { "name": "Acme Ventures, LLC", "domain": "acme.vc" } },                       "gold": { "same": true } },
+    { "key": "same-2",  "input": { "a": { "name": "Gamma Capital", "domain": "gamma.capital" }, "b": { "name": "Gamma Capital", "domain": "www.gamma.capital" } },              "gold": { "same": true } },
+    { "key": "same-3",  "input": { "a": { "name": "Jane Doe", "company": "Acme" }, "b": { "name": "Jane R. Doe", "company": "Acme Ventures" } },                                "gold": { "same": true } },
+    { "key": "same-4",  "input": { "a": { "name": "NorthStar Labs", "domain": "northstar.io" }, "b": { "name": "NorthStar", "domain": "northstar.io" } },                       "gold": { "same": true } },
+    { "key": "same-5",  "input": { "a": { "name": "BigCo", "domain": "bigco.com" }, "b": { "name": "BigCo Inc.", "domain": "bigco.com" } },                                     "gold": { "same": true } },
+    { "key": "diff-1",  "input": { "a": { "name": "Acme Ventures", "domain": "acme.vc" }, "b": { "name": "Acme Corp", "domain": "acme.com" } },                                  "gold": { "same": false } },
+    { "key": "diff-2",  "input": { "a": { "name": "John Smith", "company": "Acme" }, "b": { "name": "John Smith", "company": "Beta" } },                                         "gold": { "same": false } },
+    { "key": "diff-3",  "input": { "a": { "name": "Apple Inc.", "domain": "apple.com" }, "b": { "name": "Apple Records", "domain": "applerecords.com" } },                       "gold": { "same": false } },
+    { "key": "diff-4",  "input": { "a": { "name": "Delta Fund", "domain": "deltafund.com" }, "b": { "name": "Delta Air Lines", "domain": "delta.com" } },                        "gold": { "same": false } },
+    { "key": "diff-5",  "input": { "a": { "name": "Jane Doe", "email": "jane@acme.vc" }, "b": { "name": "Jane Smith", "email": "jane@beta.com" } },                              "gold": { "same": false } },
+    { "key": "same-6",  "input": { "a": { "name": "Stripe", "domain": "stripe.com" }, "b": { "name": "Stripe, Inc.", "domain": "stripe.com" } },                                 "gold": { "same": true } },
+    { "key": "diff-6",  "input": { "a": { "name": "Stripe", "domain": "stripe.com" }, "b": { "name": "Stripe Capital", "domain": "stripe.com/capital" } },                       "gold": { "same": false } }
+  ]
+}

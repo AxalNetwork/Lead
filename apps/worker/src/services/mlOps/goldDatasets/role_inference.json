@@ -1,0 +1,33 @@
+{
+  "task_key": "role_inference",
+  "name": "Role Inference — job title → canonical role category",
+  "schema_version": 1,
+  "description": "Map a person's job title to a coarse role category.",
+  "examples": [
+    { "key": "founder-1",  "input": { "title": "Co-Founder & CEO" },                "gold": { "role": "founder" } },
+    { "key": "founder-2",  "input": { "title": "Founder" },                          "gold": { "role": "founder" } },
+    { "key": "founder-3",  "input": { "title": "CTO and Co-Founder" },               "gold": { "role": "founder" } },
+    { "key": "exec-1",     "input": { "title": "Chief Executive Officer" },          "gold": { "role": "executive" } },
+    { "key": "exec-2",     "input": { "title": "CFO" },                              "gold": { "role": "executive" } },
+    { "key": "exec-3",     "input": { "title": "Chief Revenue Officer" },            "gold": { "role": "executive" } },
+    { "key": "vc-1",       "input": { "title": "General Partner" },                  "gold": { "role": "investor" } },
+    { "key": "vc-2",       "input": { "title": "Partner at Acme Ventures" },         "gold": { "role": "investor" } },
+    { "key": "vc-3",       "input": { "title": "Principal, Gamma Capital" },         "gold": { "role": "investor" } },
+    { "key": "vc-4",       "input": { "title": "Venture Partner" },                  "gold": { "role": "investor" } },
+    { "key": "angel-1",    "input": { "title": "Angel Investor" },                   "gold": { "role": "investor" } },
+    { "key": "eng-1",      "input": { "title": "Software Engineer" },                "gold": { "role": "engineer" } },
+    { "key": "eng-2",      "input": { "title": "Senior Backend Engineer" },          "gold": { "role": "engineer" } },
+    { "key": "eng-3",      "input": { "title": "Staff ML Engineer" },                "gold": { "role": "engineer" } },
+    { "key": "pm-1",       "input": { "title": "Product Manager" },                  "gold": { "role": "product" } },
+    { "key": "pm-2",       "input": { "title": "Senior PM" },                        "gold": { "role": "product" } },
+    { "key": "design-1",   "input": { "title": "Product Designer" },                 "gold": { "role": "design" } },
+    { "key": "sales-1",    "input": { "title": "Account Executive" },                "gold": { "role": "sales" } },
+    { "key": "sales-2",    "input": { "title": "VP Sales" },                         "gold": { "role": "sales" } },
+    { "key": "mkt-1",      "input": { "title": "Head of Marketing" },                "gold": { "role": "marketing" } },
+    { "key": "ops-1",      "input": { "title": "Chief of Staff" },                   "gold": { "role": "operations" } },
+    { "key": "ops-2",      "input": { "title": "COO" },                              "gold": { "role": "executive" } },
+    { "key": "law-1",      "input": { "title": "General Counsel" },                  "gold": { "role": "legal" } },
+    { "key": "advisor-1",  "input": { "title": "Board Advisor" },                    "gold": { "role": "advisor" } },
+    { "key": "other-1",    "input": { "title": "Intern" },                           "gold": { "role": "other" } }
+  ]
+}

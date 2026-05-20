@@ -261,6 +261,22 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
   //      for every active project)
   if (event && (event as ScheduledEvent).cron === "15 3 * * *") {
     ctx.waitUntil((async () => {
+      // Task #8: ML Quality Ops nightly — runs the full eval sweep
+      // over every active gold dataset, then grades any
+      // `predictions` rows whose time-window closed. Wrapped in
+      // try/catch so its failure doesn't block downstream nightly
+      // jobs (analytics, account scoring, etc).
+      try {
+        const { runAllActive } = await import("./services/mlOps/runner");
+        const { predictorFor } = await import("./services/mlOps/predictors");
+        await runAllActive(env, predictorFor, { triggered_by: "nightly", model_version: "heuristic:v1" });
+      } catch (e) { console.error("nightly ml eval sweep failed", (e as Error).message); }
+      try {
+        const { runCalibrationGrade } = await import("./services/mlOps/calibration");
+        const r = await runCalibrationGrade(env);
+        console.log("nightly calibration grade", r.graded, "per type", r.perType.length);
+      } catch (e) { console.error("nightly calibration grade failed", (e as Error).message); }
+
       // 1. Analytics aggregator
       try { await runNightlyAggregator(env); } catch (e) { console.error("nightly aggregator failed", (e as Error).message); }
 

@@ -660,5 +660,107 @@ ops_crawler). The gated-source queue is at
 `GET /api/ops/crawler/skipped/gated-paste`. The "Open Secrets"
 deep link uses `?id=PROXY_URL` per the query-string convention.
 
+### Task #8 — ML Quality Ops: migration 374 + source_kind="inferred"/"enrichment" for ML registry facts (ACCEPTED)
+Spec slotted the schema at migration 366, but 366–373 are all
+taken (per the Task #13/#14/#18/#2/#3/#4/#5/#6 contract-update
+precedent above; in particular 373 was Task #6's repair migration).
+The schema lands at `apps/worker/migrations/374_ml_quality_ops.sql`
+(six tables: `eval_datasets`, `eval_examples` UNIQUE(dataset_id,
+example_key), `eval_runs` append-only per run, `prompt_versions`
+append-only with one `active=1` row per `prompt_key`,
+`prediction_outcomes_calibration` UNIQUE(prediction_type,
+day_bucket), `hallucination_flags`). Future migrations should
+number from 375.
+
+Per the Task #1 canonical write contract, any fact mirrored from
+prompt-version routing or eval output uses `source_kind="inferred"`
+(same precedent as Task #2 fund-return modeling and Task #3 edge
+quality); there is no dedicated `"ml"` source_kind. The hallucination
+verifier itself is a guard, not a writer: `guardedInsertFact` in
+`services/mlOps/hallucination.ts` is the AI-extractor entry point
+that runs `verifySourceSpan` BEFORE calling `insertFact`. Failing
+rows are appended to `hallucination_flags` and NEVER reach the
+canonical ledger; passing rows flow through `insertFact` unchanged
+with their original `source_kind` (`enrichment` for AI extractors).
+
+Gold-set sizing deviation (CONSTRAINT, not silent shortfall): the
+six bundled JSON fixtures ship with 20/26/25/8/12/10 rows rather
+than the spec's 500/50/300/200/500/100. The loader handles any
+size and re-runs upsert via UNIQUE(dataset_id, example_key) so
+operators can grow the sets in-place without a migration. The
+runner contract is identical at any size — this is a starter
+sample sufficient to exercise the eval pipeline + the CI gate
+end-to-end; bulk labeling lands in a follow-up.
+
+Eval runner (`services/mlOps/runner.ts`) is pure orchestration:
+metric helpers in `metrics.ts` are unit-tested on fixtures and
+take no DB binding. Per-task metric dispatch: classification
+macro-F1 for page/csv/role; pair P/R/F1 for entity_dedupe + founder
+background (with optional Brier when probability is available);
+field-level F1 for deal_extraction. Honest degradation matches
+the Task #14 PACER pattern: when a predictor returns
+`unconfigured` (e.g. missing `OPENAI_API_KEY` for an LLM path),
+the runner writes `eval_runs.status='unconfigured'` with the
+reason rather than a fabricated metric. The bundled heuristic
+predictors (`services/mlOps/predictors.ts`) work without a model
+provider so the pipeline + CI gate are exercisable in dev / CI.
+
+Prompt registry (`services/mlOps/prompts.ts`) is append-only with
+one `active=1` row per `prompt_key`. Promotion = INSERT new row +
+UPDATE prior to `active=0` (UNIQUE(prompt_key) WHERE active=1).
+Old rows retained for rollback, never deleted. A/B routing
+(`abRouting.ts`) is deterministic: `fnv1a32(prompt_key|salt) % 100
+< rollout_pct` routes to the new version, else the previous one.
+`getPrompt(env, key, { salt, fallbackBody })` returns a
+caller-provided fallback when migration 374 hasn't applied yet
+(cold install) so the deal extractor never crashes on a fresh
+worker. `dealExtractor.ts` exports `DEAL_EXTRACTOR_PROMPT_KEY` =
+`"deal_extractor:v1"` as the canonical prompt key for the deal
+extraction path.
+
+Regression gate (`services/mlOps/regressionGate.ts`) compares the
+two most recent `ok` eval_runs per active dataset and fails when
+any task regresses more than 5% on accuracy / precision_macro /
+recall_macro / f1_macro / precision / recall / f1, OR Brier rises
+more than 5%. The CI script `apps/worker/scripts/eval-gate.mjs`
+calls `GET /api/ml/eval/gate?threshold=5` and exits non-zero on a
+hard fail. It soft-passes on HTTP / network errors so the first
+deploy after a cold start (no baseline runs yet) doesn't block.
+The deploy workflow runs the gate between `Typecheck` and
+`Apply D1 migrations` so a regression blocks the migration apply
++ the deploy.
+
+Prediction calibration (`services/mlOps/calibration.ts`) is wrapped
+in safeQuery: when the optional `predictions` table is absent
+(test DB / fresh install) the grader returns `{graded: 0,
+perType: []}` rather than throwing — same honest-degradation
+pattern as the Task #14 verifier optional-source guards. The
+grader collapses all four common outcome shapes (boolean,
+scalar-threshold, categorical-match, numeric-proximity) to
+`(predicted_prob ∈ [0,1], actual ∈ {0,1})` and upserts one row per
+`(prediction_type, day_bucket)`. Re-runs the same day re-upsert
+in-place.
+
+Both nightly jobs (eval sweep + calibration grader) piggyback the
+consolidated `15 3 * * *` slot at the TOP of the block so their
+failures never block the downstream analytics / account-score /
+relationship-derivation chain (each wrapped in its own try/catch).
+Free plan caps crons at 5/5 — same constraint as Task #4 angel
+sweep, Task #14 verification sweep, Task #18 term benchmarks,
+Task #2 fund-return sweep, Task #3 edge-quality sweep, Task #4
+intro retrain.
+
+Per the Task #4 static-routing constraint, the two dashboard pages
+live at `/dashboard/ml/evals/` (per-dataset metric history +
+sparkline + "Run now" button) and `/dashboard/ml/calibration/`
+(per-prediction-type Brier sparkline + sample-size). Deep links
+use `?id=<dataset_id>` and `?id=<prediction_type>` respectively
+(query string, not path segment). Admin gating on the four
+write/mutation endpoints (`POST /api/ml/eval/run`, `/run-all`,
+`/load-bundled`, `/prompts/:key/promote`, `/prompts/:id/rollout`,
+`/calibration/grade`, `/hallucinations/:id/review`) uses
+`c.var.is_admin` populated by the existing `accessGuard`
+middleware (per Task #14 inline-admin pattern).
+
 ## User preferences
 - (none recorded yet)

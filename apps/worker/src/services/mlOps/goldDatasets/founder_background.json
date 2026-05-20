@@ -1,0 +1,18 @@
+{
+  "task_key": "founder_background",
+  "name": "Founder Background Claims — verifiable claim from bio text",
+  "schema_version": 1,
+  "description": "Given a founder bio + a specific claim, decide whether the bio supports the claim.",
+  "examples": [
+    { "key": "edu-1",  "input": { "bio": "Jane was previously at Google and holds an MS from Stanford.", "claim": "Studied at Stanford" },                                  "gold": { "supported": true } },
+    { "key": "edu-2",  "input": { "bio": "John holds a BS in CS from MIT.", "claim": "Studied at Stanford" },                                                                 "gold": { "supported": false } },
+    { "key": "prior-1","input": { "bio": "Alex was a founding engineer at Stripe.", "claim": "Worked at Stripe" },                                                            "gold": { "supported": true } },
+    { "key": "prior-2","input": { "bio": "Alex was a founding engineer at Stripe.", "claim": "Worked at Square" },                                                            "gold": { "supported": false } },
+    { "key": "exit-1", "input": { "bio": "Sam previously founded NorthStar, acquired by BigCo in 2022.", "claim": "Had a prior exit" },                                       "gold": { "supported": true } },
+    { "key": "exit-2", "input": { "bio": "Sam is a first-time founder.", "claim": "Had a prior exit" },                                                                       "gold": { "supported": false } },
+    { "key": "board-1","input": { "bio": "Serves on the board of OpenSourceFoundation.", "claim": "Holds a board seat" },                                                     "gold": { "supported": true } },
+    { "key": "board-2","input": { "bio": "Frequent conference speaker.", "claim": "Holds a board seat" },                                                                     "gold": { "supported": false } },
+    { "key": "phd-1",  "input": { "bio": "Earned a PhD in Computer Science from Berkeley.", "claim": "Has a PhD" },                                                           "gold": { "supported": true } },
+    { "key": "phd-2",  "input": { "bio": "Bachelors from Berkeley.", "claim": "Has a PhD" },                                                                                  "gold": { "supported": false } }
+  ]
+}

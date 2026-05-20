@@ -52,6 +52,17 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # Task #8: ML Quality Ops regression gate. Compares the two most
+      # recent `ok` eval runs per dataset against the deployed worker
+      # and fails the deploy when any task regresses more than 5%.
+      # Soft-passes on HTTP / network errors so the first deploy
+      # after a cold-start (no baseline) doesn't block.
+      - name: ML eval regression gate
+        env:
+          GATE_BASE_URL: https://api.aidatasignal.com
+          GATE_THRESHOLD: "5"
+        run: node scripts/eval-gate.mjs
+
       # Task #35: Pre-create any R2 buckets declared in wrangler.toml so
       # `wrangler deploy` doesn't 10085 on a missing bucket. The Cloudflare
       # API returns code 10004 when the bucket already exists, which we

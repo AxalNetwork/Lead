@@ -73,6 +73,7 @@ import { dataRoomsRoute } from "./routes/data_rooms";
 import { personsVerificationRoute } from "./routes/verification";
 import { diligenceRoute } from "./routes/diligence";
 import { founderCrmRoute } from "./routes/founder_crm";
+import { mlRoute } from "./routes/ml";
 export { EntityLock } from "./do/EntityLock";
 export { HostThrottle } from "./do/HostThrottle";
 export { EnrichLeadWorkflow, EnrichFirmWorkflow, IngestPageWorkflow, EnrichAccountWorkflow, CrawlSignalsWorkflow, RescorePersonaWorkflow, PersonaEntityMatchWorkflow, PersonaMatchRefreshWorkflow, PersonaMatchEntityWorkflow, MatchProjectWorkflow, DDScanEntityWorkflow, DDScanBatchWorkflow, RefreshNewsWorkflow, ClassifyEntityWorkflow, ClassifyBatchWorkflow, AIProfileFillerWorkflow, AIProfileFillerBatchWorkflow, RefreshGovernmentWorkflow, DiscoverFromSeedWorkflow, CrawlFrontierWorkflow, MonitorEntityWorkflow, MonitorBatchWorkflow, DigestWorkflow, IndividualProfilerWorkflow } from "./ai/workflows";
@@ -223,6 +224,10 @@ api.route("/api/diligence", diligenceRoute);
 // its handler; Hono falls through to this mount when the prior
 // sub-app returns no match.
 api.route("/api", founderCrmRoute);
+// Task #8: ML Quality Ops — eval runs, prompt registry, calibration,
+// hallucination flags. Admin gating is inline via c.var.is_admin
+// (populated by accessGuard) per the Task #14 inline-admin pattern.
+api.route("/api/ml", mlRoute);
 
 api.notFound((c) => c.json({ error: "not_found", request_id: c.var.request_id }, 404));
 api.onError((err, c) => {

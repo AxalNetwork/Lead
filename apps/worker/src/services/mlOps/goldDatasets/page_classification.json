@@ -1,0 +1,28 @@
+{
+  "task_key": "page_classification",
+  "name": "Page Classification — page type from URL + title + snippet",
+  "schema_version": 1,
+  "description": "Classify a crawled page into one of: team, portfolio, blog, press, profile, funding, other.",
+  "examples": [
+    { "key": "vc1-team",      "input": { "url": "https://acme.vc/team",                    "title": "Our Team — Acme Ventures",            "snippet": "Meet the partners and operators driving Acme Ventures." }, "gold": { "label": "team" } },
+    { "key": "vc1-portfolio", "input": { "url": "https://acme.vc/portfolio",               "title": "Portfolio — Acme Ventures",            "snippet": "Companies we've backed across SaaS, fintech and AI." }, "gold": { "label": "portfolio" } },
+    { "key": "vc1-blog",      "input": { "url": "https://acme.vc/blog/why-we-invest",      "title": "Why we invested in NorthStar",         "snippet": "We led the Series A in NorthStar last week." }, "gold": { "label": "blog" } },
+    { "key": "vc2-team",      "input": { "url": "https://gamma.capital/about/people",      "title": "People",                                "snippet": "General Partners, Principals and operating advisors." }, "gold": { "label": "team" } },
+    { "key": "vc2-portfolio", "input": { "url": "https://gamma.capital/companies",         "title": "Companies",                             "snippet": "Our active portfolio companies and exits." }, "gold": { "label": "portfolio" } },
+    { "key": "press-1",       "input": { "url": "https://acme.vc/press/series-c",          "title": "Acme Closes $200M Fund IV",             "snippet": "Press release: Acme has closed its fourth fund at $200M." }, "gold": { "label": "press" } },
+    { "key": "profile-1",     "input": { "url": "https://acme.vc/team/jane-doe",           "title": "Jane Doe — Partner",                    "snippet": "Jane joined Acme in 2019 and focuses on infrastructure." }, "gold": { "label": "profile" } },
+    { "key": "profile-2",     "input": { "url": "https://gamma.capital/people/john-smith", "title": "John Smith",                            "snippet": "Principal at Gamma Capital. Previously product at Stripe." }, "gold": { "label": "profile" } },
+    { "key": "funding-1",     "input": { "url": "https://techcrunch.com/2025/02/funding",  "title": "NorthStar raises $30M Series B",        "snippet": "Led by Acme Ventures with participation from Gamma." }, "gold": { "label": "funding" } },
+    { "key": "funding-2",     "input": { "url": "https://prnewswire.com/r/abc-25m",        "title": "ABC Co announces $25M Series A",        "snippet": "ABC Co today announced the closing of a $25M Series A round." }, "gold": { "label": "funding" } },
+    { "key": "blog-2",        "input": { "url": "https://gamma.capital/insights/ai-state", "title": "The state of AI investing in 2025",     "snippet": "Our annual thesis update on AI investing." }, "gold": { "label": "blog" } },
+    { "key": "team-3",        "input": { "url": "https://delta.fund/our-team",             "title": "Our team",                              "snippet": "Founders-first investing since 2014." }, "gold": { "label": "team" } },
+    { "key": "portfolio-3",   "input": { "url": "https://delta.fund/work",                 "title": "Our work",                              "snippet": "Companies we work with from seed through scale." }, "gold": { "label": "portfolio" } },
+    { "key": "other-1",       "input": { "url": "https://acme.vc/legal/privacy",           "title": "Privacy policy",                        "snippet": "Acme Ventures privacy and cookie policy." }, "gold": { "label": "other" } },
+    { "key": "other-2",       "input": { "url": "https://acme.vc/contact",                 "title": "Contact us",                            "snippet": "Email us at hello@acme.vc." }, "gold": { "label": "other" } },
+    { "key": "press-2",       "input": { "url": "https://gamma.capital/news/fund-iii",     "title": "Announcing Gamma Capital Fund III",     "snippet": "We are thrilled to announce the closing of Fund III." }, "gold": { "label": "press" } },
+    { "key": "profile-3",     "input": { "url": "https://delta.fund/team/alex-r",          "title": "Alex R.",                               "snippet": "Partner. Joined 2021. Focus on healthtech." }, "gold": { "label": "profile" } },
+    { "key": "funding-3",     "input": { "url": "https://businesswire.com/news/x100m",     "title": "X Inc closes $100M growth round",       "snippet": "X Inc, the leading provider of …, today closed $100M." }, "gold": { "label": "funding" } },
+    { "key": "blog-3",        "input": { "url": "https://acme.vc/blog/portfolio-tips",     "title": "Tips for our founders",                 "snippet": "Lessons we share with our portfolio founders." }, "gold": { "label": "blog" } },
+    { "key": "other-3",       "input": { "url": "https://acme.vc/jobs",                    "title": "Jobs at portfolio companies",           "snippet": "Open roles across our portfolio." }, "gold": { "label": "other" } }
+  ]
+}

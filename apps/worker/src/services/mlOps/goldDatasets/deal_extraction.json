@@ -1,0 +1,48 @@
+{
+  "task_key": "deal_extraction",
+  "name": "Deal Extraction — funding event fields from press text",
+  "schema_version": 1,
+  "description": "Extract structured deal fields from a press headline + body.",
+  "examples": [
+    {
+      "key": "northstar-b",
+      "input": { "title": "NorthStar raises $30M Series B led by Acme Ventures", "body": "NorthStar, a developer-tools startup, today announced a $30M Series B led by Acme Ventures with participation from Gamma Capital." },
+      "gold": { "event_type": "funding_round", "company_name": "NorthStar", "round_name": "Series B", "amount_usd": 30000000, "lead_investors": ["Acme Ventures"] }
+    },
+    {
+      "key": "abc-a",
+      "input": { "title": "ABC Co announces $25M Series A", "body": "ABC Co today announced the closing of a $25M Series A round led by Delta Fund." },
+      "gold": { "event_type": "funding_round", "company_name": "ABC Co", "round_name": "Series A", "amount_usd": 25000000, "lead_investors": ["Delta Fund"] }
+    },
+    {
+      "key": "x-growth",
+      "input": { "title": "X Inc closes $100M growth round", "body": "X Inc, the leading provider of analytics, today closed a $100M growth round led by Epsilon Growth." },
+      "gold": { "event_type": "funding_round", "company_name": "X Inc", "amount_usd": 100000000, "lead_investors": ["Epsilon Growth"] }
+    },
+    {
+      "key": "y-seed",
+      "input": { "title": "Y raises $4M seed", "body": "Y, an AI infrastructure company, raised a $4M seed round from Zeta Seed Capital and a group of angels." },
+      "gold": { "event_type": "funding_round", "company_name": "Y", "round_name": "Seed", "amount_usd": 4000000, "lead_investors": ["Zeta Seed Capital"] }
+    },
+    {
+      "key": "z-acquired",
+      "input": { "title": "BigCo acquires Z for $500M", "body": "BigCo today announced the acquisition of Z, a security startup, for $500M in cash." },
+      "gold": { "event_type": "acquisition", "company_name": "Z", "amount_usd": 500000000 }
+    },
+    {
+      "key": "preseed-q",
+      "input": { "title": "Q closes pre-seed", "body": "Q raised $750k in pre-seed from Theta Ventures." },
+      "gold": { "event_type": "funding_round", "company_name": "Q", "round_name": "Pre-Seed", "amount_usd": 750000, "lead_investors": ["Theta Ventures"] }
+    },
+    {
+      "key": "ipo-w",
+      "input": { "title": "W files for IPO", "body": "W filed an S-1 with the SEC to list on the Nasdaq." },
+      "gold": { "event_type": "ipo", "company_name": "W" }
+    },
+    {
+      "key": "bridge-v",
+      "input": { "title": "V raises bridge round", "body": "V, a fintech startup, raised a $5M bridge round led by Iota Capital." },
+      "gold": { "event_type": "funding_round", "company_name": "V", "round_name": "Bridge", "amount_usd": 5000000, "lead_investors": ["Iota Capital"] }
+    }
+  ]
+}
