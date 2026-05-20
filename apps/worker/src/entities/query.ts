@@ -11,6 +11,9 @@ export interface LoadedEntity {
   kind: string;
   roles: Array<{ role: string; is_primary: number; confidence: number }>;
   facts: Array<{ id: string; predicate: string; value_text: string | null; value_number: number | null; value_json: unknown; value_entity_id: string | null; source: string | null; source_kind: string; confidence: number; verified_score: number | null; observed_at: string; is_current: number; superseded_by_override?: number }>;
+  // Task #3: AI/scrape attempts that were dethroned by an active override.
+  // Returned for the field-history diff strip; never the canonical value.
+  attempts?: Array<{ id: string; predicate: string; value_text: string | null; value_number: number | null; value_json: unknown; value_entity_id: string | null; source: string | null; source_kind: string; confidence: number; verified_score: number | null; observed_at: string; is_current: number; superseded_by_override?: number }>;
   overrides?: Array<{ id: string; predicate: string; value_text: string | null; value_number: number | null; value_json: unknown; overridden_at: string }>;
   channels: Array<{ kind: string; canonical: string; display: string | null; is_primary: number; is_verified: number; is_dnc: number }>;
   tags: Array<{ taxonomy: string; slug: string; weight: number }>;
@@ -35,15 +38,66 @@ export async function loadEntity(env: Env, id: string, opts?: { includeNonCurren
       try { f.value_json = JSON.parse(f.value_json); } catch { /* leave as string */ }
     }
   }
-  // Task #3 (Editable Profiles): mark AI/scrape rows that conflict with
-  // an active locked override as superseded_by_override (returned for
-  // diff/history; never used as canonical). Also expose the active
-  // override rows so the field-history UI can render them.
+  // Task #3 (Editable Profiles): the overlay makes the override the
+  // CANONICAL row in facts[] — substitute the value_* fields with the
+  // override values for predicates that have an active locked override,
+  // so downstream consumers reading raw facts[] see the operator's
+  // value (not the AI value) without needing to filter. The AI/scrape
+  // attempt is moved into attempts[] so the field-history diff strip
+  // still has the prior values to display.
   const overridesMap = await loadCurrentOverrides(env, id);
+  const attempts: typeof factRows = [];
+  const overlaidByPred = new Set<string>();
   if (overridesMap.size > 0) {
+    const finalRows: typeof factRows = [];
     for (const f of factRows) {
-      if (overridesMap.has(f.predicate)) f.superseded_by_override = 1;
+      const ov = overridesMap.get(f.predicate);
+      if (ov) {
+        // First time we see this predicate, replace the row with the
+        // override-valued canonical row (preserving the existing row id
+        // so consumers keying off id still resolve).
+        if (!overlaidByPred.has(f.predicate)) {
+          overlaidByPred.add(f.predicate);
+          finalRows.push({
+            ...f,
+            value_text: ov.value_text,
+            value_number: ov.value_numeric,
+            value_json: ov.value_json ? (() => { try { return JSON.parse(ov.value_json as string); } catch { return ov.value_json; } })() : null,
+            value_entity_id: null,
+            source_kind: "manual",
+            source: "field_override",
+            confidence: 1,
+            observed_at: ov.overridden_at,
+            superseded_by_override: 0,
+          });
+        }
+        // The original AI/scrape row moves into attempts[].
+        attempts.push({ ...f, superseded_by_override: 1 });
+      } else {
+        finalRows.push(f);
+      }
     }
+    // Overrides for predicates with no underlying fact at all → still
+    // expose as canonical rows.
+    for (const [pred, ov] of overridesMap.entries()) {
+      if (overlaidByPred.has(pred)) continue;
+      finalRows.push({
+        id: `override:${ov.id}`,
+        predicate: pred,
+        value_text: ov.value_text,
+        value_number: ov.value_numeric,
+        value_json: ov.value_json ? (() => { try { return JSON.parse(ov.value_json as string); } catch { return ov.value_json; } })() : null,
+        value_entity_id: null,
+        source_kind: "manual",
+        source: "field_override",
+        confidence: 1,
+        verified_score: null,
+        observed_at: ov.overridden_at,
+        is_current: 1,
+        superseded_by_override: 0,
+      });
+    }
+    factRows.splice(0, factRows.length, ...finalRows);
   }
   const overrideArr = Array.from(overridesMap.values()).map((ov) => ({
     id: ov.id,
@@ -57,6 +111,7 @@ export async function loadEntity(env: Env, id: string, opts?: { includeNonCurren
     id, kind: ent.kind, entity: ent,
     roles: (roles.results ?? []) as LoadedEntity["roles"],
     facts: factRows,
+    attempts,
     channels: (channels.results ?? []) as LoadedEntity["channels"],
     tags: (tags.results ?? []) as LoadedEntity["tags"],
     summary: (summary as Record<string, unknown> | null) ?? null,
