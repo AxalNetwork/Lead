@@ -201,6 +201,38 @@ test("routeFromUrl: collapses uuid/numeric path segments to :id", () => {
   assert.equal(routeFromUrl("/api/foo"), "/api/foo");
 });
 
+test("/db-errors route: source query uses occurred_at, not created_at (schema regression)", async () => {
+  // Route-level harness would require compiling Hono + all transitive
+  // route deps in the test build. Instead, lock the schema column at
+  // the source level: error_log's timestamp is `occurred_at` (see
+  // migrations/190_error_log.sql); using `created_at` here throws
+  // `no such column` at runtime — exactly the bug this test prevents.
+  const fs = await import("node:fs/promises");
+  const src = await fs.readFile(new URL("../src/routes/ops_crawler.ts", import.meta.url), "utf8");
+  const handlerStart = src.indexOf('opsCrawlerRoute.get("/db-errors"');
+  assert.ok(handlerStart > 0, "/db-errors handler must exist in ops_crawler.ts");
+  // Pull just the SQL template literal (anchored on `SELECT) so prose
+  // comments above the query — which contain backtick-quoted column
+  // names — don't pollute the column-name assertions.
+  const sqlStart = src.indexOf("`SELECT", handlerStart);
+  assert.ok(sqlStart > 0, "handler must contain a SELECT query");
+  const sqlEnd = src.indexOf("`", sqlStart + 1);
+  const sql = src.slice(sqlStart + 1, sqlEnd);
+  assert.match(sql, /FROM error_log/);
+  assert.match(sql, /occurred_at/,
+    "query must filter/order by occurred_at (the real column)");
+  assert.doesNotMatch(sql, /\bcreated_at\b/,
+    "query must not reference a non-existent created_at column");
+  // The catch-branch tableMissing regex: must include `no such table`
+  // but NOT `no such column` (column-drift bugs must surface as 500,
+  // not be masked as a missing-table degrade).
+  const catchBlock = src.slice(sqlEnd, src.indexOf("groupDbErrors", sqlEnd));
+  const tableMissingRegex = catchBlock.match(/\/[^/]*no such table[^/]*\/i/);
+  assert.ok(tableMissingRegex, "table_missing branch must test for 'no such table'");
+  assert.doesNotMatch(tableMissingRegex[0], /no such column/,
+    "table_missing regex must not also match 'no such column'");
+});
+
 test("groupDbErrors: groups by (normalized_message, route) and sorts by count desc", () => {
   const rows = [
     { message: "db_error", cause_message: "no such table: foo", url: "/api/a" },

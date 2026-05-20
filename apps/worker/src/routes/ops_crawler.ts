@@ -876,17 +876,22 @@ opsCrawlerRoute.get("/db-errors", async (c) => {
   let tableMissing = false;
   try {
     const r = await c.env.DB.prepare(
+      // error_log uses `occurred_at` (migration 190_error_log.sql) —
+      // there is no `created_at` column on this table.
       `SELECT message, cause_message, url, method
          FROM error_log
         WHERE code = 'db_error'
-          AND created_at >= datetime('now', ?)
-        ORDER BY created_at DESC
+          AND occurred_at >= datetime('now', ?)
+        ORDER BY occurred_at DESC
         LIMIT 5000`,
     ).bind(`-${days} days`).all<{ message: string | null; cause_message: string | null; url: string | null; method: string | null }>();
     rows = r.results ?? [];
   } catch (e) {
     const msg = (e as Error).message || "";
-    if (/no such table|no such column/i.test(msg)) {
+    // Only `no such table` is honest degradation. A `no such column`
+    // is a real bug (schema drift) that must surface to the operator
+    // — not be silently re-skinned as "table_missing".
+    if (/no such table/i.test(msg)) {
       tableMissing = true;
     } else {
       return c.json({ ok: false, error: "db_error_query_failed", message: msg }, 500);
