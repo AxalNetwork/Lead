@@ -21,13 +21,25 @@ export async function insertFact(env: Env, f: FactInput): Promise<string | null>
   const hash = await sha256(`${f.entity_id}|${f.predicate}|${valueKey}|${f.source ?? ""}`);
   const id = crypto.randomUUID();
   const now = f.observed_at ?? new Date().toISOString();
+  // Task #3 (Editable Profiles): lock check. If a locked override exists
+  // for this (entity, predicate), the new fact row is still inserted (so
+  // the diff strip can show the AI/scrape attempt) but stamped with
+  // superseded_by_override=1 so it never wins the read race. The override
+  // layer overlays at read time via getEffectiveFacts.
+  const lock = await env.DB.prepare(
+    `SELECT 1 FROM field_overrides
+      WHERE entity_id = ? AND predicate = ? AND locked = 1
+        AND (unlock_after IS NULL OR unlock_after > datetime('now'))
+      LIMIT 1`,
+  ).bind(f.entity_id, f.predicate).first().catch(() => null);
+  const supersededByOverride = lock ? 1 : 0;
   try {
     await env.DB.prepare(
       `INSERT INTO facts (
          id, entity_id, predicate, value_text, value_number, value_json,
          value_entity_id, source_kind, source, evidence_url, confidence,
-         observed_at, valid_from, valid_to, is_current, hash
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+         observed_at, valid_from, valid_to, is_current, hash, superseded_by_override
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
     ).bind(
       id, f.entity_id, f.predicate,
       f.value_text ?? null,
@@ -42,7 +54,27 @@ export async function insertFact(env: Env, f: FactInput): Promise<string | null>
       f.valid_from ?? null,
       f.valid_to ?? null,
       hash,
+      supersededByOverride,
     ).run();
+    // Task #3 race fix: the SELECT lock-check above and this INSERT are
+    // not atomic. If an override landed between them, our row would have
+    // superseded_by_override=0 even though an override now dominates. The
+    // override-create handler ALSO runs `UPDATE facts SET
+    // superseded_by_override = 1` to catch facts inserted before the
+    // override; this post-insert re-check covers the reverse direction,
+    // so both writers converge on the same end state regardless of which
+    // raced first.
+    if (!supersededByOverride) {
+      await env.DB.prepare(
+        `UPDATE facts SET superseded_by_override = 1
+          WHERE id = ?
+            AND EXISTS (
+              SELECT 1 FROM field_overrides
+               WHERE entity_id = ? AND predicate = ? AND locked = 1
+                 AND (unlock_after IS NULL OR unlock_after > datetime('now'))
+            )`,
+      ).bind(id, f.entity_id, f.predicate).run().catch(() => undefined);
+    }
     // Centralized rebuild guarantee: every successful fact insert
     // enqueues a summary rebuild for the owning entity. This keeps the
     // "fact INSERT → rebuild within ~5s" SLO honest regardless of which
@@ -82,6 +114,175 @@ export interface FactPatch {
   value_number?: number | null;
   value_json?: unknown;
   value_entity_id?: string | null;
+}
+
+// Task #3 (Editable Profiles): single, shared overlay used by both the
+// summary rebuild and the per-entity fact read path. The override row
+// wins when locked=1 and the unlock_after window has not expired. The
+// AI/scrape attempt is preserved in `facts` (with superseded_by_override=1
+// set by insertFact) so the field-history diff strip can show it; this
+// helper returns it ONLY in the array marked `overridden_attempt=true`
+// for diff rendering — never as the canonical value.
+export interface EffectiveFact {
+  predicate: string;
+  value_text: string | null;
+  value_number: number | null;
+  value_json: unknown;
+  value_entity_id: string | null;
+  source_kind: string;
+  source: string | null;
+  confidence: number;
+  observed_at: string;
+  is_override: boolean;
+  override_id: string | null;
+  overridden_attempt: boolean;
+}
+
+interface FieldOverrideRow {
+  id: string;
+  predicate: string;
+  value_text: string | null;
+  value_numeric: number | null;
+  value_json: string | null;
+  overridden_at: string;
+}
+
+interface RawFactRow {
+  predicate: string;
+  value_text: string | null;
+  value_number: number | null;
+  value_json: string | null;
+  value_entity_id: string | null;
+  source_kind: string;
+  source: string | null;
+  confidence: number;
+  observed_at: string;
+  superseded_by_override: number;
+}
+
+function parseJsonSafe(s: string | null): unknown {
+  if (s == null) return null;
+  try { return JSON.parse(s); } catch { return s; }
+}
+
+export async function loadCurrentOverrides(env: Env, entityId: string): Promise<Map<string, FieldOverrideRow>> {
+  const r = await env.DB.prepare(
+    `SELECT id, predicate, value_text, value_numeric, value_json, overridden_at
+       FROM field_overrides
+      WHERE entity_id = ? AND locked = 1
+        AND (unlock_after IS NULL OR unlock_after > datetime('now'))
+      ORDER BY overridden_at DESC`,
+  ).bind(entityId).all<FieldOverrideRow>().catch(() => ({ results: [] as FieldOverrideRow[] }));
+  const map = new Map<string, FieldOverrideRow>();
+  for (const o of r.results ?? []) {
+    if (!map.has(o.predicate)) map.set(o.predicate, o);
+  }
+  return map;
+}
+
+export async function getEffectiveFacts(env: Env, entityId: string): Promise<EffectiveFact[]> {
+  const [factsRes, overrides] = await Promise.all([
+    env.DB.prepare(
+      `SELECT predicate, value_text, value_number, value_json, value_entity_id,
+              source_kind, source, confidence, observed_at, superseded_by_override
+         FROM facts
+        WHERE entity_id = ? AND is_current = 1`,
+    ).bind(entityId).all<RawFactRow>(),
+    loadCurrentOverrides(env, entityId),
+  ]);
+  const out: EffectiveFact[] = [];
+  const overridePredsSeen = new Set<string>();
+
+  for (const f of factsRes.results ?? []) {
+    const ov = overrides.get(f.predicate);
+    if (ov) {
+      if (!overridePredsSeen.has(f.predicate)) {
+        overridePredsSeen.add(f.predicate);
+        out.push({
+          predicate: f.predicate,
+          value_text: ov.value_text,
+          value_number: ov.value_numeric,
+          value_json: parseJsonSafe(ov.value_json),
+          value_entity_id: null,
+          source_kind: "manual",
+          source: "field_override",
+          confidence: 1,
+          observed_at: ov.overridden_at,
+          is_override: true,
+          override_id: ov.id,
+          overridden_attempt: false,
+        });
+      }
+      // Mark the underlying fact as an overridden attempt for the diff
+      // strip. Never returned as canonical.
+      out.push({
+        predicate: f.predicate,
+        value_text: f.value_text,
+        value_number: f.value_number,
+        value_json: parseJsonSafe(f.value_json),
+        value_entity_id: f.value_entity_id,
+        source_kind: f.source_kind,
+        source: f.source,
+        confidence: f.confidence,
+        observed_at: f.observed_at,
+        is_override: false,
+        override_id: null,
+        overridden_attempt: true,
+      });
+    } else if (f.superseded_by_override === 1) {
+      // No active override but the row was stamped (race / unlocked).
+      // Surface only as an attempt; canonical resolves to whatever
+      // other is_current=1 row exists, or none.
+      out.push({
+        predicate: f.predicate,
+        value_text: f.value_text,
+        value_number: f.value_number,
+        value_json: parseJsonSafe(f.value_json),
+        value_entity_id: f.value_entity_id,
+        source_kind: f.source_kind,
+        source: f.source,
+        confidence: f.confidence,
+        observed_at: f.observed_at,
+        is_override: false,
+        override_id: null,
+        overridden_attempt: true,
+      });
+    } else {
+      out.push({
+        predicate: f.predicate,
+        value_text: f.value_text,
+        value_number: f.value_number,
+        value_json: parseJsonSafe(f.value_json),
+        value_entity_id: f.value_entity_id,
+        source_kind: f.source_kind,
+        source: f.source,
+        confidence: f.confidence,
+        observed_at: f.observed_at,
+        is_override: false,
+        override_id: null,
+        overridden_attempt: false,
+      });
+    }
+  }
+  // Overrides for predicates with no underlying fact row at all.
+  for (const [pred, ov] of overrides.entries()) {
+    if (overridePredsSeen.has(pred)) continue;
+    out.push({
+      predicate: pred,
+      value_text: ov.value_text,
+      value_number: ov.value_numeric,
+      value_json: parseJsonSafe(ov.value_json),
+      value_entity_id: null,
+      source_kind: "manual",
+      source: "field_override",
+      confidence: 1,
+      observed_at: ov.overridden_at,
+      is_override: true,
+      override_id: ov.id,
+      overridden_attempt: false,
+    });
+  }
+  return out;
 }
 
 export async function insertFactsBatch(

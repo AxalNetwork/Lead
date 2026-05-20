@@ -922,5 +922,76 @@ parent listing route that wildcards on `/:id` so the new sub-path
 doesn't get shadowed — same precedent as the Task #2 fund-returns
 sub-route ordering.
 
+### Task #3 — Editable Profiles + Manual Overrides with Audit: migration 376 + read-time overlay + entity_audit_log (ACCEPTED)
+Spec slotted the schema at migration 369, but slots 350–375 are all
+taken (per the Task #13/#14/#18/#2/#3/#4/#5/#6/#8/#1/#2 contract-
+update precedent above; 375 is the Task #1 garbage detector). The
+schema lands at `apps/worker/migrations/376_field_overrides.sql`
+(two tables: `field_overrides` typed override layer, and
+`entity_audit_log` append-only audit trail; plus a new
+`facts.superseded_by_override` column + filtered index). Future
+migrations should number from 377.
+
+Per the Task #1 canonical write contract, every fact write still
+flows through `entities/facts.ts::insertFact` — the override layer
+is a **separate** table that overlays at read time, NOT another
+fact source. No handler in `routes/overrides.ts` writes directly
+to `facts`. When a locked override exists for the same (entity_id,
+predicate), `insertFact` still inserts the new fact row (so the
+diff strip can show the AI/scrape attempt) but stamps
+`superseded_by_override=1` so it never wins the read race.
+
+The read-path overlay lives in ONE place — `loadCurrentOverrides`
++ `getEffectiveFacts` in `entities/facts.ts` — and is called by
+both `entities/summary.ts` (substitutes override values before the
+summary blob is built) and `entities/query.ts::loadEntity` (marks
+conflicting facts `superseded_by_override` and returns the active
+override array). Exactly two read sites, so the overlay can't drift.
+
+Append-only semantics: `entity_audit_log` rows are NEVER updated or
+deleted. Restore is a new `restore` row, unlock is a new
+`field_unlock` row. The override row itself can flip
+`locked=1 → locked=0` (with `unlock_after` stamped) — this is the
+only in-place mutation; the row's prior state is recoverable from
+the audit log timeline.
+
+Non-admin viewers see `<redacted>` for `overridden_by_email` and
+`actor_email` on history / audit-log responses (matches the Task #14
+verification-history redaction pattern). Admin gating uses
+`c.var.is_admin` populated by the existing `accessGuard` middleware
+at `src/middleware/access.ts` — same inline-admin-check pattern as
+the Task #14 verification routes; no parallel `adminOnly` middleware.
+
+Manual entity creation (`POST /api/entities`) routes through
+`createEntity` + `addRole` (Task #1 canonical write contract) with
+`suppressAutoProfileFill: true` so a stray "+ Create entity" click
+doesn't burn AI neurons; the `?fill=ai` query opts back in via
+`WF_PROFILE_FILLER`. Soft-delete uses the existing
+`u_entities.status='soft_deleted'` enum + `deleted_reason` column
+already added by Task #9 (migration 375) — no add-column-if-not-
+exists branch needed at this point in the queue.
+
+`POST /api/entities/:id/merge-into` is a NEW operator-driven path
+(named target, writes `entity_audit_log` rows) mounted at a
+distinct sub-path so the existing legacy `POST /api/entities/:id/merge`
+on `entitiesRoute` (Task #4, quality-score pickPrimary) is preserved.
+The new `overridesRoute` is mounted at `/api` AFTER `entitiesRoute`
+in `src/index.ts` so the legacy `/:id` and `/:id/merge` handlers
+keep their first-match priority and the new sub-paths fall through.
+
+Per the Task #4 static-routing constraint, every UI deep link from
+`field-edit.js` (history panel hydration, post-create navigation)
+uses `?id=<entity_id>` query strings, never `/:id` path segments.
+
+Nightly `unlock_after` expiry (`runOverrideUnlockSweep`, bounded
+500/tick) piggybacks the consolidated `15 3 * * *` slot (Free plan
+caps crons at 5/5 — same constraint as Task #4 angel sweep,
+Task #14 verification sweep, Task #18 term benchmarks, Task #2
+fund-return sweep, Task #3 edge-quality sweep, Task #4 intro
+retrain, Task #1 garbage detector, Task #8 ML eval). The sweep
+flips `locked=0`, clears `superseded_by_override=0` on matching
+current facts, writes a `field_unlock` audit row with
+`actor_email='system:cron'`, and enqueues a summary rebuild.
+
 ## User preferences
 - (none recorded yet)

@@ -261,6 +261,19 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
   //      for every active project)
   if (event && (event as ScheduledEvent).cron === "15 3 * * *") {
     ctx.waitUntil((async () => {
+      // Task #3 (Editable Profiles): unlock_after expiry sweep. Flips
+      // locked=0 on overrides whose unlock_after has passed (originally
+      // set by a bulk_revert or admin unlock), clears
+      // superseded_by_override on matching facts, and enqueues a summary
+      // rebuild. Bounded so a backlog can't dominate the nightly slot.
+      try {
+        const { runOverrideUnlockSweep } = await import("./routes/overrides");
+        const r = await runOverrideUnlockSweep(env, 500);
+        if (r.unlocked > 0) console.log("nightly override unlock sweep", r.unlocked);
+      } catch (e) {
+        console.error("nightly override unlock sweep failed", (e as Error).message);
+      }
+
       // Task #8: ML Quality Ops nightly — runs the full eval sweep
       // over every active gold dataset, then grades any
       // `predictions` rows whose time-window closed. Wrapped in

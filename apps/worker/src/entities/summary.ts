@@ -2,6 +2,7 @@
 // channels + tags + roles. Runs inside the queue consumer.
 
 import type { Env } from "../types";
+import { loadCurrentOverrides } from "./facts";
 
 interface FactRow {
   predicate: string;
@@ -58,7 +59,28 @@ export async function rebuildSummary(env: Env, entityId: string): Promise<boolea
     env.DB.prepare(`SELECT role, is_primary, confidence FROM entity_roles WHERE entity_id = ?`).bind(entityId).all<RoleRow>(),
     env.DB.prepare(`SELECT kind, canonical, display, is_primary, is_verified FROM channels WHERE entity_id = ?`).bind(entityId).all<ChannelRow>(),
   ]);
-  const facts = factsRes.results ?? [];
+  let facts = factsRes.results ?? [];
+  // Task #3 (Editable Profiles): overlay locked field_overrides over the
+  // raw is_current=1 facts before computing the summary. The override
+  // wins; the AI/scrape attempt remains in facts (with
+  // superseded_by_override=1) but is filtered out of the summary inputs.
+  const overrides = await loadCurrentOverrides(env, entityId);
+  if (overrides.size > 0) {
+    facts = facts.filter((f) => !overrides.has(f.predicate));
+    const nowTs = new Date().toISOString();
+    for (const [pred, ov] of overrides.entries()) {
+      facts.push({
+        predicate: pred,
+        value_text: ov.value_text,
+        value_number: ov.value_numeric,
+        value_json: ov.value_json,
+        value_entity_id: null,
+        confidence: 1,
+        observed_at: ov.overridden_at ?? nowTs,
+        source_kind: "manual",
+      });
+    }
+  }
   const tags = tagsRes.results ?? [];
   const roles = rolesRes.results ?? [];
   const channels = channelsRes.results ?? [];
