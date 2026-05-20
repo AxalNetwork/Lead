@@ -1159,5 +1159,74 @@ path segments. Page-level gating uses the Task #2
 `/ops/crawler/` pre-flight pattern — `#ops-content` hidden
 until `GET /api/ops/compute-nodes` returns 2xx.
 
+### Task #5 — System Health & Errors Dashboard: migration 379 + Slack as secondary channel + hourly piggyback (ACCEPTED)
+Spec slotted the schema at migration 371, but slots 360–378 were all
+taken (per the Task #13/#14/#18/#2/#3/#4/#5/#6 contract-update precedent
+above; in particular 371 = diligence from Task #6). The schema lands
+at `apps/worker/migrations/379_system_health.sql` (three tables:
+`ops_incidents` append-only opened/closed with `signature` dedupe key,
+`external_api_probes` append-only per probe with latency + rate-limit
+fields, `health_snapshots` 5-min bucket rollups keyed by
+`(bucket_start, metric_name)`). Future migrations should number from 380.
+
+**No new cron slot** (CONSTRAINT, not deviation): Free plan caps crons
+at 5/5 — same constraint as Task #4 angel sweep, Task #14 verification,
+Task #18 term benchmarks, Task #2 fund returns, Task #3 edge quality,
+Task #4 intro retrain. The 5-min rollup target from the spec drops to
+**hourly piggyback** on the existing `0 * * * *` slot
+(`writeHealthSnapshot` + `runAlertEvaluator`). To preserve sub-hour
+freshness for live page loads, `GET /api/ops/system-health` does an
+**on-demand snapshot write** when the latest `health_snapshots` bucket
+is >5 min stale — so opening the page always renders against a fresh
+rollup without burning a cron slot. The nightly external-API probe
+sweep piggybacks the consolidated `15 3 * * *` slot.
+
+**Slack as secondary channel only** (CONSTRAINT): hard-threshold
+alerts (queue age >30min, node down >5min, error rate >5/min, D1
+throttle sustained) fire through the existing operator email path
+(`ALLOWED_EMAIL` via MailChannels) as the primary transport. The new
+optional `SLACK_WEBHOOK_URL` secret is a secondary channel — when
+set, the same payload is POSTed to the webhook in parallel. When
+either delivery fails the failure is captured on
+`ops_incidents.delivery_status` (honest error string, never silently
+"ok"), matching the Task #14 PACER / Task #18 leak-harvester honesty
+pattern. No notification-preferences UI is introduced.
+
+**Recovery semantics**: incidents close automatically after
+`RECOVER_TICKS_TO_CLOSE=2` consecutive ticks with no breach matching
+the incident's signature. The recovery counter persists in
+`SESSIONS` KV keyed by `sysh:recover:<signature>` so it survives
+isolate recycling. Counter resets to 0 the instant the breach
+returns — incidents that flap stay open. Re-opens against an already-
+open signature are no-ops (dedupe on `signature` + `closed_at IS NULL`).
+
+Per the Task #1 canonical write contract, derived facts are NOT
+mirrored from this surface — health metrics are operator-facing
+observability, not entity-level business facts. The `insertFact`
+write path stays scoped to entity profile derivations.
+
+Per the Task #4 static-routing constraint, the incident timeline lives
+at `/ops/incidents/?id=<incident_id>` (query string, not path segment)
+and hydrates strictly from the `context_json` snapshot captured at
+incident open — the page never re-queries underlying gauge tables.
+The free-form resolution-notes textarea PATCHes back into
+`ops_incidents.resolution_notes` via `PATCH /api/ops/system-health/incidents/by-id`.
+
+Page-level admin gating uses the Task #2 `/ops/crawler/` pre-flight
+pattern: `#ops-content` is hidden by default and `ops-system-health.js`
+pre-flights `GET /api/ops/system-health` (worker-side `adminOnly`
+via the `/api/ops/*` parent mount) before revealing the panels.
+Drain and probe-now buttons are admin-only on the worker side via
+the same parent mount; no parallel `adminOnly` middleware is added.
+
+Each collector (`services/systemHealth/collectors.ts`) wraps its
+source query in `safeQuery` so the cold-install case (zero rows in
+every source table) renders the page without throwing — same pattern
+as the Task #14 verification optional-source / Task #6 diligence
+executor honest-degradation contracts. External-API probes return
+`{ok:false, configured:false, reason:"unconfigured"}` (never silent
+"ok") when their env var / token is absent — same honesty pattern
+as the Task #14 CourtListener / Task #18 Delaware-COI fetchers.
+
 ## User preferences
 - (none recorded yet)

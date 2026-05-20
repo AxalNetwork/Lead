@@ -54,6 +54,7 @@ import { profileComments as profileCommentsRoute } from "./routes/profile_commen
 import { opsCrawlerRoute } from "./routes/ops_crawler";
 import { opsGarbageRoute } from "./routes/ops_garbage";
 import { opsComputeNodesRoute } from "./routes/ops_compute_nodes";
+import { opsSystemHealthRoute } from "./routes/ops_system_health";
 import { computeRunnerRoute } from "./routes/compute";
 import { peopleRoute } from "./routes/people";
 import { leadsPromote } from "./routes/leads_promote";
@@ -186,6 +187,9 @@ api.route("/api/profile-comments", profileCommentsRoute);
 api.route("/api/ops/crawler", opsCrawlerRoute);
 // Task #9: External Worker Pool admin console.
 api.route("/api/ops/compute-nodes", opsComputeNodesRoute);
+// Task #5: System Health & Errors Dashboard. Admin-only via the parent
+// /api/ops/* mount; aggregator + incidents + external API probes.
+api.route("/api/ops/system-health", opsSystemHealthRoute);
 // Task #1: Garbage entity review console (admin-only via the
 // /api/ops/* parent mount above).
 api.route("/api/ops/garbage-review", opsGarbageRoute);

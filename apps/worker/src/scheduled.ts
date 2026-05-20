@@ -246,6 +246,30 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       } catch (e) {
         console.error("hourly crawl-signals failed", (e as Error).message);
       }
+
+      // Task #5 (System Health): hourly rollup write + alert evaluator
+      // tick + cron-tick marker. Piggybacks the hourly slot (Free plan
+      // caps crons at 5/5 — same constraint as the other piggybacks
+      // above). The aggregator endpoint additionally writes an
+      // on-demand snapshot when the last bucket is >5min old so live
+      // page reads see fresh data between cron ticks.
+      try {
+        const { writeHealthSnapshot, markCronTick } = await import("./services/systemHealth/snapshot");
+        const snap = await writeHealthSnapshot(env);
+        await markCronTick(env, "0 * * * *");
+        console.log("hourly system-health snapshot", JSON.stringify(snap));
+      } catch (e) {
+        console.error("hourly system-health snapshot failed", (e as Error).message);
+      }
+      try {
+        const { runAlertEvaluator } = await import("./services/systemHealth/alerts");
+        const r = await runAlertEvaluator(env);
+        if (r.opened > 0 || r.closed > 0) {
+          console.log("hourly system-health alerts", JSON.stringify(r));
+        }
+      } catch (e) {
+        console.error("hourly system-health alerts failed", (e as Error).message);
+      }
     })());
     return;
   }
@@ -261,6 +285,23 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
   //      for every active project)
   if (event && (event as ScheduledEvent).cron === "15 3 * * *") {
     ctx.waitUntil((async () => {
+      // Task #5 (System Health): nightly external-API probe sweep. One
+      // cheap GET per registered API; writes to external_api_probes.
+      // Piggybacks the consolidated nightly slot (Free plan caps crons
+      // at 5/5). Mark the nightly cron tick so the cron-status panel
+      // surfaces it on /ops/system-health/.
+      try {
+        const { runAllProbes } = await import("./services/systemHealth/probes");
+        const probes = await runAllProbes(env);
+        const failed = probes.filter((p) => !p.ok && p.configured).length;
+        const unconfigured = probes.filter((p) => !p.configured).length;
+        console.log("nightly external-api probes", JSON.stringify({ probed: probes.length, failed, unconfigured }));
+        const { markCronTick } = await import("./services/systemHealth/snapshot");
+        await markCronTick(env, "15 3 * * *");
+      } catch (e) {
+        console.error("nightly external-api probes failed", (e as Error).message);
+      }
+
       // Task #3 (Editable Profiles): unlock_after expiry sweep. Flips
       // locked=0 on overrides whose unlock_after has passed (originally
       // set by a bulk_revert or admin unlock), clears

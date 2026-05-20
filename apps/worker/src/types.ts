@@ -182,6 +182,10 @@ export interface Env {
   WF_PROFILER_INDIVIDUAL?:  { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
   // Task #3: durable per-import CSV pipeline for >5,000 row files.
   WF_CSV_IMPORT?:           { create: (opts: { params: Record<string, unknown> }) => Promise<{ id: string }> };
+  // Task #5 (System Health): optional Slack webhook for hard-threshold
+  // alerts. When unset, alerts still fire to ALLOWED_EMAIL — Slack is
+  // a secondary channel only.
+  SLACK_WEBHOOK_URL?: string;
 }
 
 export type JobKind =

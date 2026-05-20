@@ -239,6 +239,10 @@
     "src/services/compute/routing.ts",
     "src/services/compute/envelope.ts",
     "src/services/compute/registration.ts",
-    "src/services/compute/dispatcher.ts"
+    "src/services/compute/dispatcher.ts",
+    "src/services/systemHealth/collectors.ts",
+    "src/services/systemHealth/alerts.ts",
+    "src/services/systemHealth/snapshot.ts",
+    "src/services/systemHealth/probes.ts"
   ]
 }

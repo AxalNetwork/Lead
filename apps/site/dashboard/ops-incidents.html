@@ -1,0 +1,80 @@
+---
+layout: default
+title: Incidents
+permalink: /ops/incidents/
+---
+
+<section class="ads-section" id="ops-root">
+  <h1 class="ads-h1">Incidents</h1>
+
+  <div id="ops-auth-check" class="ads-card">
+    <strong>Verifying admin access…</strong>
+  </div>
+
+  <div id="ops-forbidden" hidden class="ads-card ads-card--err">
+    <strong>403 Forbidden.</strong> You are not on the ops admin allowlist.
+  </div>
+
+  <div id="ops-content" hidden>
+    <!-- List mode (no ?id=) -->
+    <div id="ops-incidents-list-mode">
+      <p class="ads-sub">
+        Every open and closed incident from the System Health alert
+        engine. Click an incident to view the timeline and edit
+        resolution notes.
+      </p>
+      <div style="margin:.5rem 0;display:flex;gap:.5rem;flex-wrap:wrap">
+        <button class="ads-btn" data-filter="all">All</button>
+        <button class="ads-btn" data-filter="open">Open</button>
+        <button class="ads-btn" data-filter="closed">Closed</button>
+        <a class="ads-btn" href="/ops/system-health/" style="margin-left:auto">← Back to System Health</a>
+      </div>
+      <div class="ads-card">
+        <div class="ads-table-wrap">
+          <table class="ads-table" id="ops-incidents-table">
+            <thead><tr><th>Opened</th><th>Closed</th><th>Severity</th><th>Kind</th><th>Summary</th><th>Delivery</th></tr></thead>
+            <tbody><tr><td colspan="6">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Detail mode (?id=...) -->
+    <div id="ops-incident-detail-mode" hidden>
+      <p class="ads-sub">
+        <a href="/ops/incidents/">← All incidents</a> ·
+        <a href="/ops/system-health/">System Health</a>
+      </p>
+      <div class="ads-card" id="ops-incident-meta">Loading…</div>
+
+      <h2 class="ads-h2">Context snapshot at open time</h2>
+      <div class="ads-card">
+        <pre class="ads-mono" id="ops-incident-context" style="white-space:pre-wrap;margin:0">Loading…</pre>
+      </div>
+
+      <h2 class="ads-h2">Timeline (±30 min around opened_at)</h2>
+      <div class="ads-card">
+        <div class="ads-table-wrap">
+          <table class="ads-table" id="ops-incident-timeline">
+            <thead><tr><th>Bucket</th><th>Metric</th><th>Value</th><th>Payload</th></tr></thead>
+            <tbody><tr><td colspan="4">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <h2 class="ads-h2">Resolution notes</h2>
+      <div class="ads-card">
+        <textarea id="ops-incident-notes" rows="6" style="width:100%;font-family:inherit"
+                  placeholder="What was the root cause? What action was taken?"></textarea>
+        <div style="margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap">
+          <button class="ads-btn" data-action="save-notes">Save notes</button>
+          <button class="ads-btn" data-action="ack">Acknowledge</button>
+          <button class="ads-btn" data-action="close">Mark closed</button>
+          <span class="ads-mono" id="ops-incident-status" style="font-size:.85em"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script src="/assets/js/ops-incidents.js"></script>

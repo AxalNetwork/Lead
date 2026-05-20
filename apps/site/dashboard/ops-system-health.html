@@ -1,0 +1,112 @@
+---
+layout: default
+title: System Health & Errors
+permalink: /ops/system-health/
+---
+
+<section class="ads-section" id="ops-root">
+  <h1 class="ads-h1">System Health &amp; Errors</h1>
+
+  <div id="ops-auth-check" class="ads-card">
+    <strong>Verifying admin access…</strong>
+  </div>
+
+  <div id="ops-forbidden" hidden class="ads-card ads-card--err">
+    <strong>403 Forbidden.</strong> You are not on the ops admin allowlist.
+    Operational data is not loaded.
+  </div>
+
+  <div id="ops-content" hidden>
+    <p class="ads-sub">
+      Live status across compute, queues, D1, R2, KV, Vectorize, external APIs,
+      crons, and the error inbox. Hard-threshold alerts (queue age &gt; 30m,
+      node down &gt; 5m, error rate &gt; 5/min, sustained D1 throttling) open
+      incidents and notify operators. Admin-only; every action is audited.
+    </p>
+
+    <div style="margin:.5rem 0 1rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+      <button class="ads-btn" data-action="probe-all">Probe all external APIs now</button>
+      <button class="ads-btn" data-action="snapshot">Refresh snapshot</button>
+      <span class="ads-mono" id="ops-action-status" style="font-size:.85em"></span>
+      <span class="ads-mono" id="ops-generated-at" style="margin-left:auto;font-size:.85em;color:#6b7280"></span>
+    </div>
+
+    <h2 class="ads-h2">Open incidents</h2>
+    <div class="ads-card">
+      <div class="ads-table-wrap">
+        <table class="ads-table" id="ops-incidents-open">
+          <thead><tr><th>Opened</th><th>Severity</th><th>Kind</th><th>Summary</th><th></th></tr></thead>
+          <tbody><tr><td colspan="5">Loading…</td></tr></tbody>
+        </table>
+      </div>
+      <p class="ads-sub" style="margin:.5rem 0 0">
+        <a href="/ops/incidents/">See all incidents →</a>
+      </p>
+    </div>
+
+    <h2 class="ads-h2">Compute pool</h2>
+    <div class="ads-card">
+      <div class="ads-table-wrap">
+        <table class="ads-table" id="ops-compute">
+          <thead><tr><th>Status</th><th>Node</th><th>Provider/Kind</th><th>Active / Max</th><th>p95 (1h)</th><th>Last heartbeat</th><th>Last error</th><th></th></tr></thead>
+          <tbody><tr><td colspan="8">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <h2 class="ads-h2">Queues</h2>
+    <div class="ads-card">
+      <div class="ads-table-wrap">
+        <table class="ads-table" id="ops-queues">
+          <thead><tr><th>Queue</th><th>Depth</th><th>Oldest age</th><th>Failed (24h)</th><th>Sparkline (60m)</th></tr></thead>
+          <tbody><tr><td colspan="5">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <h2 class="ads-h2">D1</h2>
+    <div class="ads-card">
+      <div id="ops-d1" class="ads-mono">Loading…</div>
+    </div>
+
+    <h2 class="ads-h2">R2 / KV / Vectorize bindings</h2>
+    <div class="ads-card">
+      <div id="ops-bindings" class="ads-mono">Loading…</div>
+    </div>
+
+    <h2 class="ads-h2">External APIs</h2>
+    <div class="ads-card">
+      <div class="ads-table-wrap">
+        <table class="ads-table" id="ops-external">
+          <thead><tr><th>API</th><th>Configured</th><th>Last success</th><th>Success 24h</th><th>Rate-limit remaining</th><th>Last error</th><th></th></tr></thead>
+          <tbody><tr><td colspan="7">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <h2 class="ads-h2">Crons</h2>
+    <div class="ads-card">
+      <div class="ads-table-wrap">
+        <table class="ads-table" id="ops-crons">
+          <thead><tr><th>Name</th><th>Schedule</th><th>Last observed tick</th></tr></thead>
+          <tbody><tr><td colspan="3">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <h2 class="ads-h2">Error inbox — last 24h, grouped by signature</h2>
+    <div class="ads-card">
+      <div style="margin-bottom:.5rem">
+        <span class="ads-mono">Errors in last minute: </span><strong id="ops-erate">—</strong>
+      </div>
+      <div class="ads-table-wrap">
+        <table class="ads-table" id="ops-errors">
+          <thead><tr><th>Count</th><th>Last seen</th><th>Code</th><th>Route</th><th>Sample</th></tr></thead>
+          <tbody><tr><td colspan="5">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script src="/assets/js/ops-system-health.js"></script>
