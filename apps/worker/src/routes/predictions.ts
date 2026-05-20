@@ -109,8 +109,13 @@ predictionsRoute.get("/summary", async (c) => {
   } catch { /* table missing — leave empty */ }
 
   try {
-    // Latest model run per fund_id. Tries to join funds table for the
-    // display name; falls back to fund_id when funds table absent.
+    // Latest model run per fund_id. NOTE: per migration 366 the
+    // `fund_return_models` table is append-only and has NO
+    // `is_current` column — the contract documented in replit.md is
+    // "the latest row per fund is 'current' for read paths". So
+    // MAX(created_at) joined back on the same fund_id IS the
+    // is_current=1 equivalent here; we do not filter on a column
+    // that does not exist.
     const r = await c.env.DB.prepare(
       `SELECT m.fund_id,
               f.name AS fund_name,
@@ -162,19 +167,38 @@ predictionsRoute.get("/summary", async (c) => {
 
   return c.json({
     intros: {
-      items: intros.map((r) => ({
-        entity_id: r.entity_id,
-        display_name: r.display_name,
-        predicted_conversion_pct: r.predicted_conversion_pct,
-        ranking_mode: r.ranking_mode,
-        hops: r.hops,
-        weakest_edge_quality: r.weakest_edge_quality,
-        model_version: r.model_version,
-        created_at: r.created_at,
-        // Honest degradation flag — surfaces in the UI as "limited
-        // signal" so operators never see a fake confidence number.
-        degraded: r.ranking_mode === "hop_count_only" || r.predicted_conversion_pct == null,
-      })),
+      items: intros.map((r) => {
+        const degraded = r.ranking_mode === "hop_count_only" || r.predicted_conversion_pct == null;
+        // Confidence band per row: "limited" when the model ran in
+        // hop_count_only fallback (no calibrated number); otherwise
+        // derived from predicted_conversion_pct. Bands match the
+        // fund-returns vocabulary (high / medium / low) so the UI
+        // can render one consistent pill component across tabs.
+        let band: "high" | "medium" | "low" | "limited";
+        if (degraded) {
+          band = "limited";
+        } else if ((r.predicted_conversion_pct ?? 0) >= 0.5) {
+          band = "high";
+        } else if ((r.predicted_conversion_pct ?? 0) >= 0.2) {
+          band = "medium";
+        } else {
+          band = "low";
+        }
+        return {
+          entity_id: r.entity_id,
+          display_name: r.display_name,
+          predicted_conversion_pct: r.predicted_conversion_pct,
+          confidence_band: band,
+          ranking_mode: r.ranking_mode,
+          hops: r.hops,
+          weakest_edge_quality: r.weakest_edge_quality,
+          model_version: r.model_version,
+          created_at: r.created_at,
+          // Honest degradation flag — surfaces in the UI as "limited
+          // signal" so operators never see a fake confidence number.
+          degraded,
+        };
+      }),
       last_computed_at: introMax,
     },
     funds: {

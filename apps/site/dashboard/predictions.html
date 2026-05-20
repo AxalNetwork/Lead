@@ -17,23 +17,26 @@ permalink: /dashboard/predictions/
 
 <div class="ads-tab-panel active" data-panel="intros">
   <p class="ads-muted" style="font-size:12px;margin:8px 0">
-    Top targets ranked by predicted conversion %. Rows in
-    <span class="ads-pill">limited signal</span> mode were scored in
+    Top targets ranked by predicted conversion %. Confidence band:
+    <span class="ads-pill">high</span> ≥ 50%, <span class="ads-pill">medium</span> 20–50%,
+    <span class="ads-pill">low</span> &lt; 20%. Rows in
+    <span class="ads-pill ads-pill--warn">limited</span> band were scored in
     hop-count-only fallback — their conversion % is intentionally blank
     rather than faked. Click a name to open the Outreach tab on that
-    profile.
+    profile. Click any column header to sort.
   </p>
   <div id="ads-pr-intros"><div class="ads-loading">Loading…</div></div>
 </div>
 
 <div class="ads-tab-panel" data-panel="funds">
   <p class="ads-muted" style="font-size:12px;margin:8px 0">
-    Latest modeled DPI / TVPI / MOIC / Net IRR per fund. Confidence
-    is the model's own coverage band: <span class="ads-pill">high</span>
+    Latest modeled DPI / TVPI / MOIC / Net IRR per fund (per migration 366,
+    the table is append-only and "latest row per fund" is the current
+    contract — there is no <code>is_current</code> column).
+    Confidence is the model's own coverage band: <span class="ads-pill ads-pill--ok">high</span>
     ≥70% positions resolved, <span class="ads-pill">medium</span>
-    40–70%, <span class="ads-pill">low</span> &lt;40%. Low-confidence
-    rows are shown but flagged so they don't masquerade as a
-    high-confidence ranking signal.
+    40–70%, <span class="ads-pill ads-pill--warn">low</span> &lt;40%.
+    Click any column header to sort.
   </p>
   <div id="ads-pr-funds"><div class="ads-loading">Loading…</div></div>
 </div>
@@ -41,9 +44,10 @@ permalink: /dashboard/predictions/
 <div class="ads-tab-panel" data-panel="influence">
   <p class="ads-muted" style="font-size:12px;margin:8px 0">
     Top entities by global PageRank from the edge-quality sweep. The
-    <span class="ads-pill">power node</span> badge marks entities in
+    <span class="ads-pill ads-pill--ok">power node</span> badge marks entities in
     the top of their primary sector. For sector-filtered ranking, use
-    the <a href="/dashboard/power-nodes/">Power Nodes page</a>.
+    the <a href="/dashboard/power-nodes/">Power Nodes page</a>. Click
+    any column header to sort.
   </p>
   <div id="ads-pr-influence"><div class="ads-loading">Loading…</div></div>
 </div>
@@ -56,6 +60,14 @@ permalink: /dashboard/predictions/
   function fmtPct(n) { return (n == null || isNaN(+n)) ? "—" : (Number(n) * 100).toFixed(1) + "%"; }
   function fmtTs(t) { if (!t) return "—"; try { return new Date(t).toISOString().replace("T", " ").slice(0, 19) + "Z"; } catch (e) { return String(t); } }
 
+  // Per-tab sort state. Defaults match the server-side ranking so the
+  // first paint and any subsequent re-sort agree.
+  var sortState = {
+    intros:    { key: "predicted_conversion_pct", dir: "desc" },
+    funds:     { key: "tvpi",                     dir: "desc" },
+    influence: { key: "pagerank_score",           dir: "desc" }
+  };
+
   // Tab switching.
   var tabs = document.querySelectorAll(".ads-tab");
   var panels = document.querySelectorAll(".ads-tab-panel");
@@ -67,7 +79,6 @@ permalink: /dashboard/predictions/
       try { history.replaceState(null, "", location.pathname + "?tab=" + encodeURIComponent(key)); } catch (e) { /* no-op */ }
     });
   });
-  // Restore tab from URL on first load.
   try {
     var qs = new URLSearchParams(location.search);
     var initial = qs.get("tab");
@@ -89,6 +100,53 @@ permalink: /dashboard/predictions/
   function badge(label, cls) {
     return '<span class="ads-pill' + (cls ? ' ' + cls : '') + '">' + esc(label) + '</span>';
   }
+  function bandPill(band) {
+    if (!band) return "—";
+    var cls = band === "high" ? "ads-pill--ok"
+            : band === "low"  ? "ads-pill--warn"
+            : band === "limited" ? "ads-pill--warn" : "";
+    return badge(band, cls);
+  }
+
+  // Generic sortable-header renderer. `columns` is an array of
+  // {label, key, render(row) -> innerHTML, sortable} where sortable
+  // defaults to true.
+  function applySort(rows, state) {
+    return rows.slice().sort(function (a, b) {
+      var av = a[state.key]; var bv = b[state.key];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (typeof av === "string" && typeof bv === "string") {
+        return state.dir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+      }
+      return state.dir === "asc" ? (av - bv) : (bv - av);
+    });
+  }
+  function renderSortableTable(rootEl, rows, columns, tabKey) {
+    var state = sortState[tabKey];
+    function paint() {
+      var arrow = function (k) { return state.key === k ? (state.dir === "asc" ? " ▲" : " ▼") : ""; };
+      var th = columns.map(function (col) {
+        if (col.sortable === false) return '<th>' + esc(col.label) + '</th>';
+        return '<th data-sort="' + esc(col.key) + '" style="cursor:pointer;user-select:none">' + esc(col.label) + arrow(col.key) + '</th>';
+      }).join("");
+      var sorted = applySort(rows, state);
+      var body = sorted.map(function (r) {
+        return '<tr>' + columns.map(function (col) { return col.render(r); }).join("") + '</tr>';
+      }).join("");
+      rootEl.innerHTML = '<table class="ads-table"><thead><tr>' + th + '</tr></thead><tbody>' + body + '</tbody></table>';
+      rootEl.querySelectorAll("th[data-sort]").forEach(function (h) {
+        h.addEventListener("click", function () {
+          var k = h.getAttribute("data-sort");
+          if (state.key === k) state.dir = state.dir === "asc" ? "desc" : "asc";
+          else { state.key = k; state.dir = "desc"; }
+          paint();
+        });
+      });
+    }
+    paint();
+  }
 
   function renderIntros(items) {
     var el = document.getElementById("ads-pr-intros");
@@ -96,22 +154,28 @@ permalink: /dashboard/predictions/
       el.innerHTML = '<div class="ads-empty">No intro-routing predictions yet. The model retrains nightly — log a few intro outcomes from any profile to seed it.</div>';
       return;
     }
-    var rows = items.map(function (r) {
-      var name = r.display_name || r.entity_id;
-      var pct = r.degraded ? badge("limited signal", "ads-pill--warn") : fmtPct(r.predicted_conversion_pct);
-      return '<tr>' +
-        '<td><a href="/dashboard/profile/?id=' + encodeURIComponent(r.entity_id) + '#outreach">' + esc(name) + '</a></td>' +
-        '<td class="ads-mono">' + pct + '</td>' +
-        '<td class="ads-mono">' + fmtInt(r.hops) + '</td>' +
-        '<td class="ads-mono">' + fmtNum(r.weakest_edge_quality, 3) + '</td>' +
-        '<td>' + esc(r.ranking_mode || "—") + '</td>' +
-        '<td class="ads-mono ads-muted" style="font-size:12px">' + esc(fmtTs(r.created_at)) + '</td>' +
-      '</tr>';
-    }).join("");
-    el.innerHTML = '<table class="ads-table"><thead><tr>' +
-      '<th>Target</th><th>Predicted conversion</th><th>Hops</th>' +
-      '<th>Weakest edge</th><th>Ranking mode</th><th>Last scored</th>' +
-      '</tr></thead><tbody>' + rows + '</tbody></table>';
+    renderSortableTable(el, items, [
+      { label: "Target", key: "display_name",
+        render: function (r) {
+          var name = r.display_name || r.entity_id;
+          return '<td><a href="/dashboard/profile/?id=' + encodeURIComponent(r.entity_id) + '#outreach">' + esc(name) + '</a></td>';
+        } },
+      { label: "Predicted conversion", key: "predicted_conversion_pct",
+        render: function (r) {
+          var pct = r.degraded ? '<span class="ads-muted">—</span>' : fmtPct(r.predicted_conversion_pct);
+          return '<td class="ads-mono">' + pct + '</td>';
+        } },
+      { label: "Confidence band", key: "confidence_band",
+        render: function (r) { return '<td>' + bandPill(r.confidence_band) + '</td>'; } },
+      { label: "Hops", key: "hops",
+        render: function (r) { return '<td class="ads-mono">' + fmtInt(r.hops) + '</td>'; } },
+      { label: "Weakest edge", key: "weakest_edge_quality",
+        render: function (r) { return '<td class="ads-mono">' + fmtNum(r.weakest_edge_quality, 3) + '</td>'; } },
+      { label: "Ranking mode", key: "ranking_mode",
+        render: function (r) { return '<td>' + esc(r.ranking_mode || "—") + '</td>'; } },
+      { label: "Last scored", key: "created_at",
+        render: function (r) { return '<td class="ads-mono ads-muted" style="font-size:12px">' + esc(fmtTs(r.created_at)) + '</td>'; } }
+    ], "intros");
   }
 
   function renderFunds(items) {
@@ -120,25 +184,24 @@ permalink: /dashboard/predictions/
       el.innerHTML = '<div class="ads-empty">No modeled fund returns yet. The fund-return sweep runs nightly at 03:15 UTC against every active / harvesting / wound-down fund.</div>';
       return;
     }
-    var rows = items.map(function (r) {
-      var name = r.fund_name || r.fund_id;
-      var cls = r.confidence === "high" ? "ads-pill--ok"
-              : r.confidence === "low"  ? "ads-pill--warn" : "";
-      return '<tr>' +
-        '<td><a href="/dashboard/funds/detail/?id=' + encodeURIComponent(r.fund_id) + '">' + esc(name) + '</a></td>' +
-        '<td class="ads-mono">' + fmtNum(r.dpi, 2) + '</td>' +
-        '<td class="ads-mono">' + fmtNum(r.tvpi, 2) + '</td>' +
-        '<td class="ads-mono">' + fmtNum(r.moic, 2) + '</td>' +
-        '<td class="ads-mono">' + (r.net_irr_pct == null ? "—" : Number(r.net_irr_pct).toFixed(1) + "%") + '</td>' +
-        '<td>' + badge(r.confidence || "—", cls) + '</td>' +
-        '<td class="ads-mono">' + (r.resolved_coverage_pct == null ? "—" : (Number(r.resolved_coverage_pct) * 100).toFixed(0) + "%") + '</td>' +
-        '<td class="ads-mono ads-muted" style="font-size:12px">' + esc(fmtTs(r.created_at)) + '</td>' +
-      '</tr>';
-    }).join("");
-    el.innerHTML = '<table class="ads-table"><thead><tr>' +
-      '<th>Fund</th><th>DPI</th><th>TVPI</th><th>MOIC</th><th>Net IRR</th>' +
-      '<th>Confidence</th><th>Coverage</th><th>Last modeled</th>' +
-      '</tr></thead><tbody>' + rows + '</tbody></table>';
+    renderSortableTable(el, items, [
+      { label: "Fund", key: "fund_name",
+        render: function (r) {
+          var name = r.fund_name || r.fund_id;
+          return '<td><a href="/dashboard/funds/detail/?id=' + encodeURIComponent(r.fund_id) + '">' + esc(name) + '</a></td>';
+        } },
+      { label: "DPI",   key: "dpi",   render: function (r) { return '<td class="ads-mono">' + fmtNum(r.dpi, 2) + '</td>'; } },
+      { label: "TVPI",  key: "tvpi",  render: function (r) { return '<td class="ads-mono">' + fmtNum(r.tvpi, 2) + '</td>'; } },
+      { label: "MOIC",  key: "moic",  render: function (r) { return '<td class="ads-mono">' + fmtNum(r.moic, 2) + '</td>'; } },
+      { label: "Net IRR", key: "net_irr_pct",
+        render: function (r) { return '<td class="ads-mono">' + (r.net_irr_pct == null ? "—" : Number(r.net_irr_pct).toFixed(1) + "%") + '</td>'; } },
+      { label: "Confidence", key: "confidence",
+        render: function (r) { return '<td>' + bandPill(r.confidence) + '</td>'; } },
+      { label: "Coverage", key: "resolved_coverage_pct",
+        render: function (r) { return '<td class="ads-mono">' + (r.resolved_coverage_pct == null ? "—" : (Number(r.resolved_coverage_pct) * 100).toFixed(0) + "%") + '</td>'; } },
+      { label: "Last modeled", key: "created_at",
+        render: function (r) { return '<td class="ads-mono ads-muted" style="font-size:12px">' + esc(fmtTs(r.created_at)) + '</td>'; } }
+    ], "funds");
   }
 
   function renderInfluence(items) {
@@ -147,22 +210,24 @@ permalink: /dashboard/predictions/
       el.innerHTML = '<div class="ads-empty">No influence rankings yet. The edge-quality sweep runs nightly at 03:15 UTC.</div>';
       return;
     }
-    var rows = items.map(function (r) {
-      var name = r.display_name || r.entity_id;
-      return '<tr>' +
-        '<td><a href="/dashboard/profile/?id=' + encodeURIComponent(r.entity_id) + '">' + esc(name) + '</a>' +
-          (r.is_power_node ? ' ' + badge("power node", "ads-pill--ok") : '') + '</td>' +
-        '<td>' + esc(r.primary_sector || "—") + '</td>' +
-        '<td class="ads-mono">' + fmtNum(r.pagerank_score, 5) + '</td>' +
-        '<td class="ads-mono">' + fmtNum(r.broker_score, 3) + '</td>' +
-        '<td class="ads-mono">' + fmtInt(r.total_degree) + '</td>' +
-        '<td class="ads-mono ads-muted" style="font-size:12px">' + esc(fmtTs(r.computed_at)) + '</td>' +
-      '</tr>';
-    }).join("");
-    el.innerHTML = '<table class="ads-table"><thead><tr>' +
-      '<th>Entity</th><th>Sector</th><th>PageRank</th>' +
-      '<th>Broker</th><th>Degree</th><th>Last refresh</th>' +
-      '</tr></thead><tbody>' + rows + '</tbody></table>';
+    renderSortableTable(el, items, [
+      { label: "Entity", key: "display_name",
+        render: function (r) {
+          var name = r.display_name || r.entity_id;
+          return '<td><a href="/dashboard/profile/?id=' + encodeURIComponent(r.entity_id) + '">' + esc(name) + '</a>' +
+            (r.is_power_node ? ' ' + badge("power node", "ads-pill--ok") : '') + '</td>';
+        } },
+      { label: "Sector", key: "primary_sector",
+        render: function (r) { return '<td>' + esc(r.primary_sector || "—") + '</td>'; } },
+      { label: "PageRank", key: "pagerank_score",
+        render: function (r) { return '<td class="ads-mono">' + fmtNum(r.pagerank_score, 5) + '</td>'; } },
+      { label: "Broker", key: "broker_score",
+        render: function (r) { return '<td class="ads-mono">' + fmtNum(r.broker_score, 3) + '</td>'; } },
+      { label: "Degree", key: "total_degree",
+        render: function (r) { return '<td class="ads-mono">' + fmtInt(r.total_degree) + '</td>'; } },
+      { label: "Last refresh", key: "computed_at",
+        render: function (r) { return '<td class="ads-mono ads-muted" style="font-size:12px">' + esc(fmtTs(r.computed_at)) + '</td>'; } }
+    ], "influence");
   }
 
   fetch("/api/predictions/summary?limit=50", { credentials: "include" })
