@@ -17,7 +17,7 @@
 
 import { Hono } from "hono";
 import type { Env } from "../types";
-import { buildPdf } from "./dashboards_pdf";
+import { pdfResponse } from "./dashboards_pdf";
 
 export const dossiersRoute = new Hono<{ Bindings: Env; Variables: { email: string; is_admin: boolean } }>();
 
@@ -158,14 +158,15 @@ async function loadDossier(env: Env, id: string) {
   } catch { influence = null; }
 
   // Section: 10 most-recent verified facts. Verified = verified_score
-  // is set (the crossRef-promoted contract from Task #1).
+  // is set (the crossRef-promoted contract from Task #1 — unverified
+  // raw rows must NOT appear in the dossier per the task spec).
   let recentFacts: unknown[] = [];
   try {
     const r = await env.DB.prepare(
       `SELECT predicate, value_text, value_number, source, source_kind,
               confidence, verified_score, evidence_url, observed_at
          FROM facts
-        WHERE entity_id = ? AND is_current = 1
+        WHERE entity_id = ? AND is_current = 1 AND verified_score IS NOT NULL
         ORDER BY observed_at DESC
         LIMIT 10`,
     ).bind(id).all();
@@ -318,12 +319,7 @@ dossiersRoute.get("/:id/pdf", async (c) => {
   const title = `Dossier — ${data.identity.display_name ?? id}`;
   const subtitle = `Generated ${data.generated_at} · ${data.identity.kind ?? "entity"} · ${data.identity.primary_domain ?? ""}`;
   const filename = `dossier-${id}`;
-  const bytes = buildPdf({ title, subtitle, headers, rows });
-  return new Response(bytes, {
-    headers: {
-      "Content-Type": "application/pdf",
-      "Content-Disposition": `attachment; filename="${filename}.pdf"`,
-      "X-Total-Rows": String(rows.length),
-    },
-  });
+  // Reuses the canonical pdfResponse helper per the Task #4
+  // PDF-pipeline decision — no parallel renderer.
+  return pdfResponse(rows, headers, filename, title, subtitle);
 });
