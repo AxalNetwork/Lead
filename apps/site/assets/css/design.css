@@ -148,9 +148,11 @@
   background: linear-gradient(135deg, var(--ads-accent), var(--ads-accent-2));
 }
 .ads-rail__brand-logo {
-  height: 44px; width: auto; flex: 0 0 auto;
+  height: 36px; width: 36px; flex: 0 0 36px;
   display: block;
+  object-fit: contain;
 }
+.ads-rail__brand-text { color: #fff; }
 .ads-shell[data-rail="collapsed"] .ads-rail__brand-text { display: none; }
 .ads-rail__group {
   margin-top: var(--ads-sp-3);
