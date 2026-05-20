@@ -87,7 +87,7 @@ pages in this task beyond the People list").
     <a class="ads-rail__link" href="/dashboard/coming-soon/?feature=agent" data-cmdk-nav="Agent">
       <span class="ads-rail__icon">⚙</span><span>Agent</span>
     </a>
-    <a class="ads-rail__link" href="/dashboard/coming-soon/?feature=dossiers" data-cmdk-nav="Dossiers">
+    <a class="ads-rail__link {% if p contains '/dashboard/dossiers' %}active{% endif %}" href="/dashboard/dossiers/" data-cmdk-nav="Dossiers">
       <span class="ads-rail__icon">▤</span><span>Dossiers</span>
     </a>
     <a class="ads-rail__link {% if p contains '/dashboard/projects' %}active{% endif %}" href="/dashboard/projects/" data-cmdk-nav="Projects">

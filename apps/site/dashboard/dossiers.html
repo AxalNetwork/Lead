@@ -1,0 +1,291 @@
+---
+layout: default
+title: Dossiers
+permalink: /dashboard/dossiers/
+---
+
+<style>
+  .ads-dossier { display: grid; grid-template-columns: 200px 1fr; gap: 24px; }
+  .ads-dossier__toc { position: sticky; top: 70px; align-self: start; font-size: 13px; }
+  .ads-dossier__toc a { display: block; padding: 4px 8px; color: #2c6eb5; text-decoration: none; border-left: 2px solid transparent; }
+  .ads-dossier__toc a:hover { background: #f0f6ff; }
+  .ads-dossier__toc a.active { border-left-color: #2c6eb5; background: #f0f6ff; font-weight: 600; }
+  .ads-dossier section { margin-bottom: 28px; scroll-margin-top: 60px; }
+  .ads-dossier section h2 { margin: 0 0 10px 0; font-size: 16px; border-bottom: 1px solid #e3e6ea; padding-bottom: 6px; }
+  .ads-dossier__empty { color: #888; font-size: 12px; font-style: italic; }
+  .ads-dossier__pill { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+  .ads-dossier__pill--ok { background: #e6f4ec; color: #1f7a4d; }
+  .ads-dossier__pill--warn { background: #fdebd0; color: #b8651b; }
+  .ads-dossier__pill--neutral { background: #eef0f3; color: #555; }
+  .ads-dossier table { width: 100%; font-size: 12px; }
+  .ads-dossier table th { text-align: left; font-weight: 600; color: #555; padding: 4px 6px; border-bottom: 1px solid #e3e6ea; }
+  .ads-dossier table td { padding: 4px 6px; border-bottom: 1px solid #f0f1f3; vertical-align: top; }
+  .ads-dossier__picker { max-width: 480px; margin: 24px 0; }
+  .ads-dossier__picker input { width: 100%; padding: 8px 10px; font-size: 14px; border: 1px solid #cdd2da; border-radius: 4px; }
+  .ads-dossier__picker .results { margin-top: 4px; border: 1px solid #e3e6ea; border-radius: 4px; max-height: 320px; overflow-y: auto; }
+  .ads-dossier__picker .results a { display: block; padding: 8px 10px; color: #222; text-decoration: none; border-bottom: 1px solid #f0f1f3; font-size: 13px; }
+  .ads-dossier__picker .results a:hover { background: #f0f6ff; }
+</style>
+
+<div id="ads-dossiers-root">
+  <h1 class="ads-page-title">Dossier</h1>
+  <p class="ads-page-sub">A one-page synthesis of everything the platform knows about an entity — identity, verification, holdings, term aggressiveness, intro paths, top relationships, and recent facts.</p>
+  <div class="ads-loading">Loading…</div>
+</div>
+
+<script>
+(function () {
+  var API = (window.ADS && window.ADS.API_BASE) || "https://api.aidatasignal.com";
+  var qs = new URLSearchParams(location.search);
+  var id = qs.get("id");
+  var root = document.getElementById("ads-dossiers-root");
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]);
+    });
+  }
+  function safeHref(u) {
+    try { var p = new URL(u, location.href); return p.protocol === "https:" || p.protocol === "http:"; }
+    catch (e) { return false; }
+  }
+  function fmtPct(x) { return x == null ? "—" : (Math.round(x * 1000) / 10) + "%"; }
+  function fmtNum(x, d) { return x == null ? "—" : (Math.round(x * Math.pow(10, d || 2)) / Math.pow(10, d || 2)).toString(); }
+  function fmtDate(s) { if (!s) return "—"; try { return new Date(s).toISOString().slice(0,10); } catch (e) { return s; } }
+
+  if (!id) {
+    renderPicker();
+    return;
+  }
+
+  fetch(API + "/api/dossiers/" + encodeURIComponent(id), { credentials: "include" })
+    .then(function (r) {
+      if (r.status === 404) throw new Error("entity_not_found");
+      if (!r.ok) throw new Error("http_" + r.status);
+      return r.json();
+    })
+    .then(renderDossier)
+    .catch(function (e) {
+      root.innerHTML = '<h1 class="ads-page-title">Dossier</h1>'
+        + '<div class="ads-card" style="border-left:3px solid #c0392b">'
+        + '<p style="margin:0;color:#c0392b">' + esc(e.message === "entity_not_found" ? "Entity not found." : "Failed to load dossier: " + e.message) + '</p>'
+        + '<p style="margin:6px 0 0;font-size:12px"><a href="/dashboard/dossiers/">Pick another entity</a></p>'
+        + '</div>';
+    });
+
+  function renderPicker() {
+    root.innerHTML = ''
+      + '<h1 class="ads-page-title">Dossier</h1>'
+      + '<p class="ads-page-sub">Search for an entity to view its consolidated dossier.</p>'
+      + '<div class="ads-dossier__picker">'
+      + '<input type="text" id="ads-dossier-q" placeholder="Type at least 2 characters…" autocomplete="off" />'
+      + '<div class="results" id="ads-dossier-results"></div>'
+      + '</div>';
+    var input = document.getElementById("ads-dossier-q");
+    var results = document.getElementById("ads-dossier-results");
+    var t = null;
+    input.addEventListener("input", function () {
+      clearTimeout(t);
+      var q = input.value.trim();
+      if (q.length < 2) { results.innerHTML = ""; return; }
+      t = setTimeout(function () {
+        fetch(API + "/api/dossiers/search?q=" + encodeURIComponent(q), { credentials: "include" })
+          .then(function (r) { return r.ok ? r.json() : { items: [] }; })
+          .then(function (b) {
+            var items = b.items || [];
+            if (!items.length) { results.innerHTML = '<div style="padding:10px;color:#888;font-size:12px">No matches.</div>'; return; }
+            results.innerHTML = items.map(function (it) {
+              return '<a href="/dashboard/dossiers/?id=' + esc(it.id) + '">'
+                + '<strong>' + esc(it.display_name || it.id) + '</strong>'
+                + ' <span style="color:#888;font-size:11px">' + esc(it.kind || "") + (it.primary_domain ? " · " + esc(it.primary_domain) : "") + '</span>'
+                + '</a>';
+            }).join("");
+          });
+      }, 200);
+    });
+    input.focus();
+  }
+
+  function section(idAttr, title, bodyHtml) {
+    return '<section id="' + idAttr + '"><h2>' + esc(title) + '</h2>' + bodyHtml + '</section>';
+  }
+  function emptyBlock(msg) {
+    return '<div class="ads-dossier__empty">' + esc(msg) + '</div>';
+  }
+
+  function renderDossier(d) {
+    var ident = d.identity || {};
+    var title = ident.display_name || ident.id || "Entity";
+
+    var verifBody;
+    if (!d.verification.items.length) {
+      verifBody = emptyBlock("No verification findings yet.");
+    } else {
+      verifBody = '<table><thead><tr><th>Claim</th><th>Status</th><th>Verifier</th><th>Confidence</th><th>Evidence</th></tr></thead><tbody>'
+        + d.verification.items.map(function (v) {
+          var statusCls = v.status === "confirmed" ? "ok" : (v.status === "contradicted" ? "warn" : "neutral");
+          var ev = v.evidence_url && safeHref(v.evidence_url) ? '<a href="' + esc(v.evidence_url) + '" target="_blank" rel="noopener">link</a>' : "—";
+          return '<tr>'
+            + '<td><strong>' + esc(v.claim_summary || v.claim_predicate) + '</strong></td>'
+            + '<td><span class="ads-dossier__pill ads-dossier__pill--' + statusCls + '">' + esc(v.status) + '</span></td>'
+            + '<td>' + esc(v.verifier_name || "") + '</td>'
+            + '<td>' + (v.confidence != null ? Math.round(v.confidence * 100) + "%" : "—") + '</td>'
+            + '<td>' + ev + '</td>'
+            + '</tr>';
+        }).join("") + '</tbody></table>';
+    }
+
+    var holdBody;
+    if (!d.holdings.items.length) {
+      holdBody = emptyBlock("No holdings yet.");
+    } else {
+      holdBody = '<table><thead><tr><th>Kind</th><th>Other party</th><th>Quality</th><th>Last interaction</th></tr></thead><tbody>'
+        + d.holdings.items.map(function (h) {
+          var name = h.other_name || h.other_id;
+          var link = h.other_id ? '<a href="/dashboard/dossiers/?id=' + esc(h.other_id) + '">' + esc(name) + '</a>' : esc(name);
+          return '<tr><td>' + esc(h.kind || "") + '</td><td>' + link + '</td><td>' + fmtNum(h.quality_score, 2) + '</td><td>' + fmtDate(h.last_interaction_at) + '</td></tr>';
+        }).join("") + '</tbody></table>';
+    }
+
+    var termBody;
+    var ps = d.term_aggressiveness.preferred_series || [];
+    var ita = d.term_aggressiveness.investor_terms_avg;
+    if (!ps.length && !ita) {
+      termBody = emptyBlock("No term-sheet data yet.");
+    } else {
+      var parts = [];
+      if (ps.length) {
+        parts.push('<table><thead><tr><th>Series</th><th>Stage</th><th>LP×</th><th>Participating</th><th>Anti-dilution</th><th>Closing</th></tr></thead><tbody>'
+          + ps.map(function (s) {
+            var flagsCls = (s.liquidation_pref_x > 1 || s.participating === 1 || s.anti_dilution === "full_ratchet") ? "warn" : "neutral";
+            return '<tr><td><strong>' + esc(s.series_name || "") + '</strong></td><td>' + esc(s.stage || "—") + '</td>'
+              + '<td><span class="ads-dossier__pill ads-dossier__pill--' + flagsCls + '">' + fmtNum(s.liquidation_pref_x, 2) + 'x</span></td>'
+              + '<td>' + (s.participating === 1 ? "yes" + (s.participating_cap_x ? " (" + fmtNum(s.participating_cap_x, 1) + "x cap)" : " (uncapped)") : "no") + '</td>'
+              + '<td>' + esc(s.anti_dilution || "—") + '</td>'
+              + '<td>' + fmtDate(s.closing_date) + '</td></tr>';
+          }).join("") + '</tbody></table>');
+      }
+      if (ita) {
+        parts.push('<div style="margin-top:10px;font-size:12px">Investor terms (averaged over <strong>' + ita.series_count + '</strong> series): '
+          + 'avg LP× <strong>' + fmtNum(ita.avg_lp_x, 2) + '</strong> · '
+          + '<strong>' + ita.aggressive_count + '</strong> aggressive of ' + ita.series_count + '.</div>');
+      }
+      termBody = parts.join("");
+    }
+
+    var introBody;
+    if (!d.intros.items.length) {
+      introBody = emptyBlock("No intro paths yet.");
+    } else {
+      introBody = '<table><thead><tr><th>Hops</th><th>Predicted conversion</th><th>Weakest edge</th><th>Opener</th></tr></thead><tbody>'
+        + d.intros.items.map(function (p) {
+          var conf = p.predicted_conversion_pct == null
+            ? '<span class="ads-dossier__pill ads-dossier__pill--neutral">limited signal</span>'
+            : '<span class="ads-dossier__pill ads-dossier__pill--ok">' + fmtPct(p.predicted_conversion_pct) + '</span>';
+          return '<tr><td>' + p.hops + '</td><td>' + conf + '</td><td>' + fmtNum(p.weakest_edge_quality, 2) + '</td>'
+            + '<td style="font-size:11px;color:#444;max-width:340px">' + esc((p.suggested_opener || "").slice(0, 200)) + '</td></tr>';
+        }).join("") + '</tbody></table>';
+    }
+
+    var relBody;
+    if (!d.relationships.items.length) {
+      relBody = emptyBlock("No relationship edges yet.");
+    } else {
+      relBody = '<table><thead><tr><th>Kind</th><th>Other party</th><th>Quality</th><th>Last interaction</th></tr></thead><tbody>'
+        + d.relationships.items.map(function (r) {
+          var name = r.other_name || r.other_id;
+          var link = r.other_id ? '<a href="/dashboard/dossiers/?id=' + esc(r.other_id) + '">' + esc(name) + '</a>' : esc(name);
+          return '<tr><td>' + esc(r.kind || "") + '</td><td>' + link + '</td><td>' + fmtNum(r.quality_score, 2) + '</td><td>' + fmtDate(r.last_interaction_at) + '</td></tr>';
+        }).join("") + '</tbody></table>';
+    }
+
+    var influenceBody;
+    if (!d.influence) {
+      influenceBody = emptyBlock("No influence data yet.");
+    } else {
+      influenceBody = '<table><tbody>'
+        + '<tr><td style="width:200px">PageRank score</td><td>' + fmtNum(d.influence.pagerank_score, 4) + '</td></tr>'
+        + '<tr><td>Broker score</td><td>' + fmtNum(d.influence.broker_score, 4) + '</td></tr>'
+        + '<tr><td>Power node</td><td>' + (d.influence.is_power_node ? '<span class="ads-dossier__pill ads-dossier__pill--ok">yes</span>' : 'no') + '</td></tr>'
+        + '<tr><td>Primary sector</td><td>' + esc(d.influence.primary_sector || "—") + '</td></tr>'
+        + '<tr><td>Total degree</td><td>' + (d.influence.total_degree || 0) + '</td></tr>'
+        + '</tbody></table>';
+    }
+
+    var factsBody;
+    if (!d.recent_facts.items.length) {
+      factsBody = emptyBlock("No facts yet.");
+    } else {
+      factsBody = '<table><thead><tr><th>Predicate</th><th>Value</th><th>Source</th><th>Verified</th><th>Observed</th></tr></thead><tbody>'
+        + d.recent_facts.items.map(function (f) {
+          var val = f.value_text != null ? f.value_text : (f.value_number != null ? f.value_number : "");
+          var ver = f.verified_score != null ? '<span class="ads-dossier__pill ads-dossier__pill--ok">' + Math.round(f.verified_score * 100) + '%</span>' : '<span class="ads-dossier__pill ads-dossier__pill--neutral">unverified</span>';
+          return '<tr><td><code style="font-size:11px">' + esc(f.predicate) + '</code></td><td>' + esc(val) + '</td><td>' + esc(f.source || f.source_kind || "") + '</td><td>' + ver + '</td><td style="font-size:11px;color:#888">' + fmtDate(f.observed_at) + '</td></tr>';
+        }).join("") + '</tbody></table>';
+    }
+
+    var header = ''
+      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:16px">'
+      + '<div>'
+      + '<h1 class="ads-page-title" style="margin:0">' + esc(title) + '</h1>'
+      + '<p class="ads-page-sub" style="margin:4px 0 0">'
+      + esc(ident.kind || "entity")
+      + (ident.primary_domain ? ' · <a href="' + (safeHref("https://" + ident.primary_domain) ? "https://" + esc(ident.primary_domain) : "#") + '" target="_blank" rel="noopener">' + esc(ident.primary_domain) + '</a>' : '')
+      + ' · generated ' + esc((d.generated_at || "").slice(0,19).replace("T"," "))
+      + '</p></div>'
+      + '<div style="display:flex;gap:8px">'
+      + '<a class="ads-btn" href="/dashboard/profile/?id=' + esc(ident.id) + '">Open profile</a>'
+      + '<a class="ads-btn" href="' + API + '/api/dossiers/' + encodeURIComponent(ident.id) + '/pdf" target="_blank" rel="noopener">Download PDF</a>'
+      + '<a class="ads-btn" href="/dashboard/dossiers/">Pick another</a>'
+      + '</div></div>';
+
+    var toc = ''
+      + '<nav class="ads-dossier__toc">'
+      + '<a href="#sec-identity">Identity</a>'
+      + '<a href="#sec-verification">Verification</a>'
+      + '<a href="#sec-holdings">Holdings</a>'
+      + '<a href="#sec-terms">Term aggressiveness</a>'
+      + '<a href="#sec-intros">Intro paths</a>'
+      + '<a href="#sec-relationships">Top relationships</a>'
+      + '<a href="#sec-influence">Influence</a>'
+      + '<a href="#sec-facts">Recent facts</a>'
+      + '</nav>';
+
+    var body = ''
+      + section("sec-identity", "Identity",
+          '<table><tbody>'
+          + '<tr><td style="width:200px">Entity ID</td><td><code style="font-size:11px">' + esc(ident.id) + '</code></td></tr>'
+          + '<tr><td>Display name</td><td><strong>' + esc(ident.display_name || "—") + '</strong></td></tr>'
+          + '<tr><td>Kind</td><td>' + esc(ident.kind || "—") + '</td></tr>'
+          + '<tr><td>Primary URL</td><td>' + (ident.primary_url && safeHref(ident.primary_url) ? '<a href="' + esc(ident.primary_url) + '" target="_blank" rel="noopener">' + esc(ident.primary_url) + '</a>' : esc(ident.primary_url || "—")) + '</td></tr>'
+          + '<tr><td>Primary domain</td><td>' + esc(ident.primary_domain || "—") + '</td></tr>'
+          + '<tr><td>Status</td><td>' + esc(ident.status || "—") + '</td></tr>'
+          + '<tr><td>Created</td><td>' + fmtDate(ident.created_at) + '</td></tr>'
+          + '</tbody></table>')
+      + section("sec-verification", "Verification (Task #14)", verifBody)
+      + section("sec-holdings", "Holdings", holdBody)
+      + section("sec-terms", "Term aggressiveness (Task #18)", termBody)
+      + section("sec-intros", "Intro paths (Task #4)", introBody)
+      + section("sec-relationships", "Top relationships (Task #3)", relBody)
+      + section("sec-influence", "Influence (Task #3)", influenceBody)
+      + section("sec-facts", "Recent facts", factsBody);
+
+    root.innerHTML = header + '<div class="ads-dossier">' + toc + '<div>' + body + '</div></div>';
+
+    // Active-section highlighting on scroll.
+    var links = root.querySelectorAll(".ads-dossier__toc a");
+    var sections = root.querySelectorAll(".ads-dossier section");
+    function updateActive() {
+      var top = window.scrollY + 80;
+      var current = sections[0];
+      sections.forEach(function (s) { if (s.offsetTop <= top) current = s; });
+      if (!current) return;
+      links.forEach(function (a) {
+        a.classList.toggle("active", a.getAttribute("href") === "#" + current.id);
+      });
+    }
+    window.addEventListener("scroll", updateActive, { passive: true });
+    updateActive();
+  }
+})();
+</script>
