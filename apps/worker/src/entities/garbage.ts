@@ -342,13 +342,16 @@ export async function runCleanupSweep(
   let softDeleted = 0;
 
   for (const r of items) {
-    const heur = isGarbage({
+    // Route through evaluateEntity so the AI second opinion fires for
+    // ambiguous 30–60 char names (when env.AI is bound). Honors
+    // skipAi for unit tests + operator-requested fast sweeps.
+    const evald = await evaluateEntity(env, {
       kind: r.kind, display_name: r.display_name,
       primary_url: r.primary_url, primary_domain: r.primary_domain,
       primary_email_key: r.primary_email_key, primary_linkedin_key: r.primary_linkedin_key,
-    });
-    let reasons = heur.reasons;
-    let flag = heur.is_garbage;
+    }, { skipAi: opts.skipAi });
+    let reasons = evald.reasons;
+    let flag = evald.is_garbage;
     if (!flag) {
       // Structural rule — only meaningful when the entity is not
       // brand-new (otherwise the crawler may still be writing joins).

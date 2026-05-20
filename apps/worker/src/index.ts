@@ -52,6 +52,7 @@ import { osint as osintRoute } from "./routes/osint";
 import { profilers as profilersRoute } from "./routes/profilers";
 import { profileComments as profileCommentsRoute } from "./routes/profile_comments";
 import { opsCrawlerRoute } from "./routes/ops_crawler";
+import { opsGarbageRoute } from "./routes/ops_garbage";
 import { bulk } from "./routes/bulk";
 import { profileTypesRoute } from "./routes/profile_types";
 import { crawlerRoute } from "./routes/crawler";
@@ -166,6 +167,9 @@ api.route("/api/osint", osintRoute);
 api.route("/api/profilers", profilersRoute);
 api.route("/api/profile-comments", profileCommentsRoute);
 api.route("/api/ops/crawler", opsCrawlerRoute);
+// Task #1: Garbage entity review console (admin-only via the
+// /api/ops/* parent mount above).
+api.route("/api/ops/garbage-review", opsGarbageRoute);
 api.route("/api/leads", leadsEnrichActions);
 api.route("/api/leads", leadsDncActions);
 api.route("/api/leads", leadsCampaignActions);

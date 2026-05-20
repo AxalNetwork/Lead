@@ -1,0 +1,67 @@
+---
+layout: default
+title: Garbage Entity Review
+permalink: /ops/garbage-review/
+---
+
+<section class="ads-section" id="ops-root">
+  <h1 class="ads-h1">Garbage Entity Review</h1>
+
+  <div id="ops-auth-check" class="ads-card">
+    <strong>Verifying admin access…</strong>
+  </div>
+
+  <div id="ops-forbidden" hidden class="ads-card ads-card--err">
+    <strong>403 Forbidden.</strong> You are not on the ops admin allowlist.
+    Soft-deleted entities are not loaded.
+  </div>
+
+  <div id="ops-content" hidden>
+    <p class="ads-sub">
+      Entities flagged by the garbage detector (Task #1) — HTML page titles,
+      nav strings, UI labels, and structural orphans. All rows are
+      <strong>soft-deleted</strong>: hidden from dashboards via
+      <code>status='soft_deleted'</code>, never hard-deleted unless an
+      operator clicks <em>Permanently Delete</em>. Every action is audited.
+    </p>
+
+    <div class="ads-card" style="margin-bottom:1rem">
+      <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:center">
+        <div><strong>Soft-deleted total:</strong> <span id="g-total">…</span></div>
+        <div><strong>Last 24h:</strong> <span id="g-24h">…</span></div>
+        <div><strong>Audit log rows:</strong> <span id="g-log">…</span></div>
+        <div style="margin-left:auto;display:flex;gap:.5rem">
+          <input id="g-q" placeholder="Filter by name / domain / URL" class="ads-input" style="min-width:240px">
+          <button class="ads-btn" id="g-refresh">Refresh</button>
+          <button class="ads-btn ads-btn--warn" id="g-sweep-recent">Run recent sweep</button>
+          <button class="ads-btn ads-btn--warn" id="g-sweep-all">Run full cleanup (oneoff)</button>
+        </div>
+      </div>
+      <p class="ads-sub" id="g-sweep-status" style="margin:.5rem 0 0"></p>
+    </div>
+
+    <div class="ads-card">
+      <div class="ads-table-wrap">
+        <table class="ads-table" id="g-table">
+          <thead>
+            <tr>
+              <th>Kind</th>
+              <th>Display name</th>
+              <th>Domain / URL</th>
+              <th>Reason</th>
+              <th>Deleted at</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody><tr><td colspan="6">Loading…</td></tr></tbody>
+        </table>
+      </div>
+      <div style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:.5rem">
+        <button class="ads-btn" id="g-prev" disabled>← Prev</button>
+        <button class="ads-btn" id="g-next" disabled>Next →</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script src="/assets/js/ops-garbage-review.js"></script>

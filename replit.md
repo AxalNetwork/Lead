@@ -794,5 +794,63 @@ ACCEPTED:
    `EVAL_LOCAL_UPDATE=1 node scripts/eval-local.mjs`; bypass with
    `EVAL_LOCAL_SKIP=1` (logs loud).
 
+### Task #1 — Garbage Entity Detector & Cleanup: migration 375 + nightly-piggyback sweep (ACCEPTED)
+Spec slotted the schema at migration 368 (later 372 after re-numbering
+in the prep notes), but slots 350–374 are all taken (per the
+Task #13/#14/#18/#2/#3/#4/#5/#6 contract-update precedent above). The
+schema lands at `apps/worker/migrations/375_garbage_detector.sql`
+(adds `u_entities.deleted_reason` column + new `data_quality_log`
+table; one-off cleanup pass logs + soft-deletes every existing
+garbage row and removes their `entity_roles`). Future migrations
+should number from 376.
+
+Detector module (`apps/worker/src/entities/garbage.ts`) is pure: a
+heuristic `isGarbage` covering every spec rule (empty/whitespace,
+page-title `|`-fragment, press leader phrases, no alphanumeric
+chars, >80 chars, known UI strings, person-no-space /
+person-contains-separator) and the structural-orphan rule (zero
+facts AND zero relationships AND zero contact channels AND age
+≥24h). The AI second opinion (`aiSecondOpinion`) only fires for
+names 30-60 chars long with no heuristic match, and follows the
+Task #14 honest-degradation pattern: missing `env.AI` binding
+returns `verdict='uncertain'` with reason `ai_binding_missing` —
+never silently flags. AI flags require `verdict='garbage' AND
+confidence>0.8`.
+
+Pre-insert guard is wired in `entities/roles.ts::createEntity`
+(returns `EntityRow | null` instead of throwing — callers in
+`entities/dualwrite.ts::persistOrUpdate` already null-check and
+skip the legacy-map upsert when the guard rejects). Rejected
+writes log `garbage.pre_insert_rejected` to console AND insert a
+`data_quality_log` row with a `rejected:<truncated_name>`
+synthetic entity_id so operators can audit pre-insert rejections
+without polluting `u_entities`.
+
+**Cron slot decision** (CONSTRAINT, not deviation): the spec asked
+for a 6-hourly sweep but Free plan caps crons at 5/5 (same
+constraint as Task #4 angel sweep, Task #14 verification, Task #18
+benchmarks, Task #2 fund returns, Task #3 edge quality, Task #4
+intro retrain, Task #5 reputation). The sweep piggybacks the
+consolidated `15 3 * * *` slot with a 30h lookback (>24h to cover
+the daily cadence plus the structural-orphan ≥24h-old rule). Once
+a day is the accepted trade-off; the pre-insert guard catches new
+writes in real time so the sweep is purely a safety net for paths
+that bypass `createEntity` and for structural-orphan promotion
+after the 24h grace window. Sweep bounded at 5000 entities/tick.
+
+Operator console lives at `/ops/garbage-review/` per the Task #2
+/ops/crawler/ gating pattern — the static Jekyll page can't
+enforce server-side 403 so `ops-garbage-review.js` pre-flights
+`GET /api/ops/garbage-review/` (worker-side admin-only via the
+`/api/ops/*` parent mount) and reveals `#ops-content` only on 2xx.
+Per the Task #4 static-routing constraint, per-entity deep links
+use `?id=<entity_id>` query strings (the Restore / Permanently
+Delete actions). Permanently Delete cascades via
+`garbage.purgeEntity` through `facts`, `rel_edges`,
+`entity_channels`, `entity_roles`, `entity_legacy_map`,
+`entity_history`, and `data_quality_log` before the
+`u_entities` DELETE — the **only** code path that hard-deletes
+a `u_entities` row.
+
 ## User preferences
 - (none recorded yet)

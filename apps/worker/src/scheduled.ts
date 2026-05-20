@@ -628,6 +628,24 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         console.error("nightly investor reputation sweep failed", (e as Error).message);
       }
 
+      // Task #1: Garbage Entity Detector — cron sweep over entities
+      // created in the recent window. Piggybacks the consolidated
+      // nightly slot (Free plan caps crons at 5/5 — see Task #4
+      // angel sweep / Task #14 verification / Task #18 benchmarks /
+      // Task #2 fund returns / Task #3 edge quality / Task #4 intro
+      // retrain / Task #5 reputation precedent). Bounded at 5000
+      // entities/tick. Soft-deletes flagged rows (never hard-delete);
+      // operators audit + restore via /ops/garbage-review/.
+      try {
+        const { runCleanupSweep } = await import("./entities/garbage");
+        // Nightly cadence + 30h lookback (>24h to cover the daily run
+        // plus the structural-orphan ≥24h-old rule).
+        const r = await runCleanupSweep(env, { mode: "recent", lookbackHours: 30, limit: 5000, source: "cron_sweep" });
+        console.log("garbage sweep done", JSON.stringify(r));
+      } catch (e) {
+        console.error("nightly garbage sweep failed", (e as Error).message);
+      }
+
       // 5. Project match refresh
       try {
         const r = await env.DB.prepare(`SELECT id FROM projects WHERE deleted_at IS NULL AND status = 'active' ORDER BY last_modified DESC LIMIT 200`).all<{ id: string }>();
