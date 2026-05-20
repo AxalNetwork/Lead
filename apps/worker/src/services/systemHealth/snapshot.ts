@@ -5,7 +5,11 @@
 // 5-min window collapse via the INSERT-OR-REPLACE primary key.
 
 import type { Env } from "../../types";
-import { collectComputePool, collectQueues, collectD1, collectErrorRatePerMin } from "./collectors";
+import {
+  collectComputePool, collectQueues, collectD1, collectErrorRatePerMin,
+  collectR2, collectKV, collectVectorize, collectExternalApis, collectCronStatus,
+} from "./collectors";
+import { PROBE_NAMES } from "./probes";
 
 export function bucketStart(now: Date = new Date(), minutes = 5): string {
   // SQLite-comparable timestamp: `YYYY-MM-DD HH:mm:ss` (no `T`, no `Z`)
@@ -75,6 +79,45 @@ export async function writeHealthSnapshot(env: Env): Promise<WriteSnapshotResult
   const d1 = await collectD1(env);
   await put(env, bucket, "d1.throttled_24h", d1.throttled_24h, { errors_24h: d1.errors_24h });
   n++;
+
+  // R2 / KV / Vectorize per-binding gauges (sampled, honest metric_source).
+  for (const r of await collectR2(env)) {
+    await put(env, bucket, `r2.objects_sampled.${r.bucket}`, r.objects_sampled, {
+      bound: r.bound, bytes_sampled: r.bytes_sampled, truncated: r.truncated, metric_source: r.metric_source,
+    });
+    n++;
+  }
+  for (const k of await collectKV(env)) {
+    await put(env, bucket, `kv.keys_sampled.${k.binding}`, k.keys_sampled, {
+      bound: k.bound, truncated: k.truncated, metric_source: k.metric_source,
+    });
+    n++;
+  }
+  for (const v of await collectVectorize(env)) {
+    await put(env, bucket, `vectorize.vector_count.${v.index}`, v.vector_count, {
+      bound: v.bound, dimensions: v.dimensions, metric_source: v.metric_source,
+    });
+    n++;
+  }
+
+  // External API health rollups.
+  for (const a of await collectExternalApis(env, [...PROBE_NAMES])) {
+    await put(env, bucket, `external_api.success_rate_24h.${a.api_name}`, a.success_rate_24h, {
+      configured: a.configured, last_success: a.last_success, last_probe: a.last_probe,
+      rate_limit_remaining: a.rate_limit_remaining, last_error: a.last_error,
+    });
+    n++;
+  }
+
+  // Cron status rollups (last_run timestamp surfaced as payload; value=1 if observed recently).
+  for (const c of await collectCronStatus(env)) {
+    const lastT = c.last_run ? new Date(c.last_run.replace(" ", "T") + "Z").getTime() : 0;
+    const fresh = lastT && (Date.now() - lastT) < 6 * 3600_000 ? 1 : 0;
+    await put(env, bucket, `cron.status.${c.cron_expr}`, fresh, {
+      name: c.name, last_run: c.last_run,
+    });
+    n++;
+  }
 
   return { bucket, metrics_written: n };
 }

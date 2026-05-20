@@ -10,7 +10,8 @@
 // hourly cron — no new cron slot.
 
 import type { Env } from "../../types";
-import { collectComputePool, collectQueues, collectD1, collectErrorRatePerMin, nodeStatus, collectRecentErrors } from "./collectors";
+import { collectComputePool, collectQueues, collectD1, collectErrorRatePerMin, nodeStatus, collectRecentErrors, collectExternalApis, collectCronStatus } from "./collectors";
+import { PROBE_NAMES } from "./probes";
 import { deliverEmail } from "../../monitoring/channels/email";
 
 export interface Breach {
@@ -158,17 +159,26 @@ export async function runAlertEvaluator(env: Env): Promise<RunAlertsResult> {
   let snapshotContext: Record<string, unknown> | null = null;
   async function buildContextSnapshot(): Promise<Record<string, unknown>> {
     if (snapshotContext) return snapshotContext;
-    const [queues, nodes, erate, d1, errs] = await Promise.all([
+    const [queues, nodes, erate, d1, errs, extApis, crons] = await Promise.all([
       collectQueues(env).catch(() => []),
       collectComputePool(env).catch(() => []),
       collectErrorRatePerMin(env).catch(() => 0),
       collectD1(env).catch(() => ({ reads_per_sec_estimate: 0, writes_per_sec_estimate: 0, errors_24h: 0, throttled_24h: 0 })),
       collectRecentErrors(env, 20).catch(() => []),
+      collectExternalApis(env, [...PROBE_NAMES]).catch(() => []),
+      collectCronStatus(env).catch(() => []),
     ]);
+    const versionId = (env as unknown as { CF_VERSION_METADATA?: { id?: string; timestamp?: string } }).CF_VERSION_METADATA;
     snapshotContext = {
       captured_at: new Date().toISOString(),
       queues, compute_pool: nodes, errors_per_min: erate,
       d1, top_errors: errs,
+      external_apis: extApis,
+      crons,
+      deploy: {
+        version_id: versionId?.id ?? null,
+        deployed_at: versionId?.timestamp ?? null,
+      },
     };
     return snapshotContext;
   }

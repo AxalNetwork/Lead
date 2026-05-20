@@ -231,7 +231,15 @@
       renderIncidents(data.open_incidents || []);
       // Compute strip: external nodes + Cloudflare Worker self-cards.
       var workers = (data.workers || []).map(function (w) {
-        return { id: w.id, name: w.name, status: w.status, last_heartbeat_at: w.last_hourly_tick, last_error: null, last_p95_latency_ms: null, enabled: 1, drain: 0, kind: "cloudflare_worker" };
+        return {
+          id: w.id, name: w.name, status: w.status,
+          provider: "cloudflare", kind: w.kind || "cloudflare_worker",
+          current_active_jobs: "—", max_concurrent_jobs: "—",
+          p95_latency_ms: null,
+          last_heartbeat_at: w.last_hourly_tick,
+          last_error: null,
+          enabled: 1, drain: 0,
+        };
       });
       renderCompute(workers.concat(data.compute_pool || []));
       renderQueues(data.queues || []);
