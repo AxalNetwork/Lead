@@ -62,18 +62,29 @@ test("getEffectiveFacts overlays overrides over is_current=1 facts", () => {
   assert.match(factsSrc, /overridden_attempt: true/);
 });
 
-test("loadCurrentOverrides is the single overlay site for summary + query", () => {
-  assert.match(summarySrc, /loadCurrentOverrides/);
-  assert.match(querySrc, /loadCurrentOverrides/);
+test("getEffectiveFacts is the single overlay site for summary + query", () => {
+  // Both read sites consume the same shared resolver — no parallel
+  // overlay implementations allowed (drift-risk constraint).
+  assert.match(summarySrc, /getEffectiveFacts\(/);
+  assert.match(querySrc, /getEffectiveFacts\(/);
+  // Neither site re-implements the overlay loop.
+  assert.doesNotMatch(summarySrc, /overrides\.has\(f\.predicate\)/);
+  assert.doesNotMatch(querySrc, /overridesMap\.get\(f\.predicate\)/);
 });
 
 // ---------- 4. Read-path overlay ----------
 test("summary.ts filters out facts that have an active locked override", () => {
-  assert.match(summarySrc, /facts = facts\.filter\(\(f\) => !overrides\.has\(f\.predicate\)\)/);
+  // getEffectiveFacts returns one row per predicate where overrides
+  // win; the summary builder filters overridden_attempt rows out of
+  // the summary inputs.
+  assert.match(summarySrc, /!e\.overridden_attempt/);
 });
 
-test("query.ts marks conflicting facts as superseded_by_override and exposes overrides", () => {
-  assert.match(querySrc, /f\.superseded_by_override = 1/);
+test("query.ts exposes overrides and attempts arrays", () => {
+  // The split into facts[] / attempts[] is driven by the resolver's
+  // overridden_attempt flag.
+  assert.match(querySrc, /e\.overridden_attempt/);
+  assert.match(querySrc, /attempts/);
   assert.match(querySrc, /overrides: overrideArr/);
 });
 
@@ -184,9 +195,11 @@ test("acceptance: override row beats subsequent AI fact at read time", () => {
   assert.match(overridesRouteSrc, /INSERT INTO field_overrides[\s\S]+VALUES[\s\S]+1\)/);
   // 2. insertFact stamps the next AI write as superseded_by_override.
   assert.match(factsSrc, /superseded_by_override/);
-  // 3. summary + query overlays return the override value as canonical.
-  assert.match(summarySrc, /loadCurrentOverrides/);
-  assert.match(querySrc, /loadCurrentOverrides/);
+  // 3. summary + query overlays return the override value as canonical
+  // (via the shared getEffectiveFacts resolver — exactly one overlay
+  // implementation, consumed by both read sites).
+  assert.match(summarySrc, /getEffectiveFacts\(/);
+  assert.match(querySrc, /getEffectiveFacts\(/);
   // 4. History endpoint exposes the AI attempt with superseded_by_override.
   assert.match(overridesRouteSrc, /attempts: attempts\.results/);
 });

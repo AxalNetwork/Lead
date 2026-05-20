@@ -1,21 +1,22 @@
 // Task #3: Editable Profiles + Manual Overrides with Audit.
 //
-// Three surfaces:
+// Three UI surfaces:
 //   1. Inline-edit decorator for any element marked
-//      data-predicate="<name>" + data-entity-id="<id>". Hover → pencil
-//      → input → save (reason required on first edit). Saved fields
-//      show a lock icon that opens a side-panel history (overrides +
-//      AI attempts) with an Unlock control.
-//   2. Actions menu — auto-injected into every profile page detected
-//      via <body data-entity-id="..."> or a marker container. Surfaces
-//      "Edit field…", "Delete", "Merge into…", and "Audit log".
-//      Required by the spec acceptance criteria.
+//      data-predicate="<name>" + data-entity-id="<id>". Hover shows
+//      a pencil; click swaps the value span for an <input> with Save
+//      / Cancel + an inline reason input (required on first edit).
+//      Saved fields show a 🔒 that opens a side-panel history viewer
+//      (overrides + AI attempts) with an Unlock control.
+//   2. Profile Actions menu — auto-injected on every dashboard profile
+//      page detected via <body data-entity-id="..."> or ?id= in the
+//      URL. Surfaces "Edit field…", "Delete", "Merge into…", and
+//      "Audit log".
 //   3. List-page toolbar — auto-injected into known list filter forms
-//      (currently #ads-people-filters). Surfaces "+ Create entity" and
-//      "Bulk edit field…" buttons (Task 71 list surface).
+//      (people/investor/company/firm). Surfaces "+ Create entity" and
+//      "Bulk edit field…" buttons.
 //
-// Per the Task #4 static-routing constraint, every deep link uses
-// `?id=<entity_id>` query strings, never `/:id` path segments.
+// All deep links use ?id=<entity_id> query strings per the Task #4
+// static-routing constraint.
 (function () {
   if (window.adsFieldEditMounted) return;
   window.adsFieldEditMounted = true;
@@ -33,19 +34,13 @@
     (children || []).forEach(function (c) { if (c != null) node.appendChild(typeof c === "string" ? document.createTextNode(c) : c); });
     return node;
   }
-
   function fmt(v) { return v == null || v === "" ? "—" : String(v); }
-
-  function jsonOrText(res) {
-    return res.text().then(function (t) {
-      try { return JSON.parse(t); } catch { return { raw: t }; }
-    });
-  }
+  function jsonOrText(res) { return res.text().then(function (t) { try { return JSON.parse(t); } catch { return { raw: t }; } }); }
 
   // ---------- API wrappers ----------
   async function postOverride(entityId, predicate, value, reason) {
     var body = { predicate: predicate, override_reason: reason };
-    if (typeof value === "number") body.value_numeric = value;
+    if (typeof value === "number" && !isNaN(value)) body.value_numeric = value;
     else body.value_text = String(value);
     var res = await fetch(API + "/api/entities/" + encodeURIComponent(entityId) + "/overrides", {
       method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -97,7 +92,7 @@
           row.appendChild(el("button", {
             type: "button", style: "margin-top:4px;font-size:11px",
             onclick: function () {
-              var reason = prompt("Reason for unlock?", "");
+              var reason = window.prompt("Reason for unlock?", "");
               if (reason == null) return;
               unlockOverride(entityId, o.id, reason).then(function () { openHistoryPanel(entityId, predicate); });
             },
@@ -114,9 +109,7 @@
           ]),
         ]));
       });
-    }).catch(function (e) {
-      body.innerHTML = "<p class='ads-muted'>Failed to load: " + (e.message || e) + "</p>";
-    });
+    }).catch(function (e) { body.innerHTML = "<p class='ads-muted'>Failed to load: " + (e.message || e) + "</p>"; });
   }
 
   // ---------- Audit-log side-panel ----------
@@ -141,56 +134,103 @@
         ]));
       });
       if (!(data.items || []).length) body.appendChild(el("p", { class: "ads-muted" }, ["No audit entries yet."]));
-    }).catch(function (e) {
-      body.innerHTML = "<p class='ads-muted'>Failed to load: " + (e.message || e) + "</p>";
-    });
+    }).catch(function (e) { body.innerHTML = "<p class='ads-muted'>Failed to load: " + (e.message || e) + "</p>"; });
   }
 
-  // ---------- Inline pencil decorator ----------
+  // ---------- Inline-edit decorator (true hover→input→save, no prompt) ----------
+  // A decorated container has this DOM shape:
+  //   <span data-ads-field-edit-decorated="1">
+  //     <span data-ads-field-value>…current value…</span>
+  //     <button class="ads-field-edit-btn">✎</button>
+  //     <button class="ads-field-lock-btn">🔒</button>
+  //     <span class="ads-field-edit-form" hidden>… input + save/cancel + reason …</span>
+  //   </span>
+  // Save only mutates [data-ads-field-value] and the lock visibility,
+  // so the pencil + lock + form siblings survive a save round trip
+  // (the prior implementation called textContent = nv on the whole
+  // container, which wiped them — fixed here).
   function decorate(target) {
     if (target.dataset.adsFieldEditDecorated) return;
-    target.dataset.adsFieldEditDecorated = "1";
     var entityId = target.dataset.entityId;
     var predicate = target.dataset.predicate;
     if (!entityId || !predicate) return;
+    target.dataset.adsFieldEditDecorated = "1";
     target.style.position = target.style.position || "relative";
+
+    // Move the existing text content into a value-span so we can
+    // mutate ONLY that span on save without clobbering controls.
+    var initialText = target.textContent;
+    target.textContent = "";
+    var valueSpan = el("span", { "data-ads-field-value": "1" }, [initialText]);
+    target.appendChild(valueSpan);
 
     var pencil = el("button", {
       type: "button", title: "Edit", class: "ads-field-edit-btn",
-      style: "margin-left:6px;border:none;background:transparent;cursor:pointer;font-size:12px;opacity:0.5",
-      onclick: function (ev) {
-        ev.stopPropagation();
-        promptAndPostOverride(entityId, predicate, target);
-      },
+      style: "margin-left:6px;border:none;background:transparent;cursor:pointer;font-size:12px;opacity:.5",
     }, ["✎"]);
     var lock = el("button", {
       type: "button", title: "Edit history", class: "ads-field-lock-btn",
       style: "margin-left:4px;border:none;background:transparent;cursor:pointer;font-size:12px;display:" + (target.dataset.overridden === "1" ? "" : "none"),
-      onclick: function (ev) { ev.stopPropagation(); openHistoryPanel(entityId, predicate); },
     }, ["🔒"]);
+    var form = el("span", {
+      class: "ads-field-edit-form", style: "display:none;margin-left:6px;align-items:center;gap:4px",
+    });
     target.appendChild(pencil);
     target.appendChild(lock);
-  }
+    target.appendChild(form);
 
-  function promptAndPostOverride(entityId, presetPredicate, target) {
-    var predicate = presetPredicate || prompt("Predicate name (e.g. title, sector, country_iso2):", "");
-    if (!predicate) return;
-    var current = target && (target.dataset.currentValue || target.textContent) || "";
-    var nv = prompt("New value for " + predicate + ":", current);
-    if (nv == null) return;
-    var reason = prompt("Reason for override (required):", "");
-    if (!reason) { alert("Reason required."); return; }
-    postOverride(entityId, predicate, nv, reason).then(function () {
-      if (target) {
-        target.textContent = nv;
-        target.dataset.currentValue = nv;
-        target.dataset.overridden = "1";
+    lock.addEventListener("click", function (ev) { ev.stopPropagation(); openHistoryPanel(entityId, predicate); });
+    pencil.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      openInlineEditor();
+    });
+    target.addEventListener("dblclick", function (ev) {
+      // Double-click anywhere on the value also enters edit mode.
+      if (form.style.display !== "none") return;
+      ev.stopPropagation(); openInlineEditor();
+    });
+
+    function openInlineEditor() {
+      var current = target.dataset.currentValue || valueSpan.textContent.trim();
+      form.innerHTML = "";
+      var input = el("input", { type: "text", value: current, style: "padding:2px 4px;border:1px solid #aaa;border-radius:3px;font:inherit;min-width:160px" });
+      var reasonInput = el("input", { type: "text", placeholder: "reason (required)", style: "padding:2px 4px;border:1px solid #aaa;border-radius:3px;font:inherit;min-width:120px" });
+      var saveBtn = el("button", { type: "button", style: "padding:2px 8px;background:#0a7;color:#fff;border:none;border-radius:3px;cursor:pointer" }, ["Save"]);
+      var cancelBtn = el("button", { type: "button", style: "padding:2px 8px;background:#eee;border:1px solid #ccc;border-radius:3px;cursor:pointer" }, ["Cancel"]);
+      var status = el("span", { class: "ads-muted", style: "font-size:11px;margin-left:4px" });
+
+      function close() { form.style.display = "none"; form.innerHTML = ""; valueSpan.style.display = ""; pencil.style.display = ""; }
+      function save() {
+        var nv = input.value;
+        var reason = reasonInput.value.trim();
+        if (!reason) { status.textContent = "reason required"; reasonInput.focus(); return; }
+        saveBtn.disabled = true; status.textContent = "saving…";
+        postOverride(entityId, predicate, nv, reason).then(function () {
+          // Only touch the value-span and the lock badge — controls survive.
+          valueSpan.textContent = nv;
+          target.dataset.currentValue = nv;
+          target.dataset.overridden = "1";
+          lock.style.display = "";
+          close();
+        }).catch(function (e) {
+          saveBtn.disabled = false; status.textContent = "save failed: " + (e.message || e);
+        });
       }
-      alert("Saved.");
-    }).catch(function (e) { alert("Save failed: " + (e.message || e)); });
+      saveBtn.addEventListener("click", save);
+      cancelBtn.addEventListener("click", close);
+      input.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); save(); }
+        else if (e.key === "Escape") { e.preventDefault(); close(); }
+      });
+      form.appendChild(input); form.appendChild(reasonInput); form.appendChild(saveBtn); form.appendChild(cancelBtn); form.appendChild(status);
+      valueSpan.style.display = "none";
+      pencil.style.display = "none";
+      form.style.display = "inline-flex";
+      input.focus(); input.select();
+    }
   }
 
-  // ---------- Actions menu (auto-injected on every profile page) ----------
+  // ---------- Actions menu (auto-injected on profile pages) ----------
   function detectEntityId() {
     var b = document.body;
     if (b && b.dataset.entityId) return b.dataset.entityId;
@@ -198,8 +238,6 @@
     if (marker) return marker.getAttribute("data-ads-entity-id");
     var qs = new URLSearchParams(location.search);
     var id = qs.get("id");
-    // Only auto-inject on dashboard pages — never on list-only pages
-    // where the ?id= might be unrelated routing.
     if (id && /\/dashboard\//.test(location.pathname) && !/\bpeople\/?$/.test(location.pathname)) return id;
     return null;
   }
@@ -210,9 +248,9 @@
     if (document.getElementById("ads-profile-actions")) return;
     var bar = el("div", { id: "ads-profile-actions", style: "position:fixed;bottom:16px;right:16px;z-index:9000;background:#111;color:#fff;padding:8px 12px;border-radius:24px;box-shadow:0 4px 14px rgba(0,0,0,.25);font-size:13px;display:flex;gap:8px;align-items:center" }, [
       el("span", { style: "opacity:.7;margin-right:4px" }, ["Profile actions"]),
-      btn("Edit field…", function () { promptAndPostOverride(entityId, null, null); }),
+      btn("Edit field…", function () { openAdHocEditor(entityId); }),
       btn("Delete", function () {
-        var reason = prompt("Reason for soft-delete (required):", "");
+        var reason = window.prompt("Reason for soft-delete (required):", "");
         if (!reason) return;
         fetch(API + "/api/entities/" + encodeURIComponent(entityId) + "/soft-delete", {
           method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: reason }),
@@ -220,10 +258,10 @@
           .then(function (res) { if (!res.ok) alert("Delete failed: " + JSON.stringify(res.j)); else alert("Soft-deleted."); });
       }, "#900"),
       btn("Merge into…", function () {
-        var target = prompt("Target entity_id:", "");
+        var target = window.prompt("Target entity_id:", "");
         if (!target) return;
         if (!confirm("Merge this entity into " + target + "?")) return;
-        fetch(API + "/api/entities/" + encodeURIComponent(entityId) + "/merge-into", {
+        fetch(API + "/api/entities/" + encodeURIComponent(entityId) + "/merge", {
           method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target_entity_id: target }),
         }).then(function (r) { return jsonOrText(r).then(function (j) { return { ok: r.ok, j: j }; }); })
           .then(function (res) {
@@ -245,6 +283,39 @@
     }, [label]);
   }
 
+  // Inline modal editor for "Edit field…" when there is no matching
+  // decorated field on the page (e.g. user wants to override a
+  // predicate that isn't currently rendered).
+  function openAdHocEditor(entityId) {
+    var existing = document.getElementById("ads-adhoc-editor"); if (existing) existing.remove();
+    var modal = el("div", { id: "ads-adhoc-editor", style: "position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9500;display:flex;align-items:center;justify-content:center" });
+    var card = el("div", { style: "background:#fff;padding:16px;border-radius:6px;min-width:320px;display:flex;flex-direction:column;gap:8px" }, [
+      el("h4", { style: "margin:0" }, ["Add override"]),
+      el("label", null, ["Predicate (e.g. title, sector)"]),
+    ]);
+    var predInput = el("input", { type: "text", style: "padding:4px;border:1px solid #aaa;border-radius:3px" });
+    var valInput = el("input", { type: "text", placeholder: "new value", style: "padding:4px;border:1px solid #aaa;border-radius:3px" });
+    var reasonInput = el("input", { type: "text", placeholder: "reason (required)", style: "padding:4px;border:1px solid #aaa;border-radius:3px" });
+    var status = el("div", { class: "ads-muted", style: "font-size:12px;min-height:16px" });
+    var saveBtn = el("button", { type: "button", style: "padding:6px 12px;background:#0a7;color:#fff;border:none;border-radius:3px;cursor:pointer" }, ["Save"]);
+    var cancelBtn = el("button", { type: "button", style: "padding:6px 12px;background:#eee;border:1px solid #ccc;border-radius:3px;cursor:pointer" }, ["Cancel"]);
+    card.appendChild(predInput);
+    card.appendChild(el("label", null, ["Value"])); card.appendChild(valInput);
+    card.appendChild(el("label", null, ["Reason"])); card.appendChild(reasonInput);
+    card.appendChild(status);
+    card.appendChild(el("div", { style: "display:flex;gap:8px;justify-content:flex-end" }, [cancelBtn, saveBtn]));
+    modal.appendChild(card); document.body.appendChild(modal);
+    cancelBtn.addEventListener("click", function () { modal.remove(); });
+    saveBtn.addEventListener("click", function () {
+      var pred = predInput.value.trim(); if (!pred) { status.textContent = "predicate required"; return; }
+      var reason = reasonInput.value.trim(); if (!reason) { status.textContent = "reason required"; return; }
+      saveBtn.disabled = true; status.textContent = "saving…";
+      postOverride(entityId, pred, valInput.value, reason).then(function () { status.textContent = "saved."; setTimeout(function () { modal.remove(); }, 400); })
+        .catch(function (e) { saveBtn.disabled = false; status.textContent = "save failed: " + (e.message || e); });
+    });
+    predInput.focus();
+  }
+
   // ---------- List-page toolbar ----------
   function injectListToolbar() {
     var filtersForm = document.getElementById("ads-people-filters")
@@ -254,18 +325,13 @@
     if (!filtersForm) return;
     if (filtersForm.parentNode && filtersForm.parentNode.querySelector(".ads-list-toolbar")) return;
     var toolbar = el("div", { class: "ads-list-toolbar", style: "display:flex;gap:8px;align-items:center;margin:8px 0" }, [
+      el("button", { type: "button", style: "background:#0a7;color:#fff;border:none;padding:6px 12px;border-radius:4px;cursor:pointer", onclick: function () { window.adsOpenCreateEntity({}); } }, ["+ Create entity"]),
       el("button", {
-        type: "button",
-        style: "background:#0a7;color:#fff;border:none;padding:6px 12px;border-radius:4px;cursor:pointer",
-        onclick: function () { window.adsOpenCreateEntity({}); },
-      }, ["+ Create entity"]),
-      el("button", {
-        type: "button",
-        style: "background:#fff;color:#111;border:1px solid #ccc;padding:6px 12px;border-radius:4px;cursor:pointer",
+        type: "button", style: "background:#fff;color:#111;border:1px solid #ccc;padding:6px 12px;border-radius:4px;cursor:pointer",
         onclick: function () {
           var ids = (window.adsGetSelectedEntityIds && window.adsGetSelectedEntityIds()) || [];
           if (!ids.length) {
-            var manual = prompt("No row selection found. Enter comma-separated entity IDs for bulk edit:", "");
+            var manual = window.prompt("No row selection found. Enter comma-separated entity IDs for bulk edit:", "");
             if (!manual) return;
             ids = manual.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
           }
@@ -279,12 +345,11 @@
   // ---------- Public helpers ----------
   window.adsOpenCreateEntity = function (defaults) {
     var d = defaults || {};
-    var name = prompt("Name:", d.name || "");
-    if (!name) return;
-    var kind = (d.kind || prompt("Kind (person|org):", "org") || "").toLowerCase();
+    var name = window.prompt("Name:", d.name || ""); if (!name) return;
+    var kind = (d.kind || window.prompt("Kind (person|org):", "org") || "").toLowerCase();
     if (kind !== "person" && kind !== "org") { alert("kind must be person or org"); return; }
-    var role = d.primary_role || prompt("Primary role (optional, e.g. founder, investor, firm):", "") || null;
-    var website = d.website || prompt("Website (optional):", "") || null;
+    var role = d.primary_role || window.prompt("Primary role (optional, e.g. founder, investor, firm):", "") || null;
+    var website = d.website || window.prompt("Website (optional):", "") || null;
     var fillAi = confirm("Run AI fill on save?");
     var url = API + "/api/entities" + (fillAi ? "?fill=ai" : "");
     fetch(url, {
@@ -301,12 +366,9 @@
 
   window.adsOpenBulkFieldEdit = function (entityIds) {
     if (!Array.isArray(entityIds) || !entityIds.length) { alert("No entities selected."); return; }
-    var predicate = prompt("Predicate (e.g. title, sector, country_iso2):", "");
-    if (!predicate) return;
-    var value = prompt("New value:", "");
-    if (value == null) return;
-    var reason = prompt("Reason for bulk override (required):", "");
-    if (!reason) { alert("Reason required."); return; }
+    var predicate = window.prompt("Predicate (e.g. title, sector, country_iso2):", ""); if (!predicate) return;
+    var value = window.prompt("New value:", ""); if (value == null) return;
+    var reason = window.prompt("Reason for bulk override (required):", ""); if (!reason) { alert("Reason required."); return; }
     fetch(API + "/api/entities/overrides/bulk", {
       method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ entity_ids: entityIds, predicate: predicate, value_text: value, override_reason: reason }),

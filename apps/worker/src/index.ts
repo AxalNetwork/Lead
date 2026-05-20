@@ -159,6 +159,12 @@ api.route("/api/signals", signalsRoute);
 api.route("/api/crawlers", crawlersRoute);
 api.route("/api/personas", personasRoute);
 api.route("/api/projects", projectsRoute);
+// Task #3 (Editable Profiles): overridesRoute mounts BEFORE entitiesRoute
+// so the new operator-driven /api/entities/:id/merge handler (which
+// takes target_entity_id + writes an audit-log row) wins over the
+// legacy pickPrimary /merge handler defined on entitiesRoute. Hono
+// dispatches first-match, so order matters.
+api.route("/api", overridesRoute);
 api.route("/api/entities", entitiesRoute);
 api.route("/api/dd", ddRoute);
 api.route("/api/news", newsRoute);
@@ -241,18 +247,6 @@ api.route("/api", founderCrmRoute);
 // hallucination flags. Admin gating is inline via c.var.is_admin
 // (populated by accessGuard) per the Task #14 inline-admin pattern.
 api.route("/api/ml", mlRoute);
-// Task #3: Editable Profiles + Manual Overrides with Audit.
-// Mounted at /api so the route owns /entities/:id/overrides,
-// /entities/overrides/bulk, /entities (manual create), /entities/:id/
-// soft-delete, /entities/:id/restore, /entities/:id/merge-into, and
-// /entities/:id/audit-log. Mounted AFTER the existing entitiesRoute
-// (api.route("/api/entities", entitiesRoute) above) so the
-// pre-existing /:id and /:id/merge handlers keep their first-match
-// priority; Hono falls through to overridesRoute when those exact
-// paths don't match a leaf above. Both mounts share the accessGuard
-// applied at /api/* above.
-api.route("/api", overridesRoute);
-
 api.notFound((c) => c.json({ error: "not_found", request_id: c.var.request_id }, 404));
 api.onError((err, c) => {
   const appErr = err instanceof AppError ? err : wrapUnknown(err, "internal_error");

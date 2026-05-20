@@ -124,6 +124,7 @@ export interface FactPatch {
 // helper returns it ONLY in the array marked `overridden_attempt=true`
 // for diff rendering — never as the canonical value.
 export interface EffectiveFact {
+  id: string;
   predicate: string;
   value_text: string | null;
   value_number: number | null;
@@ -132,7 +133,10 @@ export interface EffectiveFact {
   source_kind: string;
   source: string | null;
   confidence: number;
+  verified_score: number | null;
   observed_at: string;
+  is_current: number;
+  superseded_by_override: number;
   is_override: boolean;
   override_id: string | null;
   overridden_attempt: boolean;
@@ -148,6 +152,7 @@ interface FieldOverrideRow {
 }
 
 interface RawFactRow {
+  id: string;
   predicate: string;
   value_text: string | null;
   value_number: number | null;
@@ -156,7 +161,9 @@ interface RawFactRow {
   source_kind: string;
   source: string | null;
   confidence: number;
+  verified_score: number | null;
   observed_at: string;
+  is_current: number;
   superseded_by_override: number;
 }
 
@@ -180,14 +187,18 @@ export async function loadCurrentOverrides(env: Env, entityId: string): Promise<
   return map;
 }
 
-export async function getEffectiveFacts(env: Env, entityId: string): Promise<EffectiveFact[]> {
+export async function getEffectiveFacts(env: Env, entityId: string, opts?: { includeNonCurrent?: boolean; limit?: number }): Promise<EffectiveFact[]> {
+  const factWhere = opts?.includeNonCurrent ? "" : " AND is_current = 1";
+  const limit = opts?.limit ?? 500;
   const [factsRes, overrides] = await Promise.all([
     env.DB.prepare(
-      `SELECT predicate, value_text, value_number, value_json, value_entity_id,
-              source_kind, source, confidence, observed_at, superseded_by_override
+      `SELECT id, predicate, value_text, value_number, value_json, value_entity_id,
+              source_kind, source, confidence, verified_score, observed_at,
+              is_current, superseded_by_override
          FROM facts
-        WHERE entity_id = ? AND is_current = 1`,
-    ).bind(entityId).all<RawFactRow>(),
+        WHERE entity_id = ?${factWhere}
+        ORDER BY observed_at DESC LIMIT ?`,
+    ).bind(entityId, limit).all<RawFactRow>(),
     loadCurrentOverrides(env, entityId),
   ]);
   const out: EffectiveFact[] = [];
@@ -199,6 +210,7 @@ export async function getEffectiveFacts(env: Env, entityId: string): Promise<Eff
       if (!overridePredsSeen.has(f.predicate)) {
         overridePredsSeen.add(f.predicate);
         out.push({
+          id: `override:${ov.id}`,
           predicate: f.predicate,
           value_text: ov.value_text,
           value_number: ov.value_numeric,
@@ -207,7 +219,10 @@ export async function getEffectiveFacts(env: Env, entityId: string): Promise<Eff
           source_kind: "manual",
           source: "field_override",
           confidence: 1,
+          verified_score: null,
           observed_at: ov.overridden_at,
+          is_current: 1,
+          superseded_by_override: 0,
           is_override: true,
           override_id: ov.id,
           overridden_attempt: false,
@@ -216,6 +231,7 @@ export async function getEffectiveFacts(env: Env, entityId: string): Promise<Eff
       // Mark the underlying fact as an overridden attempt for the diff
       // strip. Never returned as canonical.
       out.push({
+        id: f.id,
         predicate: f.predicate,
         value_text: f.value_text,
         value_number: f.value_number,
@@ -224,16 +240,17 @@ export async function getEffectiveFacts(env: Env, entityId: string): Promise<Eff
         source_kind: f.source_kind,
         source: f.source,
         confidence: f.confidence,
+        verified_score: f.verified_score,
         observed_at: f.observed_at,
+        is_current: f.is_current,
+        superseded_by_override: 1,
         is_override: false,
         override_id: null,
         overridden_attempt: true,
       });
     } else if (f.superseded_by_override === 1) {
-      // No active override but the row was stamped (race / unlocked).
-      // Surface only as an attempt; canonical resolves to whatever
-      // other is_current=1 row exists, or none.
       out.push({
+        id: f.id,
         predicate: f.predicate,
         value_text: f.value_text,
         value_number: f.value_number,
@@ -242,13 +259,17 @@ export async function getEffectiveFacts(env: Env, entityId: string): Promise<Eff
         source_kind: f.source_kind,
         source: f.source,
         confidence: f.confidence,
+        verified_score: f.verified_score,
         observed_at: f.observed_at,
+        is_current: f.is_current,
+        superseded_by_override: 1,
         is_override: false,
         override_id: null,
         overridden_attempt: true,
       });
     } else {
       out.push({
+        id: f.id,
         predicate: f.predicate,
         value_text: f.value_text,
         value_number: f.value_number,
@@ -257,7 +278,10 @@ export async function getEffectiveFacts(env: Env, entityId: string): Promise<Eff
         source_kind: f.source_kind,
         source: f.source,
         confidence: f.confidence,
+        verified_score: f.verified_score,
         observed_at: f.observed_at,
+        is_current: f.is_current,
+        superseded_by_override: 0,
         is_override: false,
         override_id: null,
         overridden_attempt: false,
@@ -268,6 +292,7 @@ export async function getEffectiveFacts(env: Env, entityId: string): Promise<Eff
   for (const [pred, ov] of overrides.entries()) {
     if (overridePredsSeen.has(pred)) continue;
     out.push({
+      id: `override:${ov.id}`,
       predicate: pred,
       value_text: ov.value_text,
       value_number: ov.value_numeric,
@@ -276,7 +301,10 @@ export async function getEffectiveFacts(env: Env, entityId: string): Promise<Eff
       source_kind: "manual",
       source: "field_override",
       confidence: 1,
+      verified_score: null,
       observed_at: ov.overridden_at,
+      is_current: 1,
+      superseded_by_override: 0,
       is_override: true,
       override_id: ov.id,
       overridden_attempt: false,

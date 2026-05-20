@@ -326,14 +326,16 @@ overridesRoute.post("/entities/:id/restore", async (c) => {
   return c.json({ ok: true });
 });
 
-// ---------- POST /api/entities/:id/merge-into ----------
-// NB: /api/entities/:id/merge already exists on the legacy entitiesRoute
-// (Task #4) and uses pickPrimary (quality-score wins). This is a NEW
-// operator-driven path that names the target explicitly and writes an
-// entity_audit_log row. We mount it at a different sub-path so the
-// existing route handler is preserved.
-overridesRoute.post("/entities/:id/merge-into", async (c) => {
-  const sourceId = c.req.param("id");
+// ---------- POST /api/entities/:id/merge ----------
+// Spec-mandated endpoint. There is a legacy /api/entities/:id/merge on
+// entitiesRoute (Task #4 pickPrimary). We mount overridesRoute BEFORE
+// entitiesRoute in src/index.ts so this operator-driven handler
+// (target_entity_id explicit + audit log) wins. The /merge-into alias
+// is kept as a deprecated synonym for any client that already adopted
+// it during the rejected review cycles.
+async function handleMerge(c: import("hono").Context<{ Bindings: Env; Variables: Vars }>) {
+  const sourceId = c.req.param("id") ?? "";
+  if (!sourceId) return c.json({ error: "id_required" }, 400);
   let body: Record<string, unknown>;
   try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
   const targetId = typeof body.target_entity_id === "string" ? body.target_entity_id : "";
@@ -347,7 +349,9 @@ overridesRoute.post("/entities/:id/merge-into", async (c) => {
   } catch (e) {
     return c.json({ error: "merge_failed", message: (e as Error).message }, 400);
   }
-});
+}
+overridesRoute.post("/entities/:id/merge", handleMerge);
+overridesRoute.post("/entities/:id/merge-into", handleMerge);
 
 // ---------- GET /api/entities/:id/audit-log ----------
 overridesRoute.get("/entities/:id/audit-log", async (c) => {
