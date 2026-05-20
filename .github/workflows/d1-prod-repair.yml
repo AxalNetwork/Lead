@@ -1,0 +1,88 @@
+name: D1 prod repair (one-shot)
+
+# Task #6: one-shot prod D1 repair workflow. The dashboard_snapshots
+# table was created out-of-band on prod with a schema older than what
+# migration 357_dashboards.sql expects, causing 357's CREATE INDEX on
+# owner_email to fail and stalling migrations 358..372.
+#
+# Three modes (workflow_dispatch inputs):
+#   - inspect: dump PRAGMA table_info + row count for dashboard_snapshots
+#   - drop:    DROP TABLE IF EXISTS dashboard_snapshots (requires confirm=YES)
+#   - retry:   re-apply migrations after the drop (npx wrangler d1 migrations apply)
+#
+# Once dashboard_snapshots is gone from prod, migration 357 re-runs
+# cleanly on the next deploy and 358..372 follow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "inspect | drop | retry"
+        required: true
+        default: "inspect"
+        type: choice
+        options: [inspect, drop, retry]
+      confirm:
+        description: "Type YES to confirm destructive ops (drop)."
+        required: false
+        default: ""
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Inspect prod dashboard_snapshots
+        if: ${{ inputs.mode == 'inspect' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 30c9362191318777b71647145decda48
+        run: |
+          set -euo pipefail
+          echo "=== Schema (PRAGMA table_info) ==="
+          npx --yes wrangler@3.99.0 d1 execute aidatasignal-leads --remote \
+            --command "PRAGMA table_info(dashboard_snapshots);"
+          echo "=== Row count ==="
+          npx --yes wrangler@3.99.0 d1 execute aidatasignal-leads --remote \
+            --command "SELECT COUNT(*) AS n FROM dashboard_snapshots;"
+          echo "=== Index list ==="
+          npx --yes wrangler@3.99.0 d1 execute aidatasignal-leads --remote \
+            --command "PRAGMA index_list(dashboard_snapshots);"
+          echo "=== d1_migrations applied entries for 357+ ==="
+          npx --yes wrangler@3.99.0 d1 execute aidatasignal-leads --remote \
+            --command "SELECT name, applied_at FROM d1_migrations WHERE name LIKE '35%' OR name LIKE '36%' OR name LIKE '37%' ORDER BY name;"
+
+      - name: Drop orphan dashboard_snapshots
+        if: ${{ inputs.mode == 'drop' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 30c9362191318777b71647145decda48
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.confirm }}" != "YES" ]; then
+            echo "::error::Refusing to drop without confirm=YES." >&2
+            exit 1
+          fi
+          echo "Dropping dashboard_snapshots on prod (idempotent)…"
+          npx --yes wrangler@3.99.0 d1 execute aidatasignal-leads --remote \
+            --command "DROP TABLE IF EXISTS dashboard_snapshots;"
+          echo "Verifying it is gone…"
+          npx --yes wrangler@3.99.0 d1 execute aidatasignal-leads --remote \
+            --command "SELECT name FROM sqlite_master WHERE type='table' AND name='dashboard_snapshots';"
+
+      - name: Re-apply migrations (after drop)
+        if: ${{ inputs.mode == 'retry' }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 30c9362191318777b71647145decda48
+        run: |
+          set -euo pipefail
+          npx --yes wrangler@3.99.0 d1 migrations apply DB --remote
