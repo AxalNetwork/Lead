@@ -87,6 +87,14 @@ export function isGarbage(input: GarbageInput): GarbageVerdict {
   // Rule 6: known UI / nav string (case-insensitive exact match).
   if (KNOWN_UI_STRINGS.has(raw.toLowerCase())) reasons.push("known_ui_string");
 
+  // Rule 6b (Task #6 Section A/F): literal HTML entity in name
+  // (e.g. "Founder &amp; Partner", "Acme &#38; Co"). These are parser
+  // bugs upstream — the entity should have been decoded before write.
+  // We flag them here as garbage so they soft-delete on the next sweep
+  // and surface to the operator console; the durable fix is at the
+  // scraper layer via decodeEntities() (Task #6 Section F).
+  if (/&(amp|lt|gt|quot|#x?[0-9a-f]+);/i.test(raw)) reasons.push("literal_html_entity");
+
   // Rule 7: person-specific constraints — must contain a space AND
   // must not contain pipe / slash / colon. Real human display names
   // are "First Last", not "Contact | Sequoia" or "team/people:1".

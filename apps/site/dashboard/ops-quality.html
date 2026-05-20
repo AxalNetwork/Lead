@@ -1,0 +1,127 @@
+---
+layout: default
+title: Quality Console
+permalink: /ops/quality/
+---
+
+<h1 class="ads-page-title">Quality Console</h1>
+<p class="ads-page-sub">Operator-side data-quality rollup: garbage cleanup, CSV errors, locked overrides, fact contradictions, dedupe backlog, and recent soft-deletes.</p>
+
+<div id="ops-quality-gate" style="display:none">
+  <div class="ads-card"><p>This area is admin-only. <a href="/dashboard/">Back to dashboard</a>.</p></div>
+</div>
+
+<div id="ops-quality-content" style="display:none">
+  <div class="ads-card-grid" id="ops-quality-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:24px"></div>
+
+  <div class="ads-card">
+    <h3 style="margin-top:0">Recent soft-deletes</h3>
+    <div id="ops-quality-soft-deletes"><div class="ads-loading">Loading…</div></div>
+  </div>
+
+  <div class="ads-card" style="margin-top:16px">
+    <h3 style="margin-top:0">Operator actions</h3>
+    <p class="ads-muted" style="font-size:12px">Bulk maintenance — gated by the same admin allowlist as /api/ops/*.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="ads-btn" data-action="garbage-sweep">Run garbage sweep (all)</button>
+      <button class="ads-btn" data-action="csv-name-remap">Remap mis-mapped CSV names</button>
+      <button class="ads-btn" data-action="sweep-csv-imports">Sweep stuck CSV imports</button>
+      <button class="ads-btn ads-btn--ghost" data-action="refresh">Refresh rollup</button>
+    </div>
+    <pre id="ops-quality-action-log" class="ads-mono" style="margin-top:12px;max-height:240px;overflow:auto;background:#0b0d12;color:#cfe;border:1px solid #1f2733;padding:8px;border-radius:6px;font-size:12px"></pre>
+  </div>
+</div>
+
+<script>
+(function () {
+  var content = document.getElementById("ops-quality-content");
+  var gate = document.getElementById("ops-quality-gate");
+  var cardsEl = document.getElementById("ops-quality-cards");
+  var sdEl = document.getElementById("ops-quality-soft-deletes");
+  var log = document.getElementById("ops-quality-action-log");
+
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]; }); }
+  function fmtInt(n) { return (n == null || isNaN(+n)) ? "—" : (+n).toLocaleString(); }
+  function appendLog(s) { log.textContent += "[" + new Date().toISOString().slice(11, 19) + "] " + s + "\n"; log.scrollTop = log.scrollHeight; }
+
+  function card(label, value, drilldown) {
+    var href = drilldown ? ' href="' + esc(drilldown) + '"' : "";
+    var tag = drilldown ? "a" : "div";
+    return '<' + tag + ' class="ads-card" style="display:block;text-decoration:none;color:inherit"' + href + '>' +
+      '<div class="ads-muted" style="font-size:12px;text-transform:uppercase;letter-spacing:0.04em">' + esc(label) + '</div>' +
+      '<div style="font-size:28px;font-weight:700;margin-top:4px">' + fmtInt(value) + '</div>' +
+      '</' + tag + '>';
+  }
+
+  function loadRollup() {
+    return fetch("/api/ops/quality/rollup", { credentials: "include" })
+      .then(function (r) { if (r.status === 403) { gate.style.display = ""; content.style.display = "none"; throw new Error("forbidden"); } if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function (data) {
+        content.style.display = "";
+        var c = data.counts || {};
+        var d = data.drilldowns || {};
+        var entries = [
+          ["Garbage cleaned today", c.garbage_cleaned_today, d.garbage_cleaned_today],
+          ["CSV imports with errors", c.csv_imports_with_errors, d.csv_imports_with_errors],
+          ["Locked overrides", c.locked_overrides, d.locked_overrides],
+          ["Contradicting facts", c.contradicting_facts, d.contradicting_facts],
+          ["Dedupe review backlog", c.dedupe_backlog, d.dedupe_backlog],
+          ["Soft-deleted (7d)", c.soft_deleted_this_week, d.soft_deleted_this_week],
+          ["Stuck running jobs", c.stuck_running_jobs, d.stuck_running_jobs],
+          ["Active entities", c.active_entities, null],
+        ];
+        cardsEl.innerHTML = entries.map(function (e) { return card(e[0], e[1], e[2]); }).join("");
+        if (data.missing_subsystems && data.missing_subsystems.length) {
+          appendLog("missing_subsystems: " + data.missing_subsystems.join(", "));
+        }
+      });
+  }
+
+  function loadSoftDeletes() {
+    return fetch("/api/ops/quality/recent-soft-deletes?limit=25", { credentials: "include" })
+      .then(function (r) { return r.ok ? r.json() : { items: [] }; })
+      .then(function (data) {
+        var items = data.items || [];
+        if (!items.length) { sdEl.innerHTML = '<div class="ads-empty">Nothing soft-deleted yet.</div>'; return; }
+        var rows = items.map(function (it) {
+          var reasons = Array.isArray(it.reasons) ? it.reasons.join(", ") : esc(it.reasons || "");
+          return '<tr>' +
+            '<td>' + esc(it.created_at || "") + '</td>' +
+            '<td>' + esc(it.kind || "—") + '</td>' +
+            '<td><a href="/dashboard/profile/?id=' + esc(it.entity_id) + '">' + esc(it.display_name || it.entity_id) + '</a></td>' +
+            '<td>' + esc(reasons) + '</td>' +
+            '<td class="ads-muted">' + esc(it.source || "—") + '</td>' +
+            '</tr>';
+        }).join("");
+        sdEl.innerHTML = '<table class="ads-table"><thead><tr><th>When</th><th>Kind</th><th>Name</th><th>Reasons</th><th>Source</th></tr></thead><tbody>' + rows + '</tbody></table>';
+      });
+  }
+
+  function postAction(path, label) {
+    appendLog("POST " + path + " …");
+    fetch(path, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: "{}" })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
+      .then(function (res) {
+        appendLog(label + " → HTTP " + res.status + " " + JSON.stringify(res.body));
+        loadRollup(); loadSoftDeletes();
+      })
+      .catch(function (e) { appendLog(label + " failed: " + e.message); });
+  }
+
+  document.addEventListener("click", function (ev) {
+    var btn = ev.target.closest("[data-action]"); if (!btn) return;
+    var a = btn.getAttribute("data-action");
+    if (a === "garbage-sweep") postAction("/api/admin/garbage-sweep", "garbage-sweep");
+    else if (a === "csv-name-remap") postAction("/api/admin/csv-name-remap", "csv-name-remap");
+    else if (a === "sweep-csv-imports") postAction("/api/admin/sweep-csv-imports", "sweep-csv-imports");
+    else if (a === "refresh") { loadRollup(); loadSoftDeletes(); }
+  });
+
+  loadRollup().then(loadSoftDeletes).catch(function (e) {
+    if (e.message !== "forbidden") {
+      content.style.display = "";
+      cardsEl.innerHTML = '<div class="ads-card"><p>Failed to load rollup: ' + esc(e.message) + '</p></div>';
+    }
+  });
+})();
+</script>

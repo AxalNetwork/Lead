@@ -90,16 +90,41 @@ profileRoute.get("/politicians", async (c) => {
 //
 // The response is owner-scoped KV-cached for 60 s. ?bust=1 invalidates.
 
-interface MissingTracker { missing: string[] }
+interface MissingTracker { missing: string[]; errors?: Record<string, string> }
 
 async function settled<T>(p: Promise<T>, tracker: MissingTracker, slice: string, fallback: T): Promise<T> {
   try {
     return await p;
   } catch (e) {
-    console.warn(`profile envelope: slice "${slice}" failed:`, (e as Error).message);
+    const msg = (e as Error).message;
+    console.warn(`profile envelope: slice "${slice}" failed:`, msg);
     tracker.missing.push(slice);
+    if (tracker.errors) tracker.errors[slice] = msg;
     return fallback;
   }
+}
+
+// Task #6 Section C: per-slice health debug endpoint. Runs every
+// sub-query individually (NOT in parallel — sequential so we get a
+// clean per-slice timing trace) and reports `ok` / `error` per slice
+// plus elapsed ms. Wired in profile.ts route below the main GET
+// /:id handler.
+export async function buildProfileHealth(env: Env, id: string): Promise<{
+  id: string;
+  as_of: string;
+  slices: Array<{ slice: string; ok: boolean; ms: number; error?: string }>;
+  ok: boolean;
+}> {
+  // Lazy-import the slice loaders to avoid a circular-import on this
+  // top-level helper file.
+  const mod = await import("./profile_slices_for_health");
+  const slices = await mod.runProfileHealthSlices(env, id);
+  return {
+    id,
+    as_of: new Date().toISOString(),
+    slices,
+    ok: slices.every((s) => s.ok),
+  };
 }
 
 interface EntityRowMin {
@@ -399,6 +424,17 @@ async function buildProfileEnvelope(env: Env, id: string): Promise<{
   };
   return { found: true, body };
 }
+
+// Task #6 Section C: per-slice health debug endpoint. Registered
+// BEFORE the wildcard /:id below so the literal path takes precedence
+// over the param route. Operators hit this when the main envelope
+// returns missing_subsystems and they need a tighter signal on which
+// table is broken.
+profileRoute.get("/:id/health", async (c) => {
+  const id = c.req.param("id");
+  const health = await buildProfileHealth(c.env, id);
+  return c.json(health);
+});
 
 profileRoute.get("/:id", async (c) => {
   const id = c.req.param("id");

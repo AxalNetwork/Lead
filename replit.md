@@ -1228,5 +1228,94 @@ executor honest-degradation contracts. External-API probes return
 "ok") when their env var / token is absent — same honesty pattern
 as the Task #14 CourtListener / Task #18 Delaware-COI fetchers.
 
+### Task #6 — Comprehensive Bug Sweep (PARTIAL ACCEPTED)
+This is a multi-section operator-side cleanup pass (A–N). The
+following sections landed in this session; deferred sections are
+called out explicitly so the next pass knows what's outstanding.
+
+**Section A (Garbage entities) — ACCEPTED.** Added `POST
+/api/admin/garbage-sweep` (operator-triggered bulk soft-delete via
+the existing `runCleanupSweep` from `entities/garbage.ts`) — returns
+`active_before` / `active_after` / `delta` so the operator console
+can show the diff. The `isGarbage()` detector picked up a new
+literal-HTML-entity rule (Rule 6b) so names like
+`"Founder &amp; Partner"` flag on the next sweep; the durable fix
+is at the parser layer (Section F deferred for the scraper-side
+unescape). Soft-delete only — never hard DELETE — per the spec
+constraint.
+
+**Section B (CSV column-mapping bug) — ACCEPTED.** Added `POST
+/api/admin/csv-name-remap` (paginates 2000 active entities at a
+time; re-derives `display_name` from `primary_url`/`primary_domain`
+via the existing `displayFromDomain()` helper for any row matching
+`isBadEntityName()` — i.e. `display_name` is a kind-string like
+`"VC"` / `"Accelerator"`). Emits one `entity_history` row per
+fix; supports `dryRun:true` for a pre-flight count. Returns
+`{ scanned, fixed, no_domain, examples }`.
+
+**Section C (Profile API 503 → tolerant envelope) — ACCEPTED.**
+The main `buildProfileEnvelope` was already wrapped in `settled()`
+(Promise.allSettled per slice with `missing_subsystems` tracking) —
+the remaining gap was the per-slice debug endpoint. Added
+`GET /api/profile/:id/health`: walks 17 sub-system probes
+sequentially (entity / facts / summary / classification /
+relationships / channels / memberships / appointments / donations /
+predictions / dd_scores / verification_findings / fund_returns /
+preferred_series / documents / intro_paths / entity_influence) and
+returns `{ slice, ok, ms, error? }` per probe. Mounted BEFORE the
+`/:id` wildcard so the literal `/health` segment takes precedence.
+
+**Section D (Stuck import jobs) — ACCEPTED.** Added `POST
+/api/admin/sweep-csv-imports`: forces `csv_imports.status='running'`
+rows with `updated_at` (the workflow heartbeat) > 5 min stale to
+`status='timed_out'`; force-cancels `jobs.kind='csv_import'` rows
+running > 30 min. Queue consumer in `src/index.ts` accepts
+`type='import_file'` as an alias for `type='csv_import'` so legacy
+upload-route messages don't dead-letter — both route to the same
+`csv_import` envelope. (`pipelineBudgets` already lists both names.)
+
+**Section E (Investors page metadata stray) — ACCEPTED.** Removed
+the `by_kind` sub-line in `apps/site/assets/js/investors.js` that
+rendered as a stray `: 29` under the headline-numbers strip
+because most `by_kind` rows have empty `k`. The four headline
+counters (investors / investments / unicorns / exits) are the
+operator surface. The join-empty-columns audit (Location / Sweet
+spot / #Inv / Unicorns / Avg check rendering as `—` / `0`) is
+DEFERRED — would require a `/api/investors` query rewrite, which
+expanded beyond the bounds of this section's commit.
+
+**Section N (Quality Console) — ACCEPTED.** New page at
+`/ops/quality/` (`apps/site/dashboard/ops-quality.html`) with two
+endpoints under `routes/ops_quality.ts`:
+`GET /api/ops/quality/rollup` returns 8 counts (garbage cleaned
+today, CSV imports with errors, locked overrides, contradicting
+facts via `facts` self-join on `is_current=1` distinct sources,
+dedupe backlog, soft-deleted-this-week, stuck running jobs, active
+entities) with drilldown URLs and `missing_subsystems` tracking;
+`GET /api/ops/quality/recent-soft-deletes` reads
+`data_quality_log` for the last N triage rows joined to
+`u_entities`. Page surfaces 8 metric cards + recent-soft-deletes
+table + three operator action buttons (garbage-sweep,
+csv-name-remap, sweep-csv-imports) that POST to the new admin
+endpoints and refresh the rollup. Sidenav `Quality Console` link
+rewired from `coming-soon` to `/ops/quality/`; dedupe-review link
+rewired to the existing `/dashboard/review/`. Admin gating via
+the existing `/api/ops/*` parent mount in `src/index.ts:131` —
+no parallel adminOnly middleware introduced.
+
+**Deferred sections** (next pass): F (scraper-side `decodeEntities`
+at the entity write path — the detector flags but the parser
+doesn't fix), G (persona kinds enum — already loads from
+`/api/personas/taxonomy` per investigation; worth a sanity test
+but not edited this round), H (Projects auto-match — needs
+matcher-run verification), I (Profile inline edit + delete UI —
+non-trivial UI build), J (Relationships inference worker run),
+K (routing audit — exhaustive walk of every `routes/*.ts` vs
+`index.ts` mounts), L (per-page console-error pass — operator
+walkthrough), M (Access JWT parsing audit — read-only walkthrough
+of `middleware/access.ts`).
+
+Future migrations should continue from 380.
+
 ## User preferences
 - (none recorded yet)

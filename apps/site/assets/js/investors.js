@@ -99,13 +99,15 @@
       api("/api/investors/aggregate").then(function (a) {
         var strip = document.getElementById("ads-investors-strip");
         if (!strip) return;
-        var byKind = (a.by_kind || []).map(function (r) { return esc(r.k) + ": " + fmtInt(r.n); }).join(" · ");
+        // Section E (Comprehensive Bug Sweep): the by_kind sub-line
+        // (e.g. ": 29") rendered as a near-empty stray under the
+        // summary because most rows have null/empty `k`. Suppressed —
+        // the four headline numbers above are the operator surface.
         strip.innerHTML =
           '<strong>' + fmtInt(a.total) + '</strong> investors · ' +
           fmtInt(a.totals && a.totals.investments) + ' investments · ' +
           fmtInt(a.totals && a.totals.unicorns) + ' unicorns · ' +
-          fmtInt(a.totals && a.totals.exits) + ' exits' +
-          (byKind ? '<div class="ads-muted" style="margin-top:6px;font-size:12px">' + byKind + '</div>' : '');
+          fmtInt(a.totals && a.totals.exits) + ' exits';
       }).catch(function () {});
     }
 

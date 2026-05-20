@@ -55,6 +55,7 @@ import { opsCrawlerRoute } from "./routes/ops_crawler";
 import { opsGarbageRoute } from "./routes/ops_garbage";
 import { opsComputeNodesRoute } from "./routes/ops_compute_nodes";
 import { opsSystemHealthRoute } from "./routes/ops_system_health";
+import { opsQualityRoute } from "./routes/ops_quality";
 import { computeRunnerRoute } from "./routes/compute";
 import { peopleRoute } from "./routes/people";
 import { leadsPromote } from "./routes/leads_promote";
@@ -190,6 +191,8 @@ api.route("/api/ops/compute-nodes", opsComputeNodesRoute);
 // Task #5: System Health & Errors Dashboard. Admin-only via the parent
 // /api/ops/* mount; aggregator + incidents + external API probes.
 api.route("/api/ops/system-health", opsSystemHealthRoute);
+// Task #6 (Comprehensive Bug Sweep) — Section N: Quality Console rollup.
+api.route("/api/ops/quality", opsQualityRoute);
 // Task #1: Garbage entity review console (admin-only via the
 // /api/ops/* parent mount above).
 api.route("/api/ops/garbage-review", opsGarbageRoute);
@@ -315,7 +318,11 @@ export default {
     try {
     for (const msg of batch.messages) {
       const body = msg.body as QueueMessage | undefined;
-      if (body && typeof body === "object" && (body as { type?: string }).type === "csv_import" && typeof (body as { import_id?: unknown }).import_id === "string") {
+      // Task #6 Section D: accept `import_file` as an alias for
+      // `csv_import` — the legacy upload route was observed emitting
+      // the alias; the queue handler must route both to the same
+      // envelope so messages don't dead-letter.
+      if (body && typeof body === "object" && ((body as { type?: string }).type === "csv_import" || (body as { type?: string }).type === "import_file") && typeof (body as { import_id?: unknown }).import_id === "string") {
         const stepStart = Date.now();
         const importId = (body as { import_id: string }).import_id;
         const jobId = crypto.randomUUID();

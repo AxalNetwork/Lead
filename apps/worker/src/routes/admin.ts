@@ -635,3 +635,157 @@ admin.get("/queue-health", async (c) => {
     last_repair: lastRepair ?? null,
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task #6 (Comprehensive Bug Sweep) — Sections A, B, D.
+//
+// Operator-triggered bulk maintenance endpoints. Gated by the existing
+// accessGuard (email allowlist) — admin gating happens at the
+// /api/ops/* prefix; /api/admin/* is operator-only but not strictly
+// admin-only. Section N's Quality Console buttons POST here.
+// ---------------------------------------------------------------------------
+
+import { runCleanupSweep } from "../entities/garbage";
+import { isBadEntityName, displayFromDomain } from "../entities/badName";
+
+// Section A: garbage entity sweep. Soft-deletes (never hard DELETE)
+// every active entity matching the heuristic detector. Returns before/
+// after counts so the operator console can show the diff.
+admin.post("/garbage-sweep", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as
+    | { mode?: "recent" | "all"; limit?: number; skipAi?: boolean }
+    | null;
+  // Default to "all" (full pass) per the Section A spec; honor an
+  // explicit "recent" for operator-triggered incremental sweeps.
+  const mode: "recent" | "all" = body?.mode === "recent" ? "recent" : "all";
+  const limit = typeof body?.limit === "number" ? Math.min(Math.max(body.limit, 1), 10000) : 5000;
+  const skipAi = body?.skipAi !== false; // skip AI by default; operator can flip
+
+  const beforeRow = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM u_entities WHERE status = 'active'`,
+  ).first<{ n: number }>().catch(() => null);
+
+  const result = await runCleanupSweep(c.env, {
+    mode, limit, skipAi,
+    source: "admin.garbage_sweep",
+    actorEmail: c.var.email ?? null,
+  });
+
+  const afterRow = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM u_entities WHERE status = 'active'`,
+  ).first<{ n: number }>().catch(() => null);
+
+  return c.json({
+    ok: true,
+    active_before: beforeRow?.n ?? null,
+    active_after: afterRow?.n ?? null,
+    delta: (beforeRow?.n ?? 0) - (afterRow?.n ?? 0),
+    ...result,
+  });
+});
+
+// Section B: CSV column-mapping bug. Re-derives `display_name` from
+// `primary_domain` / `primary_url` for every active entity whose name
+// is a kind-string like "VC" / "Nonprofit" / "Training Program" (per
+// the isBadEntityName predicate). Wrapped in a single bulk UPDATE
+// per-entity so the audit trail in entity_history records each fix.
+admin.post("/csv-name-remap", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as
+    | { limit?: number; dryRun?: boolean; cursor?: string }
+    | null;
+  const limit = Math.min(Math.max(body?.limit ?? 2000, 1), 10000);
+  const dryRun = body?.dryRun === true;
+
+  // Deterministic, convergent pagination: scan in ID-ASC order from
+  // the optional cursor; each call returns next_cursor so a repeated
+  // operator click walks the whole table without re-hitting the same
+  // rows or skipping any. The page size (`limit`) bounds per-call CPU.
+  const cursor = typeof body?.cursor === "string" ? body!.cursor : "";
+  const rows = await c.env.DB.prepare(
+    `SELECT id, display_name, primary_url, primary_domain
+       FROM u_entities
+      WHERE status = 'active' AND id > ?
+      ORDER BY id ASC
+      LIMIT ?`,
+  ).bind(cursor, limit).all<{ id: string; display_name: string | null; primary_url: string | null; primary_domain: string | null }>();
+
+  const items = rows.results ?? [];
+  let scanned = 0, fixed = 0, no_domain = 0, skipped_noop = 0;
+  const examples: Array<{ id: string; from: string | null; to: string }> = [];
+  const now = new Date().toISOString();
+
+  for (const r of items) {
+    scanned += 1;
+    if (!isBadEntityName(r.display_name)) continue;
+    const derived = displayFromDomain(r.primary_url ?? r.primary_domain);
+    if (!derived) { no_domain += 1; continue; }
+    // Skip when the derived value matches what's already stored — keeps
+    // entity_history clean and avoids touching updated_at unnecessarily.
+    if (derived === (r.display_name ?? "")) { skipped_noop += 1; continue; }
+    if (examples.length < 25) examples.push({ id: r.id, from: r.display_name, to: derived });
+    if (dryRun) { fixed += 1; continue; }
+    try {
+      await c.env.DB.prepare(
+        `UPDATE u_entities SET display_name = ?, updated_at = ? WHERE id = ?`,
+      ).bind(derived, now, r.id).run();
+      try {
+        await c.env.DB.prepare(
+          `INSERT INTO entity_history (id, entity_id, action, source, changed_at, old_value, new_value)
+           VALUES (?, ?, 'name_remap', 'admin.csv_name_remap', ?, ?, ?)`,
+        ).bind(crypto.randomUUID(), r.id, now, r.display_name ?? "", derived).run();
+      } catch { /* entity_history schema variants — best-effort audit */ }
+      fixed += 1;
+    } catch (e) {
+      console.warn("csv-name-remap update failed", r.id, (e as Error).message);
+    }
+  }
+
+  const next_cursor = items.length === limit ? items[items.length - 1].id : null;
+  return c.json({ ok: true, dry_run: dryRun, scanned, fixed, no_domain, skipped_noop, next_cursor, examples });
+});
+
+// Section D: stuck CSV import sweep. Forces csv_imports rows with
+// status='running' AND no heartbeat in 5+ min (or NULL) to 'timed_out',
+// and force-cancels long-running csv_import jobs (the queue-side
+// envelope) older than 30 minutes.
+admin.post("/sweep-csv-imports", async (c) => {
+  const now = new Date().toISOString();
+  let importsTimedOut = 0;
+  let jobsCancelled = 0;
+
+  // csv_imports table — the workflow uses updated_at as its heartbeat.
+  try {
+    const r = await c.env.DB.prepare(
+      `UPDATE csv_imports
+          SET status = 'timed_out',
+              updated_at = ?,
+              error_log_json = COALESCE(error_log_json, '{"reason":"heartbeat_stale_>5min"}')
+        WHERE status = 'running'
+          AND (updated_at IS NULL
+               OR (strftime('%s', ?) - strftime('%s', updated_at)) > 300)`,
+    ).bind(now, now).run();
+    importsTimedOut = Number(r.meta?.changes ?? 0);
+  } catch (e) {
+    console.warn("sweep-csv-imports: csv_imports update failed", (e as Error).message);
+  }
+
+  // csv_import envelope jobs — long-running > 30 min go to cancelled.
+  try {
+    const r = await c.env.DB.prepare(
+      `UPDATE jobs
+          SET status = 'cancelled',
+              cancelled_at = ?,
+              finished_at = COALESCE(finished_at, ?),
+              error = COALESCE(error, 'csv_import_long_running')
+        WHERE kind = 'csv_import'
+          AND status = 'running'
+          AND running_started_at IS NOT NULL
+          AND (strftime('%s', ?) - strftime('%s', running_started_at)) > 1800`,
+    ).bind(now, now, now).run();
+    jobsCancelled = Number(r.meta?.changes ?? 0);
+  } catch (e) {
+    console.warn("sweep-csv-imports: jobs update failed", (e as Error).message);
+  }
+
+  return c.json({ ok: true, imports_timed_out: importsTimedOut, jobs_cancelled: jobsCancelled });
+});
