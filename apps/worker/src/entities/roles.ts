@@ -97,6 +97,13 @@ export async function createEntity(
       } catch { /* best-effort */ }
     }
   }
+  // Task #4 (Relationship Inference Worker): debounced enqueue into
+  // relationship_infer_queue (migration 377). The consolidated nightly
+  // slot drains the queue with the per-entity orchestrator pass.
+  try {
+    const { enqueueRelInfer } = await import("../services/relationships/orchestrator");
+    void enqueueRelInfer(env, id, `created:${init.kind}`).catch(() => undefined);
+  } catch { /* best-effort */ }
   return (await env.DB.prepare(`SELECT * FROM u_entities WHERE id = ?`).bind(id).first<EntityRow>())!;
 }
 

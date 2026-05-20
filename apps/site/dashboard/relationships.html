@@ -5,7 +5,7 @@ permalink: /dashboard/relationships/
 ---
 
 <h1 class="ads-page-title">Relationships</h1>
-<p class="ads-page-sub">Search the graph, expand a subgraph from any entity, or find the shortest intro path between two people, firms, or companies.</p>
+<p class="ads-page-sub">Search the graph, expand a sub-graph from any entity, or find the shortest intro path between two people, firms, or companies.</p>
 
 <div class="ads-card" style="margin-bottom:12px">
   <div class="ads-filter-grid ads-filter-grid--3">
@@ -13,11 +13,13 @@ permalink: /dashboard/relationships/
     <label class="ads-field"><span>To (optional, for intro path)</span><input id="ads-rel-to" placeholder="Search a person/firm/company"><div id="ads-rel-to-results" class="ads-pop" hidden></div></label>
     <button class="ads-btn" id="ads-rel-go">Find path</button>
   </div>
-  <p class="ads-muted" style="font-size:11px;margin:6px 0 0">Family edges are filtered out by default. Intro paths use works_at / partner_at / school_with / colleague_of / referred edges.</p>
+  <p class="ads-muted" style="font-size:11px;margin:6px 0 0">Click any node to expand its neighbours. Edge colour encodes kind; thickness encodes quality_score. Family edges are filtered out by default.</p>
 </div>
 
 <div class="ads-card">
-  <div id="ads-rel-graph"></div>
+  <div id="ads-rel-cy" style="width:100%;height:620px;background:var(--ads-panel-2,#0e0f12);border-radius:6px"></div>
+  <div id="ads-rel-legend" style="margin-top:8px;font-size:11px;color:var(--ads-muted,#888);display:flex;flex-wrap:wrap;gap:10px"></div>
+  <div id="ads-rel-paths" style="margin-top:12px"></div>
 </div>
 
 <style>
@@ -25,8 +27,11 @@ permalink: /dashboard/relationships/
   .ads-pop button { display:block; width:100%; text-align:left; padding:8px 10px; background:none; border:0; font-size:13px; color:var(--ads-text); cursor:pointer }
   .ads-pop button:hover { background:var(--ads-panel-2) }
   .ads-field { position:relative }
+  .ads-rel-path-row { padding:8px 10px; border:1px solid var(--ads-border); border-radius:6px; margin-bottom:6px; font-size:13px }
+  .ads-rel-path-chip { display:inline-block; padding:2px 6px; border-radius:3px; background:#eef; color:#223; margin:0 2px }
+  .ads-rel-path-edge { color:#666; font-size:11px; margin:0 4px }
 </style>
 
-<script src="/assets/js/vendor/force-graph.js?v={{ site.time | date: '%s' }}"></script>
-<script src="/assets/js/relationship-graph.js?v={{ site.time | date: '%s' }}"></script>
+<!-- Cytoscape via CDN per the Task #4 spec ("Cytoscape sub-graph"). -->
+<script src="https://unpkg.com/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
 <script src="/assets/js/relationships.js?v={{ site.time | date: '%s' }}"></script>

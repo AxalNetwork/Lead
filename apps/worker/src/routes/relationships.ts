@@ -5,8 +5,81 @@
 import { Hono } from "hono";
 import type { Env } from "../types";
 import { runRelationshipDerivation } from "../scraper/relationships/derive";
+// Task #4 (Relationship Inference Worker): rel_edges-backed endpoints.
+import { runAllExtractors, listExtractors } from "../services/relationships/orchestrator";
+import { findPaths, neighborhood, fetchNodeMeta } from "../services/relationships/pathfinder";
 
-export const relationships = new Hono<{ Bindings: Env; Variables: { email: string } }>();
+export const relationships = new Hono<{ Bindings: Env; Variables: { email: string; is_admin?: boolean } }>();
+
+// ============================================================
+// Task #4 (Relationship Inference Worker) endpoints — rel_edges
+// (TEXT entity ids). Mounted BEFORE the legacy `/entity/:id` and
+// `/path` handlers below so the new query-string contracts
+// (`/neighborhood?id=`, `/paths?src=&dst=`) win the route match.
+// Per the Task #4 static-routing constraint, all deep links use
+// `?id=` query strings, never `/:id` path segments.
+// ============================================================
+
+function requireAdmin(c: { var: { is_admin?: boolean; email?: string }; json: (b: unknown, s?: number) => Response }): Response | null {
+  // Mirror the inline-admin-check pattern from the dashboards/ops routes
+  // (see replit.md Task #14 verification note). c.var.is_admin is
+  // populated by the global accessGuard middleware in src/index.ts.
+  if (c.var.is_admin) return null;
+  const email = (c.var.email ?? "").toLowerCase();
+  if (email && email === "guillaumelauzier@gmail.com") return null;
+  return c.json({ error: "forbidden" }, 403);
+}
+
+// POST /api/relationships/infer-all (admin) — full orchestrator pass.
+relationships.post("/infer-all", async (c) => {
+  const g = requireAdmin(c as never); if (g) return g;
+  const since = c.req.query("since") ?? null;
+  const summary = await runAllExtractors(c.env, { since });
+  return c.json({ ok: true, extractors: listExtractors(), summary });
+});
+
+// POST /api/relationships/infer/:entity_id (admin) — incremental pass.
+relationships.post("/infer/:entity_id", async (c) => {
+  const g = requireAdmin(c as never); if (g) return g;
+  const entityId = c.req.param("entity_id");
+  if (!entityId) return c.json({ error: "bad_request" }, 400);
+  const summary = await runAllExtractors(c.env, { entityId });
+  return c.json({ ok: true, entity_id: entityId, summary });
+});
+
+// GET /api/relationships/neighborhood?id=<entity_id>&hops=1
+relationships.get("/neighborhood", async (c) => {
+  const id = c.req.query("id");
+  if (!id) return c.json({ error: "bad_request", reason: "id required" }, 400);
+  const hops = Math.min(3, Math.max(1, Number(c.req.query("hops") ?? "1")));
+  const limit = Math.min(500, Math.max(10, Number(c.req.query("limit") ?? "150")));
+  const sub = await neighborhood(c.env, id, hops, limit);
+  // Cytoscape-shaped payload.
+  return c.json({
+    root_id: id,
+    hops,
+    nodes: sub.nodes.map((n) => ({ data: { id: n.id, label: n.display_name ?? n.id.slice(0, 8), kind: n.kind } })),
+    edges: sub.edges.map((e) => ({
+      data: { id: e.id, source: e.src, target: e.dst, kind: e.kind, quality: e.quality },
+    })),
+  });
+});
+
+// GET /api/relationships/paths?src=&dst=&max_hops=4 — up to k shortest paths.
+relationships.get("/paths", async (c) => {
+  const src = c.req.query("src");
+  const dst = c.req.query("dst");
+  if (!src || !dst) return c.json({ error: "bad_request", reason: "src and dst required" }, 400);
+  const maxHops = Math.min(4, Math.max(1, Number(c.req.query("max_hops") ?? "4")));
+  const k = Math.min(10, Math.max(1, Number(c.req.query("k") ?? "5")));
+  const paths = await findPaths(c.env, src, dst, maxHops, k);
+  const allNodeIds = Array.from(new Set(paths.flatMap((p) => p.nodes)));
+  const meta = await fetchNodeMeta(c.env, allNodeIds);
+  const nodes = allNodeIds.map((id) => ({
+    id, display_name: meta.get(id)?.display_name ?? null, kind: meta.get(id)?.kind ?? null,
+  }));
+  return c.json({ src, dst, max_hops: maxHops, paths, nodes });
+});
 
 interface EntityRow { id: number; kind: string; ref_table: string | null; ref_id: string | null; name: string }
 interface EdgeRow { id: number; src: number; dst: number; kind: string; source: string; strength: number; started_at: string | null; ended_at: string | null; evidence_url: string | null }

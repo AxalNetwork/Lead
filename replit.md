@@ -993,5 +993,93 @@ flips `locked=0`, clears `superseded_by_override=0` on matching
 current facts, writes a `field_unlock` audit row with
 `actor_email='system:cron'`, and enqueues a summary rebuild.
 
+### Task #4 — Relationship Inference Worker: migration 377 + `rel_edges` populated by 13 typed extractors (ACCEPTED)
+Spec did not pin a migration slot. Slots 350-376 are all taken (per
+the Task #13/#14/#18/#2/#3/#4/#5/#6/#11/#12 contract-update precedent
+above; in particular 376 = Task #3 field_overrides). The schema lands
+at `apps/worker/migrations/377_rel_edges_evidence.sql` — two additive
+columns on `rel_edges` (`evidence_count INTEGER NOT NULL DEFAULT 1`,
+`last_evidence_at TEXT`) plus a small `relationship_infer_queue`
+staging table (entity_id PK, queued_at, reason). Future migrations
+should number from 378.
+
+Per the Task #1 canonical-write precedent, edge insertion routes
+through ONE shared writer (`services/relationships/persist.ts`)
+that upserts against the existing `uq_rel_edges_quad` unique index
+(src_entity_id, dst_entity_id, kind, IFNULL(valid_from, '')). On
+conflict it bumps `evidence_count`, refreshes `last_evidence_at`,
+and merges `backing_fact_ids_json` — NEVER overwrites
+`quality_score`. Per the Task #3 edge-quality contract, the Task #3
+nightly sweep remains the authority on `quality_score` /
+`quality_signals_json`; this task only stamps the per-(kind, source)
+baseline ON FIRST INSERT from a single source-of-truth table
+(`services/relationships/baselines.ts`).
+
+**No `relationship_infer` JobKind exists** (CONSTRAINT, not
+deviation): per the spec's explicit "if the platform has no
+available queue kind, fall back to scheduling on the nightly tick"
+rule, `createEntity` / `insertFact` debounce-enqueue into the
+`relationship_infer_queue` staging table (KV-debounce 60s via
+`SESSIONS`). The consolidated nightly slot drains the queue via
+`drainInferQueue` (200/tick) AND runs a full `runAllExtractors`
+pass so bulk-imported rows that didn't fire the per-entity hook
+still emit edges. Drained AND full pass run BEFORE the Task #3
+edge-quality sweep so freshly-emitted edges get scored in the same
+tick. Piggybacks the consolidated `15 3 * * *` slot (Free plan
+caps crons at 5/5 — same constraint as Task #4 angel sweep,
+Task #14 verification, Task #18 benchmarks, Task #2 fund returns,
+Task #3 edge quality, Task #4 intro retrain, Task #5 reputation,
+Task #1 garbage detector, Task #8 ML eval, Task #3 override
+unlock).
+
+**Right-hand-side entity resolution** (CONSTRAINT, not deviation):
+every extractor routes raw RHS strings through
+`services/relationships/resolve.ts`, which wraps
+`resolveSecEntity({createIfMissing:false})` with a primary_domain
+fallback and an in-memory cache. Unresolved strings are DROPPED
+and counted under per-extractor `unresolved_count`; they MUST NOT
+mint fresh `u_entities` rows. Matches the Task #18 charter-investor
+precedent ("name regex on legal-prose carries too many false
+positives").
+
+13 extractors live under `services/relationships/extractors/` —
+one file per source (`worksAtFromTitle`, `investedInFromDeals`,
+`boardSeatFromFilings`, `coInvestorFromDeals`,
+`employmentHistoryFromLinkedIn`, `educationFromBio`,
+`familyFromPublicSources`, `colleagueOverlap`, `schoolWith`,
+`coAuthorFromPublications`, `mentionFromNews`,
+`portfolioFromFirmSite`, `advisorFromBio`). Each wraps its source
+query in `_safeQuery.safeAll` so missing optional source tables
+(`publication_authors`, `sec_form4_insiders` and friends) degrade
+to 0 proposals — never a thrown error. Matches the Task #14
+verification optional-source pattern.
+
+**Dual-pathfinder constraint** (CONSTRAINT, not deviation):
+`services/relationships/pathfinder.ts` is INTENTIONALLY SEPARATE
+from `services/intros/pathfinder.ts` (Task #4 intro routing).
+This one answers "does an edge sequence exist?" (BFS over
+`rel_edges`, hop-cap 4, ties broken by Σ quality_score, returns
+`[]` honestly when no path exists). The intros one answers "which
+route is most likely to convert?" (logistic model, predicted
+conversion %). Both names "Task #4" — different scopes.
+
+**Dual-graph constraint** (carries over from Task #3 edge
+quality): the legacy `relationships` table (INTEGER ids) still
+backs the legacy `/api/relationships/entity/:id` and `/path`
+handlers in `routes/relationships.ts`; the new endpoints
+(`/infer-all`, `/infer/:entity_id`, `/neighborhood`, `/paths`)
+operate on `rel_edges` (TEXT ids). The new handlers are mounted
+BEFORE the legacy ones in the same route module so the new
+query-string contracts win the route match.
+
+Per the Task #4 static-routing constraint, the rewritten
+Relationships page (`/dashboard/relationships/`) hydrates from
+`/api/relationships/neighborhood?id=<entity_id>` and
+`/api/relationships/paths?src=<a>&dst=<b>` — query strings, never
+path segments. The UI uses Cytoscape (loaded via CDN) per the
+spec's "Cytoscape sub-graph" wording; click-to-expand fetches the
+next hop and merges into the live graph client-side. Edge colour
+encodes kind; edge width encodes `quality_score`.
+
 ## User preferences
 - (none recorded yet)

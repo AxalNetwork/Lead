@@ -86,6 +86,16 @@ export async function insertFact(env: Env, f: FactInput): Promise<string | null>
         console.warn("triggerEntityMatchRefresh from insertFact failed", (e as Error).message);
       });
     }
+    // Task #4 (Relationship Inference Worker): debounced enqueue into
+    // relationship_infer_queue (migration 377). KV-debounced 60s; the
+    // consolidated nightly slot drains the queue with the per-entity
+    // orchestrator pass. Never inline — entity/fact writes stay fast.
+    // No `relationship_infer` JobKind exists, so we fall back to the
+    // nightly tick per the spec's explicit instruction.
+    try {
+      const { enqueueRelInfer } = await import("../services/relationships/orchestrator");
+      void enqueueRelInfer(env, f.entity_id, `fact:${f.predicate}`).catch(() => undefined);
+    } catch { /* best-effort */ }
     return id;
   } catch (e) {
     // UNIQUE(hash) collision = exact-replay observation. Task #1
