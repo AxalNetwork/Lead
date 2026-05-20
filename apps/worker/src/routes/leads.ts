@@ -40,12 +40,44 @@ leads.get("/", async (c) => {
   if (dnc === "1") wheres.push("do_not_contact = 1");
   else if (dnc === "0") wheres.push("do_not_contact = 0");
   if (!includeMerged) wheres.push("(merged_into IS NULL OR merged_into = '')");
+  // Task #2 (Leads unification): scope Leads list to entities that
+  // still carry the 'lead' role (or have no role rows yet — pre-
+  // classification). Once role inference promotes the entity into
+  // Investors/Customers/etc, the 'lead' row is dropped by
+  // POST /api/leads/promote and the entity falls off this list.
+  // Pass ?include_promoted=1 to bypass for ops/debug.
+  const includePromoted = c.req.query("include_promoted") === "1";
+  if (!includePromoted) {
+    wheres.push(
+      `NOT EXISTS (
+         SELECT 1 FROM entity_legacy_map m
+         JOIN entity_roles r ON r.entity_id = m.entity_id
+         WHERE m.legacy_table = 'leads' AND m.legacy_id = leads.id
+           AND r.role IN ('investor','customer','prospect','founder','operator')
+       )`,
+    );
+  }
   const whereSql = wheres.length ? `WHERE ${wheres.join(" AND ")}` : "";
   const stmt = c.env.DB.prepare(
-    `SELECT ${RICH_COLUMNS} FROM leads ${whereSql} ORDER BY created_at DESC LIMIT ?`,
+    `SELECT ${RICH_COLUMNS},
+            (SELECT json_group_array(r.role) FROM entity_legacy_map m
+               JOIN entity_roles r ON r.entity_id = m.entity_id
+              WHERE m.legacy_table = 'leads' AND m.legacy_id = leads.id) AS roles_json
+       FROM leads ${whereSql} ORDER BY created_at DESC LIMIT ?`,
   ).bind(...binds, limit);
   const r = await stmt.all();
-  return c.json({ items: r.results ?? [] });
+  const items = (r.results ?? []).map((row) => {
+    const r2 = row as Record<string, unknown> & { roles_json?: string | null };
+    let roles: string[] = [];
+    try {
+      const parsed = r2.roles_json ? JSON.parse(String(r2.roles_json)) : [];
+      if (Array.isArray(parsed)) roles = parsed.filter((s): s is string => typeof s === "string");
+    } catch { /* empty */ }
+    const { roles_json: _drop, ...rest } = r2;
+    void _drop;
+    return { ...rest, roles };
+  });
+  return c.json({ items });
 });
 
 leads.get("/:id", async (c) => {

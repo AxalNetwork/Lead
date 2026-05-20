@@ -1,99 +1,161 @@
 ---
 layout: default
-title: Person dossier
+title: People
 permalink: /dashboard/people/
 ---
-<a href="/dashboard/" class="ads-muted" style="font-size:12px">← Dashboard</a>
 
-<div id="ads-person-empty" hidden>
+{%- comment -%}
+Task #2 (People): one HTML, two modes.
+  - No `?id=` → list-mode (people-list.js renders the list).
+  - `?id=<entity_id>` → dossier-mode (people.js hydrates).
+The legacy `/dashboard/profiles/<id>` path is already mapped to
+`/dashboard/people/?id=<id>` by the 404.html SPA redirect.
+{%- endcomment -%}
+
+<!-- LIST MODE -->
+<div id="ads-people-list-root">
   <h1 class="ads-page-title">People</h1>
-  <p class="ads-page-sub">Open any person from a list to see their full dossier here. The canonical URL is <code>/dashboard/people/&lt;entity_id&gt;</code> (alias: <code>/dashboard/profiles/&lt;entity_id&gt;</code>).</p>
-  <div class="ads-card ads-empty">No person selected.</div>
-</div>
+  <p class="ads-page-sub">Every person across Investors, Customers, Prospects, Founders, Operators, and unclassified Leads. Sorted by most recently created.</p>
 
-<header class="ads-person-header" id="ads-person-header" hidden>
-  <div class="ads-person-header__inner">
-    <div class="ads-person-header__avatar" id="ads-person-avatar" aria-hidden="true">·</div>
-    <div class="ads-person-header__id">
-      <h1 class="ads-person-header__name">
-        <span id="ads-person-name">Loading…</span>
-        <span class="ads-person-header__pronouns" id="ads-person-pronouns" hidden></span>
-        <span class="ads-pill ads-person-header__phash" id="ads-person-phash" hidden title="Avatar pHash matches another entity">possible duplicate</span>
-      </h1>
-      <p class="ads-person-header__sub">
-        <span id="ads-person-role"></span>
-        <span id="ads-person-tz" class="ads-person-header__tz" hidden></span>
-      </p>
-      <p class="ads-person-header__summary" id="ads-person-summary">&nbsp;</p>
-    </div>
-    <div class="ads-person-header__rings" id="ads-person-rings" aria-label="Trust rings"></div>
-    <div class="ads-person-header__actions" id="ads-person-actions">
-      <button class="ads-btn ads-btn--sm" type="button" id="ads-person-refresh">Refresh</button>
-      <div class="ads-person-header__qa" id="ads-person-quick">
-        <a class="ads-btn ads-btn--ghost ads-btn--sm" id="ads-qa-email" hidden>Email</a>
-        <a class="ads-btn ads-btn--ghost ads-btn--sm" id="ads-qa-message" hidden>Message</a>
-        <a class="ads-btn ads-btn--ghost ads-btn--sm" id="ads-qa-calendar" target="_blank" rel="noopener" hidden>Calendar</a>
-        <a class="ads-btn ads-btn--ghost ads-btn--sm" id="ads-qa-linkedin" target="_blank" rel="noopener" hidden>LinkedIn</a>
-        <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-qa-save">Save to list</button>
-        <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-qa-watchlist">Watchlist</button>
-        <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-qa-deep">Run deep profile</button>
-        <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-qa-share">Share</button>
-        <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-person-copy">Copy link</button>
-        <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-qa-copy-handle" hidden>Copy handle</button>
+  <div class="ads-card">
+    <form id="ads-people-filters" class="ads-filter-grid ads-filter-grid--6" autocomplete="off">
+      <label class="ads-field"><span>Search</span><input name="q" placeholder="name, domain, or email"></label>
+      <label class="ads-field"><span>Role</span>
+        <select name="role">
+          <option value="">all</option>
+          <option value="lead">lead</option>
+          <option value="investor">investor</option>
+          <option value="customer">customer</option>
+          <option value="prospect">prospect</option>
+          <option value="founder">founder</option>
+          <option value="operator">operator</option>
+          <option value="executive">executive</option>
+          <option value="advisor">advisor</option>
+        </select>
+      </label>
+      <div style="grid-column:1/-1;display:flex;gap:8px">
+        <button class="ads-btn" type="submit">Apply</button>
+        <button class="ads-btn ads-btn--ghost" type="reset">Reset</button>
+        <span class="ads-form-msg" id="ads-people-msg"></span>
       </div>
+    </form>
+  </div>
+
+  <div class="ads-card" style="margin-top:12px">
+    <div id="ads-people-list"><div class="ads-loading">Loading…</div></div>
+    <div style="margin-top:12px;text-align:center">
+      <button class="ads-btn ads-btn--ghost" id="ads-people-more" hidden>Load more</button>
     </div>
   </div>
-  <div class="ads-person-header__msg" id="ads-person-msg" hidden></div>
-</header>
-
-<div class="ads-person-layout" id="ads-person-layout" hidden>
-  <main class="ads-person-main">
-    <div class="ads-tabs ads-person-tabs" role="tablist">
-      <button type="button" class="ads-tab active" data-tab="overview" role="tab">Overview</button>
-      <button type="button" class="ads-tab" data-tab="career" role="tab">Career</button>
-      <button type="button" class="ads-tab" data-tab="background" role="tab">Background</button>
-      <button type="button" class="ads-tab" data-tab="interests" role="tab">Interests &amp; Lifestyle</button>
-      <button type="button" class="ads-tab" data-tab="network" role="tab">Network</button>
-      <button type="button" class="ads-tab" data-tab="voice" role="tab">Voice &amp; Content</button>
-      <button type="button" class="ads-tab" data-tab="intelligence" role="tab">Intelligence</button>
-      <button type="button" class="ads-tab" data-tab="outreach" role="tab">Outreach Playbook</button>
-    </div>
-
-    <section class="ads-tab-panel active" data-tab="overview"><h2 class="ads-section-anchor" data-tab="overview">Overview</h2><div class="ads-card" id="ads-pane-overview"><div class="ads-skeleton"></div></div></section>
-    <section class="ads-tab-panel" data-tab="career" hidden><h2 class="ads-section-anchor" data-tab="career">Career</h2><div class="ads-card" id="ads-pane-career"><div class="ads-skeleton"></div></div></section>
-    <section class="ads-tab-panel" data-tab="background" hidden><h2 class="ads-section-anchor" data-tab="background">Background</h2><div class="ads-card" id="ads-pane-background"><div class="ads-skeleton"></div></div></section>
-    <section class="ads-tab-panel" data-tab="interests" hidden><h2 class="ads-section-anchor" data-tab="interests">Interests &amp; Lifestyle</h2><div class="ads-card" id="ads-pane-interests"><div class="ads-skeleton"></div></div></section>
-    <section class="ads-tab-panel" data-tab="network" hidden><h2 class="ads-section-anchor" data-tab="network">Network</h2><div class="ads-card" id="ads-pane-network"><div class="ads-skeleton"></div></div></section>
-    <section class="ads-tab-panel" data-tab="voice" hidden><h2 class="ads-section-anchor" data-tab="voice">Voice &amp; Content</h2><div class="ads-card" id="ads-pane-voice"><div class="ads-skeleton"></div></div></section>
-    <section class="ads-tab-panel" data-tab="intelligence" hidden><h2 class="ads-section-anchor" data-tab="intelligence">Intelligence</h2><div class="ads-card" id="ads-pane-intelligence"><div class="ads-skeleton"></div></div></section>
-    <section class="ads-tab-panel" data-tab="outreach" hidden><h2 class="ads-section-anchor" data-tab="outreach">Outreach Playbook</h2><div class="ads-card" id="ads-pane-outreach"><div class="ads-skeleton"></div></div></section>
-  </main>
-
-  <aside class="ads-person-rail" id="ads-person-rail">
-    <div class="ads-card ads-person-rail__card">
-      <h3>Freshness</h3>
-      <div id="ads-person-freshness" class="ads-muted" style="font-size:12px">Loading…</div>
-    </div>
-    <div class="ads-card ads-person-rail__card">
-      <h3>Sources</h3>
-      <div id="ads-person-sources"><div class="ads-skeleton ads-skeleton--sm"></div></div>
-    </div>
-    <div class="ads-card ads-person-rail__card">
-      <h3>Recent edits</h3>
-      <div id="ads-person-changelog"><div class="ads-skeleton ads-skeleton--sm"></div></div>
-    </div>
-    <div class="ads-card ads-person-rail__card">
-      <h3>Comments</h3>
-      <form id="ads-person-comment-form" autocomplete="off" style="margin-bottom:10px">
-        <textarea name="body" rows="2" placeholder="Add an operator note…" maxlength="2000"
-          style="width:100%;background:var(--ads-bg);border:1px solid var(--ads-border);border-radius:8px;padding:8px 10px;color:var(--ads-text);font-size:13px;font-family:inherit;resize:vertical"></textarea>
-        <div style="display:flex;justify-content:flex-end;margin-top:6px">
-          <button class="ads-btn ads-btn--sm" type="submit">Post</button>
-        </div>
-      </form>
-      <div id="ads-person-comments"><div class="ads-skeleton ads-skeleton--sm"></div></div>
-    </div>
-  </aside>
 </div>
 
+<!-- DOSSIER MODE -->
+<div id="ads-person-dossier-root" hidden>
+  <a href="/dashboard/people/" class="ads-muted" style="font-size:12px">← People</a>
+
+  <div id="ads-person-empty" hidden>
+    <h1 class="ads-page-title">People</h1>
+    <p class="ads-page-sub">Open any person from the list to see their full dossier here.</p>
+    <div class="ads-card ads-empty">No person selected.</div>
+  </div>
+
+  <header class="ads-person-header" id="ads-person-header" hidden>
+    <div class="ads-person-header__inner">
+      <div class="ads-person-header__avatar" id="ads-person-avatar" aria-hidden="true">·</div>
+      <div class="ads-person-header__id">
+        <h1 class="ads-person-header__name">
+          <span id="ads-person-name">Loading…</span>
+          <span class="ads-person-header__pronouns" id="ads-person-pronouns" hidden></span>
+          <span class="ads-pill ads-person-header__phash" id="ads-person-phash" hidden title="Avatar pHash matches another entity">possible duplicate</span>
+        </h1>
+        <p class="ads-person-header__sub">
+          <span id="ads-person-role"></span>
+          <span id="ads-person-tz" class="ads-person-header__tz" hidden></span>
+        </p>
+        <p class="ads-person-header__summary" id="ads-person-summary">&nbsp;</p>
+      </div>
+      <div class="ads-person-header__rings" id="ads-person-rings" aria-label="Trust rings"></div>
+      <div class="ads-person-header__actions" id="ads-person-actions">
+        <button class="ads-btn ads-btn--sm" type="button" id="ads-person-refresh">Refresh</button>
+        <div class="ads-person-header__qa" id="ads-person-quick">
+          <a class="ads-btn ads-btn--ghost ads-btn--sm" id="ads-qa-email" hidden>Email</a>
+          <a class="ads-btn ads-btn--ghost ads-btn--sm" id="ads-qa-message" hidden>Message</a>
+          <a class="ads-btn ads-btn--ghost ads-btn--sm" id="ads-qa-calendar" target="_blank" rel="noopener" hidden>Calendar</a>
+          <a class="ads-btn ads-btn--ghost ads-btn--sm" id="ads-qa-linkedin" target="_blank" rel="noopener" hidden>LinkedIn</a>
+          <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-qa-save">Save to list</button>
+          <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-qa-watchlist">Watchlist</button>
+          <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-qa-deep">Run deep profile</button>
+          <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-qa-share">Share</button>
+          <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-person-copy">Copy link</button>
+          <button class="ads-btn ads-btn--ghost ads-btn--sm" type="button" id="ads-qa-copy-handle" hidden>Copy handle</button>
+        </div>
+      </div>
+    </div>
+    <div class="ads-person-header__msg" id="ads-person-msg" hidden></div>
+  </header>
+
+  <div class="ads-person-layout" id="ads-person-layout" hidden>
+    <main class="ads-person-main">
+      <div class="ads-tabs ads-person-tabs" role="tablist">
+        <button type="button" class="ads-tab active" data-tab="overview" role="tab">Overview</button>
+        <button type="button" class="ads-tab" data-tab="career" role="tab">Career</button>
+        <button type="button" class="ads-tab" data-tab="background" role="tab">Background</button>
+        <button type="button" class="ads-tab" data-tab="interests" role="tab">Interests &amp; Lifestyle</button>
+        <button type="button" class="ads-tab" data-tab="network" role="tab">Network</button>
+        <button type="button" class="ads-tab" data-tab="voice" role="tab">Voice &amp; Content</button>
+        <button type="button" class="ads-tab" data-tab="intelligence" role="tab">Intelligence</button>
+        <button type="button" class="ads-tab" data-tab="outreach" role="tab">Outreach Playbook</button>
+      </div>
+
+      <section class="ads-tab-panel active" data-tab="overview"><h2 class="ads-section-anchor" data-tab="overview">Overview</h2><div class="ads-card" id="ads-pane-overview"><div class="ads-skeleton"></div></div></section>
+      <section class="ads-tab-panel" data-tab="career" hidden><h2 class="ads-section-anchor" data-tab="career">Career</h2><div class="ads-card" id="ads-pane-career"><div class="ads-skeleton"></div></div></section>
+      <section class="ads-tab-panel" data-tab="background" hidden><h2 class="ads-section-anchor" data-tab="background">Background</h2><div class="ads-card" id="ads-pane-background"><div class="ads-skeleton"></div></div></section>
+      <section class="ads-tab-panel" data-tab="interests" hidden><h2 class="ads-section-anchor" data-tab="interests">Interests &amp; Lifestyle</h2><div class="ads-card" id="ads-pane-interests"><div class="ads-skeleton"></div></div></section>
+      <section class="ads-tab-panel" data-tab="network" hidden><h2 class="ads-section-anchor" data-tab="network">Network</h2><div class="ads-card" id="ads-pane-network"><div class="ads-skeleton"></div></div></section>
+      <section class="ads-tab-panel" data-tab="voice" hidden><h2 class="ads-section-anchor" data-tab="voice">Voice &amp; Content</h2><div class="ads-card" id="ads-pane-voice"><div class="ads-skeleton"></div></div></section>
+      <section class="ads-tab-panel" data-tab="intelligence" hidden><h2 class="ads-section-anchor" data-tab="intelligence">Intelligence</h2><div class="ads-card" id="ads-pane-intelligence"><div class="ads-skeleton"></div></div></section>
+      <section class="ads-tab-panel" data-tab="outreach" hidden><h2 class="ads-section-anchor" data-tab="outreach">Outreach Playbook</h2><div class="ads-card" id="ads-pane-outreach"><div class="ads-skeleton"></div></div></section>
+    </main>
+
+    <aside class="ads-person-rail" id="ads-person-rail">
+      <div class="ads-card ads-person-rail__card">
+        <h3>Freshness</h3>
+        <div id="ads-person-freshness" class="ads-muted" style="font-size:12px">Loading…</div>
+      </div>
+      <div class="ads-card ads-person-rail__card">
+        <h3>Sources</h3>
+        <div id="ads-person-sources"><div class="ads-skeleton ads-skeleton--sm"></div></div>
+      </div>
+      <div class="ads-card ads-person-rail__card">
+        <h3>Recent edits</h3>
+        <div id="ads-person-changelog"><div class="ads-skeleton ads-skeleton--sm"></div></div>
+      </div>
+      <div class="ads-card ads-person-rail__card">
+        <h3>Comments</h3>
+        <form id="ads-person-comment-form" autocomplete="off" style="margin-bottom:10px">
+          <textarea name="body" rows="2" placeholder="Add an operator note…" maxlength="2000"
+            style="width:100%;background:var(--ads-bg);border:1px solid var(--ads-border);border-radius:8px;padding:8px 10px;color:var(--ads-text);font-size:13px;font-family:inherit;resize:vertical"></textarea>
+          <div style="display:flex;justify-content:flex-end;margin-top:6px">
+            <button class="ads-btn ads-btn--sm" type="submit">Post</button>
+          </div>
+        </form>
+        <div id="ads-person-comments"><div class="ads-skeleton ads-skeleton--sm"></div></div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script>
+// Mode switch: dossier when ?id= present, list otherwise.
+(function () {
+  var p = new URLSearchParams(location.search);
+  var fromPath = (location.pathname.match(/\/(?:people|profiles)\/([^/?#]+)\/?$/) || [])[1];
+  var id = p.get("id") || (fromPath && fromPath !== "index.html" ? fromPath : "");
+  var listRoot = document.getElementById("ads-people-list-root");
+  var dossierRoot = document.getElementById("ads-person-dossier-root");
+  if (id) { listRoot.hidden = true; dossierRoot.hidden = false; }
+  else    { listRoot.hidden = false; dossierRoot.hidden = true; }
+})();
+</script>
+<script src="/assets/js/people-list.js?v={{ site.time | date: '%s' }}"></script>
 <script src="/assets/js/people.js?v={{ site.time | date: '%s' }}"></script>

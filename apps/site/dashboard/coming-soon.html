@@ -1,0 +1,26 @@
+---
+layout: default
+title: Coming soon
+permalink: /dashboard/coming-soon/
+---
+
+<h1 class="ads-page-title">Coming soon</h1>
+<p class="ads-page-sub" id="ads-coming-soon-feature">This area of the dashboard is on the roadmap and is not yet shipped.</p>
+
+<div class="ads-card">
+  <p>This page is a placeholder for a nav entry that doesn't yet have a dedicated implementation. The link exists so the navigation taxonomy is complete; the underlying view is tracked in the project backlog and will replace this stub once shipped.</p>
+  <p class="ads-muted" style="font-size:12px">If you reached this page from a bookmark, the feature may have moved — try the <a href="/dashboard/">dashboard home</a> or the command palette (⌘K).</p>
+</div>
+
+<script>
+(function () {
+  var p = new URLSearchParams(location.search);
+  var f = p.get("feature");
+  if (f) {
+    var el = document.getElementById("ads-coming-soon-feature");
+    var label = f.replace(/-/g, " ").replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+    el.textContent = label + " — this area is on the roadmap and is not yet shipped.";
+    document.title = label + " — Coming soon";
+  }
+})();
+</script>

@@ -5,7 +5,15 @@ permalink: /dashboard/leads/
 ---
 
 <h1 class="ads-page-title">Leads</h1>
-<p class="ads-page-sub">Triage inbound + scraped leads. Select rows to bulk-assign roles, tag, enrich, merge, export, or delete.</p>
+<p class="ads-page-sub">Triage inbound + scraped leads (entities still carrying <code>role='lead'</code>). Promoted entities drop off automatically. Select rows to bulk-assign roles, tag, enrich, merge, export, delete, or <strong>Promote to…</strong>.</p>
+
+<div style="margin:-4px 0 10px 0">
+  <button class="ads-btn ads-btn--sm" type="button" id="ads-leads-promote-btn"
+          title="Promote selected leads to Investors / Customers / Prospects / Founders / Operators">
+    Promote to…
+  </button>
+  <span class="ads-muted" style="margin-left:8px;font-size:12px">Writes new <code>entity_roles</code> rows and removes the lead role.</span>
+</div>
 
 <div class="ads-card">
   <form id="ads-leads-filters" class="ads-filter-grid ads-filter-grid--6" autocomplete="off">

@@ -53,6 +53,8 @@ import { profilers as profilersRoute } from "./routes/profilers";
 import { profileComments as profileCommentsRoute } from "./routes/profile_comments";
 import { opsCrawlerRoute } from "./routes/ops_crawler";
 import { opsGarbageRoute } from "./routes/ops_garbage";
+import { peopleRoute } from "./routes/people";
+import { leadsPromote } from "./routes/leads_promote";
 import { bulk } from "./routes/bulk";
 import { profileTypesRoute } from "./routes/profile_types";
 import { crawlerRoute } from "./routes/crawler";
@@ -170,6 +172,11 @@ api.route("/api/ops/crawler", opsCrawlerRoute);
 // Task #1: Garbage entity review console (admin-only via the
 // /api/ops/* parent mount above).
 api.route("/api/ops/garbage-review", opsGarbageRoute);
+// Task #2 (People page): list-mode API.
+api.route("/api/people", peopleRoute);
+// Task #2 (Leads unification): bulk promote endpoint. Mounted under
+// /api/leads so accessGuard applies and the path matches the spec.
+api.route("/api/leads", leadsPromote);
 api.route("/api/leads", leadsEnrichActions);
 api.route("/api/leads", leadsDncActions);
 api.route("/api/leads", leadsCampaignActions);

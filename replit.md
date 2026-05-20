@@ -852,5 +852,75 @@ Delete actions). Permanently Delete cascades via
 `u_entities` DELETE — the **only** code path that hard-deletes
 a `u_entities` row.
 
+### Task #2 — People page + Leads unification + clear nav (ACCEPTED)
+No new migration (route + UI + listing-API reshaping on top of
+`u_entities` + `entity_roles`). New routes mounted in
+`src/index.ts` AFTER the `/api/*` accessGuard so both inherit
+gating: `peopleRoute` (`GET /api/people`) and `leadsPromote`
+(`POST /api/leads/promote`). `GET /api/leads` was extended to
+exclude entities whose `entity_legacy_map` row has any of the 5
+promoted roles in `entity_roles`, and to attach a `roles[]` array
+per row so cross-list badges render without a second round trip.
+
+Per the Task #1 canonical write contract, `POST /api/leads/promote`
+writes through `entities/roles.ts::addRole` — never a raw INSERT
+into `entity_roles`. The accepted target roles are the spec's 5:
+`investor | customer | prospect | founder | operator` (unknown
+target → 400 `bad_role`). `drop_lead` defaults to true (the
+spec's "drop the lead row" path) and is explicitly opt-out via
+`drop_lead: false`. Legacy lead ids are mapped to `u_entities.id`
+via `getLegacyEntityId(env, "leads", leadId)`; unresolved ids are
+counted into the response `unresolved` field rather than throwing
+the whole request.
+
+Per the Task #4 static-routing constraint, the People page is a
+two-mode template: `/dashboard/people/` is the list view and
+`/dashboard/people/?id=<entity_id>` is the dossier (the existing
+single-purpose page). A small head script in `dashboard/people.html`
+inspects the `?id=` query string and toggles `#ads-people-list-root`
+vs `#ads-person-dossier-root`. The legacy `/dashboard/profiles/<id>/`
+shape is preserved via the existing `404.html` redirect to
+`/dashboard/people/?id=<id>` — no new redirect snippet needed.
+
+Listing filter contract: `WHERE e.kind = 'person' AND e.status = 'active'`
+(Task #9 garbage-detector soft-deletes never leak into the UI).
+Roles are aggregated with `(SELECT json_group_array(r.role) FROM
+entity_roles r WHERE r.entity_id = e.id)` so the per-row `roles[]`
+is one query, not N+1. Pagination is limit+1 with `next_offset`.
+Optional filters: `q` (LIKE over display_name + email/linkedin keys),
+`role` (EXISTS sub-select on `entity_roles`), `source_email`
+(LIKE on primary_email_key — the "Where is X?" widget links this).
+
+Sidenav (`_includes/shell/sidenav.html`) was reorganized into the
+exact 5 spec groups (Discover / Network / Intelligence / Research
+/ Operations). Every existing dashboard URL is preserved (no
+bookmark 404s). Spec items without an existing route (Power Nodes,
+Watchlists, Predictions, Saved Research, Agent, Dossiers, Sources,
+Dedupe Review, Quality Console) link to
+`/dashboard/coming-soon/?feature=<slug>` per the task constraint
+("do not invent new pages in this task beyond the People list").
+
+The "Where is X?" widget (`assets/js/where-is-x.js`) is a
+floating, dismissible aside (localStorage flag `ads.widgets.where_is_x.dismissed=1`)
+loaded from `_layouts/default.html`. It reads ONLY the
+`data-user-email` attribute already on `#ads-user-avatar`
+(stamped by `dashboard.js`) and renders three "Take me there"
+deep links — `/dashboard/people/?source_email=<...>`,
+`/dashboard/leads/?owner_email=<...>`,
+`/dashboard/imports/?owner_email=<...>`. Per the task constraint
+it never issues an API call.
+
+Cross-list badge contract: each role chip maps to an existing
+dashboard list URL (`ROLE_LIST_URL` table). The same table is
+duplicated in `people-list.js` and `leads.js` so the chips are
+identical visually and link-wise on both pages. Promoted entities
+fall off the Leads list automatically via the listing-API exclusion
+above; no UI-level filtering needed.
+
+`fundReturnsRoute` precedent: `peopleRoute` is mounted BEFORE any
+parent listing route that wildcards on `/:id` so the new sub-path
+doesn't get shadowed — same precedent as the Task #2 fund-returns
+sub-route ordering.
+
 ## User preferences
 - (none recorded yet)
