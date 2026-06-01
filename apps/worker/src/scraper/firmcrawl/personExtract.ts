@@ -12,6 +12,8 @@
 //   7. Email regex against the firm domain (and obvious aliases).
 //   8. JSON blob scan of `__NEXT_DATA__` / `__INITIAL_STATE__` / inline JSON.
 
+import { classifyPersonName } from "../../entities/garbage.js";
+
 export interface ExtractedPerson {
   name: string;
   role?: string | null;
@@ -212,9 +214,15 @@ function extractImageAlts(html: string, base?: string): ExtractedPerson[] {
       const name = safeName(namePart);
       if (!name) continue;
       const after = alt.slice(namePart.length + 1).trim();
+      const role = after && looksLikeRole(after) ? after : null;
+      // Task #6: image-alt is the weakest person signal — decorative
+      // captions ("Updated Homepage Image") and logo alts pass NAME_RE
+      // and pollute the People list. Require an accompanying role string
+      // so only genuine "Name — Title" headshots are emitted.
+      if (!role) continue;
       out.push({
         name,
-        role: after && looksLikeRole(after) ? after : null,
+        role,
         avatar: absolutize(src, base),
         source_strategy: "image_alt",
       });
@@ -383,7 +391,14 @@ export function extractPeopleFromPage(
     for (const p of byKey.values()) if (!p.crunchbase) { p.crunchbase = allCrunchbases[0]; break; }
   }
 
-  return Array.from(byKey.values());
+  // Task #6: precision gate at the extraction boundary — drop names that
+  // are clearly organizations ("Intel Capital") or page junk ("Updated
+  // Homepage Image") before they ever reach insertLead → the People list.
+  // Plausible-person and uncertain names pass through untouched.
+  return Array.from(byKey.values()).filter((p) => {
+    const v = classifyPersonName(p.name).verdict;
+    return v !== "junk" && v !== "organization";
+  });
 }
 
 export { nameKeyOf };

@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { isGarbage, aiSecondOpinion, evaluateEntity, runCleanupSweep } =
+const { isGarbage, aiSecondOpinion, evaluateEntity, runCleanupSweep, classifyPersonName } =
   await import("../test-dist/entities/garbage.js");
 
 // ---------- 1. isGarbage — positive fixtures ----------------------------
@@ -223,4 +223,79 @@ test("pre-insert guard: known garbage names produce is_garbage=true (caller must
   for (const name of ["Contact Us", "Our Team | Acme", "Introducing Cogna", "★", ""]) {
     assert.equal(isGarbage({ kind: "org", display_name: name }).is_garbage, true);
   }
+});
+
+// ---------- 7. Task #6: classifyPersonName ------------------------------
+test("classifyPersonName: organizations scraped as people", () => {
+  const fixtures = [
+    ["Intel Capital", "investor_firm"],
+    ["Mendoza Ventures", "investor_firm"],
+    ["Backstage Capital", "investor_firm"],
+    ["Hillman Accelerator Foundation", "accelerator"],
+  ];
+  for (const [name, role] of fixtures) {
+    const c = classifyPersonName(name);
+    assert.equal(c.verdict, "organization", `expected organization for ${name}`);
+    assert.equal(c.orgRole, role, `expected role ${role} for ${name}`);
+  }
+});
+
+test("classifyPersonName: page junk scraped as people", () => {
+  for (const name of [
+    "Updated Homepage Image", "Our Mission", "Map of the Money",
+    "Wayback Machine", "Deep Tech", "Startup Mentorship Hub", "North America",
+  ]) {
+    assert.equal(classifyPersonName(name).verdict, "junk", `expected junk for ${name}`);
+  }
+});
+
+test("classifyPersonName: real people pass as person", () => {
+  for (const name of ["Roelof Botha", "Marc Andreessen", "Guillaume Lauzier", "Jane Doe"]) {
+    assert.equal(classifyPersonName(name).verdict, "person", `expected person for ${name}`);
+  }
+});
+
+test("classifyPersonName: precision guard — 2-token person whose surname collides with a junk word is NOT junk", () => {
+  // "Banner"/"Map" are asset/UI words but also plausible surnames; a clean
+  // two-token Title-Case name must never auto-delete a real person.
+  for (const name of ["John Banner", "John Map", "Sarah Gallery"]) {
+    assert.notEqual(classifyPersonName(name).verdict, "junk", `must not soft-delete ${name}`);
+  }
+  // ...but real ≥3-token captions and all-generic 2-token phrases stay junk.
+  assert.equal(classifyPersonName("Updated Homepage Image").verdict, "junk");
+  assert.equal(classifyPersonName("Wayback Machine").verdict, "junk");
+});
+
+test("isGarbage flags junk person names but NOT organization names", () => {
+  assert.equal(isGarbage({ kind: "person", display_name: "Updated Homepage Image" }).is_garbage, true);
+  // Organizations are reclassified, not soft-deleted — must not be garbage.
+  assert.equal(isGarbage({ kind: "person", display_name: "Intel Capital" }).is_garbage, false);
+  // Real people remain untouched.
+  assert.equal(isGarbage({ kind: "person", display_name: "Jane Doe" }).is_garbage, false);
+});
+
+// ---------- 8. Task #6: sweep reclassifies org-named persons ------------
+test("runCleanupSweep: flips org-named person to org (no firm row when domain absent)", async () => {
+  const rows = [
+    { id: "p1", kind: "person", display_name: "Intel Capital", primary_url: null, primary_domain: null, primary_email_key: null, primary_linkedin_key: null },
+    { id: "p2", kind: "person", display_name: "Updated Homepage Image", primary_url: null, primary_domain: null, primary_email_key: null, primary_linkedin_key: null },
+  ];
+  const { env, calls } = makeFakeEnv({ rows });
+  const r = await runCleanupSweep(env, { mode: "recent", limit: 100, skipAi: true });
+  assert.equal(r.reclassified, 1, "Intel Capital reclassified to org");
+  assert.ok(r.soft_deleted >= 1, "junk person soft-deleted");
+  // The reclassify path flips kind to 'org' and logs a 'reclassified' row.
+  assert.ok(calls.update.some((u) => /kind\s*=\s*'org'/i.test(u.sql)), "kind flipped to org");
+  assert.ok(calls.log.some((l) => l.binds[1] === "reclassified"), "reclassified audit row written");
+});
+
+test("runCleanupSweep: org-named person WITH email is flagged for review, not flipped", async () => {
+  const rows = [
+    { id: "p3", kind: "person", display_name: "Marcus Partners", primary_url: null, primary_domain: null, primary_email_key: "marcus@x.com", primary_linkedin_key: null },
+  ];
+  const { env, calls } = makeFakeEnv({ rows });
+  const r = await runCleanupSweep(env, { mode: "recent", limit: 100, skipAi: true });
+  assert.equal(r.reclassified, 0, "not auto-flipped when a person signal is present");
+  assert.equal(r.needs_review, 1, "flagged for operator review instead");
+  assert.ok(calls.log.some((l) => l.binds[1] === "needs_review"), "needs_review audit row written");
 });

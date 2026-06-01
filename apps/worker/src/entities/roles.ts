@@ -1,6 +1,6 @@
 import type { Env } from "../types";
 import type { EntityKind, EntityRole, EntityRow } from "./model";
-import { isGarbage, logDataQuality } from "./garbage";
+import { isGarbage, logDataQuality, classifyPersonName } from "./garbage";
 
 export async function createEntity(
   env: Env,
@@ -52,6 +52,25 @@ export async function createEntity(
     ).catch(() => undefined);
     return null;
   }
+  // Task #6: reclassify-on-write. A `person` whose display name is clearly
+  // an organization ("Intel Capital", "Mendoza Ventures") is written as an
+  // `org` so it never lands in the People list in the first place. A strong
+  // personal identifier (personal LinkedIn /in/ or email) contradicting the
+  // org-suffix name suppresses the flip — never mislabel a likely real
+  // person. Junk names were already rejected by the isGarbage guard above.
+  let effectiveKind: EntityKind = init.kind;
+  let reclassifiedOrgRole: EntityRole | null = null;
+  if (init.kind === "person") {
+    const cls = classifyPersonName(init.display_name ?? null);
+    if (cls.verdict === "organization" && cls.orgRole) {
+      const personalLinkedin = !!init.primary_linkedin_key && /(^|\/)in\//i.test(init.primary_linkedin_key);
+      const hasEmail = !!init.primary_email_key;
+      if (!personalLinkedin && !hasEmail) {
+        effectiveKind = "org";
+        reclassifiedOrgRole = cls.orgRole;
+      }
+    }
+  }
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   await env.DB.prepare(
@@ -61,7 +80,7 @@ export async function createEntity(
        status, created_at, updated_at
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
   ).bind(
-    id, init.kind,
+    id, effectiveKind,
     init.display_name ?? null,
     init.primary_url ?? null,
     init.primary_domain ?? null,
@@ -78,18 +97,28 @@ export async function createEntity(
   // person entities so a freshly-created founder/operator appears in
   // matching personas' candidate lists within minutes — even before
   // any career/title facts are written. KV-debounced inside trigger.
-  if (init.kind === "person") {
+  if (effectiveKind === "person") {
     try {
       const { triggerEntityMatchRefresh } = await import("../services/personaMatchTrigger.js");
       void triggerEntityMatchRefresh(env, id).catch(() => undefined);
     } catch { /* best-effort */ }
+  }
+  // Task #6: stamp the inferred org role + an audit row when a person was
+  // reclassified to an org on write, so the operator console can trace it.
+  if (reclassifiedOrgRole) {
+    await addRole(env, id, reclassifiedOrgRole, { is_primary: true, source: "garbage_reclassify_on_write" });
+    void logDataQuality(
+      env, id, "reclassified",
+      [`org_role:${reclassifiedOrgRole}`, "reclassified_on_write"],
+      "pre_insert_guard", null,
+    ).catch(() => undefined);
   }
   // Task #3 (AI Profile Filler): auto-trigger a profile fill for newly
   // created org entities that have a website but no facts yet (the
   // signal-poor "low confidence" case the spec calls out). Dispatched
   // via WF binding when available so the cost is async and respects
   // the daily neuron cap. No-op when the binding isn't configured.
-  if (init.kind === "org" && (init.primary_url || init.primary_domain) && !init.suppressAutoProfileFill) {
+  if (effectiveKind === "org" && (init.primary_url || init.primary_domain) && !init.suppressAutoProfileFill) {
     const wf = (env as Env & { WF_PROFILE_FILLER?: { create: (o: { params: Record<string, unknown> }) => Promise<{ id: string }> } }).WF_PROFILE_FILLER;
     if (wf) {
       try {
@@ -102,7 +131,7 @@ export async function createEntity(
   // slot drains the queue with the per-entity orchestrator pass.
   try {
     const { enqueueRelInfer } = await import("../services/relationships/orchestrator");
-    void enqueueRelInfer(env, id, `created:${init.kind}`).catch(() => undefined);
+    void enqueueRelInfer(env, id, `created:${effectiveKind}`).catch(() => undefined);
   } catch { /* best-effort */ }
   return (await env.DB.prepare(`SELECT * FROM u_entities WHERE id = ?`).bind(id).first<EntityRow>())!;
 }

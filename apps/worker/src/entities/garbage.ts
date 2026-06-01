@@ -14,7 +14,7 @@
 // entity — never silently garbage.
 
 import type { Env } from "../types";
-import type { EntityKind } from "./model";
+import type { EntityKind, EntityRole } from "./model";
 
 export interface GarbageInput {
   kind: EntityKind | string;
@@ -61,6 +61,193 @@ const PIPE_TITLE_RE = /\s\|\s\S/;
 // Pure emoji / icon names (no alphanumerics at all).
 const NO_ALNUM_RE = /^[^\p{L}\p{N}]+$/u;
 
+// ---------------------------------------------------------------------------
+// Task #6: person-name disambiguation. Classifies a name that was recorded
+// as a `person` into one of: a real person, an organization scraped as a
+// person (firm / fund / accelerator / company), generic page junk, or
+// uncertain. Used by:
+//   * the pre-insert reclassify-on-write guard in `createEntity`,
+//   * the cron / one-off sweep (`runCleanupSweep`),
+//   * the scraper extraction boundary (`extractPeopleFromPage`).
+// PURE — name-only, no IO — so it's safe on the hot write path.
+// ---------------------------------------------------------------------------
+
+// Legal-entity suffixes — an extremely strong organization signal anywhere
+// in the name. Normalized (punctuation stripped) before comparison.
+const ORG_LEGAL_SUFFIX = new Set([
+  "llc", "inc", "ltd", "limited", "lp", "llp", "plc", "gmbh", "ag",
+  "sarl", "bv", "pty", "oy", "ab", "srl", "spa",
+]);
+
+// Descriptor words that, as the LAST token, denote an organization
+// ("Intel Capital", "Mendoza Ventures", "Hillman Accelerator Foundation").
+const ORG_SUFFIX_LAST = new Set([
+  "capital", "ventures", "venture", "partners", "partner", "holdings",
+  "group", "fund", "funds", "foundation", "labs", "lab", "hub",
+  "collective", "management", "advisors", "associates", "accelerator",
+  "incubator", "equity", "securities", "technologies", "studios", "studio",
+  "network", "institute", "academy", "council", "alliance", "syndicate",
+  "consortium", "enterprises", "industries", "international", "global",
+  "company", "corp", "corporation", "university", "college", "systems",
+  "solutions",
+]);
+
+// Generic, non-distinctive words. A name made up ENTIRELY of these is junk
+// ("Deep Tech", "Our Mission"); they're also excluded when looking for a
+// distinctive proper-noun token in an org name.
+const GENERIC_WORDS = new Set([
+  "the", "our", "your", "my", "a", "an", "all", "more", "new", "updated",
+  "featured", "latest", "recent", "top", "best", "of", "and", "or", "for",
+  "with", "to", "in", "on", "at", "by", "from", "about", "welcome", "hello",
+  "home", "homepage", "page", "web", "website", "webpage", "mission",
+  "vision", "values", "story", "team", "careers", "jobs", "blog", "news",
+  "press", "media", "map", "menu", "footer", "header", "sidebar", "gallery",
+  "resources", "events", "podcast", "newsletter", "insights", "research",
+  "report", "reports", "overview", "summary", "services", "solutions",
+  "products", "pricing", "features", "get", "started", "learn", "read",
+  "view", "see", "guide", "guides", "faq", "faqs", "help", "support",
+  "contact", "deep", "tech", "technology", "startup", "startups",
+  "mentorship", "money", "data", "signal", "community", "ecosystem",
+  "platform", "world", "global", "international", "region", "regions",
+  "area", "areas", "north", "south", "east", "west", "central", "america",
+  "americas", "europe", "asia", "africa", "oceania", "antarctica", "middle",
+  "image", "images", "photo", "photos", "logo", "logos", "icon", "banner",
+  "thumbnail", "placeholder", "avatar", "headshot", "slideshow", "carousel",
+  "machine", "wayback", "future", "work", "working", "people", "portfolio",
+  "companies", "investors", "founders", "funding", "rounds", "deals",
+]);
+
+// Words whose presence alone marks a name as page junk rather than a
+// person — decorative / UI / asset captions that pass NAME_RE.
+const HARD_JUNK_WORDS = new Set([
+  "image", "images", "photo", "photos", "logo", "logos", "icon", "banner",
+  "thumbnail", "placeholder", "gallery", "slideshow", "carousel", "homepage",
+  "webpage", "sidebar", "footer", "header", "menu", "map", "wayback",
+  "machine",
+]);
+
+// Exact lowercase phrases observed polluting the People list.
+const KNOWN_JUNK_PHRASES = new Set([
+  "updated homepage image", "our mission", "map of the money",
+  "wayback machine", "deep tech", "startup mentorship hub", "read more",
+  "learn more", "our team", "the team", "our story", "our values",
+  "our vision", "get started", "coming soon", "page not found",
+]);
+
+// Exact lowercase place / region names that get scraped as "people".
+const PLACE_NAMES = new Set([
+  "north america", "south america", "central america", "latin america",
+  "united states", "united kingdom", "middle east", "european union",
+  "north", "south", "east", "west", "europe", "asia", "africa", "oceania",
+  "antarctica", "americas", "global", "worldwide",
+]);
+
+function normToken(t: string): string {
+  return t.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]/g, "");
+}
+
+function orgRoleForTokens(tokensLower: string[]): EntityRole {
+  const set = new Set(tokensLower);
+  if (set.has("accelerator") || set.has("incubator")) return "accelerator";
+  if (set.has("fund") || set.has("funds")) return "fund";
+  for (const t of ["capital", "ventures", "venture", "partners", "partner",
+    "equity", "management", "advisors", "associates", "holdings",
+    "securities", "syndicate"]) {
+    if (set.has(t)) return "investor_firm";
+  }
+  return "firm";
+}
+
+/** Map an inferred org role to the `firms.kind` taxonomy for dual-write. */
+export function orgRoleToFirmKind(role: EntityRole): string | null {
+  switch (role) {
+    case "accelerator": return "accelerator";
+    case "fund": return "fund";
+    case "investor_firm": return "vc";
+    default: return null;
+  }
+}
+
+export type PersonNameVerdict = "person" | "organization" | "junk" | "uncertain";
+
+export interface PersonNameClassification {
+  verdict: PersonNameVerdict;
+  reasons: string[];
+  orgRole?: EntityRole;
+}
+
+/**
+ * Pure classifier for a name recorded as a `person`. Conservative by
+ * design: only returns `organization` / `junk` when the signal is clear,
+ * otherwise `person` (a plausible human name) or `uncertain`. Callers
+ * decide what to DO with each verdict (reclassify, soft-delete, review).
+ */
+export function classifyPersonName(rawName: string | null | undefined): PersonNameClassification {
+  const raw = (rawName ?? "").trim();
+  if (!raw) return { verdict: "junk", reasons: ["empty_name"] };
+  const lower = raw.toLowerCase();
+  const tokens = raw.split(/\s+/).filter(Boolean);
+  const norm = tokens.map(normToken).filter(Boolean);
+
+  // 1. Exact known-junk phrase / place name.
+  if (KNOWN_JUNK_PHRASES.has(lower)) return { verdict: "junk", reasons: ["known_junk_phrase"] };
+  if (PLACE_NAMES.has(lower)) return { verdict: "junk", reasons: ["place_name"] };
+
+  // 2. Hard junk word present (image / logo / homepage / map / ...).
+  // PRECISION GUARD (precision-over-recall): a single junk token inside an
+  // otherwise-clean two-token Title-Case name ("John Banner", "John Map")
+  // must NOT auto-delete a plausible real person. Real decorative captions
+  // are ≥3 tokens ("Updated Homepage Image") or all-generic two-token
+  // phrases ("Wayback Machine", caught by rule 4 below), so deferring the
+  // junk-word rule for clean two-token names keeps every junk fixture while
+  // protecting people whose surname happens to collide with an asset word.
+  const cleanTwoToken =
+    tokens.length === 2 && tokens.every((t) => /^[\p{Lu}][\p{L}'’.\-]*$/u.test(t));
+  if (!cleanTwoToken) {
+    for (const t of norm) {
+      if (HARD_JUNK_WORDS.has(t)) return { verdict: "junk", reasons: [`junk_word:${t}`] };
+    }
+  }
+
+  // 3. Organization-suffix detection.
+  const last = norm[norm.length - 1] ?? "";
+  const hasLegal = norm.some((t) => ORG_LEGAL_SUFFIX.has(t));
+  const lastIsOrgSuffix = ORG_SUFFIX_LAST.has(last);
+  if (hasLegal || lastIsOrgSuffix) {
+    // Need a distinctive (non-generic, non-suffix) token to call it a real
+    // org. "Intel Capital" → distinctive "intel". "Startup Mentorship Hub"
+    // → all-generic + suffix → junk.
+    const distinctive = norm.filter((t, i) =>
+      !GENERIC_WORDS.has(t) &&
+      !ORG_SUFFIX_LAST.has(t) &&
+      !ORG_LEGAL_SUFFIX.has(t) &&
+      !(i === norm.length - 1 && lastIsOrgSuffix),
+    );
+    if (distinctive.length === 0) {
+      return { verdict: "junk", reasons: ["generic_org_phrase"] };
+    }
+    return {
+      verdict: "organization",
+      orgRole: orgRoleForTokens(norm),
+      reasons: [hasLegal ? "org_legal_suffix" : `org_suffix:${last}`],
+    };
+  }
+
+  // 4. Every token is a generic word ("Deep Tech", "Our Mission").
+  if (norm.length >= 1 && norm.every((t) => GENERIC_WORDS.has(t))) {
+    return { verdict: "junk", reasons: ["all_generic_words"] };
+  }
+
+  // 5. Plausible human name: 2–4 tokens, ≥2 capitalized, not all generic.
+  const titleTokens = tokens.filter((t) => /^[\p{Lu}]/u.test(t));
+  if (tokens.length >= 2 && tokens.length <= 4 && titleTokens.length >= 2) {
+    return { verdict: "person", reasons: ["plausible_person_name"] };
+  }
+
+  // 6. Anything else — don't guess.
+  return { verdict: "uncertain", reasons: ["unclassified"] };
+}
+
 /** Pure detector. NO IO. Safe to call inline on every entity write. */
 export function isGarbage(input: GarbageInput): GarbageVerdict {
   const reasons: string[] = [];
@@ -101,6 +288,14 @@ export function isGarbage(input: GarbageInput): GarbageVerdict {
   if (input.kind === "person") {
     if (!/\s/.test(raw)) reasons.push("person_no_space");
     if (/[|/:]/.test(raw)) reasons.push("person_contains_separator");
+    // Task #6: generic page-junk names recorded as people ("Updated
+    // Homepage Image", "Our Mission", "North America"). Organization
+    // names are NOT flagged here — they're reclassified (not deleted)
+    // by the createEntity write guard and the sweep.
+    const cls = classifyPersonName(raw);
+    if (cls.verdict === "junk") {
+      for (const code of cls.reasons) reasons.push(`name_${code}`);
+    }
   }
 
   return { is_garbage: reasons.length > 0, reasons };
@@ -299,6 +494,83 @@ export async function purgeEntity(env: Env, entityId: string, actorEmail: string
 }
 
 // ---------------------------------------------------------------------------
+// Task #6: reclassify a person row that is actually an organization. The
+// row is FLIPPED in place (kind person→org) so it leaves the People list
+// and joins the org world — non-destructive and reversible (the row, its
+// facts and relationships are preserved). When a domain/website is known
+// we dual-write a `firms` row so it also surfaces in the Firms list;
+// upsertFirm's syncFirmToEntity re-resolves the firm to THIS now-org
+// entity via the primary_domain match, so no duplicate entity is minted.
+// HONEST DEGRADATION: with no domain/website we cannot dedupe a firm row
+// (name-only matching mints duplicates), so we skip it and record the gap
+// rather than guessing — the entity still leaves People as an org.
+// ---------------------------------------------------------------------------
+export async function reclassifyPersonAsOrg(
+  env: Env,
+  entity: {
+    id: string;
+    display_name: string | null;
+    primary_url: string | null;
+    primary_domain: string | null;
+  },
+  orgRole: EntityRole,
+  reasons: string[],
+  source: string,
+  actorEmail?: string | null,
+): Promise<{ reclassified: boolean; firm_listed: boolean }> {
+  // 1. Flip kind in place — removes it from the People list immediately.
+  await env.DB.prepare(
+    `UPDATE u_entities SET kind = 'org', updated_at = datetime('now') WHERE id = ?`,
+  ).bind(entity.id).run();
+
+  // 2. Swap person/investor roles for the inferred org role. Capture the
+  // prior role set into the audit trail FIRST so the reclassification is
+  // fully reversible: an operator (or a rollback) can restore the original
+  // roles from the data_quality_log row, not just flip the kind back.
+  let priorRoles: string[] = [];
+  try {
+    const existing = await env.DB.prepare(
+      `SELECT role FROM entity_roles WHERE entity_id = ?`,
+    ).bind(entity.id).all<{ role: string }>();
+    priorRoles = (existing.results ?? []).map((x) => x.role);
+    await env.DB.prepare(`DELETE FROM entity_roles WHERE entity_id = ?`).bind(entity.id).run();
+    await env.DB.prepare(
+      `INSERT INTO entity_roles (entity_id, role, is_primary, source, confidence)
+       VALUES (?, ?, 1, ?, 1)
+       ON CONFLICT(entity_id, role) DO UPDATE SET is_primary = 1`,
+    ).bind(entity.id, orgRole, source).run();
+  } catch (e) {
+    console.warn("reclassify role swap failed", entity.id, (e as Error).message);
+  }
+
+  // 3. Dual-write a firms row when we can dedupe by domain/website.
+  let firmListed = false;
+  if (entity.display_name && (entity.primary_domain || entity.primary_url)) {
+    try {
+      const { upsertFirm } = await import("../scraper/firms_upsert.js");
+      await upsertFirm(env, {
+        name: entity.display_name,
+        domain: entity.primary_domain ?? null,
+        website: entity.primary_url ?? null,
+        kind: orgRoleToFirmKind(orgRole),
+      }, source);
+      firmListed = true;
+    } catch (e) {
+      console.warn("reclassify upsertFirm failed", entity.id, (e as Error).message);
+    }
+  }
+
+  await logDataQuality(
+    env, entity.id, "reclassified",
+    [...reasons, `org_role:${orgRole}`,
+     priorRoles.length ? `prior_roles:${priorRoles.join(",")}` : "prior_roles:none",
+     firmListed ? "firm_listed" : "firm_row_skipped_no_domain"],
+    source, actorEmail,
+  );
+  return { reclassified: true, firm_listed: firmListed };
+}
+
+// ---------------------------------------------------------------------------
 // Sweep. Two modes:
 //   * mode='recent': entities created in the last `lookbackHours` (cron path)
 //   * mode='all':    full scan (one-off cleanup; admin-triggered)
@@ -308,6 +580,8 @@ export interface SweepResult {
   scanned: number;
   flagged: number;
   soft_deleted: number;
+  reclassified: number;
+  needs_review: number;
   by_reason: Record<string, number>;
   bounded: boolean;
 }
@@ -348,8 +622,47 @@ export async function runCleanupSweep(
   const byReason: Record<string, number> = {};
   let flagged = 0;
   let softDeleted = 0;
+  let reclassified = 0;
+  let needsReview = 0;
 
   for (const r of items) {
+    // Task #6: organization-name disambiguation for `person` rows.
+    // Orgs scraped as people are RECLASSIFIED into the org world (and the
+    // Firms list) rather than soft-deleted. A strong personal identifier
+    // (personal LinkedIn /in/ or an email) contradicting an org-suffix
+    // name is flagged for operator review instead of auto-flipped — never
+    // destroy a likely real person. Junk / plausible-person / uncertain
+    // names fall through to the existing garbage + orphan path below so
+    // no prior behavior regresses.
+    if (r.kind === "person") {
+      const cls = classifyPersonName(r.display_name);
+      if (cls.verdict === "organization" && cls.orgRole) {
+        const personalLinkedin = !!r.primary_linkedin_key && /(^|\/)in\//i.test(r.primary_linkedin_key);
+        const hasEmail = !!r.primary_email_key;
+        if (personalLinkedin || hasEmail) {
+          for (const code of cls.reasons) byReason[`review_${code}`] = (byReason[`review_${code}`] ?? 0) + 1;
+          await logDataQuality(
+            env, r.id, "needs_review",
+            [...cls.reasons, "org_name_with_person_signal"], source, opts.actorEmail ?? null,
+          );
+          needsReview += 1;
+          continue;
+        }
+        try {
+          await reclassifyPersonAsOrg(
+            env,
+            { id: r.id, display_name: r.display_name, primary_url: r.primary_url, primary_domain: r.primary_domain },
+            cls.orgRole, cls.reasons, source, opts.actorEmail ?? null,
+          );
+          reclassified += 1;
+          byReason[`reclassified_${cls.orgRole}`] = (byReason[`reclassified_${cls.orgRole}`] ?? 0) + 1;
+        } catch (e) {
+          console.warn("sweep reclassify failed", r.id, (e as Error).message);
+        }
+        continue;
+      }
+    }
+
     // Route through evaluateEntity so the AI second opinion fires for
     // ambiguous 30–60 char names (when env.AI is bound). Honors
     // skipAi for unit tests + operator-requested fast sweeps.
@@ -379,6 +692,7 @@ export async function runCleanupSweep(
 
   const result: SweepResult = {
     scanned: items.length, flagged, soft_deleted: softDeleted,
+    reclassified, needs_review: needsReview,
     by_reason: byReason, bounded: items.length >= limit,
   };
   console.log("garbage.cleanup_sweep", JSON.stringify({ mode, ...result }));

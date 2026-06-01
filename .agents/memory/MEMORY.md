@@ -1,2 +1,3 @@
 - [Production deploy path](prod-deploy-path.md) — main agent has NO GitHub write auth; worker deploy only via GitHub Actions (push touching apps/worker/** or workflow_dispatch), never local push/wrangler.
 - [Production behind Cloudflare Access](prod-cloudflare-access.md) — every api.aidatasignal.com endpoint 302s to Access login server-side; can't verify prod endpoints with curl from the workspace.
+- [Worker test build quirks](worker-test-build.md) — tsconfig.test.json is NodeNext (stricter than Bundler main build) and tsc emits despite errors; verify tests via node --test on emitted test-dist/ when baseline tsc errors block npm test.
