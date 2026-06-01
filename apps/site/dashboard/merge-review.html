@@ -6,22 +6,22 @@ permalink: /dashboard/merge-review/
 
 <style>
   .ads-mr__pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }
-  .ads-mr__cand { border: 1px solid #e3e6ea; border-radius: 6px; padding: 12px; background: #fff; }
-  .ads-mr__cand h3 { margin: 0 0 8px 0; font-size: 13px; color: #555; text-transform: uppercase; letter-spacing: 0.04em; }
+  .ads-mr__cand { border: 1px solid var(--ads-border); border-radius: 6px; padding: 12px; background: var(--ads-panel-2); color: var(--ads-text); }
+  .ads-mr__cand h3 { margin: 0 0 8px 0; font-size: 13px; color: var(--ads-muted); text-transform: uppercase; letter-spacing: 0.04em; }
   .ads-mr__cand table { width: 100%; font-size: 12px; }
-  .ads-mr__cand td { padding: 3px 4px; vertical-align: top; border-bottom: 1px solid #f0f1f3; }
-  .ads-mr__cand td:first-child { color: #888; width: 80px; }
+  .ads-mr__cand td { padding: 3px 4px; vertical-align: top; border-bottom: 1px solid var(--ads-border); }
+  .ads-mr__cand td:first-child { color: var(--ads-muted); width: 80px; }
   .ads-mr__row { display: contents; }
-  .ads-mr__diff td { background: #fff7e6; }
-  .ads-mr__head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid #e3e6ea; margin-bottom: 6px; }
-  .ads-mr__score { font-size: 18px; font-weight: 600; color: #2c6eb5; }
-  .ads-mr__reasons { font-size: 11px; color: #888; }
+  .ads-mr__diff td { background: color-mix(in srgb, var(--ads-accent) 16%, var(--ads-panel-2)); }
+  .ads-mr__head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--ads-border); margin-bottom: 6px; }
+  .ads-mr__score { font-size: 18px; font-weight: 600; color: var(--ads-accent); }
+  .ads-mr__reasons { font-size: 11px; color: var(--ads-muted); }
   .ads-mr__actions { display: flex; gap: 8px; }
-  .ads-mr__discrim { margin-top: 12px; padding: 10px; background: #f7f8fa; border-left: 3px solid #2c6eb5; font-size: 12px; }
-  .ads-mr__discrim strong { color: #1a3a6b; }
-  .ads-mr__card { background: #fff; border: 1px solid #e3e6ea; border-radius: 6px; padding: 16px; margin-bottom: 16px; }
-  .ads-mr__empty { padding: 40px; text-align: center; color: #888; font-size: 14px; }
-  .ads-mr__empty strong { color: #1f7a4d; font-size: 16px; display: block; margin-bottom: 4px; }
+  .ads-mr__discrim { margin-top: 12px; padding: 10px; background: var(--ads-panel-2); border-left: 3px solid var(--ads-accent); font-size: 12px; color: var(--ads-text); }
+  .ads-mr__discrim strong { color: var(--ads-text-strong); }
+  .ads-mr__card { background: var(--ads-panel); border: 1px solid var(--ads-border); border-radius: 6px; padding: 16px; margin-bottom: 16px; color: var(--ads-text); }
+  .ads-mr__empty { padding: 40px; text-align: center; color: var(--ads-muted); font-size: 14px; }
+  .ads-mr__empty strong { color: var(--ads-accent-2); font-size: 16px; display: block; margin-bottom: 4px; }
 </style>
 
 <h1 class="ads-page-title">Merge Review</h1>
@@ -111,9 +111,9 @@ permalink: /dashboard/merge-review/
       + '</div>'
       + '<div class="ads-mr__discrim">'
       +   (d.diffs.length ? '<strong>Discriminating fields:</strong> ' + esc(d.diffs.join(", ")) : '<strong>All highlighted fields match.</strong>')
-      +   (d.same.length ? ' &middot; <span style="color:#555">Matching: ' + esc(d.same.join(", ")) + '</span>' : '')
+      +   (d.same.length ? ' &middot; <span style="color:var(--ads-muted)">Matching: ' + esc(d.same.join(", ")) + '</span>' : '')
       + '</div>'
-      + '<div class="ads-mr__status" data-for="' + esc(item.id) + '" style="margin-top:6px;font-size:11px;color:#888"></div>'
+      + '<div class="ads-mr__status" data-for="' + esc(item.id) + '" style="margin-top:6px;font-size:11px;color:var(--ads-muted)"></div>'
       + '</div>';
   }
 
@@ -132,8 +132,8 @@ permalink: /dashboard/merge-review/
         root.innerHTML = items.map(pairCard).join("");
       })
       .catch(function (e) {
-        root.innerHTML = '<div class="ads-mr__card" style="border-left:3px solid #c0392b">'
-          + '<p style="margin:0;color:#c0392b">Failed to load review queue: ' + esc(e.message) + '</p>'
+        root.innerHTML = '<div class="ads-mr__card" style="border-left:3px solid var(--ads-danger)">'
+          + '<p style="margin:0;color:var(--ads-danger)">Failed to load review queue: ' + esc(e.message) + '</p>'
           + '</div>';
       });
   }
@@ -190,7 +190,7 @@ permalink: /dashboard/merge-review/
       })
       .catch(function (err) {
         status.textContent = "failed: " + err.message;
-        status.style.color = "#c0392b";
+        status.style.color = "var(--ads-danger)";
         card.querySelectorAll("button").forEach(function (b) { b.disabled = false; });
       });
   });
