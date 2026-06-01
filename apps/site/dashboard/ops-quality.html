@@ -34,6 +34,7 @@ permalink: /ops/quality/
 
 <script>
 (function () {
+  var API = window.adsApiBase || "https://api.aidatasignal.com";
   var content = document.getElementById("ops-quality-content");
   var gate = document.getElementById("ops-quality-gate");
   var cardsEl = document.getElementById("ops-quality-cards");
@@ -54,7 +55,7 @@ permalink: /ops/quality/
   }
 
   function loadRollup() {
-    return fetch("/api/ops/quality/rollup", { credentials: "include" })
+    return fetch(API + "/api/ops/quality/rollup", { credentials: "include" })
       .then(function (r) { if (r.status === 403) { gate.style.display = ""; content.style.display = "none"; throw new Error("forbidden"); } if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(function (data) {
         content.style.display = "";
@@ -78,7 +79,7 @@ permalink: /ops/quality/
   }
 
   function loadSoftDeletes() {
-    return fetch("/api/ops/quality/recent-soft-deletes?limit=25", { credentials: "include" })
+    return fetch(API + "/api/ops/quality/recent-soft-deletes?limit=25", { credentials: "include" })
       .then(function (r) { return r.ok ? r.json() : { items: [] }; })
       .then(function (data) {
         var items = data.items || [];
@@ -99,7 +100,7 @@ permalink: /ops/quality/
 
   function postAction(path, label) {
     appendLog("POST " + path + " …");
-    fetch(path, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: "{}" })
+    fetch(API + path, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: "{}" })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
       .then(function (res) {
         appendLog(label + " → HTTP " + res.status + " " + JSON.stringify(res.body));
