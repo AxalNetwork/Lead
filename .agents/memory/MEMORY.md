@@ -1,0 +1,2 @@
+- [Production deploy path](prod-deploy-path.md) — main agent has NO GitHub write auth; worker deploy only via GitHub Actions (push touching apps/worker/** or workflow_dispatch), never local push/wrangler.
+- [Production behind Cloudflare Access](prod-cloudflare-access.md) — every api.aidatasignal.com endpoint 302s to Access login server-side; can't verify prod endpoints with curl from the workspace.
