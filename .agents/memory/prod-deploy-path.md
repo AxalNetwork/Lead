@@ -35,6 +35,16 @@ successful push would NOT deploy until that compile task lands. Verify with
 `git diff --stat origin/main..HEAD -- apps/worker` (empty = worker code already
 on GitHub; non-empty = local has un-pushed worker commits).
 
+**Manual wrangler deploy is a real escape hatch (confirmed 2026-06-02).** With
+explicit user approval, `cd apps/worker && npx wrangler@3.99.0 deploy` from the
+workspace succeeds even while the CI typecheck gate is RED — wrangler bundles via
+esbuild, which strips types and ignores the `tsc` errors. It ships whatever is on
+LOCAL `main`, so only do it when local == `origin/main` (verify `git rev-list
+--left-right --count origin/main...HEAD` is `0 0`) to avoid shipping un-pushed
+checkpoint commits. It bypasses the typecheck + ML-eval gates, so it ships every
+worker task merged since the last green CI run, not just the latest change — call
+that out to the user before running.
+
 **D1 prod repair recipe (when the migration chain is stalled):** a leftover/orphan
 object (e.g. a hand-created table) can block `migrations apply`. Identify the
 blocker from the apply error, drop/rename it via
