@@ -70,7 +70,7 @@
   function openHistoryPanel(entityId, predicate) {
     var existing = document.getElementById("ads-field-history-panel");
     if (existing) existing.remove();
-    var panel = el("aside", { id: "ads-field-history-panel", style: "position:fixed;top:0;right:0;bottom:0;width:420px;max-width:90vw;background:#fff;border-left:1px solid #ccc;box-shadow:-4px 0 16px rgba(0,0,0,.08);padding:16px;overflow:auto;z-index:9999" });
+    var panel = el("aside", { id: "ads-field-history-panel", style: "position:fixed;top:0;right:0;bottom:0;width:420px;max-width:90vw;background:#fff;color:#1a1a1a;border-left:1px solid #ccc;box-shadow:-4px 0 16px rgba(0,0,0,.08);padding:16px;overflow:auto;z-index:9999" });
     panel.appendChild(el("div", { style: "display:flex;justify-content:space-between;align-items:center;margin-bottom:8px" }, [
       el("strong", null, ["Edit history: " + predicate]),
       el("button", { type: "button", onclick: function () { panel.remove(); }, style: "border:none;background:transparent;font-size:18px;cursor:pointer" }, ["×"]),
@@ -116,7 +116,7 @@
   function openAuditPanel(entityId) {
     var existing = document.getElementById("ads-audit-panel");
     if (existing) existing.remove();
-    var panel = el("aside", { id: "ads-audit-panel", style: "position:fixed;top:0;right:0;bottom:0;width:520px;max-width:95vw;background:#fff;border-left:1px solid #ccc;box-shadow:-4px 0 16px rgba(0,0,0,.08);padding:16px;overflow:auto;z-index:9999" });
+    var panel = el("aside", { id: "ads-audit-panel", style: "position:fixed;top:0;right:0;bottom:0;width:520px;max-width:95vw;background:#fff;color:#1a1a1a;border-left:1px solid #ccc;box-shadow:-4px 0 16px rgba(0,0,0,.08);padding:16px;overflow:auto;z-index:9999" });
     panel.appendChild(el("div", { style: "display:flex;justify-content:space-between;align-items:center;margin-bottom:8px" }, [
       el("strong", null, ["Audit log"]),
       el("button", { type: "button", onclick: function () { panel.remove(); }, style: "border:none;background:transparent;font-size:18px;cursor:pointer" }, ["×"]),
@@ -193,10 +193,10 @@
     function openInlineEditor() {
       var current = target.dataset.currentValue || valueSpan.textContent.trim();
       form.innerHTML = "";
-      var input = el("input", { type: "text", value: current, style: "padding:2px 4px;border:1px solid #aaa;border-radius:3px;font:inherit;min-width:160px" });
-      var reasonInput = el("input", { type: "text", placeholder: "reason (required)", style: "padding:2px 4px;border:1px solid #aaa;border-radius:3px;font:inherit;min-width:120px" });
+      var input = el("input", { type: "text", value: current, style: "padding:2px 4px;border:1px solid #aaa;border-radius:3px;font:inherit;min-width:160px;color:#1a1a1a;background:#fff" });
+      var reasonInput = el("input", { type: "text", placeholder: "reason (required)", style: "padding:2px 4px;border:1px solid #aaa;border-radius:3px;font:inherit;min-width:120px;color:#1a1a1a;background:#fff" });
       var saveBtn = el("button", { type: "button", style: "padding:2px 8px;background:#0a7;color:#fff;border:none;border-radius:3px;cursor:pointer" }, ["Save"]);
-      var cancelBtn = el("button", { type: "button", style: "padding:2px 8px;background:#eee;border:1px solid #ccc;border-radius:3px;cursor:pointer" }, ["Cancel"]);
+      var cancelBtn = el("button", { type: "button", style: "padding:2px 8px;background:#eee;color:#1a1a1a;border:1px solid #ccc;border-radius:3px;cursor:pointer" }, ["Cancel"]);
       var status = el("span", { class: "ads-muted", style: "font-size:11px;margin-left:4px" });
 
       function close() { form.style.display = "none"; form.innerHTML = ""; valueSpan.style.display = ""; pencil.style.display = ""; }
@@ -345,13 +345,13 @@
   function openAdHocEditor(entityId) {
     var existing = document.getElementById("ads-adhoc-editor"); if (existing) existing.remove();
     var modal = el("div", { id: "ads-adhoc-editor", style: "position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9500;display:flex;align-items:center;justify-content:center" });
-    var card = el("div", { style: "background:#fff;padding:16px;border-radius:6px;min-width:320px;display:flex;flex-direction:column;gap:8px" }, [
-      el("h4", { style: "margin:0" }, ["Add override"]),
+    var card = el("div", { style: "background:#fff;color:#1a1a1a;padding:16px;border-radius:6px;min-width:320px;display:flex;flex-direction:column;gap:8px" }, [
+      el("h4", { style: "margin:0;color:#1a1a1a" }, ["Add override"]),
       el("label", null, ["Predicate (e.g. title, sector)"]),
     ]);
-    var predInput = el("input", { type: "text", style: "padding:4px;border:1px solid #aaa;border-radius:3px" });
-    var valInput = el("input", { type: "text", placeholder: "new value", style: "padding:4px;border:1px solid #aaa;border-radius:3px" });
-    var reasonInput = el("input", { type: "text", placeholder: "reason (required)", style: "padding:4px;border:1px solid #aaa;border-radius:3px" });
+    var predInput = el("input", { type: "text", style: "padding:4px;border:1px solid #aaa;border-radius:3px;color:#1a1a1a;background:#fff" });
+    var valInput = el("input", { type: "text", placeholder: "new value", style: "padding:4px;border:1px solid #aaa;border-radius:3px;color:#1a1a1a;background:#fff" });
+    var reasonInput = el("input", { type: "text", placeholder: "reason (required)", style: "padding:4px;border:1px solid #aaa;border-radius:3px;color:#1a1a1a;background:#fff" });
     var status = el("div", { class: "ads-muted", style: "font-size:12px;min-height:16px" });
     var saveBtn = el("button", { type: "button", style: "padding:6px 12px;background:#0a7;color:#fff;border:none;border-radius:3px;cursor:pointer" }, ["Save"]);
     var cancelBtn = el("button", { type: "button", style: "padding:6px 12px;background:#eee;border:1px solid #ccc;border-radius:3px;cursor:pointer" }, ["Cancel"]);
