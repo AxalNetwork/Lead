@@ -38,6 +38,7 @@ interface AcadExtract extends PersonExtract {
 const def: WorkflowDef = {
   id: "academic_researcher.v1",
   profile_type_id: "academic_researcher",
+  harvestIdentities: true,
   estimated_cost_per_run: { sources: 5, ai_neurons: 0.5 },
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/people", "/faculty", "/research"]),

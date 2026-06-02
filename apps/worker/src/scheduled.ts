@@ -901,6 +901,16 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       } catch (e) {
         console.error("nightly osint-reverify failed", (e as Error).message);
       }
+      // Task #7: identity backfill — promote scraped social/website facts
+      // into identity_handles for persons crawled before the harvest+promote
+      // wiring landed. Bounded so it fits inside this shared tick.
+      try {
+        const { runIdentityBackfill } = await import("./services/identity/backfill");
+        const r = await runIdentityBackfill(env, { limit: 50 });
+        console.log("identity-backfill inline", JSON.stringify(r));
+      } catch (e) {
+        console.error("nightly identity-backfill failed", (e as Error).message);
+      }
     })());
     return;
   }

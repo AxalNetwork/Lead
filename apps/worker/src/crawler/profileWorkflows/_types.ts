@@ -131,4 +131,10 @@ export interface WorkflowDef {
   map(args: { aiJson: unknown; source: PlannedSource; ctx: WorkflowContext }): FactCandidate[];
   /** Optional override of the default model (Llama 3.1 8b fast). */
   model?: string;
+  /** Task #7: when true, `runStandardWorkflow` runs the deterministic
+   *  identity harvester (emails + social/web links) over every fetched
+   *  page, injects a /contact + /about same-origin pass, and promotes
+   *  scraped social handles into `identity_handles` plus a bounded OSINT
+   *  username-enumeration pass. Set on person-shaped workflows. */
+  harvestIdentities?: boolean;
 }

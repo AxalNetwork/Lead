@@ -30,6 +30,7 @@ interface RegExtract extends PersonExtract {
 const def: WorkflowDef = {
   id: "regulator_sec.v1",
   profile_type_id: "regulator_sec",
+  harvestIdentities: true,
   estimated_cost_per_run: { sources: 4, ai_neurons: 0.4 },
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/about/biography", "/news/speech"]),

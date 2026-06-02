@@ -240,6 +240,7 @@
     html += rows.length
       ? '<table class="ads-table ads-table--kv">' + rows.join("") + '</table>'
       : emptyCard("No sourced identity fields yet.");
+    html += contactLinksBlock(d);
     var skipped = d.privacy_skipped_enrichers || [];
     if (skipped.length) {
       html += '<div style="margin-top:18px"><h3 style="margin-bottom:8px">Skipped for privacy</h3><div class="ads-tag-row">' +
@@ -258,6 +259,69 @@
     if (s == null) return null;
     if (typeof s === "object") return s;
     try { return JSON.parse(s); } catch (e) { return null; }
+  }
+
+  // Task #7: "Contact & links" block — email (mailto), social links from
+  // contact facts, and the active OSINT identity handles as pills. Renders
+  // nothing when there is no contact data so empty profiles stay clean.
+  var PLATFORM_LABEL = {
+    linkedin: "LinkedIn", twitter: "Twitter / X", github: "GitHub",
+    website: "Website", hackernews: "Hacker News", reddit: "Reddit",
+    keybase: "Keybase", farcaster: "Farcaster", lens: "Lens", ens: "ENS",
+  };
+  function platformLabel(p) {
+    var k = String(p || "").toLowerCase();
+    return PLATFORM_LABEL[k] || (k ? k.charAt(0).toUpperCase() + k.slice(1) : "Link");
+  }
+  // Only allow http(s) links — scraped fact values are untrusted, so a
+  // javascript:/data: scheme must never become a clickable href.
+  function safeHttpUrl(u) {
+    if (!u) return null;
+    var s = String(u).trim();
+    return /^https?:\/\//i.test(s) ? s : null;
+  }
+  function handleUrl(h) {
+    if (h.url) return safeHttpUrl(h.url);
+    var p = String(h.platform || "").toLowerCase();
+    if (p === "linkedin") return "https://www.linkedin.com/in/" + encodeURIComponent(h.handle || "");
+    if (p === "twitter") return "https://twitter.com/" + encodeURIComponent(h.handle || "");
+    if (p === "github") return "https://github.com/" + encodeURIComponent(h.handle || "");
+    return null;
+  }
+  function contactLinksBlock(d) {
+    var id = d.identity || {};
+    var email = id.primary_email || id.email || null;
+    var links = d.social_links || [];
+    var handles = d.identity_handles || [];
+    if (!email && !links.length && !handles.length) return "";
+
+    var parts = [];
+    if (email) {
+      parts.push('<div style="margin-bottom:6px"><b>Email</b>: <a href="mailto:' +
+        esc(email) + '">' + esc(email) + '</a></div>');
+    }
+    if (links.length) {
+      parts.push('<div class="ads-tag-row" style="margin-bottom:6px">' + links.map(function (l) {
+        var badge = l.verified ? ' <span class="ads-pill ok" style="font-size:10px">verified</span>' : '';
+        var u = safeHttpUrl(l.url);
+        var label = esc(platformLabel(l.platform));
+        return u
+          ? '<a class="ads-pill idle" href="' + esc(u) + '" target="_blank" rel="noopener noreferrer">' + label + '</a>' + badge
+          : '<span class="ads-pill idle">' + label + '</span>' + badge;
+      }).join(" ") + '</div>');
+    }
+    if (handles.length) {
+      parts.push('<div style="margin-top:8px"><span class="ads-muted" style="font-size:11px">OSINT-resolved handles</span><div class="ads-tag-row" style="margin-top:4px">' +
+        handles.slice(0, 30).map(function (h) {
+          var u = handleUrl(h);
+          var inner = esc(platformLabel(h.platform)) + " · " + esc(h.handle || "—");
+          return u
+            ? '<a class="ads-pill idle" href="' + esc(u) + '" target="_blank" rel="noopener noreferrer">' + inner + '</a>'
+            : '<span class="ads-pill idle">' + inner + '</span>';
+        }).join(" ") + '</div></div>');
+    }
+    return '<div style="margin-top:18px"><h3 style="margin-bottom:8px">Contact &amp; links</h3>' +
+      parts.join("") + '</div>';
   }
 
   // Spec: a row is a "fact" — hide rows lacking source_url unless

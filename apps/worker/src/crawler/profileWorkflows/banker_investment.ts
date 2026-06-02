@@ -29,6 +29,7 @@ interface BankExtract extends PersonExtract {
 const def: WorkflowDef = {
   id: "banker_investment.v1",
   profile_type_id: "banker_investment",
+  harvestIdentities: true,
   estimated_cost_per_run: { sources: 4, ai_neurons: 0.4 },
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/about", "/professionals"]),

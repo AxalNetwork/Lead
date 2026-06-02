@@ -90,6 +90,7 @@ function makeTemplatedDef(spec: TemplateSpec): WorkflowDef {
   return {
     id: `${spec.typeId}.v1`,
     profile_type_id: spec.typeId,
+    harvestIdentities: true,
     estimated_cost_per_run: { sources: 5, ai_neurons: 0.5 },
     plan: personPlan,
     extractionSchema: PERSON_SCHEMA as unknown as Record<string, unknown>,

@@ -29,6 +29,7 @@ interface LawExtract extends PersonExtract {
 const def: WorkflowDef = {
   id: "lawyer_securities.v1",
   profile_type_id: "lawyer_securities",
+  harvestIdentities: true,
   estimated_cost_per_run: { sources: 4, ai_neurons: 0.4 },
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/professionals", "/people"]),

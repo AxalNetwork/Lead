@@ -20,6 +20,19 @@ async function rows<T = Row>(env: Env, sql: string, ...binds: unknown[]): Promis
 export interface DossierBundle {
   entity_id: string;
   identity: Row | null;
+  /**
+   * Task #7: active identity handles (is_active=1) discovered by the
+   * OSINT layer + promoted from scraped social URLs. The header
+   * quick-actions + Contact & links block read this.
+   */
+  identity_handles: Row[];
+  /**
+   * Task #7: social/web links derived from contact facts (bare canonical
+   * `linkedin_url` / `twitter_url` / `github_url` / `website` predicates
+   * AND the role-prefixed `founder.linkedin_url` variants the AI mapper
+   * writes). De-duped by platform; verified rows win.
+   */
+  social_links: Array<{ platform: string; url: string; verified: boolean; confidence: number; source_url: string | null }>;
   career_history: Row[];
   board_seats: Row[];
   education_history: Row[];
@@ -97,6 +110,7 @@ export async function readDossier(
   const [
     identityRows, career, boards, education, familyPublic, preferences,
     interests, lifestyle, travel, conferences, goals, hooks, appreciation,
+    handleRows, contactFactRows,
   ] = await Promise.all([
     rows(env, `SELECT * FROM person_identity WHERE entity_id = ?`, entityId),
     rows(env, `SELECT * FROM career_history WHERE entity_id = ? ORDER BY is_current DESC, started_at DESC`, entityId),
@@ -112,10 +126,67 @@ export async function readDossier(
     rows(env, `SELECT * FROM person_goals WHERE entity_id = ? ORDER BY observed_at DESC`, entityId),
     rows(env, `SELECT * FROM conversation_hooks WHERE entity_id = ? ORDER BY observed_at DESC`, entityId),
     rows(env, `SELECT * FROM appreciation_signals WHERE entity_id = ? ORDER BY observed_at DESC`, entityId),
+    // Task #7: active identity handles + contact/social facts.
+    rows(env,
+      `SELECT id, platform, handle, url, link_method, link_confidence, last_verified_at
+         FROM identity_handles
+        WHERE entity_id = ? AND is_active = 1
+        ORDER BY link_confidence DESC, last_verified_at DESC`,
+      entityId),
+    rows<{ predicate: string; value_text: string; verified: number; confidence: number; evidence_url: string | null }>(env,
+      `SELECT predicate, value_text, verified, confidence, evidence_url
+         FROM facts
+        WHERE entity_id = ? AND is_current = 1 AND value_text IS NOT NULL
+          AND ( predicate = 'email'
+             OR predicate LIKE '%email'
+             OR predicate LIKE '%linkedin_url'
+             OR predicate LIKE '%twitter_url'
+             OR predicate LIKE '%github_url'
+             OR predicate LIKE '%personal_url'
+             OR predicate LIKE '%website' )
+        ORDER BY verified DESC, confidence DESC`,
+      entityId),
   ]);
+
+  // Task #7: derive a primary email + de-duped social links from the
+  // contact facts. The query already orders verified-then-confident first,
+  // so the first row per platform / the first email is the strongest.
+  const platformOf = (predicate: string): string | null => {
+    if (predicate.endsWith("linkedin_url")) return "linkedin";
+    if (predicate.endsWith("twitter_url")) return "twitter";
+    if (predicate.endsWith("github_url")) return "github";
+    if (predicate.endsWith("personal_url") || predicate.endsWith("website")) return "website";
+    return null;
+  };
+  const emailFact = contactFactRows.find((f) => f.predicate === "email" || f.predicate.endsWith("email"));
+  const primaryEmail = emailFact?.value_text ?? null;
+  const social_links: DossierBundle["social_links"] = [];
+  const socialSeen = new Set<string>();
+  for (const f of contactFactRows) {
+    const platform = platformOf(f.predicate);
+    if (!platform || socialSeen.has(platform)) continue;
+    socialSeen.add(platform);
+    social_links.push({
+      platform, url: f.value_text,
+      verified: !!f.verified, confidence: f.confidence,
+      source_url: f.evidence_url ?? null,
+    });
+  }
+  // Attach the email onto the identity object (the header + Contact block
+  // read `identity.primary_email`). Create a minimal identity object when
+  // there's no person_identity row but we DO have an email fact, so the
+  // contact still surfaces.
+  let identity: Row | null = identityRows[0] ?? null;
+  if (primaryEmail) {
+    identity = { ...(identity ?? {}) };
+    if (identity.primary_email == null) identity.primary_email = primaryEmail;
+    if (identity.email == null) identity.email = primaryEmail;
+  }
 
   const populated: string[] = [];
   if (identityRows.length) populated.push("person_identity");
+  if (handleRows.length) populated.push("identity_handles");
+  if (contactFactRows.length) populated.push("contact_facts");
   if (career.length) populated.push("career_history");
   if (boards.length) populated.push("board_seats");
   if (education.length) populated.push("education_history");
@@ -164,7 +235,9 @@ export async function readDossier(
 
   const bundle: DossierBundle = {
     entity_id: entityId,
-    identity: identityRows[0] ?? null,
+    identity,
+    identity_handles: handleRows,
+    social_links,
     career_history: career,
     board_seats: boards,
     education_history: education,

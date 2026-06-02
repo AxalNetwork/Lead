@@ -1,26 +1,33 @@
 ---
-name: worker test build quirks
-description: How apps/worker tests compile/run and why tsc errors don't always block them
+name: worker test-build quirk
+description: How apps/worker's test build (tsconfig.test.json) differs from production, and the extensionless-dynamic-import error class.
 ---
 
-# apps/worker test build
+# apps/worker test build vs production typecheck
 
-`npm test` = `tsc -p tsconfig.test.json && node --test <files>`. Two non-obvious facts:
+The worker has two TypeScript configs that resolve modules differently:
 
-- **tsconfig.test.json uses `moduleResolution: NodeNext`** while the main build
-  (tsconfig.json) uses `Bundler`. NodeNext is far stricter: relative imports
-  (including dynamic `import()`) must carry explicit `.js` extensions or you get
-  TS2835. Code that compiles for wrangler/deploy can still fail the test build.
+- **Production** (`apps/worker/tsconfig.json`): `module: ES2022`,
+  `moduleResolution: Bundler`. Extensionless relative imports (static AND
+  dynamic `await import("./x")`) are correct here. This is the build that
+  actually ships, and it should be clean.
+- **Test** (`apps/worker/tsconfig.test.json`): extends the above but forces
+  `module/moduleResolution: NodeNext`, emits to `test-dist/`, and uses an
+  **explicit `include` allow-list** of source files (NOT a glob over `src`).
 
-- **tsc emits JS despite type errors** (`noEmitOnError` is false). So when the
-  test build has pre-existing type errors that block the `&&`, you can still
-  verify your own work: run `npx tsc -p tsconfig.test.json` (ignore exit code),
-  then `node --test test/<your>.test.mjs` directly against the emitted
-  `test-dist/`. The `.mjs` tests import from `../test-dist/...`.
-
-**Why:** the committed baseline test build has carried multiple type errors at
-times (createEntity now returns `EntityRow | null` but several service callers
-return null against non-null signatures; extensionless dynamic orchestrator
-imports). These block `npm test` at the tsc step even though the runtime JS is
-fine. Don't assume an unrelated tsc error is your regression — diff against the
-committed baseline (`git show HEAD:path`) before owning it.
+**Why this matters / how to apply:**
+- When you add a new source file that a `.mjs` test needs, you MUST add it to
+  the `include` array in `tsconfig.test.json` or it won't be compiled into
+  `test-dist/`.
+- NodeNext flags extensionless relative imports as **TS2835** ("needs explicit
+  file extensions"). The repo's dynamic-import convention is extensionless
+  (used pervasively in `scheduled.ts`, plus `entities/facts.ts` and
+  `entities/roles.ts`), so this error is **expected test-build noise**, not a
+  real defect — production (Bundler) compiles them fine. Don't "fix" it by
+  adding `.js` to one file; that diverges from the codebase convention.
+- The test build has a handful of pre-existing errors (the TS2835 ones plus a
+  few `null`-return TS2322/TS18047 in deals/fund/lp/secEdgar resolvers). They
+  are tolerated; `tsc -p tsconfig.test.json` exits non-zero but still emits, so
+  run it ignoring exit code, then `node --test test/<file>.test.mjs`.
+- Tests live in `test/*.test.mjs` (hand-written, not compiled — rootDir is
+  `src`) and import the compiled output from `../test-dist/...`.

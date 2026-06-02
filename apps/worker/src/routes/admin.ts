@@ -789,3 +789,18 @@ admin.post("/sweep-csv-imports", async (c) => {
 
   return c.json({ ok: true, imports_timed_out: importsTimedOut, jobs_cancelled: jobsCancelled });
 });
+
+// Task #7: identity backfill — promote scraped social/website facts into
+// identity_handles for persons missing them. Bounded by `limit` (≤500).
+// `osint=0` skips the username-enumeration pass for a faster, cheaper run.
+admin.post("/backfill-identity", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as
+    | { limit?: number; osint?: boolean }
+    | null;
+  const limitRaw = Number(c.req.query("limit") ?? body?.limit ?? 50);
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 500) : 50;
+  const runOsint = body?.osint !== false && c.req.query("osint") !== "0";
+  const { runIdentityBackfill } = await import("../services/identity/backfill");
+  const result = await runIdentityBackfill(c.env, { limit, runOsint });
+  return c.json({ ok: true, ...result });
+});

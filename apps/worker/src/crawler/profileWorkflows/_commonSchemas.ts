@@ -8,6 +8,7 @@
 // gives the cross-source verifier a single normalized shape to bucket on.
 
 import type { FactCandidate, PlannedSource, WorkflowContext } from "./_types";
+import { cleanEmail } from "./identityHarvest";
 
 // ---- Firm schema --------------------------------------------------------
 
@@ -108,6 +109,7 @@ export const PERSON_SCHEMA = {
     focus_areas:        { type: "array", items: { type: "string" } },
     location_city:      { type: "string" },
     location_country:   { type: "string" },
+    email:              { type: "string" },
     linkedin_url:       { type: "string" },
     twitter_url:        { type: "string" },
     github_url:         { type: "string" },
@@ -118,6 +120,7 @@ export const PERSON_SCHEMA = {
 } as const;
 
 export interface PersonExtract {
+  email?: string;
   full_name?: string;
   current_title?: string;
   current_employer?: string;
@@ -146,6 +149,14 @@ export function mapPerson(j: PersonExtract, source: PlannedSource, predicatePref
   arrField(out, `${predicatePrefix}.focus_areas`,      j.focus_areas,      source, conf);
   strField(out, `${predicatePrefix}.location_city`,    j.location_city,    source, conf);
   strField(out, `${predicatePrefix}.location_country`, j.location_country, source, conf);
+  // Email is written as the canonical BARE `email` predicate (category
+  // contact in the predicate registry) rather than role-prefixed, so the
+  // dossier + UI surface it uniformly across every person type. Role
+  // inboxes / placeholders are dropped by cleanEmail.
+  if (typeof j.email === "string") {
+    const e = cleanEmail(j.email);
+    if (e) out.push({ predicate: "email", valueText: e, sourceUrl: source.url, sourceTag: source.tag, confidence: conf });
+  }
   strField(out, `${predicatePrefix}.linkedin_url`,     j.linkedin_url,     source, conf);
   strField(out, `${predicatePrefix}.twitter_url`,      j.twitter_url,      source, conf);
   strField(out, `${predicatePrefix}.github_url`,       j.github_url,       source, conf);

@@ -34,6 +34,7 @@ interface PolExtract extends PersonExtract {
 const def: WorkflowDef = {
   id: "politician_federal.v1",
   profile_type_id: "politician_federal",
+  harvestIdentities: true,
   estimated_cost_per_run: { sources: 4, ai_neurons: 0.4 },
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/about", "/biography"]),

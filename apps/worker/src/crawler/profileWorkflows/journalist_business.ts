@@ -30,6 +30,7 @@ interface JournExtract extends PersonExtract {
 const def: WorkflowDef = {
   id: "journalist_business.v1",
   profile_type_id: "journalist_business",
+  harvestIdentities: true,
   estimated_cost_per_run: { sources: 4, ai_neurons: 0.4 },
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/author", "/staff", "/team"]),

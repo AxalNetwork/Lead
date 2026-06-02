@@ -30,6 +30,7 @@ interface AngelExtract extends PersonExtract {
 const def: WorkflowDef = {
   id: "investor_angel.v1",
   profile_type_id: "investor_angel",
+  harvestIdentities: true,
   estimated_cost_per_run: { sources: 4, ai_neurons: 0.4 },
   plan: (ctx) => [
     ...sameOrigin(ctx.candidateUrl, ["/about", "/portfolio", "/investments"]),

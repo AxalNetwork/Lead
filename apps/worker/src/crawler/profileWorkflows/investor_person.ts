@@ -30,6 +30,7 @@ interface InvPersonExtract extends PersonExtract {
 const def: WorkflowDef = {
   id: "investor_person.v1",
   profile_type_id: "investor_person",
+  harvestIdentities: true,
   estimated_cost_per_run: { sources: 5, ai_neurons: 0.5 },
   plan: (ctx) => [
     // Direct public profiles (task spec Step 4): firm-bio (same-origin

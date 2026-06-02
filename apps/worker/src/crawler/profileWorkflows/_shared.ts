@@ -34,6 +34,8 @@ import { trackAi } from "../../analytics/events";
 import { sha256 } from "../../entities/normalize";
 import { insertFact } from "../../entities/facts";
 import { pauseScopeFor } from "../../services/ops/pause";
+import { harvestIdentityFacts } from "./identityHarvest";
+import { promoteIdentityFromFacts } from "../../services/identity/promote";
 import type {
   FactCandidate, PlannedSource, ProfileWorkflow, WorkflowContext,
   WorkflowDef, WorkflowError, WorkflowResult, WorkflowRunOpts,
@@ -414,6 +416,19 @@ export async function runStandardWorkflow(
     seenUrls.add(c);
     dedupedPlanned.push(p);
   }
+  // Task #7: for person-shaped workflows, add a same-origin /contact +
+  // /about pass so the deterministic identity harvester sees the pages
+  // most likely to carry a person's own email + social links. Marked
+  // optional so a 404 doesn't count against `sources_failed`.
+  if (def.harvestIdentities) {
+    for (const s of sameOrigin(ctx.candidateUrl, ["/contact", "/about"])) {
+      const c = canonicalizeUrl(s.url);
+      if (!c || seenUrls.has(c)) continue;
+      seenUrls.add(c);
+      dedupedPlanned.push({ ...s, optional: true });
+    }
+  }
+
   const sources: PlannedSource[] = [
     { tag: "candidate", url: ctx.candidateUrl },
     ...dedupedPlanned,
@@ -490,6 +505,24 @@ export async function runStandardWorkflow(
     }
   }
 
+  // Task #7: deterministic identity harvest (emails + social/web links).
+  // Runs for person-shaped workflows regardless of AI availability — it's
+  // a pure regex pass over the HTML we already fetched and is honest about
+  // empty pages (emits nothing rather than guessing). The candidate page
+  // additionally contributes its own host as `website`.
+  if (def.harvestIdentities) {
+    for (const f of fetched) {
+      try {
+        const harvested = harvestIdentityFacts(f.html, f.source, {
+          selfUrl: f.source.tag === "candidate" ? ctx.candidateUrl : undefined,
+        });
+        for (const h of harvested) allFacts.push(h);
+      } catch (e) {
+        errors.push({ tag: f.source.tag, message: `harvest_threw:${(e as Error).message}` });
+      }
+    }
+  }
+
   // Step 4: cross-source verification.
   const verifiedList = crossRef(allFacts);
 
@@ -503,6 +536,18 @@ export async function runStandardWorkflow(
       if (v.verified) factsVerified += 1;
     } catch (e) {
       errors.push({ tag: v.fact.sourceTag, message: `persist_threw:${(e as Error).message}` });
+    }
+  }
+
+  // Task #7: promote scraped social/web URLs into identity_handles and run
+  // a bounded OSINT username-enumeration pass so discovered handles surface
+  // on the profile. Best-effort: a failure is recorded but never fails the
+  // crawl, and the OSINT pass only fires when a fresh handle was attached.
+  if (def.harvestIdentities && factsWritten > 0) {
+    try {
+      await promoteIdentityFromFacts(env, entityId);
+    } catch (e) {
+      errors.push({ tag: "_identity_promote", message: `promote_threw:${(e as Error).message}` });
     }
   }
 

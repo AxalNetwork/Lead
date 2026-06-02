@@ -33,6 +33,7 @@ function makeFounderDef(typeId: string, variantLabel: string): WorkflowDef {
   return {
     id: `${typeId}.v1`,
     profile_type_id: typeId,
+    harvestIdentities: true,
     estimated_cost_per_run: { sources: 5, ai_neurons: 0.5 },
     // Direct public profiles per task spec Step 6: founded-company
     // About + LinkedIn public + Crunchbase founder + GitHub + Twitter.
