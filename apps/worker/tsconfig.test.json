@@ -52,6 +52,7 @@
     "src/osint/pivots/index.ts",
     "src/osint/pivots/*.ts",
     "src/scraper/fetcher.ts",
+    "src/scraper/proxyPool.ts",
     "src/scraper/preflight.ts",
     "src/services/frontier/tosSink.ts",
     "src/entities/profile-predicates.ts",

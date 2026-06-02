@@ -3,6 +3,7 @@ import { checkRobots } from "./robots";
 import { tosBlockedReason } from "./tos";
 import { isCircuitOpen, recordFetchOutcome } from "./circuit_breaker";
 import { fetchWaybackHtml } from "./fallbacks/wayback";
+import { getProxyProviders } from "./proxyPool";
 // Task #5: Brave Search cache (tier 5) and paid Scraping API (tier 3) were
 // removed. The fetcher now escalates Direct → Browser → Proxy → Wayback,
 // which is the supported in-house path.
@@ -373,60 +374,96 @@ async function tier1Browser(env: Env, url: string, opts: FetchOptions): Promise<
   }
 }
 
-async function tier2Proxy(env: Env, url: string, opts: FetchOptions): Promise<FetchResult> {
-  const start = Date.now();
-  if (!env.PROXY_URL) return blockResult(url, 2, "proxy_not_configured");
+export async function tier2Proxy(env: Env, url: string, opts: FetchOptions): Promise<FetchResult> {
+  // Task #16: failover pool. Try each configured provider in fixed order
+  // (generic PROXY_URL first, then Smartproxy → Bright Data → Oxylabs) and
+  // succeed as soon as one retrieves the page. Only report a proxy failure
+  // once every configured provider has failed; the last failure is returned
+  // so the chain escalates to Wayback. See scraper/proxyPool.ts.
+  const providers = getProxyProviders(env);
+  if (providers.length === 0) return blockResult(url, 2, "proxy_not_configured");
+
   // Workers fetch() can't dial an arbitrary HTTP CONNECT proxy, so we route
-  // through the proxy provider's HTTP forward endpoint: PROXY_URL is the
-  // base URL, the target URL is appended as a query parameter, and
-  // PROXY_AUTH is sent as basic auth. This pattern matches Smartproxy /
+  // through each provider's HTTP forward endpoint: the base URL is the
+  // provider URL, the target URL is appended as a query parameter, and the
+  // provider auth is sent as basic auth. This pattern matches Smartproxy /
   // Bright Data / Oxylabs "Web Unblocker" style endpoints.
-  // Merge caller-supplied headers (e.g. CourtListener Token,
-  // Companies House Basic) so authenticated API calls work after
-  // tier-0 fails and we escalate to the proxy. PROXY_AUTH (basic auth
-  // *to the proxy*) is applied after so it always wins on conflict.
-  const headers: Record<string, string> = { ...buildHeaders(), ...(opts.headers ?? {}) };
-  if (env.PROXY_AUTH) {
-    headers["Authorization"] = `Basic ${btoa(env.PROXY_AUTH)}`;
+  let last: FetchResult | null = null;
+  for (const provider of providers) {
+    const start = Date.now();
+    // Merge caller-supplied headers (e.g. CourtListener Token, Companies
+    // House Basic) so authenticated API calls work after tier-0 fails and
+    // we escalate to the proxy. Provider auth (basic auth *to the proxy*)
+    // is applied after so it always wins on conflict.
+    const headers: Record<string, string> = { ...buildHeaders(), ...(opts.headers ?? {}) };
+    if (provider.auth) {
+      headers["Authorization"] = `Basic ${btoa(provider.auth)}`;
+    }
+    const ctl = new AbortController();
+    // Task #2: 20s fetch ceiling per spec policy (per-provider attempt).
+    const tm = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 20_000);
+    try {
+      const proxied = `${provider.url}${provider.url.includes("?") ? "&" : "?"}url=${encodeURIComponent(url)}`;
+      const res = await fetch(proxied, { method: "GET", headers, redirect: "follow", signal: ctl.signal });
+      const html = await res.text();
+      const blockReason = opts.expectJson
+        ? (BLOCK_STATUSES.has(res.status) ? `status_${res.status}` : null)
+        : detectBlockReason(res.status, html);
+      const result: FetchResult = {
+        ok: res.ok && !blockReason,
+        status: res.status,
+        url,
+        html,
+        bytes: html.length,
+        durationMs: Date.now() - start,
+        tier: 2,
+        blockReason,
+        fetched_from: "live",
+      };
+      logProxyAttempt(provider.name, result);
+      if (result.ok) return result;
+      last = result;
+    } catch (e) {
+      const result: FetchResult = {
+        ok: false,
+        status: 0,
+        url,
+        html: "",
+        bytes: 0,
+        durationMs: Date.now() - start,
+        tier: 2,
+        blockReason: (e as Error).name === "AbortError"
+          ? `fetch_timeout:proxy:${(e as Error).message}`
+          : `proxy_error:${(e as Error).message}`,
+        fetched_from: "live",
+      };
+      logProxyAttempt(provider.name, result);
+      last = result;
+    } finally {
+      clearTimeout(tm);
+    }
+    // On block/error/timeout fall through to the next configured provider.
   }
-  const ctl = new AbortController();
-  // Task #2: 20s fetch ceiling per spec policy.
-  const tm = setTimeout(() => ctl.abort(), opts.timeoutMs ?? 20_000);
-  try {
-    const proxied = `${env.PROXY_URL}${env.PROXY_URL.includes("?") ? "&" : "?"}url=${encodeURIComponent(url)}`;
-    const res = await fetch(proxied, { method: "GET", headers, redirect: "follow", signal: ctl.signal });
-    const html = await res.text();
-    const blockReason = opts.expectJson
-      ? (BLOCK_STATUSES.has(res.status) ? `status_${res.status}` : null)
-      : detectBlockReason(res.status, html);
-    return {
-      ok: res.ok && !blockReason,
-      status: res.status,
-      url,
-      html,
-      bytes: html.length,
-      durationMs: Date.now() - start,
+  // Every configured provider failed → return the last failure so the
+  // escalation chain (shouldEscalate) takes the fetch to Wayback.
+  return last ?? blockResult(url, 2, "proxy_not_configured");
+}
+
+// Per-provider attempt log so operators can see which provider served or
+// failed a request. The aggregate fetch_log row is still written by the
+// caller (fetchPage → logAttempt); this is the provider-level breakdown.
+function logProxyAttempt(provider: string, result: FetchResult): void {
+  console.log(
+    JSON.stringify({
+      event: "proxy.attempt",
       tier: 2,
-      blockReason,
-      fetched_from: "live",
-    };
-  } catch (e) {
-    return {
-      ok: false,
-      status: 0,
-      url,
-      html: "",
-      bytes: 0,
-      durationMs: Date.now() - start,
-      tier: 2,
-      blockReason: (e as Error).name === "AbortError"
-        ? `fetch_timeout:proxy:${(e as Error).message}`
-        : `proxy_error:${(e as Error).message}`,
-      fetched_from: "live",
-    };
-  } finally {
-    clearTimeout(tm);
-  }
+      provider,
+      ok: result.ok,
+      status: result.status,
+      blockReason: result.blockReason,
+      durationMs: result.durationMs,
+    }),
+  );
 }
 
 // Task #5: tier 3 (paid Scraping API) was removed. The fetcher now

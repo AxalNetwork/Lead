@@ -28,6 +28,7 @@ import type { Env, JobMessage } from "../types";
 import { tosBlockedReason } from "./tos";
 import { isCircuitOpen } from "./circuit_breaker";
 import { isNfxProfileUrl } from "./parsers/profile/nfx";
+import { hasAnyProxy } from "./proxyPool";
 
 export type SkipCode =
   | "proxy_not_configured"
@@ -127,13 +128,15 @@ export async function preflight(env: Env, msg: JobMessage): Promise<PreflightRes
 
   // 3. Proxy gate — only when the pipeline actually needs the proxy
   //    tier. We can't tell tier-1/tier-0-only from here (the fetcher
-  //    escalates dynamically), so the conservative answer is: if
-  //    PROXY_URL is unset AND the kind is proxy-dependent, skip.
-  if (!env.PROXY_URL) {
+  //    escalates dynamically), so the conservative answer is: if NO
+  //    proxy provider is configured AND the kind is proxy-dependent,
+  //    skip. Task #16: any configured provider (generic / Smartproxy /
+  //    Bright Data / Oxylabs) makes the job runnable.
+  if (!hasAnyProxy(env)) {
     return {
       action: "skip",
       skip_code: "proxy_not_configured",
-      reason: "proxy_not_configured:PROXY_URL secret unset",
+      reason: "proxy_not_configured:no proxy provider secret set",
       host,
       url,
     };

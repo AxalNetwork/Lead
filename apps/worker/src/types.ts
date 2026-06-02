@@ -104,6 +104,16 @@ export interface Env {
   PACER_PASS?: string;
   COMPANIES_HOUSE_API_KEY?: string;
   PROXY_AUTH?: string;
+  // Task #16: per-provider proxy failover pool. All optional; any subset
+  // can be set. The crawler tries each configured provider in fixed order
+  // (generic PROXY_URL first, then Smartproxy → Bright Data → Oxylabs) and
+  // succeeds as soon as one retrieves the page. See scraper/proxyPool.ts.
+  SMARTPROXY_URL?: string;
+  SMARTPROXY_AUTH?: string;
+  BRIGHTDATA_URL?: string;
+  BRIGHTDATA_AUTH?: string;
+  OXYLABS_URL?: string;
+  OXYLABS_AUTH?: string;
   // Task #5: SCRAPER_API_*, BRAVE_*, HUNTER_*, APOLLO_*, ROCKETREACH_*,
   // PEOPLEDATALABS_*, PROXYCURL_*, CRUNCHBASE_*, OPENCORPORATES_*,
   // UK_CH_*, WHOISXML_*, FORBES_SIGNALS_*, BUILTWITH_* env keys were

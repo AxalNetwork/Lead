@@ -59,6 +59,22 @@ test("preflight: PROXY_URL set + clean host → run", async () => {
   assert.equal(r.action, "run");
 });
 
+// Task #16: any configured provider (not just legacy PROXY_URL) makes the
+// job runnable.
+test("preflight: only SMARTPROXY_URL set + clean host → run", async () => {
+  const r = await preflight(
+    env({ SMARTPROXY_URL: "https://smart.example/" }),
+    job("https://example.com/page"),
+  );
+  assert.equal(r.action, "run");
+});
+
+test("preflight: no proxy provider at all on url-kind job → skip:proxy_not_configured", async () => {
+  const r = await preflight(env(), job("https://example.com/page"));
+  assert.equal(r.action, "skip");
+  assert.equal(r.skip_code, "proxy_not_configured");
+});
+
 // ---- 2. ToS gate -------------------------------------------------------
 test("preflight: ToS-blocked host → skip:tos_blocked (regardless of proxy)", async () => {
   // Proxy unset AND tos blocked — tos wins (cheaper, more specific).

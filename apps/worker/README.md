@@ -76,6 +76,14 @@ Set via `wrangler secret put NAME` (or in the CF dashboard):
   `ROCKETREACH_API_KEY`, `PEOPLEDATALABS_API_KEY`, `PROXYCURL_API_KEY`,
   `CRUNCHBASE_API_KEY`, `WHOISXML_API_KEY`, `BRAVE_API_KEY`,
   `SCRAPING_API_KEY`, `PROXY_URL` (optional).
+- Proxy failover pool (all optional — set any subset; the crawler's tier-2
+  proxy tries each configured provider in fixed order and succeeds as soon
+  as one retrieves the page). Each provider is an HTTP-forward base URL plus
+  an optional `user:pass` basic-auth pair:
+  - `PROXY_URL` / `PROXY_AUTH` — generic/legacy entry, tried first.
+  - `SMARTPROXY_URL` / `SMARTPROXY_AUTH` — Smartproxy.
+  - `BRIGHTDATA_URL` / `BRIGHTDATA_AUTH` — Bright Data.
+  - `OXYLABS_URL` / `OXYLABS_AUTH` — Oxylabs.
 
 ### Required scopes for `CLOUDFLARE_API_TOKEN`
 
