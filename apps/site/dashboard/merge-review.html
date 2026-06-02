@@ -5,29 +5,41 @@ permalink: /dashboard/merge-review/
 ---
 
 <style>
-  .ads-mr__pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }
-  .ads-mr__cand { border: 1px solid var(--ads-border); border-radius: 6px; padding: 12px; background: var(--ads-panel-2); color: var(--ads-text); }
-  .ads-mr__cand h3 { margin: 0 0 8px 0; font-size: 13px; color: var(--ads-muted); text-transform: uppercase; letter-spacing: 0.04em; }
-  .ads-mr__cand table { width: 100%; font-size: 12px; }
-  .ads-mr__cand td { padding: 3px 4px; vertical-align: top; border-bottom: 1px solid var(--ads-border); }
-  .ads-mr__cand td:first-child { color: var(--ads-muted); width: 80px; }
-  .ads-mr__row { display: contents; }
-  .ads-mr__diff td { background: color-mix(in srgb, var(--ads-accent) 16%, var(--ads-panel-2)); }
-  .ads-mr__head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--ads-border); margin-bottom: 6px; }
+  /* All rules are scoped under .ads-mr / namespaced .ads-mr__* and pull
+     colors strictly from the design tokens, so the legacy marketing
+     stylesheets (bootstrap.min.css / style.css / plugins.css) loaded
+     site-wide via _layouts/default.html cannot leak light/white
+     backgrounds or dark text onto this page. Structural styling rides on
+     the shared dashboard classes (.ads-card / .ads-table / .ads-btn). */
+  .ads-mr__card { margin-bottom: 16px; }
+  .ads-mr__head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid var(--ads-border); margin-bottom: 14px; }
   .ads-mr__score { font-size: 18px; font-weight: 600; color: var(--ads-accent); }
-  .ads-mr__reasons { font-size: 11px; color: var(--ads-muted); }
-  .ads-mr__actions { display: flex; gap: 8px; }
-  .ads-mr__discrim { margin-top: 12px; padding: 10px; background: var(--ads-panel-2); border-left: 3px solid var(--ads-accent); font-size: 12px; color: var(--ads-text); }
+  .ads-mr__reasons { font-size: 11px; color: var(--ads-muted); margin-left: 10px; }
+  .ads-mr__actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .ads-mr__pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .ads-mr__pair { grid-template-columns: 1fr; } }
+  .ads-mr__col { border: 1px solid var(--ads-border); border-radius: 8px; padding: 12px; background: var(--ads-panel-2); color: var(--ads-text); }
+  .ads-mr__col-title { margin: 0 0 8px 0; font-size: 12px; color: var(--ads-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+  /* Compact key/value table on top of the shared .ads-table look. */
+  .ads-mr__table { width: 100%; }
+  .ads-mr__table td { color: var(--ads-text); font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--ads-border); }
+  .ads-mr__table tr:last-child td { border-bottom: none; }
+  .ads-mr__table td:first-child { color: var(--ads-muted); width: 88px; }
+  .ads-mr__table tr.is-diff td { background: color-mix(in srgb, var(--ads-accent) 16%, var(--ads-panel-2)); }
+  .ads-mr__discrim { margin-top: 14px; padding: 10px 12px; background: var(--ads-panel-2); border-left: 3px solid var(--ads-accent); border-radius: 4px; font-size: 12px; color: var(--ads-text); }
   .ads-mr__discrim strong { color: var(--ads-text-strong); }
-  .ads-mr__card { background: var(--ads-panel); border: 1px solid var(--ads-border); border-radius: 6px; padding: 16px; margin-bottom: 16px; color: var(--ads-text); }
-  .ads-mr__empty { padding: 40px; text-align: center; color: var(--ads-muted); font-size: 14px; }
-  .ads-mr__empty strong { color: var(--ads-accent-2); font-size: 16px; display: block; margin-bottom: 4px; }
+  .ads-mr__matching { color: var(--ads-muted); }
+  .ads-mr__status { margin-top: 8px; font-size: 11px; color: var(--ads-muted); }
+  .ads-mr__empty { text-align: center; padding: 40px; color: var(--ads-muted); font-size: 14px; }
+  .ads-mr__empty strong { display: block; color: var(--ads-accent-2); font-size: 16px; margin-bottom: 4px; }
+  .ads-mr__error { border-left: 3px solid var(--ads-danger); }
+  .ads-mr__error p { margin: 0; color: var(--ads-danger); }
 </style>
 
 <h1 class="ads-page-title">Merge Review</h1>
 <p class="ads-page-sub">Borderline pairs surfaced by the dedupe scorer between newly scraped leads and existing rows. Resolve one pair at a time: merge the candidate into the primary, keep them separate, or send back if more evidence is needed.</p>
 
-<div id="ads-mr-root"><div class="ads-loading">Loading…</div></div>
+<div id="ads-mr-root" class="ads-mr"><div class="ads-loading">Loading…</div></div>
 
 <script>
 (function () {
@@ -40,20 +52,10 @@ permalink: /dashboard/merge-review/
     });
   }
 
-  function row(label, primary, candidate) {
-    var diff = (primary || "") !== (candidate || "");
-    return ''
-      + '<tr' + (diff ? ' class="ads-mr__diff"' : '') + '>'
+  function kvRow(label, value, diff) {
+    return '<tr' + (diff ? ' class="is-diff"' : '') + '>'
       + '<td>' + esc(label) + '</td>'
-      + '<td>' + esc(primary || "—") + '</td>'
-      + '</tr>';
-  }
-  function rowCand(label, candidate, primary) {
-    var diff = (primary || "") !== (candidate || "");
-    return ''
-      + '<tr' + (diff ? ' class="ads-mr__diff"' : '') + '>'
-      + '<td>' + esc(label) + '</td>'
-      + '<td>' + esc(candidate || "—") + '</td>'
+      + '<td>' + esc(value || "—") + '</td>'
       + '</tr>';
   }
 
@@ -74,16 +76,39 @@ permalink: /dashboard/merge-review/
     return { diffs: diffs, same: same };
   }
 
+  function column(title, fields) {
+    var rows = fields.map(function (f) {
+      return kvRow(f.label, f.value, f.diff);
+    }).join("");
+    return '<div class="ads-mr__col">'
+      + '<h3 class="ads-mr__col-title">' + esc(title) + '</h3>'
+      + '<table class="ads-table ads-mr__table"><tbody>' + rows + '</tbody></table>'
+      + '</div>';
+  }
+
   function pairCard(item) {
     var reasons = parseReasons(item.reasons_json);
     var d = discriminators(item);
     var score = Math.round((Number(item.score) || 0) * 100) / 100;
-    return ''
-      + '<div class="ads-mr__card" data-id="' + esc(item.id) + '">'
+
+    var fieldDefs = [
+      ["Name", item.primary_name, item.candidate_name],
+      ["Email", item.primary_email, item.candidate_email],
+      ["Org", item.primary_org, item.candidate_org],
+      ["Source", item.primary_source_url, item.candidate_source_url]
+    ];
+    var primaryFields = fieldDefs.map(function (f) {
+      return { label: f[0], value: f[1], diff: (f[1] || "") !== (f[2] || "") };
+    });
+    var candidateFields = fieldDefs.map(function (f) {
+      return { label: f[0], value: f[2], diff: (f[1] || "") !== (f[2] || "") };
+    });
+
+    return '<div class="ads-card ads-mr__card" data-id="' + esc(item.id) + '">'
       + '<div class="ads-mr__head">'
       +   '<div>'
       +     '<span class="ads-mr__score">' + score + '</span>'
-      +     '<span class="ads-mr__reasons" style="margin-left:10px">' + esc(reasons.join(", ")) + '</span>'
+      +     '<span class="ads-mr__reasons">' + esc(reasons.join(", ")) + '</span>'
       +   '</div>'
       +   '<div class="ads-mr__actions">'
       +     '<button class="ads-btn" data-action="merge">Merge</button>'
@@ -92,28 +117,21 @@ permalink: /dashboard/merge-review/
       +   '</div>'
       + '</div>'
       + '<div class="ads-mr__pair">'
-      +   '<div class="ads-mr__cand"><h3>Primary (id ' + esc(String(item.primary_lead_id || "").slice(0,8)) + ')</h3>'
-      +     '<table><tbody>'
-      +     row("Name", item.primary_name, item.candidate_name)
-      +     + row("Email", item.primary_email, item.candidate_email)
-      +     + row("Org", item.primary_org, item.candidate_org)
-      +     + row("Source", item.primary_source_url, item.candidate_source_url)
-      +     + '</tbody></table>'
-      +   '</div>'
-      +   '<div class="ads-mr__cand"><h3>Candidate (id ' + esc(String(item.candidate_lead_id || "").slice(0,8)) + ')</h3>'
-      +     '<table><tbody>'
-      +     rowCand("Name", item.candidate_name, item.primary_name)
-      +     + rowCand("Email", item.candidate_email, item.primary_email)
-      +     + rowCand("Org", item.candidate_org, item.primary_org)
-      +     + rowCand("Source", item.candidate_source_url, item.primary_source_url)
-      +     + '</tbody></table>'
-      +   '</div>'
+      +   column("Primary (id " + String(item.primary_lead_id || "").slice(0, 8) + ")", primaryFields)
+      +   column("Candidate (id " + String(item.candidate_lead_id || "").slice(0, 8) + ")", candidateFields)
       + '</div>'
       + '<div class="ads-mr__discrim">'
       +   (d.diffs.length ? '<strong>Discriminating fields:</strong> ' + esc(d.diffs.join(", ")) : '<strong>All highlighted fields match.</strong>')
-      +   (d.same.length ? ' &middot; <span style="color:var(--ads-muted)">Matching: ' + esc(d.same.join(", ")) + '</span>' : '')
+      +   (d.same.length ? ' &middot; <span class="ads-mr__matching">Matching: ' + esc(d.same.join(", ")) + '</span>' : '')
       + '</div>'
-      + '<div class="ads-mr__status" data-for="' + esc(item.id) + '" style="margin-top:6px;font-size:11px;color:var(--ads-muted)"></div>'
+      + '<div class="ads-mr__status" data-for="' + esc(item.id) + '"></div>'
+      + '</div>';
+  }
+
+  function emptyCard(msg) {
+    return '<div class="ads-card ads-mr__empty">'
+      + '<strong>All caught up.</strong>'
+      + esc(msg)
       + '</div>';
   }
 
@@ -123,17 +141,14 @@ permalink: /dashboard/merge-review/
       .then(function (data) {
         var items = (data && data.items) || [];
         if (!items.length) {
-          root.innerHTML = '<div class="ads-mr__card ads-mr__empty">'
-            + '<strong>All caught up.</strong>'
-            + 'No borderline pairs in the queue right now.'
-            + '</div>';
+          root.innerHTML = emptyCard("No borderline pairs in the queue right now.");
           return;
         }
         root.innerHTML = items.map(pairCard).join("");
       })
       .catch(function (e) {
-        root.innerHTML = '<div class="ads-mr__card" style="border-left:3px solid var(--ads-danger)">'
-          + '<p style="margin:0;color:var(--ads-danger)">Failed to load review queue: ' + esc(e.message) + '</p>'
+        root.innerHTML = '<div class="ads-card ads-mr__error">'
+          + '<p>Failed to load review queue: ' + esc(e.message) + '</p>'
           + '</div>';
       });
   }
@@ -180,10 +195,7 @@ permalink: /dashboard/merge-review/
           setTimeout(function () {
             card.remove();
             if (!root.querySelector(".ads-mr__card")) {
-              root.innerHTML = '<div class="ads-mr__card ads-mr__empty">'
-                + '<strong>All caught up.</strong>'
-                + 'Queue is empty.'
-                + '</div>';
+              root.innerHTML = emptyCard("Queue is empty.");
             }
           }, 320);
         }, 400);
