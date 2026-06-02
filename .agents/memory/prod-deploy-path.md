@@ -1,35 +1,43 @@
 ---
 name: Production deploy path
-description: How the Cloudflare worker actually reaches production, and why the main agent can't do it directly.
+description: How the Cloudflare worker reaches production, what the workspace CAN/can't do directly, and the current gate state.
 ---
 
 The worker deploys to api.aidatasignal.com via the `Deploy Cloudflare Worker (lead)`
 GitHub Action (`.github/workflows/deploy-worker.yml`). It runs
-`wrangler d1 migrations apply DB --remote` then `wrangler deploy`, using the
-`CLOUDFLARE_API_TOKEN` stored as a GitHub repo secret.
+`wrangler d1 migrations apply DB --remote` then `wrangler deploy`, with a
+`Typecheck` (tsc) gate and an ML-eval regression gate between.
 
 Triggers: push to `main` touching `apps/worker/**`, `package.json`, or the
-workflow file (path-filtered) — OR `workflow_dispatch` (manual run, ignores the
-path filter).
+workflow file — OR `workflow_dispatch` (manual run, ignores the path filter).
 
-**Main agent cannot ship to prod directly.** Confirmed:
-- `git push` from the workspace fails: "Invalid username or token. Password
-  authentication is not supported." No working GitHub write auth in the main
-  environment.
-- `gh` CLI is installed but unauthenticated; no `GH_TOKEN`/`GITHUB_TOKEN` in env.
-- No `CLOUDFLARE_API_TOKEN` in the workspace env, so no direct `wrangler deploy`
-  either.
+**What the workspace CAN do directly (confirmed 2026-06-02):** the workspace env
+has `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` secrets, so
+`npx wrangler@3.99.0 d1 ... --remote`, `wrangler d1 migrations apply DB --remote`,
+and `wrangler secret put <NAME>` (pipe the value via `printf '%s' "$VAL" |`)
+all work against prod. Worker secrets set this way take effect on the LIVE
+worker immediately — no redeploy needed (e.g. PROXY_URL).
 
-**Why:** local `main` (Replit auto-commit) and `origin/main` (platform task-agent
-merges) are separate; main-agent commits only reach origin/main if pushed, which
-fails here. So a redeploy must come from GitHub itself: either a merge/commit that
-touches `apps/worker/**` lands on origin/main (triggering the Action), or someone
-runs the workflow manually via `workflow_dispatch`.
+**What it CANNOT do:**
+- `git push` fails ("Invalid username or token") — no GitHub write auth; `gh` is
+  unauthenticated. Pushing/rebasing must be delegated to a background project task.
+- A direct `wrangler deploy` is *technically* possible (token is present) but is
+  the wrong tool: it ships LOCAL `main`, which is routinely several un-pushed
+  checkpoint commits ahead of `origin/main` (the Replit auto-commit divergence),
+  so it would ship unrelated un-reviewed work AND bypass the typecheck + ML-eval
+  gates. Don't do it without explicit user approval.
 
-**Gotcha that broke a "just push to deploy" plan:** the worker code can already be
-on origin/main while production is still stale — meaning a prior deploy failed or
-never ran, NOT that code is missing. Verify with
+**Current gate state (2026-06-02): CI deploy is RED.** `cd apps/worker &&
+npx tsc --noEmit` fails on 5 pre-existing unrelated null-type errors
+(investorResolver / fundResolver / intl·persist / lpDisclosures·persist /
+secEdgar·xref) — same root as the "fix worker test suite" task. So even a
+successful push would NOT deploy until that compile task lands. Verify with
 `git diff --stat origin/main..HEAD -- apps/worker` (empty = worker code already
-shipped to GitHub). When it's empty, pushing local commits does nothing for the
-worker; the fix is to (re)trigger the Action and inspect its run logs (likely an
-expired CLOUDFLARE_API_TOKEN secret or a failing eval/drift gate).
+on GitHub; non-empty = local has un-pushed worker commits).
+
+**D1 prod repair recipe (when the migration chain is stalled):** a leftover/orphan
+object (e.g. a hand-created table) can block `migrations apply`. Identify the
+blocker from the apply error, drop/rename it via
+`wrangler d1 execute DB --remote --command "..."`, then re-run
+`wrangler d1 migrations apply DB --remote`. Migrations can be applied to prod
+this way independently of a worker code deploy.

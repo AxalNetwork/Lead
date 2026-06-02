@@ -23,6 +23,19 @@ Jekyll site (`apps/site`) on GitHub Pages at aidatasignal.com + Cloudflare Worke
     ancestor of local `HEAD` (9 ahead / 0 behind — the duplicate-
     "Task #8" checkpoint pattern), so a plain push sufficed; no
     `pull --rebase` was needed this round.
+- **Prod ops without a code deploy (Task #10, 2026-06-02).** The
+  workspace env has `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`,
+  so D1 migrations and worker secrets can be applied to prod directly
+  without a code deploy: `wrangler d1 migrations apply DB --remote`
+  (after dropping any orphan object that stalls the chain — Task #10
+  dropped a leftover `dashboard_snapshots` table, then 357→379 applied
+  cleanly) and `printf '%s' "$VAL" | wrangler secret put NAME` (takes
+  effect on the live worker immediately; PROXY_URL set this way).
+  Worker *code* changes still need a deploy, which is currently blocked:
+  the CI typecheck gate is red (pre-existing `tsc` errors — see the
+  "fix worker test suite" task) and a manual `wrangler deploy` would
+  bypass the gates and ship un-pushed local commits. The `url: 180_000`
+  budget override is committed but deferred to the next clean deploy.
 
 ## Architecture decisions
 
