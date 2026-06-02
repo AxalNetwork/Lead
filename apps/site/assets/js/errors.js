@@ -223,8 +223,8 @@
           <dt class="ads-muted">Message</dt><dd>${esc(r.message || "")}</dd>
           ${r.resolved ? `<dt class="ads-muted">Resolved</dt><dd>${fmtTime(r.resolved_at)} · ${esc(r.resolved_by || "")}</dd>` : ""}
         </dl>
-        <details open style="margin-top:10px"><summary>Context</summary><pre style="background:#f6f6f6;padding:10px;border-radius:4px;overflow:auto;font-size:12px">${esc(ctxStr)}</pre></details>
-        ${r.cause_stack ? `<details style="margin-top:10px"><summary>Cause stack</summary><pre style="background:#f6f6f6;padding:10px;border-radius:4px;overflow:auto;font-size:11px">${esc(r.cause_stack)}</pre></details>` : ""}
+        <details open style="margin-top:10px"><summary>Context</summary><pre style="background:#f6f6f6;color:#111;padding:10px;border-radius:4px;overflow:auto;font-size:12px">${esc(ctxStr)}</pre></details>
+        ${r.cause_stack ? `<details style="margin-top:10px"><summary>Cause stack</summary><pre style="background:#f6f6f6;color:#111;padding:10px;border-radius:4px;overflow:auto;font-size:11px">${esc(r.cause_stack)}</pre></details>` : ""}
         ${(r.cluster_recent && r.cluster_recent.length) ? `
           <div style="margin-top:14px">
             <div style="font-weight:600;font-size:13px;margin-bottom:6px">Last ${r.cluster_recent.length} same <code>{${esc(r.code)}, ${esc(r.host || "—")}}</code></div>
