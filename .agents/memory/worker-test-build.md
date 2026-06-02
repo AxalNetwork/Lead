@@ -31,3 +31,16 @@ The worker has two TypeScript configs that resolve modules differently:
   run it ignoring exit code, then `node --test test/<file>.test.mjs`.
 - Tests live in `test/*.test.mjs` (hand-written, not compiled — rootDir is
   `src`) and import the compiled output from `../test-dist/...`.
+
+## D1 shim must compile SQL lazily
+
+When hand-rolling a `DB.prepare`-compatible shim over better-sqlite3 in a
+`.mjs` test, do NOT compile the statement at `prepare()` time
+(`const stmt = db.prepare(sql)`). Real D1 `prepare()` never touches the DB;
+compilation/execution happens at `run/first/all`. Worker code (e.g.
+`insertFact`) probes optional tables like `field_overrides` and relies on
+`.catch()` to swallow a missing-table error — but an eager shim throws
+"no such table" synchronously inside `prepare()`, escaping the `.catch()`.
+**How to apply:** in the shim, defer `db.prepare(sql)` into the
+`run/first/all` async methods so a missing table surfaces as a *catchable*
+rejected promise, matching D1 semantics.

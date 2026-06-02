@@ -22,6 +22,10 @@ import { upsertFirm } from "../scraper/firms_upsert";
 import { extractDomain } from "../scraper/normalize";
 import type { FirmCandidate } from "../scraper/parsers/firmlists/types";
 import { detectHasHeader, synthesizeHeaders, looksLikeTypeString } from "../services/csv/headerDetector";
+import { createEntity } from "../entities/roles";
+import { insertFactsBatch, type FactPatch } from "../entities/facts";
+import { upsertChannel } from "../entities/channels";
+import { canonicalEmail, canonicalLinkedin, canonicalTwitter, canonicalPhone } from "../entities/normalize";
 
 const INLINE_ROW_CAP = 5000;
 const BATCH_SIZE = 50;
@@ -36,6 +40,7 @@ interface CsvImportRow {
   id: string;
   user_email: string;
   r2_key: string;
+  filename: string | null;
   status: string;
   processed_rows: number;
   detected_columns_json: string | null;
@@ -49,7 +54,7 @@ interface DetectedColumns {
 
 export async function processCsvImport(env: Env, importId: string, opts: { insideWorkflow?: boolean } = {}): Promise<void> {
   const row = await env.DB
-    .prepare("SELECT id, user_email, r2_key, status, processed_rows, detected_columns_json, error_log_json FROM csv_imports WHERE id = ?")
+    .prepare("SELECT id, user_email, r2_key, filename, status, processed_rows, detected_columns_json, error_log_json FROM csv_imports WHERE id = ?")
     .bind(importId)
     .first<CsvImportRow>();
   if (!row) throw new Error(`csv_import_not_found:${importId}`);
@@ -90,12 +95,33 @@ export async function processCsvImport(env: Env, importId: string, opts: { insid
     let needsManualMapping = false;
     let hitCap = false;
     let reachedEof = false;
+    // Person facts carry the operator-facing filename in their `source`
+    // per the Task #12 contract (csv_import:<filename>). Falls back to the
+    // import id when the row has no stored filename.
+    const personSource = `csv_import:${row.filename ?? importId}`;
 
     const flushBatch = async (): Promise<void> => {
       if (!pendingRows.length || !detected) { pendingRows.length = 0; return; }
       for (const cells of pendingRows) {
         const idx = totalSeen - pendingRows.length + pendingRows.indexOf(cells); // best-effort index
         try {
+          // Task #12: person CSVs flow through a first-class person upsert
+          // path (dedupe into existing profiles, all facts via insertFact).
+          // Firm behavior below is untouched.
+          if (detected.entity_type === "person") {
+            const pc = rowToPersonCandidate(headers!, cells, detected);
+            if (!pc) continue; // skipped (no usable name/email/linkedin)
+            const res = await upsertPerson(env, pc, personSource);
+            if (res.action === "created") created++;
+            else if (res.action === "updated") updated++;
+            else {
+              // createEntity's garbage/reclassify guard rejected the row.
+              skippedRows++;
+              if (errors.length < ERROR_LOG_CAP) errors.push({ row_index: idx, error: `person_rejected:${(pc.display_name ?? "").slice(0, 80)}` });
+              else droppedErrors++;
+            }
+            continue;
+          }
           const candidate = rowToFirmCandidate(headers!, cells, detected);
           if (!candidate) continue; // skipped (no usable name+domain)
           // Task #5: pre-insert safeguard. If the proposed `name` matches
@@ -417,6 +443,7 @@ async function detectSchema(env: Env, headers: string[], sample: string[][]): Pr
     // if even that yields nothing, return null so caller marks
     // status='needs_manual_mapping'.
     const h = heuristicDetect(headers);
+    if (h.entity_type === "person") return isPersonMappingValid(h) ? h : null;
     if (isNameMappingValid(h, headers, sample)) return h;
     return repairNameMapping(h, headers, sample);
   }
@@ -435,6 +462,13 @@ async function detectSchema(env: Env, headers: string[], sample: string[][]): Pr
       const parsed = parseDetectResponse(res);
       if (!parsed) continue;
       lastParsed = parsed;
+      // Task #12: a person mapping is accepted as soon as it carries a
+      // usable identity column (name OR email OR linkedin) — the firm.name
+      // proper-noun gates below don't apply to people.
+      if (parsed.entity_type === "person") {
+        if (isPersonMappingValid(parsed)) return parsed;
+        continue;
+      }
       // Task #5: validate the proposed firm.name column against the
       // proper-noun + type-string gates. On attempt 0, fall through
       // to attempt 1 (different model) when invalid.
@@ -451,10 +485,34 @@ async function detectSchema(env: Env, headers: string[], sample: string[][]): Pr
   // their best-effort assignment. Caller marks
   // status='needs_manual_mapping' on any column carrying the
   // `fallback:` notes marker — not silently accepted as final.
-  const seed = lastParsed ?? heuristicDetect(headers);
+  // Task #12: if the headers look like people, fall back to the heuristic
+  // person detector (never the firm name-repair path). When the AI itself
+  // said "person" but produced no usable identity column, stay honest and
+  // return null → needs_manual_mapping rather than guessing a firm name.
+  const heur = heuristicDetect(headers);
+  if (heur.entity_type === "person") {
+    if (isPersonMappingValid(heur)) return heur;
+    return null;
+  }
+  if (lastParsed?.entity_type === "person") return null;
+  const seed = lastParsed ?? heur;
   const repaired = repairNameMapping(seed, headers, sample);
   if (repaired) return repaired;
   return null;
+}
+
+// Task #12: a person mapping is usable iff it carries at least one
+// identity column — a name part (full/first/last) OR a contact key
+// (email/linkedin). Mirrors the firm.name validity gate for people but
+// without the proper-noun heuristics (personal names are far more varied).
+function isPersonMappingValid(detected: DetectedColumns): boolean {
+  let hasName = false, hasContact = false;
+  for (const e of Object.values(detected.column_map)) {
+    const p = e?.predicate;
+    if (p === "person.full_name" || p === "person.first_name" || p === "person.last_name") hasName = true;
+    else if (p === "person.email" || p === "person.linkedin_url") hasContact = true;
+  }
+  return hasName || hasContact;
 }
 
 // True when the firm.name column was assigned by repairNameMapping
@@ -575,7 +633,7 @@ function looksLikeProperNoun(value: string): boolean {
 
 function buildDetectPrompt(headers: string[], sample: string[][]): string {
   const sampleStr = sample.map((r) => headers.map((h, i) => `${h}=${r[i] ?? ""}`).join(" | ")).join("\n");
-  return `Headers: ${headers.join(", ")}\n\nFirst rows:\n${sampleStr}\n\nMap each header to a predicate (e.g. firm.name, firm.website, firm.crunchbase_url, firm.linkedin_url, firm.hq_country_iso2, firm.thesis, firm.stages, firm.sectors, firm.aum_usd). Use null for unknown columns.`;
+  return `Headers: ${headers.join(", ")}\n\nFirst rows:\n${sampleStr}\n\nDecide whether the rows describe organizations (firms/funds/companies) or individual people, and set entity_type accordingly.\nFor organizations use firm.* predicates: firm.name, firm.website, firm.crunchbase_url, firm.linkedin_url, firm.hq_country_iso2, firm.hq_city, firm.hq_region, firm.thesis, firm.stages, firm.sectors, firm.aum_usd, firm.founded_year, firm.team_size, firm.contact_email.\nFor individual people (first/last names, job titles, personal emails, LinkedIn profiles, event attendees, network connections) use person.* predicates: person.full_name, person.first_name, person.last_name, person.email, person.linkedin_url, person.twitter_handle, person.title, person.company, person.city, person.country, person.location, person.connected_on, person.phone, person.notes.\nUse null for unknown columns.`;
 }
 
 // Task #3 reviewer R5: strict predicate allowlist. The detector mustn't
@@ -593,6 +651,13 @@ export const CSV_IMPORT_ALLOWED_PREDICATES: ReadonlySet<string> = new Set([
   "firm.thesis", "firm.stages", "firm.sectors",
   "firm.aum_usd", "firm.founded_year", "firm.team_size",
   "firm.contact_email",
+  // Task #12: person/contact predicates for LinkedIn Connections,
+  // event attendee lists, and similar individual-person CSVs.
+  "person.full_name", "person.first_name", "person.last_name",
+  "person.email", "person.linkedin_url", "person.twitter_handle",
+  "person.title", "person.company", "person.phone",
+  "person.city", "person.country", "person.location",
+  "person.connected_on", "person.notes",
 ]);
 
 function parseDetectResponse(res: { response?: string; entity_type?: string; column_map?: unknown }): DetectedColumns | null {
@@ -638,31 +703,63 @@ function parseDetectResponse(res: { response?: string; entity_type?: string; col
 // Heuristic header → predicate map. Recognizes the common columns from
 // operator-curated VC/PE/investor lists (name, website, country,
 // crunchbase, linkedin, twitter, etc.).
-function heuristicDetect(headers: string[]): DetectedColumns {
-  const column_map: DetectedColumns["column_map"] = {};
+export function heuristicDetect(headers: string[]): DetectedColumns {
+  const personMap: DetectedColumns["column_map"] = {};
+  const firmMap: DetectedColumns["column_map"] = {};
+  // Task #12: score person-vs-firm from headers alone. Strong person
+  // signals (first/last name, "connected on") force a person verdict;
+  // otherwise person wins only when it out-scores firm AND clears a
+  // minimum bar, so ambiguous low-signal firm lists keep firm behavior.
+  let personScore = 0, firmScore = 0;
+  let hasFirst = false, hasLast = false, hasConnected = false;
+  const setMap = (
+    map: DetectedColumns["column_map"], h: string, pred: string | null, vt: string,
+  ) => { map[h] = pred ? { predicate: pred, value_type: vt, confidence: 0.8 } : { predicate: null, value_type: "text", confidence: 0, notes: "no heuristic match" }; };
   for (const h of headers) {
     const k = h.toLowerCase().trim();
-    let pred: string | null = null;
-    let vt = "text";
-    if (/^(name|firm|firm name|fund|fund name|investor|investor name|company|company name)$/.test(k)) pred = "firm.name";
-    else if (/^(website|url|web|homepage|site)$/.test(k)) { pred = "firm.website"; vt = "url"; }
-    else if (/^(legal name|legal)$/.test(k)) pred = "firm.legal_name";
-    else if (/^(country|hq country|location country)$/.test(k)) { pred = "firm.hq_country_iso2"; vt = "iso2"; }
-    else if (/^(city|hq city)$/.test(k)) pred = "firm.hq_city";
-    else if (/^(region|hq region|state)$/.test(k)) pred = "firm.hq_region";
-    else if (/crunchbase/.test(k)) { pred = "firm.crunchbase_url"; vt = "url"; }
-    else if (/linkedin/.test(k)) { pred = "firm.linkedin_url"; vt = "url"; }
-    else if (/twitter|^x\b/.test(k)) pred = "firm.twitter_handle";
-    else if (/^(thesis|description|about|summary|focus)$/.test(k)) pred = "firm.thesis";
-    else if (/^(stage|stages)$/.test(k)) { pred = "firm.stages"; vt = "list"; }
-    else if (/^(sector|sectors|industry|industries)$/.test(k)) { pred = "firm.sectors"; vt = "list"; }
-    else if (/^(aum|aum_usd|assets under management)$/.test(k)) { pred = "firm.aum_usd"; vt = "money"; }
-    else if (/^(founded|year founded|founded year)$/.test(k)) { pred = "firm.founded_year"; vt = "int"; }
-    else if (/^(team size|employees|headcount)$/.test(k)) { pred = "firm.team_size"; vt = "int"; }
-    else if (/^(email|contact email)$/.test(k)) { pred = "firm.contact_email"; vt = "email"; }
-    column_map[h] = { predicate: pred, value_type: vt, confidence: pred ? 0.8 : 0.0, ...(pred ? {} : { notes: "no heuristic match" }) };
+    // ---- person predicate guess --------------------------------------
+    let pp: string | null = null, pvt = "text";
+    if (/^(first name|first_name|given name|firstname|first)$/.test(k)) { pp = "person.first_name"; hasFirst = true; personScore += 1; }
+    else if (/^(last name|last_name|surname|family name|lastname|last)$/.test(k)) { pp = "person.last_name"; hasLast = true; personScore += 1; }
+    else if (/^(full name|name|contact name|attendee|attendee name|full_name|display name)$/.test(k)) { pp = "person.full_name"; personScore += 0.5; }
+    else if (/^(email|e-mail|email address|work email|personal email|contact email)$/.test(k)) { pp = "person.email"; pvt = "email"; personScore += 0.5; }
+    else if (/linkedin/.test(k)) { pp = "person.linkedin_url"; pvt = "url"; personScore += 0.5; }
+    else if (/^(url|profile|profile url)$/.test(k)) { pp = "person.linkedin_url"; pvt = "url"; }
+    else if (/twitter|^x$|x handle|x \(twitter\)/.test(k)) { pp = "person.twitter_handle"; }
+    else if (/^(position|title|job title|jobtitle|role|headline|designation|current position)$/.test(k)) { pp = "person.title"; personScore += 1; }
+    else if (/^(company|organization|organisation|employer|current company|company name)$/.test(k)) { pp = "person.company"; personScore += 0.5; }
+    else if (/^(city|town)$/.test(k)) { pp = "person.city"; }
+    else if (/^(country|nation)$/.test(k)) { pp = "person.country"; }
+    else if (/^(location|region|state|province|geo|area)$/.test(k)) { pp = "person.location"; }
+    else if (/^(connected on|connected_on|connection date|date connected|connected)$/.test(k)) { pp = "person.connected_on"; hasConnected = true; personScore += 2; }
+    else if (/^(phone|mobile|tel|telephone|cell|phone number)$/.test(k)) { pp = "person.phone"; }
+    else if (/^(notes?|comments?|remark)$/.test(k)) { pp = "person.notes"; }
+    setMap(personMap, h, pp, pvt);
+    // ---- firm predicate guess (unchanged behavior) -------------------
+    let fp: string | null = null, fvt = "text";
+    if (/^(name|firm|firm name|fund|fund name|investor|investor name|company|company name)$/.test(k)) { fp = "firm.name"; if (/firm|fund|investor/.test(k)) firmScore += 1; }
+    else if (/^(website|url|web|homepage|site)$/.test(k)) { fp = "firm.website"; fvt = "url"; firmScore += 1; }
+    else if (/^(legal name|legal)$/.test(k)) fp = "firm.legal_name";
+    else if (/^(country|hq country|location country)$/.test(k)) { fp = "firm.hq_country_iso2"; fvt = "iso2"; }
+    else if (/^(city|hq city)$/.test(k)) fp = "firm.hq_city";
+    else if (/^(region|hq region|state)$/.test(k)) fp = "firm.hq_region";
+    else if (/crunchbase/.test(k)) { fp = "firm.crunchbase_url"; fvt = "url"; firmScore += 1; }
+    else if (/linkedin/.test(k)) { fp = "firm.linkedin_url"; fvt = "url"; }
+    else if (/twitter|^x\b/.test(k)) fp = "firm.twitter_handle";
+    else if (/^(thesis|description|about|summary|focus)$/.test(k)) { fp = "firm.thesis"; firmScore += 1; }
+    else if (/^(stage|stages)$/.test(k)) { fp = "firm.stages"; fvt = "list"; firmScore += 1; }
+    else if (/^(sector|sectors|industry|industries)$/.test(k)) { fp = "firm.sectors"; fvt = "list"; firmScore += 1; }
+    else if (/^(aum|aum_usd|assets under management)$/.test(k)) { fp = "firm.aum_usd"; fvt = "money"; firmScore += 2; }
+    else if (/^(founded|year founded|founded year)$/.test(k)) { fp = "firm.founded_year"; fvt = "int"; firmScore += 1; }
+    else if (/^(team size|employees|headcount)$/.test(k)) { fp = "firm.team_size"; fvt = "int"; firmScore += 1; }
+    else if (/^(email|contact email)$/.test(k)) { fp = "firm.contact_email"; fvt = "email"; }
+    setMap(firmMap, h, fp, fvt);
   }
-  return { entity_type: "company", column_map };
+  const strongPerson = hasFirst || hasLast || hasConnected;
+  const isPerson = strongPerson || (personScore > firmScore && personScore >= 1.5);
+  return isPerson
+    ? { entity_type: "person", column_map: personMap }
+    : { entity_type: "company", column_map: firmMap };
 }
 
 // ---- Row → FirmCandidate projection --------------------------------------
@@ -704,6 +801,194 @@ function rowToFirmCandidate(headers: string[], cells: string[], detected: Detect
     team_size: Number.isFinite(team) ? team : null,
     source_url: null,
   };
+}
+
+// ---- Row → person candidate projection -----------------------------------
+// Task #12: projects one CSV row into a normalized person candidate.
+// Mapped person.* columns are pulled by predicate; every unmapped,
+// non-empty column is retained verbatim in `raw` so no operator data is
+// silently dropped.
+export interface PersonCandidate {
+  display_name: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;        // canonical
+  linkedin_url: string | null; // canonical
+  twitter_handle: string | null;
+  title: string | null;
+  company: string | null;
+  phone: string | null;        // canonical
+  city: string | null;
+  country: string | null;
+  location: string | null;
+  connected_on: string | null;
+  notes: string | null;
+  raw: Record<string, string>; // unmapped columns: slug -> value
+}
+
+export function rowToPersonCandidate(headers: string[], cells: string[], detected: DetectedColumns): PersonCandidate | null {
+  const get = (pred: string): string => {
+    for (let i = 0; i < headers.length; i++) {
+      const m = detected.column_map[headers[i]];
+      if (m?.predicate === pred) return (cells[i] ?? "").trim();
+    }
+    return "";
+  };
+  const first = get("person.first_name") || null;
+  const last = get("person.last_name") || null;
+  const full = get("person.full_name") || null;
+  const display = full || ([first, last].filter(Boolean).join(" ").trim() || null);
+  const email = canonicalEmail(get("person.email"));
+  const linkedin = canonicalLinkedin(get("person.linkedin_url"));
+  // Quality gate: a row is only a usable person when it carries at least
+  // one durable identifier — a name (>=2 chars) OR a canonical email OR a
+  // canonical LinkedIn. Empty / junk rows are skipped (never created).
+  const hasName = !!(display && display.trim().length >= 2);
+  if (!hasName && !email && !linkedin) return null;
+  const raw: Record<string, string> = {};
+  for (let i = 0; i < headers.length; i++) {
+    const m = detected.column_map[headers[i]];
+    if (m?.predicate) continue;
+    const v = (cells[i] ?? "").trim();
+    if (!v) continue;
+    const slug = slugifyHeader(headers[i]) || `col_${i}`;
+    if (!(slug in raw)) raw[slug] = v;
+  }
+  return {
+    display_name: display,
+    first_name: first,
+    last_name: last,
+    email,
+    linkedin_url: linkedin,
+    twitter_handle: canonicalTwitter(get("person.twitter_handle")),
+    title: get("person.title") || null,
+    company: get("person.company") || null,
+    phone: canonicalPhone(get("person.phone")),
+    city: get("person.city") || null,
+    country: get("person.country") || null,
+    location: get("person.location") || null,
+    connected_on: get("person.connected_on") || null,
+    notes: get("person.notes") || null,
+    raw,
+  };
+}
+
+function slugifyHeader(h: string): string {
+  return h.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60);
+}
+
+// ---- Person upsert + dedupe ----------------------------------------------
+// Resolution order (highest-confidence first): primary_email_key →
+// email channel → primary_linkedin_key → linkedin channel → name+company
+// fact join. On a hit we enrich in place (and backfill missing primary_*
+// keys so the next import dedupes on the fast path); otherwise we mint a
+// new person via createEntity (which applies the garbage/reclassify guard).
+// All facts flow through insertFactsBatch with source_kind="import".
+interface UpsertPersonResult { action: "created" | "updated" | "skipped"; entity_id?: string }
+
+// Person-scoped channel lookup. Unlike the shared findEntityByChannel,
+// this constrains the hit to kind='person' so a person import can never
+// attach onto (and corrupt) an org/fund entity that happens to share the
+// same email/LinkedIn channel. `canonical` is already canonicalized by the
+// caller (channels store the canonical form).
+async function findPersonByChannel(env: Env, kind: "email" | "linkedin", canonical: string): Promise<string | null> {
+  if (!canonical) return null;
+  const r = await env.DB.prepare(
+    `SELECT c.entity_id FROM channels c
+       JOIN u_entities e ON e.id = c.entity_id
+      WHERE c.kind = ? AND c.canonical = ? AND e.kind = 'person'
+        AND e.status NOT IN ('merged','soft_deleted')
+      ORDER BY c.is_primary DESC, c.is_verified DESC, c.last_seen_at DESC LIMIT 1`,
+  ).bind(kind, canonical).first<{ entity_id: string }>();
+  return r?.entity_id ?? null;
+}
+
+export async function upsertPerson(env: Env, c: PersonCandidate, source: string): Promise<UpsertPersonResult> {
+  const emailKey = c.email;           // already canonical
+  const linkedinKey = c.linkedin_url; // already canonical
+  let entityId: string | null = null;
+
+  if (emailKey) {
+    const hit = await env.DB.prepare(
+      "SELECT id FROM u_entities WHERE kind = 'person' AND primary_email_key = ? AND status NOT IN ('merged','soft_deleted') LIMIT 1",
+    ).bind(emailKey).first<{ id: string }>();
+    entityId = hit?.id ?? (await findPersonByChannel(env, "email", emailKey));
+  }
+  if (!entityId && linkedinKey) {
+    const hit = await env.DB.prepare(
+      "SELECT id FROM u_entities WHERE kind = 'person' AND primary_linkedin_key = ? AND status NOT IN ('merged','soft_deleted') LIMIT 1",
+    ).bind(linkedinKey).first<{ id: string }>();
+    entityId = hit?.id ?? (await findPersonByChannel(env, "linkedin", linkedinKey));
+  }
+  if (!entityId && c.display_name && c.company) {
+    const hit = await env.DB.prepare(
+      `SELECT e.id FROM u_entities e
+         JOIN facts f ON f.entity_id = e.id AND f.predicate = 'primary_employer'
+                     AND f.is_current = 1 AND lower(f.value_text) = ?
+        WHERE e.kind = 'person' AND e.status NOT IN ('merged','soft_deleted')
+          AND lower(e.display_name) = ? LIMIT 1`,
+    ).bind(c.company.trim().toLowerCase(), c.display_name.trim().toLowerCase())
+      .first<{ id: string }>();
+    entityId = hit?.id ?? null;
+  }
+
+  let action: "created" | "updated";
+  if (entityId) {
+    action = "updated";
+    await backfillPrimaryKeys(env, entityId, c);
+  } else {
+    const created = await createEntity(env, {
+      kind: "person",
+      display_name: c.display_name,
+      primary_url: c.linkedin_url,
+      primary_email_key: emailKey,
+      primary_linkedin_key: linkedinKey,
+      primary_twitter_handle: c.twitter_handle,
+    });
+    if (!created) return { action: "skipped" };
+    entityId = created.id;
+    action = "created";
+  }
+
+  // Canonical fact write path. Mirror the same person predicates the
+  // lead→entity sync uses (name/title/primary_employer/city/region/
+  // country_iso2), then retain every unmapped column as import.raw.<slug>.
+  const patches: FactPatch[] = [];
+  if (c.display_name) patches.push({ predicate: "name", value_text: c.display_name });
+  if (c.title) patches.push({ predicate: "title", value_text: c.title });
+  if (c.company) patches.push({ predicate: "primary_employer", value_text: c.company });
+  if (c.city) patches.push({ predicate: "city", value_text: c.city });
+  if (c.country) {
+    const iso = normalizeIso2(c.country);
+    if (iso) patches.push({ predicate: "country_iso2", value_text: iso });
+  }
+  if (c.location) patches.push({ predicate: "region", value_text: c.location });
+  if (c.connected_on) patches.push({ predicate: "person.connected_on", value_text: c.connected_on });
+  if (c.notes) patches.push({ predicate: "person.notes", value_text: c.notes });
+  for (const [slug, val] of Object.entries(c.raw)) {
+    patches.push({ predicate: `import.raw.${slug}`, value_text: val });
+  }
+  if (patches.length) await insertFactsBatch(env, entityId, patches, source, "import", null);
+
+  if (emailKey) await upsertChannel(env, { entity_id: entityId, kind: "email", canonical: emailKey, source });
+  if (linkedinKey) await upsertChannel(env, { entity_id: entityId, kind: "linkedin", canonical: linkedinKey, source });
+  if (c.twitter_handle) await upsertChannel(env, { entity_id: entityId, kind: "twitter", canonical: c.twitter_handle, source });
+  if (c.phone) await upsertChannel(env, { entity_id: entityId, kind: "phone", canonical: c.phone, source });
+
+  return { action, entity_id: entityId };
+}
+
+async function backfillPrimaryKeys(env: Env, entityId: string, c: PersonCandidate): Promise<void> {
+  const sets: string[] = [];
+  const binds: unknown[] = [];
+  if (c.email) { sets.push("primary_email_key = COALESCE(primary_email_key, ?)"); binds.push(c.email); }
+  if (c.linkedin_url) { sets.push("primary_linkedin_key = COALESCE(primary_linkedin_key, ?)"); binds.push(c.linkedin_url); }
+  if (c.linkedin_url) { sets.push("primary_url = COALESCE(primary_url, ?)"); binds.push(c.linkedin_url); }
+  if (c.twitter_handle) { sets.push("primary_twitter_handle = COALESCE(primary_twitter_handle, ?)"); binds.push(c.twitter_handle); }
+  if (c.display_name) { sets.push("display_name = COALESCE(display_name, ?)"); binds.push(c.display_name); }
+  if (!sets.length) return;
+  binds.push(entityId);
+  await env.DB.prepare(`UPDATE u_entities SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
 }
 
 // Pre-upsert dedupe per Task #3 contract: natural key is
