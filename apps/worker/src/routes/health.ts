@@ -70,29 +70,42 @@ import { fetchPage } from "../scraper/fetcher";
 async function probeCrawlerFetcher(env: Env): Promise<CheckResult> {
   const t0 = Date.now();
   try {
+    // The probe walks every fetcher tier (escalation is triggered by the
+    // content-quality reasons below), and the proxy tier in particular can
+    // take a few seconds, so give each attempt a generous budget — a
+    // slightly-slow-but-healthy fetch must not be reported as a timeout.
     const r = await fetchPage(env, "https://example.com/", {
-      liveOnly: true, skipPolicy: true, timeoutMs: 4000, minIntervalMs: 0,
+      liveOnly: true, skipPolicy: true, timeoutMs: 8000, minIntervalMs: 0,
     });
-    const ok = r.ok && r.html.length > 0;
+    const reason = r.blockReason ?? "";
     // An optional tier being intentionally unconfigured (no PROXY_URL,
     // no BROWSER binding) is a CONFIG STATE, not a fetcher fault — the
     // probe should not flip the binding to "degraded" on it. We surface
     // the same situation as "ok" with an informational detail so
-    // operators can still see which optional tier is unset. A real
-    // fetch failure (timeout, block, captcha, status_4xx/5xx, …) still
-    // reports "degraded".
-    const reason = r.blockReason ?? "";
+    // operators can still see which optional tier is unset.
     const unconfiguredTier =
       reason === "proxy_not_configured" ||
       reason === "browser_binding_unavailable" ||
       reason === "puppeteer_module_missing";
+    // `too_small` / `low_visible_text` are CONTENT-QUALITY judgements meant
+    // for real scrape OUTPUT, not a fetcher-liveness signal. The probe URL
+    // (example.com) is a genuinely tiny (~1.2 KB) real page, so applying the
+    // scrape heuristic here made the probe flag itself as `degraded` even
+    // though the fetch succeeded. For a liveness check, a real 2xx response
+    // with a non-empty body is healthy regardless of how small that body is.
+    const fetchSucceeded = r.status >= 200 && r.status < 300 && r.html.length > 0;
+    const contentQualityOnly =
+      (reason === "too_small" || reason === "low_visible_text") && fetchSucceeded;
+    // A genuine fetcher fault (timeout, captcha, status_4xx/5xx, thrown
+    // error, proxy/browser error) still reports "degraded".
+    const ok = (r.ok && r.html.length > 0) || contentQualityOnly;
     return {
       binding: "crawler:fetcher",
       status: ok || unconfiguredTier ? "ok" : "degraded",
       latency_ms: Date.now() - t0,
       required: false,
       detail: ok
-        ? `tier_${r.tier} http_${r.status}`
+        ? `tier_${r.tier} http_${r.status}${contentQualityOnly ? ` ${reason}` : ""}`
         : unconfiguredTier
         ? `optional_tier_unconfigured:${reason}`
         : (r.blockReason ?? `tier_${r.tier}`),
