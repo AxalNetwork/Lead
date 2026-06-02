@@ -350,6 +350,11 @@ export async function assembleFund(env: Env, input: AssembleInput): Promise<Asse
     source,
     evidence_url: null,
   });
+  // Task #9 garbage guard rejected the fund name — can't assemble a row
+  // without a canonical fund entity.
+  if (!resolved) {
+    return { fund_id: null, firm_entity_id: firmEntityId, fund_name: fundName, created: false, evidence_count: 0, status: "active" };
+  }
   const fundEntityId = resolved.fund_entity_id;
 
   const signals = await loadSignals(env, firmEntityId, fundName, fundEntityId);

@@ -22,7 +22,7 @@ import { createEntity, addRole } from "../../entities/roles";
 import { resolveFundName } from "../fundResolver";
 
 export interface LpPersistResult {
-  lp_entity_id: string;
+  lp_entity_id: string | null;
   rows_written: number;
   rows_skipped: number;
   rows_missing_as_of: number;
@@ -53,7 +53,7 @@ async function findLpEntityBySlug(env: Env, slug: string): Promise<string | null
   return r?.entity_id ?? null;
 }
 
-async function ensureLpEntity(env: Env, payload: LpDisclosurePayload, source: string): Promise<string> {
+async function ensureLpEntity(env: Env, payload: LpDisclosurePayload, source: string): Promise<string | null> {
   const existing = await findLpEntityBySlug(env, payload.lp_slug);
   if (existing) return existing;
   const row = await createEntity(env, {
@@ -85,6 +85,18 @@ export async function persistLpDisclosure(
   source: string = `lp_disclosure:${payload.lp_slug}`,
 ): Promise<LpPersistResult> {
   const lp_entity_id = await ensureLpEntity(env, payload, source);
+  // Task #9 garbage guard rejected the LP name — nothing can be attributed
+  // without a canonical LP entity.
+  if (!lp_entity_id) {
+    return {
+      lp_entity_id: null,
+      rows_written: 0,
+      rows_skipped: payload.commitments.length,
+      rows_missing_as_of: 0,
+      facts_written: 0,
+      as_of_used: null,
+    };
+  }
   const as_of = chooseAsOfDate(payload);
   let rows_written = 0;
   let rows_skipped = 0;
@@ -122,6 +134,8 @@ export async function persistLpDisclosure(
       source,
       evidence_url: payload.source_url,
     });
+    // Task #9 garbage guard rejected the fund name — skip this commitment.
+    if (!resolved) { rows_skipped++; continue; }
     // Row-level confidence: floor at adapter signal, lifted by resolver
     // certainty. ≥2-source corroboration is detected at query time
     // (multiple rows for the same fund_entity_id across LPs) — here we

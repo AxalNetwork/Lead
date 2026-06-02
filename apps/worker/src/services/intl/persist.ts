@@ -47,7 +47,7 @@ function extractEnglishPredicates(english: string): Array<{ predicate: string; r
 }
 
 export interface IntlPersistResult {
-  filer_entity_id: string;
+  filer_entity_id: string | null;
   facts_written: number;
   amount_usd: number | null;
   translated: boolean;
@@ -69,7 +69,7 @@ async function findEntityByJurisdictionalId(env: Env, jurisdiction: string, sour
 /** Resolve (or mint) the canonical entity behind an IntlEntityHit. The
  *  `intl.source_id` fact carries the {jurisdiction, source_id} pair so
  *  re-hits dedupe deterministically. */
-export async function resolveIntlEntity(env: Env, hit: IntlEntityHit, source: string): Promise<string> {
+export async function resolveIntlEntity(env: Env, hit: IntlEntityHit, source: string): Promise<string | null> {
   const existing = await findEntityByJurisdictionalId(env, hit.jurisdiction, hit.source_id);
   if (existing) return existing;
   const row = await createEntity(env, {
@@ -165,6 +165,8 @@ async function maybeLinkVehicle(env: Env, adapter: IntlAdapter, filing: IntlFili
       url: filing.url,
       confidence: 0.7,
     }, `intl:${adapter.id}:firmgraph`);
+    // Task #9 garbage guard rejected the canonical firm name — can't link.
+    if (!canonId) return;
     r = { entity_id: canonId };
   }
   if (!r.entity_id || r.entity_id === vehicleEntityId) return;
@@ -198,6 +200,11 @@ export async function persistIntlFiling(
     original_lang: filing.original_lang ?? null,
   };
   const filerId = await resolveIntlEntity(env, filerHit, source);
+  // Task #9 garbage guard rejected the filer name — nothing to persist
+  // without a canonical filer entity.
+  if (!filerId) {
+    return { filer_entity_id: null, facts_written: 0, amount_usd: null, translated: false, fx_error: null };
+  }
 
   // Optional: bind the filer (vehicle) to a known canonical firm if
   // the adapter surfaced one. No-op when the data isn't present.

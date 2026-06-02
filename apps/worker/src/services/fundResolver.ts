@@ -152,7 +152,7 @@ async function findFirmEntityByName(env: Env, name: string): Promise<string | nu
 export async function resolveFundName(
   env: Env,
   input: FundResolveInput,
-): Promise<FundResolveResult> {
+): Promise<FundResolveResult | null> {
   const raw = (input.raw ?? "").trim();
   if (!raw) {
     return {

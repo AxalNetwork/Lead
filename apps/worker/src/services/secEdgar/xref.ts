@@ -89,7 +89,11 @@ async function findByName(env: Env, name: string, kind: ResolveKind, jurisdictio
  * to populate `issuer_entity_id` without minting a fresh entity for
  * every CUSIP in a 5000-row holdings table.
  */
-export async function resolveSecEntity(env: Env, input: ResolveInput): Promise<ResolveResult>;
+// Returns null when no match exists AND creation is skipped — either
+// explicitly (`createIfMissing: false`, lookup-only) or because the
+// Task #9 garbage guard in `createEntity` rejected the SEC-emitted name.
+// Callers must treat a null as "unresolved" and skip the affected row.
+export async function resolveSecEntity(env: Env, input: ResolveInput): Promise<ResolveResult | null>;
 export async function resolveSecEntity(env: Env, input: ResolveInput & { createIfMissing: false }): Promise<ResolveResult | null>;
 export async function resolveSecEntity(
   env: Env,
@@ -134,6 +138,9 @@ export async function resolveSecEntity(
       // dispatch thousands of profile-filler workflows.
       suppressAutoProfileFill: input.kind === "org",
     });
+    // Task #9 garbage guard rejected the name — surface as unresolved
+    // rather than dereferencing a null entity row.
+    if (!row) return null;
     entity_id = row.id;
     matchedBy = "created";
     created = true;

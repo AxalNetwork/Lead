@@ -88,7 +88,7 @@ export async function resolveInvestor(
   env: Env,
   raw: string,
   ctx: { source: string; evidence_url?: string | null },
-): Promise<InvestorResolveResult> {
+): Promise<InvestorResolveResult | null> {
   const name = (raw ?? "").trim();
   if (!name || name.length < 2) {
     return { investor_entity_id: null, confidence: 0, created: false, matched_by: "unresolved" };

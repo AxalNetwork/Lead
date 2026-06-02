@@ -71,6 +71,9 @@ async function persistAdv(env: Env, h: FilingHeader, d: AdvPayload, source: stri
     source,
     role: "firm",
   });
+  if (!xref) {
+    return { accession_no: h.accession_no, entity_id: null, facts_written: 0, rows_written: 0, skipped: true, reason: "adviser_name_rejected" };
+  }
   let facts = 0;
   let rows = 0;
   const factCtx = { entity_id: xref.entity_id, source_kind: "scrape" as const, source, confidence: 0.9 };
@@ -109,6 +112,7 @@ async function persistAdv(env: Env, h: FilingHeader, d: AdvPayload, source: stri
       source,
       role: "fund",
     });
+    if (!fundXref) continue; // garbage-rejected fund name — skip this row
     await env.DB.prepare(
       `INSERT OR IGNORE INTO sec_form_adv_funds
          (id, accession_no, adviser_crd, adviser_sec_no, adviser_name,
@@ -148,6 +152,7 @@ async function persistAdv(env: Env, h: FilingHeader, d: AdvPayload, source: stri
       source,
       role: "investor",
     });
+    if (!personXref) continue; // garbage-rejected control-person name — skip
     await insertFact(env, {
       entity_id: personXref.entity_id,
       predicate: "person.career",
@@ -185,6 +190,9 @@ async function persistFormD(env: Env, h: FilingHeader, d: FormDPayload, source: 
     source,
     role: "company",
   });
+  if (!xref) {
+    return { accession_no: h.accession_no, entity_id: null, facts_written: 0, rows_written: 0, skipped: true, reason: "issuer_name_rejected" };
+  }
   await env.DB.prepare(
     `INSERT OR IGNORE INTO sec_form_d_rounds
        (id, accession_no, issuer_cik, issuer_name, issuer_jurisdiction, issuer_year_of_inc,
@@ -230,6 +238,7 @@ async function persistFormD(env: Env, h: FilingHeader, d: FormDPayload, source: 
 
   for (const rp of d.related_persons) {
     const personXref = await resolveSecEntity(env, { name: rp.name, kind: "person", source, role: "founder" });
+    if (!personXref) continue; // garbage-rejected related-person name — skip
     await insertFact(env, {
       entity_id: personXref.entity_id,
       predicate: "person.career",
@@ -259,6 +268,9 @@ async function persist13F(env: Env, h: FilingHeader, d: Form13FPayload, source: 
     name: d.filer_name ?? "Unknown 13F Filer",
     kind: "org", cik: d.filer_cik ?? h.cik, source, role: "firm",
   });
+  if (!xref) {
+    return { accession_no: h.accession_no, entity_id: null, facts_written: 0, rows_written: 0, skipped: true, reason: "filer_name_rejected" };
+  }
   let rows = 0;
   // Cross-reference holdings to existing issuer entities by CUSIP.
   // Lookup-only (createIfMissing=false): a 13F can list 5000 positions
@@ -325,6 +337,9 @@ async function persist13D(env: Env, h: FilingHeader, d: BeneficialOwner, source:
     name: d.reporting_owner_name, kind: "org",
     cik: d.reporting_owner_cik ?? h.cik, source, role: "investor",
   });
+  if (!ownerXref) {
+    return { accession_no: h.accession_no, entity_id: null, facts_written: 0, rows_written: 0, skipped: true, reason: "reporting_owner_name_rejected" };
+  }
   const issuerXref = d.issuer_name ? await resolveSecEntity(env, {
     name: d.issuer_name, kind: "org", cik: d.issuer_cik, source, role: "company",
   }) : null;
@@ -366,6 +381,9 @@ async function persistForm4(env: Env, h: FilingHeader, d: Form4Trade, source: st
     cik: d.reporting_owner_cik, source,
     role: d.is_officer ? "executive" : (d.is_director ? "board_member" : "investor"),
   });
+  if (!ownerXref) {
+    return { accession_no: h.accession_no, entity_id: null, facts_written: 0, rows_written: 0, skipped: true, reason: "reporting_owner_name_rejected" };
+  }
   const issuerXref = d.issuer_name ? await resolveSecEntity(env, {
     name: d.issuer_name, kind: "org", cik: d.issuer_cik, ticker: d.issuer_ticker, source, role: "company",
   }) : null;
@@ -424,6 +442,9 @@ async function persistS1(env: Env, h: FilingHeader, d: FormS1Payload, source: st
     name: d.issuer_name, kind: "org", cik: d.issuer_cik ?? h.cik,
     ticker: d.ticker_symbol, source, role: "company",
   });
+  if (!xref) {
+    return { accession_no: h.accession_no, entity_id: null, facts_written: 0, rows_written: 0, skipped: true, reason: "issuer_name_rejected" };
+  }
   let facts = 0;
   const ctx = { entity_id: xref.entity_id, source_kind: "scrape" as const, source, confidence: 0.9 };
   await insertFact(env, { ...ctx, predicate: "sec.s1.ipo_intent", value_text: h.filed_at ?? "true" });
@@ -477,6 +498,9 @@ async function persist8K(env: Env, h: FilingHeader, d: Form8KPayload, source: st
   const xref = await resolveSecEntity(env, {
     name: d.issuer_name, kind: "org", cik: d.issuer_cik ?? h.cik, source, role: "company",
   });
+  if (!xref) {
+    return { accession_no: h.accession_no, entity_id: null, facts_written: 0, rows_written: 0, skipped: true, reason: "issuer_name_rejected" };
+  }
   let facts = 0;
   for (const item of d.items) {
     await insertFact(env, {
@@ -525,6 +549,9 @@ async function persist10K(env: Env, h: FilingHeader, d: Form10KPayload, source: 
   const xref = await resolveSecEntity(env, {
     name: d.issuer_name, kind: "org", cik: d.issuer_cik ?? h.cik, source, role: "company",
   });
+  if (!xref) {
+    return { accession_no: h.accession_no, entity_id: null, facts_written: 0, rows_written: 0, skipped: true, reason: "issuer_name_rejected" };
+  }
   let facts = 0;
   const ctx = { entity_id: xref.entity_id, source_kind: "scrape" as const, source, confidence: 0.95 };
   if (d.revenue_usd != null) { await insertFact(env, { ...ctx, predicate: "sec.10k.revenue_usd", value_number: d.revenue_usd }); facts++; }
@@ -532,6 +559,7 @@ async function persist10K(env: Env, h: FilingHeader, d: Form10KPayload, source: 
   if (d.fiscal_year_end) { await insertFact(env, { ...ctx, predicate: "sec.10k.fiscal_year_end", value_text: d.fiscal_year_end }); facts++; }
   for (const exec of d.executives) {
     const execXref = await resolveSecEntity(env, { name: exec.name, kind: "person", source, role: "executive" });
+    if (!execXref) continue; // garbage-rejected executive name — skip
     await insertFact(env, {
       entity_id: execXref.entity_id,
       predicate: "person.career",
@@ -550,11 +578,15 @@ async function persistPF(env: Env, h: FilingHeader, d: FormPFPayload, source: st
   const xref = await resolveSecEntity(env, {
     name: d.adviser_name, kind: "org", cik: h.cik, crd: d.adviser_crd, source, role: "firm",
   });
+  if (!xref) {
+    return { accession_no: h.accession_no, entity_id: null, facts_written: 0, rows_written: 0, skipped: true, reason: "adviser_name_rejected" };
+  }
   let facts = 0;
   const ctx = { entity_id: xref.entity_id, source_kind: "scrape" as const, source, confidence: 0.95 };
   if (d.total_regulatory_aum_usd != null) { await insertFact(env, { ...ctx, predicate: "aum_usd", value_number: d.total_regulatory_aum_usd }); facts++; }
   for (const f of d.funds) {
     const fundXref = await resolveSecEntity(env, { name: f.fund_name, kind: "org", source, role: "fund" });
+    if (!fundXref) continue; // garbage-rejected fund name — skip
     await insertFact(env, {
       ...ctx, predicate: "sec.pf.fund",
       value_json: { fund_name: f.fund_name, fund_id_807: f.fund_id_807, gross_asset_value: f.gross_asset_value, net_asset_value: f.net_asset_value, fund_type: f.fund_type },

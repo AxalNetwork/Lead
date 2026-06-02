@@ -364,6 +364,9 @@ async function upsertParticipants(
     const resolved = await resolveInvestor(env, p.name, {
       source, evidence_url: c.source_url,
     });
+    // Task #9 garbage guard rejected this name (HTML/nav string mistaken
+    // for an investor) — skip rather than write a participant with no entity.
+    if (!resolved) continue;
     try {
       await env.DB.prepare(
         `INSERT INTO deal_participants (
