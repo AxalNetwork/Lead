@@ -61,21 +61,25 @@
   }
 
   var GEOS = [];
-  async function load() {
-    var s = await api("/api/taxonomies/sectors");
-    renderSectors(s && s.items);
-    var g = await api("/api/taxonomies/geographies");
-    GEOS = (g && g.items) || [];
-    renderGeos(GEOS, "");
-    var h = await api("/api/taxonomies/heatmap");
-    renderHeatmap(h && h.cells);
+  var selectedGeoKind = "";
+  function load() {
+    // Load each panel independently and in parallel. Awaiting them in
+    // sequence meant a single slow or never-settling request (e.g. one
+    // endpoint hanging at the edge) left every panel stuck on "Loading…".
+    // Firing them separately guarantees each panel resolves on its own;
+    // api() already converts any failure into null, which each render
+    // turns into a clear empty state rather than a perpetual spinner.
+    api("/api/taxonomies/sectors").then(function (s) { renderSectors(s && s.items); });
+    api("/api/taxonomies/geographies").then(function (g) { GEOS = (g && g.items) || []; renderGeos(GEOS, selectedGeoKind); });
+    api("/api/taxonomies/heatmap").then(function (h) { renderHeatmap(h && h.cells); });
   }
 
   document.addEventListener("click", function (e) {
     var btn = e.target.closest("button[data-geo-kind]");
     if (!btn) return;
     document.querySelectorAll("button[data-geo-kind]").forEach(function (b) { b.classList.toggle("active", b === btn); });
-    renderGeos(GEOS, btn.getAttribute("data-geo-kind"));
+    selectedGeoKind = btn.getAttribute("data-geo-kind") || "";
+    renderGeos(GEOS, selectedGeoKind);
   });
 
   document.addEventListener("DOMContentLoaded", function () {
