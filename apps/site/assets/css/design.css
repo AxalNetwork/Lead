@@ -284,6 +284,25 @@
   .ads-shell[data-rail-mobile="open"] .ads-rail-backdrop { opacity: 1; pointer-events: auto; }
 }
 
+/* ---- Topbar responsive reflow (usable down to ~360px) ---- */
+@media (max-width: 640px) {
+  .ads-topbar { padding: 8px 12px; gap: var(--ads-sp-2); }
+  .ads-topbar__title {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* Comfortable touch targets */
+  .ads-topbar__btn { height: 40px; padding: 0 10px; }
+  .ads-rail-toggle { width: 40px; height: 40px; }
+  .ads-avatar { width: 40px; height: 40px; }
+  /* Search trigger: keep the icon, drop the "Search" label + ⌘K hint */
+  #ads-cmdk-trigger > span:not([aria-hidden="true"]),
+  #ads-cmdk-trigger .ads-kbd { display: none; }
+}
+@media (max-width: 380px) {
+  .ads-topbar { padding: 8px 10px; gap: 6px; }
+  .ads-topbar__title { font-size: var(--ads-fs-sm); }
+}
+
 /* ---- Score bar (universal) ---- */
 .ads-score-bar {
   display: inline-grid;

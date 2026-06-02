@@ -228,6 +228,7 @@
     var t = document.getElementById("ads-rail-toggle");
     if (t) t.setAttribute("aria-expanded", v === "expanded" ? "true" : "false");
   }
+  var railEscHandler = null;
   ui.rail = {
     toggle: function () {
       var cur = localStorage.getItem(RAIL_KEY) || "expanded";
@@ -237,11 +238,28 @@
     },
     openMobile: function () {
       var shell = document.querySelector(".ads-shell");
-      shell && shell.setAttribute("data-rail-mobile", "open");
+      if (!shell) return;
+      shell.setAttribute("data-rail-mobile", "open");
+      document.body.classList.add("ads-no-scroll"); // body-scroll-lock while drawer open
+      var t = document.getElementById("ads-rail-toggle");
+      if (t) t.setAttribute("aria-expanded", "true");
+      var firstLink = shell.querySelector(".ads-rail a, .ads-rail button");
+      if (firstLink) { try { firstLink.focus(); } catch (e) {} }
+      // Idempotent: clear any prior handler before attaching a fresh one.
+      if (railEscHandler) document.removeEventListener("keydown", railEscHandler, true);
+      railEscHandler = function (e) { if (e.key === "Escape") ui.rail.closeMobile(); };
+      document.addEventListener("keydown", railEscHandler, true);
     },
     closeMobile: function () {
       var shell = document.querySelector(".ads-shell");
-      shell && shell.removeAttribute("data-rail-mobile");
+      if (shell) shell.removeAttribute("data-rail-mobile");
+      document.body.classList.remove("ads-no-scroll");
+      if (railEscHandler) {
+        document.removeEventListener("keydown", railEscHandler, true);
+        railEscHandler = null;
+      }
+      var t = document.getElementById("ads-rail-toggle");
+      if (t) { t.setAttribute("aria-expanded", "false"); try { t.focus(); } catch (e) {} }
     }
   };
 
@@ -268,6 +286,18 @@
     });
     var bd = document.getElementById("ads-rail-backdrop");
     bd && bd.addEventListener("click", function () { ui.rail.closeMobile(); });
+    // When the viewport grows past the mobile breakpoint (e.g. rotation /
+    // window resize), normalize drawer state so the body scroll-lock, the
+    // open attribute, and the Escape listener are never left stuck.
+    window.addEventListener("resize", function () {
+      if (window.innerWidth > 900) {
+        var shell = document.querySelector(".ads-shell");
+        if ((shell && shell.getAttribute("data-rail-mobile") === "open") ||
+            document.body.classList.contains("ads-no-scroll")) {
+          ui.rail.closeMobile();
+        }
+      }
+    });
     var th = document.getElementById("ads-theme-toggle");
     th && th.addEventListener("click", function () { ui.theme.cycle(); });
     var nb = document.getElementById("ads-notify-btn");
