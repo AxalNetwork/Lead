@@ -51,6 +51,14 @@ export const PIPELINE_BUDGETS_MS: Readonly<Record<string, number>> = Object.free
   // bounded, just not at 90s.
   parse_file: 180_000,
   import_file: 180_000,
+  // Task #10: single-URL scrape jobs. The tiered fetcher escalates
+  // Direct -> Browser -> Proxy -> Wayback; each tier carries its own
+  // ~20s ceiling, and slow hosts / long PDFs / proxy round-trips can
+  // push a legitimate fetch past the 90s default and get it swept by
+  // admin.sweep. Matched to the `parse_file` heavy single-URL budget;
+  // still bounded, just not at 90s. The override only LIFTS the budget,
+  // never lowers an operator-set per-job ceiling.
+  url: 180_000,
 });
 
 export function budgetForPipeline(kind: string | null | undefined): number | null {
