@@ -245,4 +245,27 @@ test("upsertPerson writes import.raw facts and channels", async () => {
   assert.equal(raw.source_kind, "import");
   // Email channel upserted.
   assert.equal(count(env, "SELECT COUNT(*) AS n FROM channels WHERE kind = 'email' AND canonical = 'jane@acme.com'"), 1);
+  // Email is ALSO written as a canonical fact (provenance in `facts`,
+  // not only on the channel row).
+  const ef = env._db.prepare("SELECT value_text, source, source_kind FROM facts WHERE predicate = 'email'").get();
+  assert.equal(ef.value_text, "jane@acme.com");
+  assert.equal(ef.source, "csv_import:contacts.csv");
+  assert.equal(ef.source_kind, "import");
+});
+
+test("upsertPerson writes email + linkedin as canonical facts", async () => {
+  const env = makeEnv();
+  const headers = ["First Name", "Last Name", "Email Address", "URL"];
+  const d = heuristicDetect(headers);
+  const li = "https://www.linkedin.com/in/janesmith";
+  await upsertPerson(env, rowToPersonCandidate(headers, ["Jane", "Smith", "jane@acme.com", li], d), "csv_import:c.csv");
+  const facts = env._db.prepare(
+    "SELECT predicate, value_text, source_kind FROM facts WHERE predicate IN ('email','linkedin_url')",
+  ).all();
+  const byPred = Object.fromEntries(facts.map((f) => [f.predicate, f]));
+  assert.ok(byPred.email, "email fact should exist");
+  assert.equal(byPred.email.source_kind, "import");
+  assert.ok(byPred.linkedin_url, "linkedin_url fact should exist");
+  assert.equal(byPred.linkedin_url.source_kind, "import");
+  assert.match(byPred.linkedin_url.value_text, /janesmith/);
 });

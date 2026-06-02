@@ -955,6 +955,14 @@ export async function upsertPerson(env: Env, c: PersonCandidate, source: string)
   // country_iso2), then retain every unmapped column as import.raw.<slug>.
   const patches: FactPatch[] = [];
   if (c.display_name) patches.push({ predicate: "name", value_text: c.display_name });
+  // Contact identifiers flow through the canonical fact path (bare
+  // email/linkedin_url/twitter_handle/phone predicates — same as the
+  // profile contact registry, dualwrite, and crawler workflows) so
+  // provenance/source_kind is recorded in `facts`, not only on channels.
+  if (emailKey) patches.push({ predicate: "email", value_text: emailKey });
+  if (linkedinKey) patches.push({ predicate: "linkedin_url", value_text: linkedinKey });
+  if (c.twitter_handle) patches.push({ predicate: "twitter_handle", value_text: c.twitter_handle });
+  if (c.phone) patches.push({ predicate: "phone", value_text: c.phone });
   if (c.title) patches.push({ predicate: "title", value_text: c.title });
   if (c.company) patches.push({ predicate: "primary_employer", value_text: c.company });
   if (c.city) patches.push({ predicate: "city", value_text: c.city });
