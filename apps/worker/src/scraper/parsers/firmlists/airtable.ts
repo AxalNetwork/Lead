@@ -1,7 +1,8 @@
 import type { Env } from "../../../types";
 import { fetchPage } from "../../fetcher";
 import { decodeEntities } from "../../html";
-import { extractDomain, countryNameToIso2 } from "../../normalize";
+import { extractDomain } from "../../normalize";
+import { parseCountryIso2 } from "../../../imports/coercers";
 import { classifyTab } from "../../../imports/tab_intent";
 import { classifyUrl, extractUrlsFromRows } from "../../../imports/url_extract";
 import type {
@@ -1123,10 +1124,9 @@ function splitList(v: string | null | undefined): string[] | null {
 }
 
 function countryToIso2(v: string): string | null {
-  const s = v.trim();
-  if (!s) return null;
-  if (s.length === 2) return s.toUpperCase();
-  return countryNameToIso2(s) || null;
+  // Delegate to the comprehensive name→ISO2 table (handles flags, bare
+  // ISO2, and the full country list) instead of the tiny seed map.
+  return parseCountryIso2(v);
 }
 
 function isUsefulChildUrl(u: string): boolean {

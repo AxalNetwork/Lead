@@ -144,6 +144,8 @@
     "src/entities/garbage.ts",
     "src/entities/profile.ts",
     "src/imports/csv_import.ts",
+    "src/imports/coercers.ts",
+    "src/scraper/geo_backfill.ts",
     "src/crawler/archive.ts",
     "src/crawler/replay.ts",
     "src/crawler/profileWorkflows/_types.ts",

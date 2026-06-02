@@ -3,6 +3,7 @@
 // `upsertFirm` helper rather than the leads pipeline.
 
 import type { FirmCandidate } from "../firmlists/types";
+import { parseCountryIso2 } from "../../../imports/coercers";
 
 const NEXT_DATA_RE = /<script[^>]+id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/i;
 
@@ -111,7 +112,12 @@ export function parseCrunchbaseOrg(html: string, url: string): FirmCandidate | n
     founded_year: parseFoundedYear(node.founded_on?.value),
     hq_city: hq.city,
     hq_region: hq.region,
-    hq_country_iso2: null, // Crunchbase returns names, not ISO codes — let downstream geo-tag fill.
+    // Crunchbase returns country NAMES, not ISO codes. Resolve via the
+    // shared name→ISO2 table at ingest (region is a fallback when the
+    // country slot is empty but the region value is itself a country).
+    // The raw name is still stashed in `notes` below as a fallback for
+    // any name the table doesn't recognize.
+    hq_country_iso2: parseCountryIso2(hq.country) ?? parseCountryIso2(hq.region),
     sectors: sectors.length ? sectors : null,
     crunchbase_url: url,
     twitter_handle: node.twitter?.value || null,

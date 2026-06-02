@@ -911,6 +911,24 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       } catch (e) {
         console.error("nightly identity-backfill failed", (e as Error).message);
       }
+      // Task #13: geo backfill — resolve firms.hq_country_iso2 left NULL by
+      // pre-resolution scrapes (from notes hq_country_name / hq_region /
+      // website ccTLD). Idempotent; bounded so it fits this shared tick.
+      try {
+        const { runFirmGeoBackfill } = await import("./scraper/geo_backfill");
+        const r = await runFirmGeoBackfill(env, { limit: 1000 });
+        console.log("firm-geo-backfill inline", JSON.stringify(r));
+        // Re-materialize the firm geo aggregate so newly-resolved codes are
+        // visible immediately — the geo endpoint prefers the materialized
+        // payload, and this backfill runs on a different cron branch than the
+        // nightly analytics aggregator. Only worth it when something changed.
+        if (r.resolved > 0) {
+          const { materializeFirmAnalytics } = await import("./routes/analytics_firms");
+          await materializeFirmAnalytics(env);
+        }
+      } catch (e) {
+        console.error("nightly firm-geo-backfill failed", (e as Error).message);
+      }
     })());
     return;
   }

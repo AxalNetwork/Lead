@@ -60,17 +60,41 @@
   // pre-filtered by HQ country. Unmapped countries fall back to a list below.
   function worldMap(data) {
     var byIso = {};
-    (data || []).forEach(function (r) { if (r.country) byIso[String(r.country).toUpperCase()] = r.count; });
-    var counts = Object.values(byIso).filter(function (n) { return n > 0; }).sort(function (a, b) { return a - b; });
-    var quintiles = [0, 0, 0, 0, 0];
-    if (counts.length) {
-      for (var q = 0; q < 5; q++) quintiles[q] = counts[Math.floor(counts.length * (q + 1) / 5) - 1] || 0;
+    var unknownCount = 0, total = 0;
+    (data || []).forEach(function (r) {
+      var n = r.count || 0;
+      total += n;
+      var iso = String(r.country == null ? "" : r.country).toUpperCase();
+      // The geo endpoint buckets country-less firms as "__unknown__"; keep
+      // that out of the color scale and surface it explicitly below.
+      if (!iso || iso === "__UNKNOWN__") { unknownCount += n; return; }
+      byIso[iso] = n;
+    });
+    // Build DISTINCT bucket thresholds so the legend never shows repeated or
+    // all-zero cutoffs. With few distinct values we collapse to that many
+    // buckets (one per value) instead of forcing five degenerate quintiles.
+    var sorted = Object.keys(byIso).map(function (k) { return byIso[k]; })
+      .filter(function (n) { return n > 0; }).sort(function (a, b) { return a - b; });
+    var uniq = [];
+    sorted.forEach(function (n) { if (uniq[uniq.length - 1] !== n) uniq.push(n); });
+    var PAL = ["#dbe7ff", "#a9c3ff", "#7aa0ff", "#5179ee", "#2a4fbf"];
+    var thresholds = [];
+    if (uniq.length) {
+      var nb = Math.min(PAL.length, uniq.length);
+      for (var i = 0; i < nb; i++) {
+        var t = uniq[Math.floor((uniq.length - 1) * (i + 1) / nb)];
+        if (thresholds[thresholds.length - 1] !== t) thresholds.push(t);
+      }
+    }
+    var NB = thresholds.length;
+    function bucketColor(idx) {
+      if (NB <= 1) return PAL[3];
+      return PAL[Math.round(idx * (PAL.length - 1) / (NB - 1))];
     }
     function color(n) {
       if (!n) return "#e8ecf6";
-      var palette = ["#dbe7ff", "#a9c3ff", "#7aa0ff", "#5179ee", "#2a4fbf"];
-      for (var i = 0; i < 5; i++) if (n <= quintiles[i]) return palette[i];
-      return palette[4];
+      for (var i = 0; i < NB; i++) if (n <= thresholds[i]) return bucketColor(i);
+      return bucketColor(NB - 1);
     }
     var COLS = 22, ROWS = 12, CELL = 22, PAD = 8;
     var W = COLS * CELL + PAD * 2, H = ROWS * CELL + PAD * 2 + 28;
@@ -87,18 +111,35 @@
     // Legend
     var legendY = H - 18;
     svg += '<text x="' + PAD + '" y="' + (legendY - 4) + '" font-size="10" fill="#667">firms per country</text>';
-    [0, 1, 2, 3, 4].forEach(function (i) {
-      var palette = ["#dbe7ff", "#a9c3ff", "#7aa0ff", "#5179ee", "#2a4fbf"];
-      svg += '<rect x="' + (PAD + 110 + i * 60) + '" y="' + legendY + '" width="14" height="10" fill="' + palette[i] + '"/>';
-      svg += '<text x="' + (PAD + 128 + i * 60) + '" y="' + (legendY + 9) + '" font-size="10" fill="#243066">≤' + (quintiles[i] || 0) + '</text>';
-    });
+    if (NB) {
+      var prev = 0;
+      thresholds.forEach(function (t, i) {
+        var label = (t === prev) ? ("" + t) : (prev + 1 === t ? ("" + t) : ((prev + 1) + "–" + t));
+        prev = t;
+        svg += '<rect x="' + (PAD + 110 + i * 64) + '" y="' + legendY + '" width="14" height="10" fill="' + bucketColor(i) + '"/>';
+        svg += '<text x="' + (PAD + 128 + i * 64) + '" y="' + (legendY + 9) + '" font-size="10" fill="#243066">' + label + '</text>';
+      });
+    } else {
+      svg += '<text x="' + (PAD + 110) + '" y="' + (legendY + 9) + '" font-size="10" fill="#8b94c2">no countries tagged yet</text>';
+    }
     svg += '</svg>';
-    // Unmapped countries fallback (kept compact under the map)
-    var unmapped = (data || []).filter(function (r) { return r.country && !COUNTRY_TILES[String(r.country).toUpperCase()]; });
+    // Unmapped countries fallback (kept compact under the map). Excludes the
+    // "__unknown__" bucket — that coverage gap is surfaced explicitly below.
+    var unmapped = (data || []).filter(function (r) {
+      var iso = String(r.country == null ? "" : r.country).toUpperCase();
+      return iso && iso !== "__UNKNOWN__" && !COUNTRY_TILES[iso];
+    });
     if (unmapped.length) {
       svg += '<div class="ads-muted" style="margin-top:6px;font-size:11px">Other: ' + unmapped.slice(0, 12).map(function (r) {
         return '<a href="/dashboard/firms/?country=' + esc(String(r.country).toLowerCase()) + '">' + esc(r.country) + ' (' + r.count + ')</a>';
       }).join(", ") + '</div>';
+    }
+    // Coverage note: how many firms have no resolved HQ country.
+    if (unknownCount > 0) {
+      var pct = total ? Math.round(unknownCount * 100 / total) : 0;
+      svg += '<div class="ads-muted" style="margin-top:6px;font-size:11px">' +
+        unknownCount + ' firm' + (unknownCount === 1 ? '' : 's') +
+        ' have no HQ country assigned (' + pct + '% of ' + total + ').</div>';
     }
     return svg;
   }

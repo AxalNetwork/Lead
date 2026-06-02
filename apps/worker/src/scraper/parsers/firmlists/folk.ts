@@ -2,7 +2,7 @@ import type { Env } from "../../../types";
 import { fetchPage } from "../../fetcher";
 import { decodeEntities } from "../../html";
 import { extractDomain } from "../../normalize";
-import { countryNameToIso2 } from "../../normalize";
+import { parseCountryIso2 } from "../../../imports/coercers";
 import type {
   EdgeCandidate,
   FirmlistImportResult,
@@ -708,10 +708,9 @@ function splitList(v: string | null | undefined): string[] | null {
   return parts.length ? parts : null;
 }
 function countryToIso2(v: string | null | undefined): string | null {
-  if (!v) return null;
-  const s = String(v).trim();
-  if (s.length === 2) return s.toUpperCase();
-  return countryNameToIso2(s) || null;
+  // Delegate to the comprehensive name→ISO2 table (handles flags, bare
+  // ISO2, and the full country list) instead of the tiny seed map.
+  return parseCountryIso2(v);
 }
 
 // ============================================================================

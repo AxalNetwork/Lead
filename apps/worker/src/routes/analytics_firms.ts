@@ -8,7 +8,7 @@ import { Hono } from "hono";
 import type { Env } from "../types";
 import { parseFirmFilter, buildFirmWhere } from "./_firms_filter";
 
-export const analyticsFirms = new Hono<{ Bindings: Env; Variables: { email: string } }>();
+export const analyticsFirms = new Hono<{ Bindings: Env; Variables: { email: string; is_admin: boolean } }>();
 
 async function readMaterialized(env: Env, kind: string): Promise<unknown | null> {
   const r = await env.DB
@@ -127,6 +127,26 @@ analyticsFirms.get("/geo", async (c) => {
   const cached = await readMaterialized(c.env, "geo");
   if (cached) return c.json(cached);
   return c.json(await liveGeo(c.env));
+});
+
+// Task #13: admin-only manual trigger for the firm geo backfill. The same
+// routine runs nightly (bounded at 1000/tick); this lets an operator force a
+// large one-shot sweep without waiting. Admin is gated via `is_admin` set by
+// accessGuard on /api/* (Task #14 inline-admin pattern), not a parallel
+// middleware. Re-materializes the geo aggregate so the map reflects the new
+// codes immediately.
+analyticsFirms.post("/geo/backfill", async (c) => {
+  if (c.var.is_admin !== true) return c.json({ error: "forbidden" }, 403);
+  const { runFirmGeoBackfill } = await import("../scraper/geo_backfill");
+  const reqLimit = Number(c.req.query("limit"));
+  const limit = Number.isFinite(reqLimit) ? Math.min(100000, Math.max(1, reqLimit)) : 100000;
+  const result = await runFirmGeoBackfill(c.env, { limit });
+  try {
+    await materializeFirmAnalytics(c.env);
+  } catch (e) {
+    console.warn("geo backfill re-materialize failed", (e as Error).message);
+  }
+  return c.json({ ok: true, ...result });
 });
 
 // ------------------------------------------- top-N most-connected firms
