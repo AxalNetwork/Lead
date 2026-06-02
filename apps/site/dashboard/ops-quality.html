@@ -100,7 +100,14 @@ permalink: /ops/quality/
 
   function postAction(path, label) {
     appendLog("POST " + path + " …");
-    fetch(API + path, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: "{}" })
+    // No "Content-Type: application/json" header: that would force a CORS
+    // preflight OPTIONS, which carries no cookie and is bounced by Cloudflare
+    // Access (login redirect) before reaching the worker — surfacing as
+    // "The string did not match the expected pattern". Sending the body
+    // without a custom Content-Type makes this a CORS-safe simple request
+    // (text/plain), so no preflight fires; the POST carries the Access cookie
+    // and the worker still parses the body via c.req.json().
+    fetch(API + path, { method: "POST", credentials: "include", body: "{}" })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
       .then(function (res) {
         appendLog(label + " → HTTP " + res.status + " " + JSON.stringify(res.body));

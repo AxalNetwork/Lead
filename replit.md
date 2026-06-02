@@ -23,6 +23,23 @@ Jekyll site (`apps/site`) on GitHub Pages at aidatasignal.com + Cloudflare Worke
     ancestor of local `HEAD` (9 ahead / 0 behind — the duplicate-
     "Task #8" checkpoint pattern), so a plain push sufficed; no
     `pull --rebase` was needed this round.
+- **Cloudflare Access bounces CORS preflights on authenticated
+  cross-origin POSTs (Task #25, 2026-06-02).** A dashboard `fetch` to
+  `api.aidatasignal.com` that sets `Content-Type: application/json`
+  triggers a CORS preflight `OPTIONS`; preflights carry no cookie, so
+  Cloudflare Access 302s them to login and the browser surfaces
+  "The string did not match the expected pattern". Fix WITHOUT any
+  Zero Trust config: drop the `Content-Type` header so the POST is a
+  CORS-safe *simple* request (`text/plain`) — no preflight, the cookie
+  rides along, and the Hono handler still parses the body via
+  `c.req.json()`. Applied to `apps/site/dashboard/ops-quality.html`
+  (the 3 sweep buttons). The Quality Console rollup `GET
+  /api/ops/quality/rollup` 404 is a *separate*, unresolved issue: the
+  prod worker is stale and the route only lands once the worker
+  redeploys (CI typecheck gate still RED — tracked by the worker
+  test-suite task / Task #30 stale-deploy ship). Same systemic
+  preflight bug affects every other authenticated dashboard
+  POST/PUT/DELETE — proposed as a follow-up.
 - **Prod ops without a code deploy (Task #10, 2026-06-02).** The
   workspace env has `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`,
   so D1 migrations and worker secrets can be applied to prod directly
