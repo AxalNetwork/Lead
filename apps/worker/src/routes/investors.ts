@@ -17,6 +17,8 @@
 
 import { Hono } from "hono";
 import type { Env, JobMessage } from "../types";
+import { loadInvestorEntityOverlay, coalesceStr, coalesceNum, coalesceArr } from "../services/investor_entity_merge";
+import { materializeInvestorPortfolio } from "../services/investor_portfolio";
 
 export const investors = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
@@ -186,6 +188,22 @@ investors.get("/:id/profile", async (c) => {
   ).bind(id).first<InvestorRow>();
   if (!row) return c.json({ error: "not_found" }, 404);
 
+  // Task #31: fill empty scalar fields from the unified entity store (crawled
+  // bio/thesis/check-size/focus/socials). Legacy `leads` values always win.
+  const overlay = await loadInvestorEntityOverlay(c.env, id);
+  const mBio = coalesceStr(row.bio, overlay.bio);
+  const mThesis = coalesceStr(row.thesis, overlay.thesis);
+  const mCheckMin = coalesceNum(row.check_size_min_usd, overlay.check_size_min_usd);
+  const mCheckMax = coalesceNum(row.check_size_max_usd, overlay.check_size_max_usd);
+  const mCheckTyp = coalesceNum(row.check_size_typical_usd, overlay.check_size_typical_usd);
+  const mStageFocus = coalesceArr(parseJson<string[]>(row.stage_focus_json, []), overlay.stage_focus);
+  const mSectorFocus = coalesceArr(parseJson<string[]>(row.sector_focus_slugs_json, []), overlay.sector_focus);
+  const mGeoFocus = coalesceArr(parseJson<string[]>(row.geo_focus_json, []), overlay.geo_focus);
+  const mLinkedin = coalesceStr(row.linkedin_url, overlay.linkedin_url);
+  const mTwitter = coalesceStr(row.twitter_url, overlay.twitter_url);
+  const mGithub = coalesceStr(row.github_url, overlay.github_url);
+  const mPersonal = coalesceStr(row.personal_url, overlay.personal_url);
+
   // Fund (current employer) — only if linked.
   let fund: Record<string, unknown> | null = null;
   if (row.current_fund_id != null) {
@@ -214,8 +232,8 @@ investors.get("/:id/profile", async (c) => {
     const s = (inv.stage as string | null) ?? "unknown";
     stageBreakdown[s] = (stageBreakdown[s] ?? 0) + 1;
   }
-  for (const slug of parseJson<string[]>(row.sector_focus_slugs_json, [])) sectorBreakdown[slug] = (sectorBreakdown[slug] ?? 0) + 1;
-  for (const g of parseJson<string[]>(row.geo_focus_json, [])) geoBreakdown[g] = (geoBreakdown[g] ?? 0) + 1;
+  for (const slug of mSectorFocus) sectorBreakdown[slug] = (sectorBreakdown[slug] ?? 0) + 1;
+  for (const g of mGeoFocus) geoBreakdown[g] = (geoBreakdown[g] ?? 0) + 1;
 
   const companyIds = investments.map((i) => i.company_id).filter(Boolean) as number[];
   let coInvestors: Array<{ investor_lead_id: string; name: string; shared: number }> = [];
@@ -253,7 +271,7 @@ investors.get("/:id/profile", async (c) => {
 
   const boards = parseJson<Array<Record<string, unknown>>>((row as unknown as Record<string, string | null>).board_seats_json ?? null, []);
 
-  const profile = { id: row.id, name: row.name, email: row.email, org: row.org, title: row.title, category: row.category, investor_kind: row.investor_kind, bio: row.bio, location: { country_iso2: row.country_iso2, region: row.region, city: row.city }, contact: { email: row.email, linkedin_url: row.linkedin_url, twitter_url: row.twitter_url, github_url: row.github_url, personal_url: row.personal_url, office_hours_url: row.office_hours_url, pitch_form_url: row.pitch_form_url, calendly_url: row.calendly_url }, profiles: { signal_nfx_url: row.signal_nfx_url, crunchbase_url: row.crunchbase_url, wikipedia_url: row.wikipedia_url }, thesis: row.thesis, check_size: { min_usd: row.check_size_min_usd, max_usd: row.check_size_max_usd, typical_usd: row.check_size_typical_usd }, sweet_spot_stage: row.sweet_spot_stage, stage_focus: parseJson<string[]>(row.stage_focus_json, []), sector_focus: parseJson<string[]>(row.sector_focus_slugs_json, []), geo_focus: parseJson<string[]>(row.geo_focus_json, []), fund, current_role_title: row.current_role_title, counters: { investment_count: row.investment_count ?? 0, unicorn_count: row.unicorn_count ?? 0, exit_count: row.exit_count ?? 0, avg_check_usd: row.avg_check_usd, total_deployed_usd: row.total_deployed_usd, board_seats_count: row.board_seats_count ?? 0, media_count: media.length, podcast_count: row.podcast_count ?? 0 }, portfolio: investments, breakdowns: { stage: stageBreakdown, sector: sectorBreakdown, geography: geoBreakdown }, co_investors: coInvestors, boards, media, history: historyR.results ?? [], last_enriched_at: row.last_enriched_at, created_at: row.created_at, updated_at: row.updated_at };
+  const profile = { id: row.id, name: row.name, email: row.email, org: row.org, title: row.title, category: row.category, investor_kind: row.investor_kind, bio: mBio, location: { country_iso2: row.country_iso2, region: row.region, city: row.city }, contact: { email: row.email, linkedin_url: mLinkedin, twitter_url: mTwitter, github_url: mGithub, personal_url: mPersonal, office_hours_url: row.office_hours_url, pitch_form_url: row.pitch_form_url, calendly_url: row.calendly_url }, profiles: { signal_nfx_url: row.signal_nfx_url, crunchbase_url: row.crunchbase_url, wikipedia_url: row.wikipedia_url }, thesis: mThesis, check_size: { min_usd: mCheckMin, max_usd: mCheckMax, typical_usd: mCheckTyp }, sweet_spot_stage: row.sweet_spot_stage, stage_focus: mStageFocus, sector_focus: mSectorFocus, geo_focus: mGeoFocus, fund, current_role_title: row.current_role_title, counters: { investment_count: row.investment_count ?? 0, unicorn_count: row.unicorn_count ?? 0, exit_count: row.exit_count ?? 0, avg_check_usd: row.avg_check_usd, total_deployed_usd: row.total_deployed_usd, board_seats_count: row.board_seats_count ?? 0, media_count: media.length, podcast_count: row.podcast_count ?? 0 }, portfolio: investments, breakdowns: { stage: stageBreakdown, sector: sectorBreakdown, geography: geoBreakdown }, co_investors: coInvestors, boards, media, history: historyR.results ?? [], last_enriched_at: row.last_enriched_at, created_at: row.created_at, updated_at: row.updated_at };
 
   await c.env.SCRAPE_CACHE.put(cacheKey, JSON.stringify(profile), { expirationTtl: PROFILE_TTL_SEC });
   return c.json(profile);
@@ -266,8 +284,16 @@ investors.post("/:id/enrich", async (c) => {
   const force = c.req.query("force") === "1";
   const { enrichLead } = await import("../enrichment/orchestrator");
   const outcome = await enrichLead(c.env, id, { forceRefresh: force });
+  // Task #31: rebuild this investor's portfolio from firm_portfolio +
+  // companies_json so the profile reflects the freshest crawled data.
+  let portfolio: Awaited<ReturnType<typeof materializeInvestorPortfolio>> | null = null;
+  try {
+    portfolio = await materializeInvestorPortfolio(c.env, { investorLeadId: id });
+  } catch (e) {
+    console.warn("investor portfolio materialize failed", id, (e as Error).message);
+  }
   await c.env.SCRAPE_CACHE.delete(`profile:investor:${id}`);
-  return c.json({ status: "ok", outcome });
+  return c.json({ status: "ok", outcome, portfolio });
 });
 
 investors.post("/enrich/bulk", async (c) => {

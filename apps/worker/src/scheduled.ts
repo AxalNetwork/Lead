@@ -3,6 +3,7 @@ import { enrichLead } from "./enrichment/orchestrator";
 import { runNightlyAggregator } from "./services/analytics_v2.aggregator";
 import { runRelationshipDerivation } from "./scraper/relationships/derive";
 import { runInvestorStats } from "./services/investor_stats";
+import { materializeInvestorPortfolio } from "./services/investor_portfolio";
 import { recomputeAccountScore } from "./prospects/repo";
 import { ensureRoleTaxonomySeeded } from "./prospects/seedRoles";
 // Task #5: source registry — drives the 6h cron + nightly staleness sweep.
@@ -351,6 +352,18 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         console.log("nightly account scores done", n);
       } catch (e) {
         console.error("nightly account scores failed", (e as Error).message);
+      }
+
+      // 2b. Task #31: materialize investor portfolios from firm_portfolio +
+      // leads.companies_json into investor_investments (creating backing
+      // companies rows when untracked) so the investor profile page is
+      // populated. Runs BEFORE investor stats so the counters below reflect
+      // the freshly-materialized rows.
+      try {
+        const r = await materializeInvestorPortfolio(env);
+        console.log("investor portfolio materialize done", JSON.stringify(r));
+      } catch (e) {
+        console.error("investor portfolio materialize failed", (e as Error).message);
       }
 
       // 3. Investor stats

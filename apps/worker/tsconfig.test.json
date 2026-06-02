@@ -129,6 +129,8 @@
     "src/services/deals/dedupe.ts",
     "src/services/deals/investorResolver.ts",
     "src/services/deals/persist.ts",
+    "src/services/investor_portfolio.ts",
+    "src/services/investor_entity_merge.ts",
     "src/ai/dealExtractor.ts",
     "src/crawler/adapters/deals/index.ts",
     "src/crawler/adapters/deals/_shared.ts",
