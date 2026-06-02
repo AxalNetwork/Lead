@@ -33,13 +33,25 @@ Jekyll site (`apps/site`) on GitHub Pages at aidatasignal.com + Cloudflare Worke
   CORS-safe *simple* request (`text/plain`) — no preflight, the cookie
   rides along, and the Hono handler still parses the body via
   `c.req.json()`. Applied to `apps/site/dashboard/ops-quality.html`
-  (the 3 sweep buttons). The Quality Console rollup `GET
-  /api/ops/quality/rollup` 404 is a *separate*, unresolved issue: the
-  prod worker is stale and the route only lands once the worker
-  redeploys (CI typecheck gate still RED — tracked by the worker
-  test-suite task / Task #30 stale-deploy ship). Same systemic
-  preflight bug affects every other authenticated dashboard
-  POST/PUT/DELETE — proposed as a follow-up.
+  (the 3 sweep buttons). Same systemic preflight bug affects every
+  other authenticated dashboard POST/PUT/DELETE — proposed as a
+  follow-up (Task #32).
+  - **Rollup 404 fixed by a manual prod worker deploy (2026-06-02,
+    with explicit user approval).** The rollup `GET
+    /api/ops/quality/rollup` 404 was a stale prod worker (route
+    correct in code). CI auto-deploy is still RED on the pre-existing
+    typecheck gate, so we used the manual escape hatch
+    (`cd apps/worker && npx wrangler@3.99.0 deploy`) — `d1 migrations
+    list` reported "No migrations to apply", worker code was identical
+    to `origin/main` (left-right `0 1`, the 1 un-pushed commit did NOT
+    touch `apps/worker`), so the deploy shipped reviewed worker code
+    and brought prod up to the origin/main backlog. **Deployed Version
+    ID: `1492904b-89e9-4d96-8052-1771a4033921`.** Note: this bypasses
+    the typecheck + ML-eval gates and ships every worker change merged
+    since the last green CI run, so the proper fix is still to land the
+    worker test-suite/typecheck task so CI auto-deploy goes green.
+    End-to-end browser verification as the operator is still pending —
+    Access 302s all workspace curl, so it cannot be confirmed here.
 - **Prod ops without a code deploy (Task #10, 2026-06-02).** The
   workspace env has `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`,
   so D1 migrations and worker secrets can be applied to prod directly
