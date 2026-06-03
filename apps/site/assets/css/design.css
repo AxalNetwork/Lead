@@ -112,6 +112,12 @@
   transition: grid-template-columns var(--ads-dur) var(--ads-ease);
 }
 .ads-shell[data-rail="collapsed"] { --ads-rail-w: 64px; }
+/* Let the main grid track shrink below its widest child so wide tables,
+   the topbar flex row, and long strings reflow within the viewport
+   instead of forcing horizontal overflow (which body{overflow-x:hidden}
+   then clips on phones). Without min-width:0 the grid item keeps the
+   default min-width:auto and refuses to shrink. */
+.ads-shell__main { min-width: 0; }
 @media (max-width: 900px) {
   .ads-shell { grid-template-columns: 1fr; }
 }
