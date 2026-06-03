@@ -34,6 +34,25 @@ permalink: /dashboard/merge-review/
   .ads-mr__empty strong { display: block; color: var(--ads-accent-2); font-size: 16px; margin-bottom: 4px; }
   .ads-mr__error { border-left: 3px solid var(--ads-danger); }
   .ads-mr__error p { margin: 0; color: var(--ads-danger); }
+
+  /* Hard-pin a dark palette on every merge-review surface. The legacy
+     marketing stylesheets (bootstrap.min.css / style.css) leak a white
+     background onto the cards/tables; under the dark theme the text stays
+     near-white, which left it unreadable ("white on white"). Explicit
+     values + !important beat the leak so backgrounds are always dark and
+     characters always light. */
+  .ads-mr .ads-card { background-color: var(--ads-panel) !important; color: var(--ads-text) !important; }
+  .ads-mr__col { background-color: var(--ads-panel-2) !important; color: var(--ads-text) !important; }
+  .ads-mr__discrim { background-color: var(--ads-panel-2) !important; color: var(--ads-text) !important; }
+  .ads-mr__table, .ads-mr__table tbody, .ads-mr__table tr { background-color: transparent !important; }
+  .ads-mr__table td { background-color: transparent !important; color: var(--ads-text) !important; }
+  .ads-mr__table td:first-child { color: var(--ads-muted) !important; }
+  .ads-mr__table tr.is-diff td { background-color: color-mix(in srgb, var(--ads-accent) 22%, var(--ads-panel-2)) !important; color: var(--ads-text) !important; }
+  .ads-mr__col-title, .ads-mr__reasons, .ads-mr__matching, .ads-mr__status { color: var(--ads-muted) !important; }
+  .ads-mr__discrim strong { color: var(--ads-text-strong) !important; }
+  .ads-mr__score { color: var(--ads-accent) !important; }
+  .ads-mr__empty { color: var(--ads-muted) !important; }
+  .ads-mr__empty strong { color: var(--ads-accent-2) !important; }
 </style>
 
 <h1 class="ads-page-title">Merge Review</h1>
@@ -161,16 +180,20 @@ permalink: /dashboard/merge-review/
     //   merge            → POST /merge      (promotes candidate into primary)
     //   keep-separate    → POST /reject     (status=rejected, never re-queues)
     //   needs-more-info  → POST /reject     (skip_days=14, re-queues later)
+    // No "Content-Type: application/json" header: that makes the POST a
+    // CORS *preflighted* request, and the preflight OPTIONS carries no
+    // cookie, so Cloudflare Access 302s it to login and the action
+    // silently fails. Sending the body as a CORS-safe simple request
+    // (default text/plain) lets the auth cookie ride along; the Hono
+    // handlers still parse the body via c.req.json(). See Task #25.
     if (action === "merge") {
       return fetch(API + "/api/dedupe/review/" + encodeURIComponent(id) + "/merge", {
-        method: "POST", credentials: "include",
-        headers: { "Content-Type": "application/json" }, body: "{}"
+        method: "POST", credentials: "include", body: "{}"
       });
     }
     var body = action === "needs-more-info" ? { skip_days: 14 } : {};
     return fetch(API + "/api/dedupe/review/" + encodeURIComponent(id) + "/reject", {
-      method: "POST", credentials: "include",
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+      method: "POST", credentials: "include", body: JSON.stringify(body)
     });
   }
 
