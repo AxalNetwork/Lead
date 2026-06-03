@@ -76,14 +76,57 @@ Set via `wrangler secret put NAME` (or in the CF dashboard):
   `ROCKETREACH_API_KEY`, `PEOPLEDATALABS_API_KEY`, `PROXYCURL_API_KEY`,
   `CRUNCHBASE_API_KEY`, `WHOISXML_API_KEY`, `BRAVE_API_KEY`,
   `SCRAPING_API_KEY`, `PROXY_URL` (optional).
-- Proxy failover pool (all optional — set any subset; the crawler's tier-2
-  proxy tries each configured provider in fixed order and succeeds as soon
-  as one retrieves the page). Each provider is an HTTP-forward base URL plus
-  an optional `user:pass` basic-auth pair:
-  - `PROXY_URL` / `PROXY_AUTH` — generic/legacy entry, tried first.
-  - `SMARTPROXY_URL` / `SMARTPROXY_AUTH` — Smartproxy.
-  - `BRIGHTDATA_URL` / `BRIGHTDATA_AUTH` — Bright Data.
-  - `OXYLABS_URL` / `OXYLABS_AUTH` — Oxylabs.
+### Proxy failover pool (Task #16 / Task #39)
+
+All optional — set any subset. The crawler's tier-2 proxy step
+(`src/scraper/proxyPool.ts` → `src/scraper/fetcher.ts::tier2Proxy`) tries
+each **configured** provider in a fixed order and succeeds as soon as one
+retrieves the page; only once every provider fails does it escalate to
+Wayback. A provider is "configured" when its activating secret (the
+forward `*_URL`, or the API `*_KEY`) is present — absent secret = slot
+skipped. There are six slots — the legacy generic entry plus five named
+vendors — in two shapes:
+
+- **Forward** (`mode: "forward"`): an HTTP-forward base URL the target is
+  appended to as `url=`, plus an optional `user:pass` sent as HTTP Basic
+  auth. Smartproxy / Bright Data / Oxylabs "Web Unblocker" style.
+- **API** (`mode: "api"`): the API key rides in the request URL as a query
+  param; **no** Authorization header is sent. ScraperAPI / scrapestack.
+
+Order: `generic` → `smartproxy` → `brightdata` → `oxylabs` → `scraperapi`
+→ `scrapestack`. Logs (`proxy.attempt`) record only the provider name,
+never key/credential values.
+
+| Secret | Provider (mode) | Description | Example | Replit Secret? | CF Secret? |
+| ------ | --------------- | ----------- | ------- | -------------- | ---------- |
+| `PROXY_URL` | generic (forward) | Legacy/generic forward endpoint, tried first | `https://gate.example.com/` | yes | yes |
+| `PROXY_AUTH` | generic (forward) | Optional `user:pass` Basic auth for `PROXY_URL` | `user:pass` | yes | yes |
+| `SMARTPROXY_URL` | Smartproxy / **Decodo** (forward) | Smartproxy forward endpoint (Decodo is Smartproxy's rebrand — same secret) | `https://gate.smartproxy.com:7000/` | yes | yes |
+| `SMARTPROXY_AUTH` | Smartproxy / Decodo (forward) | Optional `user:pass` Basic auth | `user:pass` | yes | yes |
+| `BRIGHTDATA_URL` | Bright Data (forward) | Bright Data Web Unlocker forward endpoint | `https://brd.superproxy.io:22225/` | yes | yes |
+| `BRIGHTDATA_AUTH` | Bright Data (forward) | Optional `user:pass` Basic auth | `brd-customer-…:pass` | yes | yes |
+| `OXYLABS_URL` | Oxylabs (forward) | Oxylabs Web Unblocker forward endpoint | `https://unblock.oxylabs.io:60000/` | yes | yes |
+| `OXYLABS_AUTH` | Oxylabs (forward) | Optional `user:pass` Basic auth | `user:pass` | yes | yes |
+| `SCRAPERAPI_KEY` | ScraperAPI (api) | ScraperAPI key; baked into `api.scraperapi.com/?api_key=…&url=…` | `abc123…` | yes | yes |
+| `SCRAPERAPI_COUNTRY` | ScraperAPI (api) | Optional `country_code` (geo-targets exit node) | `us` | optional | optional |
+| `SCRAPESTACK_KEY` | scrapestack (api) | scrapestack key; baked into `api.scrapestack.com/scrape?access_key=…&url=…` | `abc123…` | yes | yes |
+| `SCRAPESTACK_COUNTRY` | scrapestack (api) | Optional `proxy_location` (geo-targets exit node) | `us` | optional | optional |
+
+> **Decodo** = Smartproxy (rebrand). Point `SMARTPROXY_URL` /
+> `SMARTPROXY_AUTH` at your Decodo gateway; no separate secret exists.
+
+**Migrate these secrets to the Cloudflare worker** with `wrangler secret
+put` (run from `apps/worker/`), e.g.:
+
+```sh
+printf '%s' "$SCRAPERAPI_KEY"  | npx wrangler secret put SCRAPERAPI_KEY
+printf '%s' "$SCRAPESTACK_KEY" | npx wrangler secret put SCRAPESTACK_KEY
+# …and the forward-proxy URL/AUTH pairs for any provider you use.
+```
+
+`node scripts/print-proxy-secrets.mjs` prints the exact `wrangler secret
+put` command for every proxy secret currently set in your shell
+environment (it never prints the values themselves).
 
 ### Required scopes for `CLOUDFLARE_API_TOKEN`
 

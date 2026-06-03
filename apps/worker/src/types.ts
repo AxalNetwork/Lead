@@ -108,12 +108,21 @@ export interface Env {
   // can be set. The crawler tries each configured provider in fixed order
   // (generic PROXY_URL first, then Smartproxy → Bright Data → Oxylabs) and
   // succeeds as soon as one retrieves the page. See scraper/proxyPool.ts.
+  // Forward proxies (HTTP-forward base URL + optional `user:pass` basic
+  // auth). Decodo is Smartproxy's rebrand, so SMARTPROXY_* covers it.
   SMARTPROXY_URL?: string;
   SMARTPROXY_AUTH?: string;
   BRIGHTDATA_URL?: string;
   BRIGHTDATA_AUTH?: string;
   OXYLABS_URL?: string;
   OXYLABS_AUTH?: string;
+  // Task #39: API-mode proxy providers. The key rides in the request URL
+  // as a query param (no Basic auth header). Tried after the forward
+  // proxies above. Optional country secrets pin exit-node geography.
+  SCRAPERAPI_KEY?: string;
+  SCRAPERAPI_COUNTRY?: string; // optional ScraperAPI country_code (e.g. "us")
+  SCRAPESTACK_KEY?: string;
+  SCRAPESTACK_COUNTRY?: string; // optional scrapestack proxy_location (e.g. "us")
   // Task #5: SCRAPER_API_*, BRAVE_*, HUNTER_*, APOLLO_*, ROCKETREACH_*,
   // PEOPLEDATALABS_*, PROXYCURL_*, CRUNCHBASE_*, OPENCORPORATES_*,
   // UK_CH_*, WHOISXML_*, FORBES_SIGNALS_*, BUILTWITH_* env keys were
