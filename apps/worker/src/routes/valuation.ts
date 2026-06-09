@@ -173,8 +173,37 @@ compPanelsRoute.get("/:id/snapshot", async (c) => {
     ev_arr_multiple: number | null; enterprise_value_usd: number | null;
     quarter_end: string | null;
   }>();
-  // For private members, attach latest mark.
-  const out = await Promise.all((members.results ?? []).map(async (m) => {
+  // Batch-load the latest valuation mark for EVERY private member of this
+  // panel in a single query, replacing the prior per-member SELECT (an N+1
+  // that scaled linearly with panel size). A window function picks the top
+  // mark per company using the SAME ordering the per-member query used
+  // (as_of DESC, confidence DESC), so output is identical. Joining against
+  // comp_members keeps this to one bound parameter (panel_id) regardless of
+  // member count, sidestepping D1's bound-parameter ceiling on IN-lists.
+  interface LatestMark { implied_valuation_usd: number | null; as_of: string; source_kind: string; confidence: number }
+  const markRows = await c.env.DB.prepare(
+    `SELECT company_entity_id, implied_valuation_usd, as_of, source_kind, confidence
+       FROM (
+         SELECT vm.company_entity_id, vm.implied_valuation_usd, vm.as_of,
+                vm.source_kind, vm.confidence,
+                ROW_NUMBER() OVER (
+                  PARTITION BY vm.company_entity_id
+                  ORDER BY vm.as_of DESC, vm.confidence DESC
+                ) AS rn
+           FROM valuation_marks vm
+           JOIN comp_members m ON m.company_entity_id = vm.company_entity_id
+          WHERE m.panel_id = ? AND m.removed_at IS NULL AND m.is_public = 0
+       )
+      WHERE rn = 1`,
+  ).bind(panelId).all<LatestMark & { company_entity_id: string }>();
+  const latestMarkByEntity = new Map<string, LatestMark>();
+  for (const r of markRows.results ?? []) {
+    latestMarkByEntity.set(r.company_entity_id, {
+      implied_valuation_usd: r.implied_valuation_usd, as_of: r.as_of,
+      source_kind: r.source_kind, confidence: r.confidence,
+    });
+  }
+  const out = (members.results ?? []).map((m) => {
     const base = {
       company_entity_id: m.company_entity_id, company_name: m.company_name_raw,
       is_public: !!m.is_public, ticker: m.ticker, match_reason: m.match_reason,
@@ -191,22 +220,18 @@ compPanelsRoute.get("/:id/snapshot", async (c) => {
         inferred_valuation_low_usd: null, inferred_valuation_high_usd: null,
       };
     }
-    const mark = await c.env.DB.prepare(
-      `SELECT implied_valuation_usd, as_of, source_kind, confidence
-         FROM valuation_marks WHERE company_entity_id = ?
-        ORDER BY as_of DESC, confidence DESC LIMIT 1`,
-    ).bind(m.company_entity_id).first<{ implied_valuation_usd: number | null; as_of: string; source_kind: string; confidence: number }>();
+    const mark = latestMarkByEntity.get(m.company_entity_id) ?? null;
     const v = mark?.implied_valuation_usd ?? null;
     return { ...base,
       revenue_usd: null, arr_usd: null,
       growth_yoy_pct: null, gross_margin_pct: null, rule_of_40_pct: null,
       ev_revenue_multiple: null, ev_arr_multiple: null,
       enterprise_value_usd: null, quarter_end: null,
-      latest_mark: mark ?? null,
+      latest_mark: mark,
       inferred_valuation_low_usd: v != null ? Math.round(v * 0.7) : null,
       inferred_valuation_high_usd: v != null ? Math.round(v * 1.3) : null,
     };
-  }));
+  });
   // Compute panel medians from public members.
   const evArr: number[] = [], evRev: number[] = [];
   for (const m of out) {

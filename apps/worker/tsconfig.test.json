@@ -254,6 +254,7 @@
     "src/services/systemHealth/alerts.ts",
     "src/services/systemHealth/snapshot.ts",
     "src/services/systemHealth/probes.ts",
-    "src/ai/search_sync.ts"
+    "src/ai/search_sync.ts",
+    "src/routes/valuation.ts"
   ]
 }
