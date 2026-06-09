@@ -100,7 +100,6 @@ permalink: /dashboard/crawlers/
       const slug = t.getAttribute("data-toggle");
       await fetch(`https://api.aidatasignal.com/api/crawlers/${slug}/toggle`, {
         method: "POST", credentials: "include",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: t.checked }),
       });
     }

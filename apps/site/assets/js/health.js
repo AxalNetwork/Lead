@@ -34,7 +34,7 @@
     const msgEl = $("ads-health-action-msg");
     if (msgEl) msgEl.textContent = label + "…";
     try {
-      const r = await fetch(API + path, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const r = await fetch(API + path, { method: "POST", credentials: "include", body: "{}" });
       const j = await r.json();
       if (msgEl) msgEl.textContent = label + ": " + JSON.stringify(j);
     } catch (e) {

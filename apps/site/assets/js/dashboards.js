@@ -70,7 +70,6 @@
   async function snapshot(page, filters, payload) {
     return api("/snapshots", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ page: page, filters: filters, payload: payload, row_count: Array.isArray(payload && payload.items) ? payload.items.length : 0 }),
     });
   }

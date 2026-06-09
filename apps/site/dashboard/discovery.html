@@ -168,7 +168,7 @@ permalink: /dashboard/discovery/
         btn.addEventListener("click", async function () {
           var id = btn.getAttribute("data-id");
           var act = btn.getAttribute("data-act");
-          await fetch(API + "/api/discovery/urls/" + encodeURIComponent(id) + "/" + act, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: "{}" });
+          await fetch(API + "/api/discovery/urls/" + encodeURIComponent(id) + "/" + act, { method: "POST", credentials: "include", body: "{}" });
           loadUrls(); loadStats();
         });
       });
@@ -215,7 +215,7 @@ permalink: /dashboard/discovery/
     var payload = { ids: ids, action: action };
     if (action === "reject") payload.reason = "manual_bulk";
     try {
-      var r = await fetch(API + "/api/discovery/urls/bulk", { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+      var r = await fetch(API + "/api/discovery/urls/bulk", { method: "POST", credentials: "include", body: JSON.stringify(payload) });
       var data = await r.json();
       if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
       window.__ads_disc_sel = {};
@@ -235,7 +235,7 @@ permalink: /dashboard/discovery/
       var methods = selectedMethods();
       var payload = { url: url, depth: depth, max_per_host: max_per_host };
       if (methods.length && methods.length < Object.keys(IMPLEMENTED).length) payload.methods = methods;
-      var r = await fetch(API + "/api/discovery/seed", { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+      var r = await fetch(API + "/api/discovery/seed", { method: "POST", credentials: "include", body: JSON.stringify(payload) });
       var data = await r.json();
       if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
       // Preserve the runId so subsequent Crawl-frontier clicks recurse
@@ -250,7 +250,7 @@ permalink: /dashboard/discovery/
     try {
       var crawlPayload = { limit: 25 };
       if (window.__ads_last_run_id) crawlPayload.run_id = window.__ads_last_run_id;
-      await fetch(API + "/api/discovery/crawl", { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify(crawlPayload) });
+      await fetch(API + "/api/discovery/crawl", { method: "POST", credentials: "include", body: JSON.stringify(crawlPayload) });
       loadStats(); loadUrls();
     } finally { this.disabled = false; this.textContent = "Crawl frontier"; }
   });

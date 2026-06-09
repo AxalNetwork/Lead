@@ -159,7 +159,6 @@
   async function postJob(payload) {
     return apiFetch("/api/jobs", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
   }
@@ -535,7 +534,6 @@
         try {
           var res = await fetch(API_BASE + "/api/uploads/" + current.id + "/rerun", {
             method: "POST", credentials: "include",
-            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ skip_ocr: true }),
           });
           if (!res.ok) throw new Error(await res.text());
@@ -555,7 +553,7 @@
         try {
           var res = await fetch(API_BASE + "/api/uploads/" + current.id + "/diff-preview", {
             method: "POST", credentials: "include",
-            headers: { "Content-Type": "application/json" }, body: "{}",
+            body: "{}",
           });
           if (!res.ok) throw new Error(await res.text());
           var j = await res.json();
@@ -614,7 +612,6 @@
           });
           var res = await fetch(API_BASE + "/api/uploads/" + current.id + "/save-template", {
             method: "POST", credentials: "include",
-            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ name: name, tabs: tabsPayload }),
           });
           if (!res.ok) throw new Error(await res.text());
@@ -703,7 +700,7 @@
       var url = API_BASE + "/api/uploads/" + current.id + "/confirm-map" + (force ? "?force=1" : "");
       var res = await fetch(url, {
         method: "POST", credentials: "include",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        body: JSON.stringify(body),
       });
       var text = await res.text();
       var data = null;
@@ -869,7 +866,7 @@
       if (!firmDomain && !persona) { showMsg(f, "Provide a firm domain or persona.", "err"); btn.disabled = false; return; }
       try {
         var payload = firmDomain ? { firmDomain: firmDomain } : { persona: persona, country: country || undefined };
-        await apiFetch("/api/discover", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        await apiFetch("/api/discover", { method: "POST", body: JSON.stringify(payload) });
         showMsg(f, "Discovery queued. Candidates appear below in ~60s.", "ok");
         pollActiveJobs();
         setTimeout(function () { pollCandidates(firmDomain); }, 5000);
@@ -905,7 +902,6 @@
       try {
         var res = await apiFetch("/api/import/firmlists", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(importer ? { urls: urls, importer: importer } : { urls: urls }),
         });
         var enq = res && res.enqueued != null ? res.enqueued : urls.length;
@@ -938,7 +934,6 @@
         try {
           var r = await apiFetch("/api/import/nfx/paste", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ rows: rows, source_url: "https://signal.nfx.com/" }),
           });
           if (msgEl) msgEl.textContent = "Created " + (r.created || 0) + " · updated " + (r.updated || 0) + " · unchanged " + (r.unchanged || 0);
@@ -1288,7 +1283,6 @@
     return fetch(API_BASE + "/api/exports/csv", {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }).then(function (r) {
       if (!r.ok) return r.text().then(function (t) { throw new Error(t || ("HTTP " + r.status)); });
@@ -1312,7 +1306,6 @@
     payload.name = name;
     fetch(API_BASE + "/api/exports/templates", {
       method: "POST", credentials: "include",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }).then(function (r) {
       if (!r.ok) return r.text().then(function (t) { throw new Error(t); });

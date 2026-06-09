@@ -165,9 +165,9 @@
     }
 
     function apiPost(path, body) {
-      if (window.adsApiFetch) return window.adsApiFetch(path, { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } });
+      if (window.adsApiFetch) return window.adsApiFetch(path, { method: "POST", body: JSON.stringify(body) });
       var base = (window.ADS && window.ADS.apiBase) || "https://api.aidatasignal.com";
-      return fetch(base + path, { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" }, credentials: "include" }).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
+      return fetch(base + path, { method: "POST", body: JSON.stringify(body), credentials: "include" }).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
     }
     function influenceHtml() {
       if (!influenceSummary) return "";

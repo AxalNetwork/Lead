@@ -35,7 +35,7 @@
     return r.json();
   }
   async function jpost(path, body) {
-    const r = await fetch(API + path, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : "{}" });
+    const r = await fetch(API + path, { method: "POST", credentials: "include", body: body ? JSON.stringify(body) : "{}" });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return r.json();
   }
