@@ -16,29 +16,24 @@
 //   .charts.worldArcs(el, items, opts?)
 (function () {
   var API = "https://api.aidatasignal.com/api/dashboards";
-  function esc(s) {
-    return (s == null ? "" : String(s)).replace(/[&<>"']/g, function (c) {
-      return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
-    });
-  }
-  function fmtUsd(n) {
-    if (!n) return "—";
-    if (n >= 1e9) return "$" + (n / 1e9).toFixed(1) + "B";
-    if (n >= 1e6) return "$" + (n / 1e6).toFixed(0) + "M";
-    if (n >= 1e3) return "$" + (n / 1e3).toFixed(0) + "k";
-    return "$" + n.toLocaleString();
-  }
+  // Shared helpers (window.adsUtil from ads-utils.js, loaded first in <head>).
+  var esc = window.adsUtil.escapeHtml;
+  var fmtUsd = window.adsUtil.fmtUsd;
   function qs(params) {
     if (!params) return "";
     var p = Object.keys(params).filter(function (k) { return params[k] != null && params[k] !== ""; })
       .map(function (k) { return encodeURIComponent(k) + "=" + encodeURIComponent(params[k]); }).join("&");
     return p ? "?" + p : "";
   }
+  // Delegates to the shared adsUtil.apiFetch; keeps the dashboards-specific
+  // 401/403 → showForbidden() behavior by inspecting err.status.
   async function api(path, opts) {
-    var r = await fetch(API + path, Object.assign({ credentials: "include" }, opts || {}));
-    if (r.status === 401 || r.status === 403) { showForbidden(); throw new Error("forbidden"); }
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    return r.json();
+    try {
+      return await window.adsUtil.apiFetch(API + path, opts);
+    } catch (e) {
+      if (e && (e.status === 401 || e.status === 403)) { showForbidden(); throw new Error("forbidden"); }
+      throw e;
+    }
   }
   function csvDownload(path, filename, params) {
     var url = API + path + qs(Object.assign({ format: "csv" }, params || {}));

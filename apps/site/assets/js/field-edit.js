@@ -38,32 +38,29 @@
   function jsonOrText(res) { return res.text().then(function (t) { try { return JSON.parse(t); } catch { return { raw: t }; } }); }
 
   // ---------- API wrappers ----------
-  async function postOverride(entityId, predicate, value, reason) {
+  // These throwing helpers route through the shared adsUtil.apiFetch
+  // (credentials + error + JSON parsing). Content-Type is kept as-is to
+  // preserve existing request behavior; the inline create/merge/delete
+  // handlers below still use raw fetch because they need the response body
+  // on failure (page logic, out of scope here).
+  function postOverride(entityId, predicate, value, reason) {
     var body = { predicate: predicate, override_reason: reason };
     if (typeof value === "number" && !isNaN(value)) body.value_numeric = value;
     else body.value_text = String(value);
-    var res = await fetch(API + "/api/entities/" + encodeURIComponent(entityId) + "/overrides", {
-      method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    return window.adsUtil.apiFetch(API + "/api/entities/" + encodeURIComponent(entityId) + "/overrides", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error("save_failed:" + res.status);
-    return jsonOrText(res);
   }
-  async function fetchHistory(entityId, predicate) {
-    var res = await fetch(API + "/api/entities/" + encodeURIComponent(entityId) + "/overrides/" + encodeURIComponent(predicate) + "/history", { credentials: "include" });
-    if (!res.ok) throw new Error("history_failed:" + res.status);
-    return jsonOrText(res);
+  function fetchHistory(entityId, predicate) {
+    return window.adsUtil.apiFetch(API + "/api/entities/" + encodeURIComponent(entityId) + "/overrides/" + encodeURIComponent(predicate) + "/history");
   }
-  async function unlockOverride(entityId, overrideId, reason) {
-    var res = await fetch(API + "/api/entities/" + encodeURIComponent(entityId) + "/overrides/" + encodeURIComponent(overrideId) + "/unlock", {
-      method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: reason || "" }),
+  function unlockOverride(entityId, overrideId, reason) {
+    return window.adsUtil.apiFetch(API + "/api/entities/" + encodeURIComponent(entityId) + "/overrides/" + encodeURIComponent(overrideId) + "/unlock", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: reason || "" }),
     });
-    if (!res.ok) throw new Error("unlock_failed:" + res.status);
-    return jsonOrText(res);
   }
-  async function fetchAuditLog(entityId) {
-    var res = await fetch(API + "/api/entities/" + encodeURIComponent(entityId) + "/audit-log", { credentials: "include" });
-    if (!res.ok) throw new Error("audit_failed:" + res.status);
-    return jsonOrText(res);
+  function fetchAuditLog(entityId) {
+    return window.adsUtil.apiFetch(API + "/api/entities/" + encodeURIComponent(entityId) + "/audit-log");
   }
 
   // ---------- History side-panel ----------

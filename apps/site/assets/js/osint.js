@@ -18,7 +18,9 @@
     }
     return e;
   }
-  function escape(s) { return String(s == null ? "" : s).replace(/[<>&"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" })[c]); }
+  // Shared escape (FIX: the prior local copy omitted the single-quote,
+  // diverging from the other dashboards). window.adsUtil from ads-utils.js.
+  const escape = window.adsUtil.escapeHtml;
   function fmtConf(c) { const n = Number(c || 0); return (n * 100).toFixed(0) + "%"; }
   function ago(s) {
     if (!s) return "—";
@@ -29,15 +31,12 @@
     if (m < 1440) return Math.floor(m / 60) + "h";
     return Math.floor(m / 1440) + "d";
   }
-  async function jget(path) {
-    const r = await fetch(API + path, { credentials: "include" });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r.json();
-  }
-  async function jpost(path, body) {
-    const r = await fetch(API + path, { method: "POST", credentials: "include", body: body ? JSON.stringify(body) : "{}" });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r.json();
+  // Authenticated fetch via the shared helper (adsUtil.apiFetch handles
+  // credentials + error + JSON parsing). Base URL stays local (separate task).
+  // No Content-Type header is set so POSTs remain CORS-simple (no preflight).
+  function jget(path) { return window.adsUtil.apiFetch(API + path); }
+  function jpost(path, body) {
+    return window.adsUtil.apiFetch(API + path, { method: "POST", body: body ? JSON.stringify(body) : "{}" });
   }
 
   async function renderIdentities(rootId, entityId) {

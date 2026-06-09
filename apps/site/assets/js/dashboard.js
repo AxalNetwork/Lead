@@ -1,19 +1,11 @@
 (function () {
   var API_BASE = "https://api.aidatasignal.com";
 
-  function fmtPct(n) {
-    if (n == null) return "—";
-    return (Math.round(n * 1000) / 10) + "%";
-  }
-  function fmtInt(n) {
-    if (n == null) return "—";
-    return new Intl.NumberFormat("en-US").format(n);
-  }
-  function esc(s) {
-    return (s == null ? "" : String(s)).replace(/[&<>"']/g, function (c) {
-      return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
-    });
-  }
+  // Shared helpers (window.adsUtil from ads-utils.js, loaded first in <head>).
+  var fmtPct = window.adsUtil.fmtPct;
+  var fmtInt = window.adsUtil.fmtInt;
+  var esc = window.adsUtil.escapeHtml;
+  var escapeHtml = esc;
   function elapsed(iso) {
     if (!iso) return "—";
     var ms = Date.now() - new Date(iso).getTime();
@@ -24,17 +16,10 @@
     return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m";
   }
 
-  // apiFetch: shared helper. credentials:include so the Cloudflare Access JWT
-  // cookie rides along on every request from the dashboard.
+  // Thin wrapper preserving the path-based contract (incl. window.adsApiFetch,
+  // consumed by jobs.js / review.js); core logic lives in adsUtil.apiFetch.
   async function apiFetch(path, opts) {
-    var res = await fetch(API_BASE + path, Object.assign({ credentials: "include" }, opts || {}));
-    if (!res.ok) {
-      var msg = "HTTP " + res.status;
-      try { var j = await res.json(); if (j && j.message) msg = j.message; } catch (e) {}
-      throw new Error(msg);
-    }
-    var ct = res.headers.get("content-type") || "";
-    return ct.indexOf("application/json") >= 0 ? res.json() : res.text();
+    return window.adsUtil.apiFetch(API_BASE + path, opts);
   }
   async function api(path) {
     try { return await apiFetch(path); } catch (e) { console.warn("API call failed", path, e); return null; }
@@ -990,7 +975,6 @@
     return '<span class="ads-pill"><b>' + fmtInt(val) + '</b> ' + escapeHtml(label) + '</span>';
   }
   function truncate(s, n) { s = String(s); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
-  function escapeHtml(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]; }); }
 
   // Approve / reject candidate delegates.
   document.addEventListener("click", async function (e) {
