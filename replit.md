@@ -26,18 +26,19 @@ Two GitHub Actions workflows matter:
 **Manual deploy escape hatch** (use only with explicit user approval):
 `cd apps/worker && npx wrangler@3.99.0 deploy`. This bypasses every gate
 and ships whatever local commits exist, so prefer the GitHub Action.
-Last manual deploy: 2026-06-02 (Version ID
-`1492904b-89e9-4d96-8052-1771a4033921`) to fix a stale-worker rollup 404.
-Current live prod version: `334d2ef7-3f06-47ae-a7a2-1eb4e5ae81b1`, shipped
-2026-06-09 18:25 UTC by `deploy-worker.yml` (the Task #57 push). Because
-`wrangler deploy` bundles the whole worker, this build includes the
-influence route (`/api/power-nodes` + `/api/power-nodes/summary`, present
-in the tree since 2026-05-20), resolving the Power Nodes "HTTP 404" — the
-earlier 404 was a stale worker that predated this deploy. `entity_influence`
-(migration 367) is confirmed present in prod D1 but currently EMPTY (0
-power nodes), so the page renders a 200 empty list until the nightly
-influence sweep populates it — that backfill is a separate data/cron
-concern, not the 404.
+Last manual deploy: 2026-06-09 (Version ID
+`5d5728e5-7e8f-4ef0-a87a-46b0026f9944`) shipping the Task #68
+`/api/dd/scores/by-ref` SQL-variable-overflow fix (id batch chunking) at
+explicit user request. Because `wrangler deploy` bundles the whole worker,
+this build also carries everything merged through Task #67. Prior live
+prod version was `334d2ef7-3f06-47ae-a7a2-1eb4e5ae81b1`, shipped
+2026-06-09 18:25 UTC by `deploy-worker.yml` (the Task #57 push); that
+build first resolved the Power Nodes "HTTP 404" by including the influence
+route (`/api/power-nodes` + `/api/power-nodes/summary`, present in the tree
+since 2026-05-20). `entity_influence` (migration 367) is confirmed present
+in prod D1 but currently EMPTY (0 power nodes), so the page renders a 200
+empty list until the nightly influence sweep populates it — that backfill
+is a separate data/cron concern, not the 404.
 
 **Prod ops WITHOUT a code deploy.** The workspace env has
 `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`, so D1 migrations and

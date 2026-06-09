@@ -188,22 +188,28 @@ ddRoute.get("/scores/by-ref", async (c) => {
   if (!idsRaw) return c.json({ items: {} });
   const ids = idsRaw.split(",").map((s) => s.trim()).filter(Boolean).slice(0, 500);
   if (!ids.length) return c.json({ items: {} });
-  const placeholders = ids.map(() => "?").join(",");
-  const rows = await c.env.DB.prepare(
-    `SELECT e.ref_id, e.id AS entity_id, r.risk_band, r.risk_score, r.trust_score, r.last_scan_at
-       FROM entities e
-       LEFT JOIN entity_risk_scores r ON r.entity_id = e.id
-      WHERE e.ref_table = ? AND e.ref_id IN (${placeholders})`,
-  ).bind(table, ...ids).all<{ ref_id: string; entity_id: number; risk_band: string | null; risk_score: number | null; trust_score: number | null; last_scan_at: string | null }>();
+  // D1 caps bound parameters per statement (~100), so a single `IN (...)` over
+  // 100+ ids overflows ("too many SQL variables"). Chunk the ids into batches
+  // of 50 (leaving headroom for the leading `table` bind) and merge the rows.
   const items: Record<string, { entity_id: number; risk_band: string | null; risk_score: number | null; trust_score: number | null; last_scan_at: string | null }> = {};
-  for (const row of rows.results ?? []) {
-    items[String(row.ref_id)] = {
-      entity_id: row.entity_id,
-      risk_band: row.risk_band,
-      risk_score: row.risk_score,
-      trust_score: row.trust_score,
-      last_scan_at: row.last_scan_at,
-    };
+  for (let i = 0; i < ids.length; i += 50) {
+    const slice = ids.slice(i, i + 50);
+    const placeholders = slice.map(() => "?").join(",");
+    const rows = await c.env.DB.prepare(
+      `SELECT e.ref_id, e.id AS entity_id, r.risk_band, r.risk_score, r.trust_score, r.last_scan_at
+         FROM entities e
+         LEFT JOIN entity_risk_scores r ON r.entity_id = e.id
+        WHERE e.ref_table = ? AND e.ref_id IN (${placeholders})`,
+    ).bind(table, ...slice).all<{ ref_id: string; entity_id: number; risk_band: string | null; risk_score: number | null; trust_score: number | null; last_scan_at: string | null }>();
+    for (const row of rows.results ?? []) {
+      items[String(row.ref_id)] = {
+        entity_id: row.entity_id,
+        risk_band: row.risk_band,
+        risk_score: row.risk_score,
+        trust_score: row.trust_score,
+        last_scan_at: row.last_scan_at,
+      };
+    }
   }
   return c.json({ items });
 });
