@@ -20,6 +20,18 @@ const RICH_COLUMNS = [
   "created_at", "updated_at",
 ].join(", ");
 
+// Click-to-sort allowlist: public sort key -> SQL column. Anything not in
+// this map is ignored (default order is used) so the ORDER BY clause can
+// never be injected with arbitrary SQL.
+const LEADS_SORTABLE: Record<string, string> = {
+  name: "name",
+  org: "org",
+  email: "email",
+  status: "status",
+  country: "country_iso2",
+  updated: "updated_at",
+};
+
 leads.get("/", async (c) => {
   const limit = Math.min(Number(c.req.query("limit") ?? "50"), 200);
   const status = c.req.query("status");
@@ -58,12 +70,17 @@ leads.get("/", async (c) => {
     );
   }
   const whereSql = wheres.length ? `WHERE ${wheres.join(" AND ")}` : "";
+  const sortCol = LEADS_SORTABLE[c.req.query("sort_by") ?? ""];
+  const sortDir = c.req.query("sort_dir") === "asc" ? "ASC" : "DESC";
+  const orderSql = sortCol
+    ? `ORDER BY ${sortCol} ${sortDir} NULLS LAST, id DESC`
+    : `ORDER BY created_at DESC`;
   const stmt = c.env.DB.prepare(
     `SELECT ${RICH_COLUMNS},
             (SELECT json_group_array(r.role) FROM entity_legacy_map m
                JOIN entity_roles r ON r.entity_id = m.entity_id
               WHERE m.legacy_table = 'leads' AND m.legacy_id = leads.id) AS roles_json
-       FROM leads ${whereSql} ORDER BY created_at DESC LIMIT ?`,
+       FROM leads ${whereSql} ${orderSql} LIMIT ?`,
   ).bind(...binds, limit);
   const r = await stmt.all();
   const items = (r.results ?? []).map((row) => {

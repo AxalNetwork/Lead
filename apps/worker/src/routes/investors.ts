@@ -24,6 +24,15 @@ export const investors = new Hono<{ Bindings: Env; Variables: { email: string } 
 
 const PROFILE_TTL_SEC = 300;
 const INVESTOR_KINDS = new Set(["gp", "angel", "operator", "lp", "scout", "principal", "associate"]);
+const INVESTORS_SORTABLE: Record<string, string> = {
+  name: "l.name",
+  investor_kind: "l.investor_kind",
+  org: "l.org",
+  location: "l.country_iso2",
+  investment_count: "l.investment_count",
+  unicorn_count: "l.unicorn_count",
+  avg_check_usd: "l.avg_check_usd",
+};
 interface InvestorRow {
   id: string;
   name: string | null;
@@ -118,9 +127,16 @@ investors.get("/", async (c) => {
   const q = url.searchParams.get("q");
   if (q) { where.push("(lower(l.name) LIKE ? OR lower(l.org) LIKE ?)"); binds.push(`%${q.toLowerCase()}%`, `%${q.toLowerCase()}%`); }
 
+  // Click-to-sort allowlist: public sort key -> SQL column. Unknown keys
+  // fall back to the default relevance order so ORDER BY is injection-safe.
+  const sortCol = INVESTORS_SORTABLE[url.searchParams.get("sort_by") ?? ""];
+  const sortDir = url.searchParams.get("sort_dir") === "asc" ? "ASC" : "DESC";
+  const orderSql = sortCol
+    ? `ORDER BY ${sortCol} ${sortDir} NULLS LAST, l.id DESC`
+    : `ORDER BY l.investment_count DESC NULLS LAST, l.unicorn_count DESC NULLS LAST, l.id DESC`;
   const sql = `SELECT DISTINCT l.* FROM leads l ${ROLE_JOIN}
                WHERE ${where.join(" AND ")}
-               ORDER BY l.investment_count DESC NULLS LAST, l.unicorn_count DESC NULLS LAST, l.id DESC
+               ${orderSql}
                LIMIT ? OFFSET ?`;
   binds.push(limit + 1, offset);
   const r = await c.env.DB.prepare(sql).bind(...binds).all<InvestorRow>();

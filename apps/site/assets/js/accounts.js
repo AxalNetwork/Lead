@@ -26,7 +26,7 @@
     }).join("");
   }
 
-  var state = { offset: 0, limit: 50 };
+  var state = { offset: 0, limit: 50, sort_by: "", sort_dir: "desc" };
 
   function buildQs() {
     var form = document.getElementById("ads-accounts-filters");
@@ -35,7 +35,33 @@
     fd.forEach(function (v, k) { if (v !== "" && v != null) qs.set(k, v); });
     qs.set("limit", String(state.limit));
     qs.set("offset", String(state.offset));
+    // Click-to-sort overrides the "Sort by" select: when a column header
+    // is active we send its key + direction so the server orders the full
+    // result set (not just the current page).
+    if (state.sort_by) { qs.set("sort", state.sort_by); qs.set("sort_dir", state.sort_dir); }
     return qs.toString();
+  }
+
+  function updateSortIndicators() {
+    document.querySelectorAll("th[data-sort]").forEach(function (th) {
+      var key = th.getAttribute("data-sort");
+      var base = th.getAttribute("data-label") || th.textContent.replace(/[ ▲▼]+$/, "");
+      th.setAttribute("data-label", base);
+      th.textContent = base + (state.sort_by === key ? (state.sort_dir === "asc" ? " ▲" : " ▼") : "");
+    });
+  }
+
+  function wireSortHeaders() {
+    document.querySelectorAll("th[data-sort]").forEach(function (th) {
+      th.addEventListener("click", function () {
+        var key = th.getAttribute("data-sort");
+        if (state.sort_by === key) state.sort_dir = state.sort_dir === "asc" ? "desc" : "asc";
+        else { state.sort_by = key; state.sort_dir = "asc"; }
+        state.offset = 0;
+        updateSortIndicators();
+        load(false);
+      });
+    });
   }
 
   function renderRows(items) {
@@ -122,12 +148,16 @@
   function init() {
     var form = document.getElementById("ads-accounts-filters");
     if (!form) return;
-    form.addEventListener("submit", function (e) { e.preventDefault(); state.offset = 0; load(false); });
-    form.addEventListener("reset", function () { setTimeout(function () { state.offset = 0; load(false); }, 0); });
+    // The "Sort by" select and the click-to-sort headers drive the same
+    // server ordering. Applying the form (or picking from the select) hands
+    // control back to the select, so clear the header-sort override.
+    form.addEventListener("submit", function (e) { e.preventDefault(); state.offset = 0; state.sort_by = ""; updateSortIndicators(); load(false); });
+    form.addEventListener("reset", function () { setTimeout(function () { state.offset = 0; state.sort_by = ""; updateSortIndicators(); load(false); }, 0); });
     var more = document.getElementById("ads-accounts-more");
     if (more) more.addEventListener("click", function () {
       state.offset = Number(more.dataset.next || 0); load(true);
     });
+    wireSortHeaders();
     loadSignalKinds();
     load(false);
 

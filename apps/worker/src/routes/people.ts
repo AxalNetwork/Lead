@@ -14,6 +14,15 @@ import type { Env } from "../types";
 
 export const peopleRoute = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
+// Click-to-sort allowlist: public sort key -> SQL column. Unknown keys fall
+// back to the default created_at order so ORDER BY is injection-safe.
+const PEOPLE_SORTABLE: Record<string, string> = {
+  name: "e.display_name",
+  domain: "e.primary_domain",
+  email: "e.primary_email_key",
+  created: "e.created_at",
+};
+
 interface PeopleRow {
   id: string;
   display_name: string | null;
@@ -55,6 +64,11 @@ peopleRoute.get("/", async (c) => {
     binds.push(sourceEmail);
   }
   const whereSql = `WHERE ${wheres.join(" AND ")}`;
+  const sortCol = PEOPLE_SORTABLE[c.req.query("sort_by") ?? ""];
+  const sortDir = c.req.query("sort_dir") === "asc" ? "ASC" : "DESC";
+  const orderSql = sortCol
+    ? `ORDER BY ${sortCol} ${sortDir} NULLS LAST, e.id DESC`
+    : `ORDER BY e.created_at DESC`;
 
   const sql = `
     SELECT e.id, e.display_name, e.primary_url, e.primary_domain,
@@ -63,7 +77,7 @@ peopleRoute.get("/", async (c) => {
            (SELECT json_group_array(r.role) FROM entity_roles r WHERE r.entity_id = e.id) AS roles_json
       FROM u_entities e
       ${whereSql}
-     ORDER BY e.created_at DESC
+     ${orderSql}
      LIMIT ? OFFSET ?`;
   let rows: PeopleRow[] = [];
   try {

@@ -53,7 +53,7 @@
     return s.charAt(0).toUpperCase() || "?";
   }
 
-  var state = { offset: 0, lastQs: "" };
+  var state = { offset: 0, lastQs: "", sort_by: "", sort_dir: "desc" };
 
   function buildQs(extra) {
     var form = document.getElementById("ads-people-filters");
@@ -64,8 +64,30 @@
       if (s) qs.set(k, s);
     });
     qs.set("limit", "50");
+    if (state.sort_by) { qs.set("sort_by", state.sort_by); qs.set("sort_dir", state.sort_dir); }
     if (extra) Object.keys(extra).forEach(function (k) { qs.set(k, extra[k]); });
     return qs.toString();
+  }
+
+  // Click-to-sort: server-side ordering via sort_by/sort_dir. The header is
+  // re-rendered on every full (non-append) render, so wiring + indicators
+  // run right after innerHTML is set.
+  function indicator(key) {
+    return state.sort_by === key ? (state.sort_dir === "asc" ? " ▲" : " ▼") : "";
+  }
+  function wireSortHeaders() {
+    var listEl = document.getElementById("ads-people-list");
+    if (!listEl) return;
+    listEl.querySelectorAll("th[data-sort]").forEach(function (th) {
+      th.style.cursor = "pointer";
+      th.addEventListener("click", function () {
+        var key = th.getAttribute("data-sort");
+        if (state.sort_by === key) state.sort_dir = state.sort_dir === "asc" ? "desc" : "asc";
+        else { state.sort_by = key; state.sort_dir = "asc"; }
+        state.offset = 0;
+        load(false);
+      });
+    });
   }
 
   function renderRows(items, append) {
@@ -78,11 +100,11 @@
     if (!append) {
       html += '<div class="ads-table-wrap"><table class="ads-table" style="width:100%;border-collapse:collapse"><thead><tr>'
         + '<th style="text-align:left;padding:8px;width:40px"></th>'
-        + '<th style="text-align:left;padding:8px">Name</th>'
+        + '<th style="text-align:left;padding:8px" data-sort="name">Name' + indicator("name") + '</th>'
         + '<th style="text-align:left;padding:8px">Roles</th>'
-        + '<th style="text-align:left;padding:8px">Domain</th>'
-        + '<th style="text-align:left;padding:8px">Email</th>'
-        + '<th style="text-align:right;padding:8px">Created</th>'
+        + '<th style="text-align:left;padding:8px" data-sort="domain">Domain' + indicator("domain") + '</th>'
+        + '<th style="text-align:left;padding:8px" data-sort="email">Email' + indicator("email") + '</th>'
+        + '<th style="text-align:right;padding:8px" data-sort="created">Created' + indicator("created") + '</th>'
         + '</tr></thead><tbody id="ads-people-tbody">';
     }
     items.forEach(function (p) {
@@ -103,6 +125,7 @@
     if (!append) {
       html += '</tbody></table></div>';
       listEl.innerHTML = html;
+      wireSortHeaders();
     } else {
       var tbody = document.getElementById("ads-people-tbody");
       if (tbody) tbody.insertAdjacentHTML("beforeend", html);

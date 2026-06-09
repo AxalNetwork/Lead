@@ -93,9 +93,14 @@ accountsRoute.get("/", async (c) => {
   f.limit = numIfFinite(url.searchParams.get("limit"));
   f.offset = numIfFinite(url.searchParams.get("offset"));
   const sort = url.searchParams.get("sort");
-  if (sort === "intent_score" || sort === "fit_score" || sort === "account_score" || sort === "name" || sort === "updated_at") {
+  if (
+    sort === "intent_score" || sort === "fit_score" || sort === "account_score" ||
+    sort === "name" || sort === "updated_at" || sort === "industry" || sort === "size_band"
+  ) {
     f.sort = sort;
   }
+  const sortDir = url.searchParams.get("sort_dir");
+  if (sortDir === "asc" || sortDir === "desc") f.sort_dir = sortDir;
   const r = await listAccounts(c.env, f);
   return c.json({
     items: r.items.map(toListItem),

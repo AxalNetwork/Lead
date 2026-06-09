@@ -15,7 +15,7 @@
     return fn(path, opts);
   }
 
-  var state = { items: [], limit: 200, lastQs: "" };
+  var state = { items: [], limit: 200, lastQs: "", sort_by: "", sort_dir: "desc" };
   var bar = null;
 
   function buildQs(extra) {
@@ -24,8 +24,33 @@
     var qs = new URLSearchParams();
     fd.forEach(function (v, k) { if (v !== "" && v != null) qs.set(k, v); });
     qs.set("limit", String(state.limit));
+    if (state.sort_by) { qs.set("sort_by", state.sort_by); qs.set("sort_dir", state.sort_dir); }
     if (extra) Object.keys(extra).forEach(function (k) { qs.set(k, extra[k]); });
     return qs.toString();
+  }
+
+  // Click-to-sort: server-side ordering via sort_by/sort_dir. The header
+  // labels carry data-sort attributes (see index.html); first click sorts
+  // ascending, a repeat click toggles direction.
+  function updateSortIndicators() {
+    document.querySelectorAll("th[data-sort]").forEach(function (th) {
+      var key = th.getAttribute("data-sort");
+      var base = th.getAttribute("data-label") || th.textContent.replace(/[ ▲▼]+$/, "");
+      th.setAttribute("data-label", base);
+      th.textContent = base + (state.sort_by === key ? (state.sort_dir === "asc" ? " ▲" : " ▼") : "");
+    });
+  }
+
+  function wireSortHeaders() {
+    document.querySelectorAll("th[data-sort]").forEach(function (th) {
+      th.addEventListener("click", function () {
+        var key = th.getAttribute("data-sort");
+        if (state.sort_by === key) state.sort_dir = state.sort_dir === "asc" ? "desc" : "asc";
+        else { state.sort_by = key; state.sort_dir = "asc"; }
+        updateSortIndicators();
+        load();
+      });
+    });
   }
 
   // Task #2: cross-list role badges. Roles arrive on each lead row
@@ -117,6 +142,8 @@
 
     var promoteBtn = document.getElementById("ads-leads-promote-btn");
     if (promoteBtn) promoteBtn.addEventListener("click", promoteSelected);
+
+    wireSortHeaders();
 
     if (window.adsBulkBar && window.adsBulkBar.init) {
       bar = window.adsBulkBar.init({

@@ -126,7 +126,8 @@ export interface AccountListFilters {
   has_signal_kind?: string;
   signal_within_days?: number;
   vendor?: string;             // account_tech vendor slug
-  sort?: "account_score" | "intent_score" | "fit_score" | "name" | "updated_at";
+  sort?: "account_score" | "intent_score" | "fit_score" | "name" | "updated_at" | "industry" | "size_band";
+  sort_dir?: "asc" | "desc";
   limit?: number;
   offset?: number;
 }
@@ -170,15 +171,22 @@ export async function listAccounts(env: Env, f: AccountListFilters): Promise<{ i
     where.push(`EXISTS (SELECT 1 FROM account_tech t WHERE t.account_id = a.id AND t.vendor = ?)`);
     binds.push(f.vendor);
   }
-  const sortCol = (() => {
-    switch (f.sort) {
-      case "intent_score": return "a.intent_score DESC";
-      case "fit_score": return "a.fit_score DESC";
-      case "name": return "lower(a.name) ASC";
-      case "updated_at": return "a.updated_at DESC";
-      default: return "a.account_score DESC";
-    }
-  })();
+  // Click-to-sort allowlist: public sort key -> SQL column. Unknown keys
+  // fall back to account_score DESC so the ORDER BY is injection-safe. When
+  // the caller passes an explicit sort_dir we honor it; otherwise each
+  // column gets a sensible natural default (names asc, scores desc).
+  const SORTABLE: Record<string, { col: string; natural: "ASC" | "DESC" }> = {
+    account_score: { col: "a.account_score", natural: "DESC" },
+    intent_score: { col: "a.intent_score", natural: "DESC" },
+    fit_score: { col: "a.fit_score", natural: "DESC" },
+    name: { col: "lower(a.name)", natural: "ASC" },
+    updated_at: { col: "a.updated_at", natural: "DESC" },
+    industry: { col: "lower(a.industry)", natural: "ASC" },
+    size_band: { col: "a.size_band", natural: "ASC" },
+  };
+  const sortDef = SORTABLE[f.sort ?? ""] ?? SORTABLE.account_score;
+  const sortDir = f.sort_dir === "asc" ? "ASC" : f.sort_dir === "desc" ? "DESC" : sortDef.natural;
+  const sortCol = `${sortDef.col} ${sortDir} NULLS LAST`;
   const limit = Math.min(Math.max(1, f.limit ?? 50), 200);
   const offset = Math.max(0, f.offset ?? 0);
   const sql = `SELECT ${ACCOUNT_COLS} FROM accounts a WHERE ${where.join(" AND ")}

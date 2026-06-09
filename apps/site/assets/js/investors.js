@@ -41,7 +41,7 @@
     var listEl = document.getElementById("ads-investors-list");
     var moreBtn = document.getElementById("ads-investors-more");
     var msg = document.getElementById("ads-investors-msg");
-    var state = { offset: 0, query: "" };
+    var state = { offset: 0, query: "", sort_by: "", sort_dir: "desc" };
 
     function buildQuery() {
       var fd = new FormData(form);
@@ -51,7 +51,27 @@
         if (v) p.set(k, v);
       });
       p.set("limit", "50");
+      if (state.sort_by) { p.set("sort_by", state.sort_by); p.set("sort_dir", state.sort_dir); }
       return p;
+    }
+
+    // Click-to-sort: server-side ordering via sort_by/sort_dir. Headers are
+    // re-rendered on every full (non-append) render, so wiring + indicators
+    // run right after innerHTML is set.
+    function indicator(key) {
+      return state.sort_by === key ? (state.sort_dir === "asc" ? " ▲" : " ▼") : "";
+    }
+    function wireSortHeaders() {
+      listEl.querySelectorAll("th[data-sort]").forEach(function (th) {
+        th.style.cursor = "pointer";
+        th.addEventListener("click", function () {
+          var key = th.getAttribute("data-sort");
+          if (state.sort_by === key) state.sort_dir = state.sort_dir === "asc" ? "desc" : "asc";
+          else { state.sort_by = key; state.sort_dir = "asc"; }
+          state.offset = 0;
+          load(false);
+        });
+      });
     }
 
     function renderRows(items, append) {
@@ -63,8 +83,15 @@
       if (!append) {
         html += '<div class="ads-table-wrap"><table class="ads-table"><thead><tr>'
           + '<th style="width:32px"><input type="checkbox" id="ads-bulk-header-check" title="Select page (click twice for all matching)"></th>'
-          + '<th>Name</th><th>Kind</th><th>Org / Title</th><th>Location</th>'
-          + '<th>Sweet spot</th><th>#Inv</th><th>Unicorns</th><th>Avg check</th></tr></thead><tbody id="ads-investors-tbody">';
+          + '<th data-sort="name">Name' + indicator("name") + '</th>'
+          + '<th data-sort="investor_kind">Kind' + indicator("investor_kind") + '</th>'
+          + '<th data-sort="org">Org / Title' + indicator("org") + '</th>'
+          + '<th data-sort="location">Location' + indicator("location") + '</th>'
+          + '<th>Sweet spot</th>'
+          + '<th data-sort="investment_count">#Inv' + indicator("investment_count") + '</th>'
+          + '<th data-sort="unicorn_count">Unicorns' + indicator("unicorn_count") + '</th>'
+          + '<th data-sort="avg_check_usd">Avg check' + indicator("avg_check_usd") + '</th>'
+          + '</tr></thead><tbody id="ads-investors-tbody">';
       }
       items.forEach(function (it) {
         html += '<tr data-id="' + esc(it.id) + '">'
@@ -82,6 +109,7 @@
       if (!append) {
         html += '</tbody></table></div>';
         listEl.innerHTML = html;
+        wireSortHeaders();
       } else {
         var tbody = document.getElementById("ads-investors-tbody");
         if (tbody) tbody.insertAdjacentHTML("beforeend", html);
