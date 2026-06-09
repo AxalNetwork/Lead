@@ -164,7 +164,7 @@
     api("/api/relationships/coinvestors/" + firmId + "?limit=15").then(function (r) {
       var items = (r && r.items) || [];
       ciTbody.innerHTML = items.length ? items.map(function (it) {
-        return "<tr><td><a href='/dashboard/firms/detail/?id=" + esc(it.firm_id) + "'>" + esc(it.name) + "</a></td><td>" + it.overlap + "</td></tr>";
+        return "<tr><td><a href='/dashboard/firms/detail/?id=" + esc(it.firm_id) + "'>" + esc(it.name) + "</a></td><td>" + esc(it.overlap) + "</td></tr>";
       }).join("") : '<tr><td colspan="2" class="ads-muted">No co-investments recorded.</td></tr>';
     }).catch(function () { ciTbody.innerHTML = '<tr><td colspan="2" class="ads-muted">Failed to load.</td></tr>'; });
 
