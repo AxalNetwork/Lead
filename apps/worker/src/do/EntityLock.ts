@@ -17,6 +17,9 @@
 import type { Env } from "../types";
 import { upsertEntityVector } from "../dedupe/vector";
 import { indexEntity } from "../ai/search_sync";
+// Task #51: route previously-swallowed merge-lock failures through the
+// structured error logger instead of console-only / silent swallow.
+import { logError } from "../db/error_log";
 
 interface MergeRequest {
   id: string;
@@ -94,6 +97,7 @@ export class EntityLock {
         }
         return new Response("unknown_op", { status: 404 });
       } catch (e) {
+        await logError(this.env, { err: e, step: `entityLock.${op}` });
         console.error("EntityLock op failed", op, (e as Error).message);
         return new Response("internal_error", { status: 500 });
       }
@@ -222,7 +226,7 @@ async function applyMerge(env: Env, table: "leads" | "firms" | "companies" | "ac
   await env.DB.prepare(`UPDATE ${table} SET ${sets}, updated_at = COALESCE(updated_at, ?) WHERE id = ?`)
     .bind(...binds, new Date().toISOString(), body.id)
     .run()
-    .catch((e) => console.warn(`applyMerge ${table} failed`, e.message));
+    .catch((e) => logError(env, { err: e, step: `entityLock.applyMerge.${table}` }));
   return fields.length;
 }
 

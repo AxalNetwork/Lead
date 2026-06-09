@@ -9,6 +9,9 @@ import { enqueueSummaryRebuild } from "./summaryQueue";
 // Task #8: triggers debounced persona ↔ entity re-match when a fact
 // that materially affects scoring is written. No-op otherwise.
 import { triggerEntityMatchRefresh, isRelevantPredicate } from "../services/personaMatchTrigger";
+// Task #51: route previously-swallowed fact-write-path failures through the
+// structured error logger so they land in `error_log` instead of vanishing.
+import { logError } from "../db/error_log";
 
 export async function insertFact(env: Env, f: FactInput): Promise<string | null> {
   if (!f.entity_id || !f.predicate) return null;
@@ -31,7 +34,10 @@ export async function insertFact(env: Env, f: FactInput): Promise<string | null>
       WHERE entity_id = ? AND predicate = ? AND locked = 1
         AND (unlock_after IS NULL OR unlock_after > datetime('now'))
       LIMIT 1`,
-  ).bind(f.entity_id, f.predicate).first().catch(() => null);
+  ).bind(f.entity_id, f.predicate).first().catch(async (e) => {
+    await logError(env, { err: e, step: "facts.insertFact.override_lock_check" });
+    return null;
+  });
   const supersededByOverride = lock ? 1 : 0;
   try {
     await env.DB.prepare(
@@ -73,7 +79,7 @@ export async function insertFact(env: Env, f: FactInput): Promise<string | null>
                WHERE entity_id = ? AND predicate = ? AND locked = 1
                  AND (unlock_after IS NULL OR unlock_after > datetime('now'))
             )`,
-      ).bind(id, f.entity_id, f.predicate).run().catch(() => undefined);
+      ).bind(id, f.entity_id, f.predicate).run().catch((e) => logError(env, { err: e, step: "facts.insertFact.override_recheck" }));
     }
     // Centralized rebuild guarantee: every successful fact insert
     // enqueues a summary rebuild for the owning entity. This keeps the
@@ -94,8 +100,10 @@ export async function insertFact(env: Env, f: FactInput): Promise<string | null>
     // nightly tick per the spec's explicit instruction.
     try {
       const { enqueueRelInfer } = await import("../services/relationships/orchestrator.js");
-      void enqueueRelInfer(env, f.entity_id, `fact:${f.predicate}`).catch(() => undefined);
-    } catch { /* best-effort */ }
+      void enqueueRelInfer(env, f.entity_id, `fact:${f.predicate}`).catch((e) => logError(env, { err: e, step: "facts.insertFact.enqueueRelInfer" }));
+    } catch (e) {
+      void logError(env, { err: e, step: "facts.insertFact.enqueueRelInfer_import" });
+    }
     return id;
   } catch (e) {
     // UNIQUE(hash) collision = exact-replay observation. Task #1

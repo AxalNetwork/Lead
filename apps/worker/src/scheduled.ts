@@ -15,6 +15,10 @@ import { sweepStuckJobs } from "./routes/admin";
 // Task #3: hourly crawler-seed sweep — picks up to 100 stalest enabled
 // seeds whose refresh interval has elapsed and enqueues them.
 import { runSeedSweep } from "./services/crawlerSeeds/sweep";
+// Task #51: route previously-swallowed cron sub-task failures through the
+// structured error logger. Each is still non-blocking so one failing
+// sub-task can't abort the rest of the cron tick.
+import { logError } from "./db/error_log";
 
 interface LegacySourceRow {
   id: string;
@@ -57,10 +61,10 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         } else {
           const { reevaluateAllSmartWatchlists } = await import("./monitoring/smart");
           const { pickDueEntities, monitorEntity, retryPendingDeliveries } = await import("./monitoring/dispatch");
-          await reevaluateAllSmartWatchlists(env, { limit: 25 }).catch(() => undefined);
+          await reevaluateAllSmartWatchlists(env, { limit: 25 }).catch((e) => logError(env, { err: e, step: "hourly.monitor.reevaluateSmartWatchlists" }));
           const ids = await pickDueEntities(env, { limit: 200, staleMinutes: 15 });
-          for (const id of ids) await monitorEntity(env, id).catch(() => undefined);
-          await retryPendingDeliveries(env, 50).catch(() => undefined);
+          for (const id of ids) await monitorEntity(env, id).catch((e) => logError(env, { err: e, step: "hourly.monitor.monitorEntity" }));
+          await retryPendingDeliveries(env, 50).catch((e) => logError(env, { err: e, step: "hourly.monitor.retryPendingDeliveries" }));
         }
       } catch (e) {
         console.error("hourly monitor-batch failed", (e as Error).message);
@@ -70,7 +74,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
           await env.WF_DIGEST.create({ params: { limit: 500 } });
         } else {
           const { runDigest } = await import("./monitoring/digest");
-          await runDigest(env, { limit: 500 }).catch(() => undefined);
+          await runDigest(env, { limit: 500 }).catch((e) => logError(env, { err: e, step: "hourly.digest.runDigest" }));
         }
       } catch (e) {
         console.error("hourly digest failed", (e as Error).message);
