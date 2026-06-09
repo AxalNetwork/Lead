@@ -149,10 +149,15 @@
     var form = document.getElementById("ads-accounts-filters");
     if (!form) return;
     // The "Sort by" select and the click-to-sort headers drive the same
-    // server ordering. Applying the form (or picking from the select) hands
-    // control back to the select, so clear the header-sort override.
-    form.addEventListener("submit", function (e) { e.preventDefault(); state.offset = 0; state.sort_by = ""; updateSortIndicators(); load(false); });
+    // server ordering. Filters and the active sort COMBINE, so a plain filter
+    // apply preserves whatever sort is active. Control returns to the select
+    // only when the operator explicitly changes it (handler below) or resets.
+    form.addEventListener("submit", function (e) { e.preventDefault(); state.offset = 0; load(false); });
     form.addEventListener("reset", function () { setTimeout(function () { state.offset = 0; state.sort_by = ""; updateSortIndicators(); load(false); }, 0); });
+    var sortSelect = form.querySelector('select[name="sort"]');
+    if (sortSelect) sortSelect.addEventListener("change", function () {
+      state.sort_by = ""; state.offset = 0; updateSortIndicators(); load(false);
+    });
     var more = document.getElementById("ads-accounts-more");
     if (more) more.addEventListener("click", function () {
       state.offset = Number(more.dataset.next || 0); load(true);

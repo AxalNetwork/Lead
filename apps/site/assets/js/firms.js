@@ -9,9 +9,12 @@
 
   var DEFAULT_COLS = ["name", "kind", "hq", "stages", "sectors", "check_size_typical_usd", "aum_usd", "lead_or_co", "portfolio_count", "last_modified"];
   var ALL_COLS = DEFAULT_COLS.concat(["website", "founded_year", "team_size", "unicorns_count", "exits_count", "contact_email", "status", "quality_score"]);
-  // Maps display column -> server sort key. `hq` is composite, so unsorted.
+  // Maps display column -> server sort key. The HQ cell shows "city, country",
+  // so it sorts by hq_city (its leading value); the backend allowlist exposes
+  // hq_city. Stages/Sectors/Lead-or-co stay non-sortable (composite JSON).
   var SORT_KEYS = {
-    name: "name", kind: "kind", check_size_typical_usd: "check_size_typical_usd",
+    name: "name", kind: "kind", hq: "hq_city",
+    check_size_typical_usd: "check_size_typical_usd",
     aum_usd: "aum_usd", portfolio_count: "portfolio_count",
     last_modified: "last_modified", founded_year: "founded_year",
     unicorns_count: "unicorns_count", exits_count: "exits_count",
