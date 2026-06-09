@@ -69,10 +69,20 @@ async function isCancelled(env: Env, jobId: string): Promise<boolean> {
 
 async function markRunning(env: Env, jobId: string): Promise<void> {
   // Task #2: stamp `running_started_at` unconditionally on the
-  // queued->running transition so the budget clock measures actual
+  // ->running transition so the budget clock measures actual
   // running time, not enqueue time. Legacy `started_at` (NOT NULL,
   // used by many list queries) is left alone. The migration-193
   // state-machine trigger still gates the status transition itself.
+  //
+  // Task #69: re-entrant guard. When Cloudflare Queues redelivers a
+  // message, the job row is already in a non-`queued` state (`failed`
+  // from the prior markFailed, or `timed_out` from the in-run deadline
+  // / sweeper). The migration-193 trigger explicitly allows
+  // failed->running and timed_out->running, so widen the guard to
+  // re-enter `running` from any of (`queued`,`failed`,`timed_out`).
+  // Truly terminal states (`succeeded`/`cancelled`/`dead_letter`/
+  // `skipped`) are excluded, so a redelivered terminal job no-ops here
+  // and markCompleted's own guard keeps it terminal.
   //
   // Defensive: if migration 214 hasn't applied yet (column missing),
   // ALTER it in-place once and retry. Avoids `D1_ERROR: no such
@@ -81,14 +91,14 @@ async function markRunning(env: Env, jobId: string): Promise<void> {
   const now = new Date().toISOString();
   try {
     await env.DB.prepare(
-      "UPDATE jobs SET status = 'running', running_started_at = ? WHERE id = ? AND status = 'queued'",
+      "UPDATE jobs SET status = 'running', running_started_at = ? WHERE id = ? AND status IN ('queued','failed','timed_out')",
     ).bind(now, jobId).run();
   } catch (e) {
     const msg = (e as Error).message ?? "";
     if (msg.includes("no such column: running_started_at")) {
       try { await env.DB.exec("ALTER TABLE jobs ADD COLUMN running_started_at TEXT"); } catch { /* race: another worker added it */ }
       await env.DB.prepare(
-        "UPDATE jobs SET status = 'running', running_started_at = ? WHERE id = ? AND status = 'queued'",
+        "UPDATE jobs SET status = 'running', running_started_at = ? WHERE id = ? AND status IN ('queued','failed','timed_out')",
       ).bind(now, jobId).run();
     } else {
       throw e;
@@ -158,8 +168,17 @@ async function markCompleted(
   costMs: number,
   result: Record<string, unknown>,
 ): Promise<void> {
+  // Task #69: status guard mirrors markFailed/markSkipped/the in-run
+  // deadline path. Only flip a row that is actually `running` to
+  // `succeeded`. Without this, a redelivered job whose row is still
+  // `failed`/`timed_out` (because the prior attempt set it terminal and
+  // markRunning's re-entry is a separate write) would attempt an illegal
+  // failed/timed_out->succeeded transition and trip the migration-193
+  // trigger (RAISE(ABORT,'invalid_state_transition')) — surfaced as a
+  // retryable 503 that loops forever. Guarding makes it a safe no-op
+  // against any terminal state set by the sweeper/operator.
   await env.DB.prepare(
-    `UPDATE jobs SET status = 'succeeded', finished_at = ?, leads_found = ?, pages_fetched = ?, pages_blocked = ?, captcha_hits = ?, cost_ms = COALESCE(cost_ms,0) + ?, result_json = ? WHERE id = ?`,
+    `UPDATE jobs SET status = 'succeeded', finished_at = ?, leads_found = ?, pages_fetched = ?, pages_blocked = ?, captcha_hits = ?, cost_ms = COALESCE(cost_ms,0) + ?, result_json = ? WHERE id = ? AND status = 'running'`,
   )
     .bind(
       new Date().toISOString(),
