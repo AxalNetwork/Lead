@@ -27,13 +27,26 @@ worker immediately — no redeploy needed (e.g. PROXY_URL).
   so it would ship unrelated un-reviewed work AND bypass the typecheck + ML-eval
   gates. Don't do it without explicit user approval.
 
-**Current gate state (2026-06-02): CI deploy is RED.** `cd apps/worker &&
-npx tsc --noEmit` fails on 5 pre-existing unrelated null-type errors
-(investorResolver / fundResolver / intl·persist / lpDisclosures·persist /
-secEdgar·xref) — same root as the "fix worker test suite" task. So even a
-successful push would NOT deploy until that compile task lands. Verify with
-`git diff --stat origin/main..HEAD -- apps/worker` (empty = worker code already
-on GitHub; non-empty = local has un-pushed worker commits).
+**Current gate state (updated 2026-06-09): CI deploy is GREEN and auto-deploying.**
+`deploy-worker.yml` shipped prod multiple times on 2026-06-09 (e.g. version
+`334d2ef7…` at 18:25 UTC off the Task #57 push) — the typecheck gate that was
+RED on 2026-06-02 is no longer the blocker. `check.yml` (lint + test build)
+remains red, but that is a *separate* workflow and does NOT gate deploys.
+
+**Verifying a route is live in prod WITHOUT curl (Access blocks probing).**
+Every `api.aidatasignal.com/*` path 302s to the Access login identically —
+even known-good routes like `/api/health` — so curl CANNOT distinguish a 404
+from a 200. The CF `workers/scripts/lead/content` endpoint also rejects the
+api-token auth scheme (`10405`), so you can't grep the deployed bundle either.
+Instead, prove a route is shipped indirectly: (1) confirm the route's introducing
+commit is an ancestor of `origin/main` (`git merge-base --is-ancestor <sha>
+origin/main`); (2) list CF deployments
+(`GET …/workers/scripts/lead/deployments`) and confirm a deploy happened AFTER
+that commit landed — a `wrangler deploy` bundles the WHOLE worker, so ANY
+successful worker deploy ships EVERY route on the deployed ref, not just the
+triggering change; (3) confirm backing tables exist via
+`wrangler d1 execute DB --remote --command "SELECT name FROM sqlite_master …"`.
+A genuine end-to-end check still needs a real operator browser session.
 
 **Manual wrangler deploy is a real escape hatch (confirmed 2026-06-02).** With
 explicit user approval, `cd apps/worker && npx wrangler@3.99.0 deploy` from the

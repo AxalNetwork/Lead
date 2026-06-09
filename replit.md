@@ -28,6 +28,16 @@ Two GitHub Actions workflows matter:
 and ships whatever local commits exist, so prefer the GitHub Action.
 Last manual deploy: 2026-06-02 (Version ID
 `1492904b-89e9-4d96-8052-1771a4033921`) to fix a stale-worker rollup 404.
+Current live prod version: `334d2ef7-3f06-47ae-a7a2-1eb4e5ae81b1`, shipped
+2026-06-09 18:25 UTC by `deploy-worker.yml` (the Task #57 push). Because
+`wrangler deploy` bundles the whole worker, this build includes the
+influence route (`/api/power-nodes` + `/api/power-nodes/summary`, present
+in the tree since 2026-05-20), resolving the Power Nodes "HTTP 404" — the
+earlier 404 was a stale worker that predated this deploy. `entity_influence`
+(migration 367) is confirmed present in prod D1 but currently EMPTY (0
+power nodes), so the page renders a 200 empty list until the nightly
+influence sweep populates it — that backfill is a separate data/cron
+concern, not the 404.
 
 **Prod ops WITHOUT a code deploy.** The workspace env has
 `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`, so D1 migrations and
