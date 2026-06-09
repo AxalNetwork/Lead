@@ -40,6 +40,7 @@ export type ErrCode =
   | "robots_disallowed"
   | "tos_blocked"
   | "rate_limited"
+  | "subrequest_limit"
   | "budget_exhausted"
   | "fetch.timeout"
   | "fetch.error"
@@ -288,6 +289,22 @@ export function classify(err: unknown): { code: ErrCode; kind: ErrorKind; retrya
   if (err instanceof AppError) return { code: err.code, kind: err.kind, retryable: err.retryable };
   const msg = (err instanceof Error ? err.message : String(err ?? "")).toLowerCase();
   if (!msg) return null;
+
+  // Task #70: Cloudflare's per-invocation subrequest cap surfaces as
+  // "Too many subrequests by single Worker invocation", which bubbles up
+  // wrapped in a `fetch_failed:proxy_error:...` (or `fetch_error:...`)
+  // string. This is NOT a permanent scrape block — the page is fine, the
+  // invocation just ran out of budget — so it must be classified
+  // transient/retryable AHEAD of the generic `fetch_failed:` permanent
+  // rule below. Matched specifically (not all proxy_errors) so genuine
+  // upstream proxy failures still dead-letter as before.
+  //
+  // `subrequest_budget_exhausted` is our OWN pre-emptive refusal (the
+  // crawl-path budget stopped a fetch before it could trip the platform
+  // cap); it is the same condition and must retry identically.
+  if (msg.includes("too many subrequests") || msg.includes("subrequest_budget")) {
+    return { code: "subrequest_limit", kind: "transient", retryable: true };
+  }
 
   // Pipeline-level fetch/scrape sentinels. These reasons are bubbled up
   // from the scraper as plain `Error("fetch_failed:<reason>:status=<n>")`

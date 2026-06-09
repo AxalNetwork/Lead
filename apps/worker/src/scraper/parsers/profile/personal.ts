@@ -7,6 +7,7 @@
 import type { Env, ParsedLead } from "../../../types";
 import type { FetchResult } from "../../fetcher";
 import { fetchPage } from "../../fetcher";
+import type { SubrequestBudget } from "../../subrequestBudget";
 import { extractDomain, normalizeEmail } from "../../normalize";
 import { extractEmails, extractSocialLinks, extractTitle } from "../../html";
 import { extractPeopleFromPage } from "../../firmcrawl/personExtract";
@@ -97,6 +98,7 @@ export async function parsePersonal(
   url: string,
   jobId: string,
   primary: FetchResult,
+  budget?: SubrequestBudget,
 ): Promise<PersonalParseResult> {
   const fetched: Array<{ result: FetchResult; url: string }> = [{ result: primary, url }];
   // Run the strategies on the primary page first so we have something to
@@ -116,11 +118,17 @@ export async function parsePersonal(
   const seen = new Set<string>([(primary.url || url).toLowerCase()]);
   if (origin) {
     for (const path of SECONDARY_PATHS) {
+      // Task #70: secondary probes are best-effort enrichment. Once the
+      // shared invocation budget is near-exhausted, STOP probing rather
+      // than spend the remaining budget on optional sub-pages — the primary
+      // page already produced the lead. Nothing to re-enqueue: probes are
+      // not first-class work.
+      if (budget?.wouldExceed(1)) break;
       const probeUrl = `${origin}${path}`;
       if (seen.has(probeUrl.toLowerCase())) continue;
       seen.add(probeUrl.toLowerCase());
       try {
-        const r = await fetchPage(env, probeUrl, { jobId, minIntervalMs: 1500, liveOnly: true });
+        const r = await fetchPage(env, probeUrl, { jobId, minIntervalMs: 1500, liveOnly: true, budget });
         if (r.ok && r.html && r.fetched_from === "live") {
           fetched.push({ result: r, url: probeUrl });
           ingest(leadsFromPage(r.html, r.url || probeUrl, url, "live"));

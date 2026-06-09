@@ -381,7 +381,17 @@ queue = "aidatasignal-lead-jobs"
 
 [[queues.consumers]]
 queue = "aidatasignal-lead-jobs"
-max_batch_size = 10
+# Task #70: lowered 10 -> 3. Every message in a batch shares ONE Worker
+# invocation's subrequest budget. This worker uses Cloudflare Queues, which
+# require the paid Workers plan, so the platform ceiling is ~1000 subrequests
+# per invocation (NOT the Free-plan 50) — all of fetch + D1/KV/R2 binding
+# calls count toward it. A batch of 10 profile jobs — each firing the primary
+# fetch + /about /contact /now probes + R2 archive + D1 touchSource + fanout
+# inserts, multiplied by the 6-provider proxy failover + Wayback — blew past
+# the cap, so the whole batch hit "Too many subrequests". A smaller batch,
+# plus the shared 700-subrequest soft budget (see scraper/subrequestBudget.ts),
+# keeps each invocation's cumulative cost under the ceiling.
+max_batch_size = 3
 max_batch_timeout = 5
 
 [[routes]]

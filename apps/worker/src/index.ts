@@ -95,6 +95,7 @@ import { piiAuditOnLeadGet } from "./middleware/pii_audit";
 import { accessGuard, adminOnly } from "./middleware/access";
 import { requestId } from "./middleware/request_id";
 import { runJob } from "./scraper/pipeline";
+import { SubrequestBudget } from "./scraper/subrequestBudget";
 import { scheduled as scheduledHandler } from "./scheduled";
 import { errors as errorsRoute } from "./routes/errors";
 import { admin, sweepStuckJobs } from "./routes/admin";
@@ -323,6 +324,13 @@ export default {
     }
     const batchAttempts = batch.messages.map((m) => ({ msg_id: m.id, attempts: m.attempts }));
     console.log("queue.batch_begin", JSON.stringify({ size: batchSize, swept: batchSwept, attempts: batchAttempts }));
+    // Task #70: Cloudflare counts subrequests (fetch + D1/KV/R2 binding calls)
+    // CUMULATIVELY across a single Worker invocation, and the queue consumer
+    // runs the whole batch in ONE invocation. Share a single budget across
+    // every job in the batch so the crawl path stops spending and re-enqueues
+    // the remainder (a transient retry) before the platform ceiling throws
+    // "Too many subrequests by single Worker invocation".
+    const budget = new SubrequestBudget();
     try {
     for (const msg of batch.messages) {
       const body = msg.body as QueueMessage | undefined;
@@ -382,7 +390,7 @@ export default {
           batchAcked++;
           continue;
         }
-        await runJob(legacy, env);
+        await runJob(legacy, env, budget);
         msg.ack();
         batchAcked++;
         console.log("queue.step_end", JSON.stringify({ step: "runJob", msg_id: msg.id, job_id: jobId, ms: Date.now() - stepStart, ok: true }));

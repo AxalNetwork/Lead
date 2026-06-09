@@ -4,6 +4,7 @@ import { tosBlockedReason } from "./tos";
 import { isCircuitOpen, recordFetchOutcome } from "./circuit_breaker";
 import { fetchWaybackHtml } from "./fallbacks/wayback";
 import { getProxyProviders } from "./proxyPool";
+import type { SubrequestBudget } from "./subrequestBudget";
 // Task #5: Brave Search cache (tier 5) and paid Scraping API (tier 3) were
 // removed. The fetcher now escalates Direct → Browser → Proxy → Wayback,
 // which is the supported in-house path.
@@ -71,6 +72,13 @@ export interface FetchOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   /** Request body for non-GET requests. */
   body?: string;
+  /** Task #70: per-invocation subrequest budget shared across the queue
+   *  batch. When provided, fetchPage/fetchBytes pre-emptively refuse (and
+   *  surface `subrequest_budget_exhausted`) once spending another fetch
+   *  would cross the ceiling, and each tier attempt is charged against it.
+   *  Omitted by tests and non-crawl callers — then fetching is unbudgeted
+   *  (the historical behaviour). */
+  budget?: SubrequestBudget;
 }
 
 export interface FetchResult {
@@ -390,6 +398,15 @@ export async function tier2Proxy(env: Env, url: string, opts: FetchOptions): Pro
   // Bright Data / Oxylabs "Web Unblocker" style endpoints.
   let last: FetchResult | null = null;
   for (const provider of providers) {
+    // Task #70: each provider attempt is a real subrequest. The proxy pool
+    // can hold up to 6 providers, so this loop is the dominant subrequest
+    // multiplier when a URL is blocked. Pre-empt the next provider once the
+    // invocation budget is near-exhausted rather than firing a doomed fetch.
+    if (opts.budget?.wouldExceed(1)) {
+      last = blockResult(url, 2, "subrequest_budget_exhausted");
+      break;
+    }
+    opts.budget?.spend(1);
     const start = Date.now();
     // Merge caller-supplied headers (e.g. CourtListener Token, Companies
     // House Basic) so authenticated API calls work after tier-0 fails and
@@ -439,6 +456,12 @@ export async function tier2Proxy(env: Env, url: string, opts: FetchOptions): Pro
       };
       logProxyAttempt(provider.name, result);
       last = result;
+      // Task #70: the subrequest cap poisons the whole invocation — every
+      // later subrequest (the next provider, Wayback) is guaranteed to fail
+      // too. Stop the failover loop immediately and surface the limit so the
+      // chain (shouldEscalate / fetchPage) skips Wayback and the classifier
+      // marks the job retryable instead of permanently dropping it.
+      if (isSubrequestLimit(result.blockReason)) return result;
     } finally {
       clearTimeout(tm);
     }
@@ -483,8 +506,21 @@ function blockResult(url: string, tier: FetchTier, reason: string): FetchResult 
   };
 }
 
+// Task #70: detect Cloudflare's per-invocation subrequest ceiling, however it
+// arrived — the platform string ("too many subrequests"), or our own
+// pre-emptive refusal (`subrequest_budget_exhausted`) once the shared budget is
+// near-exhausted. Both mean: do not fire another subrequest this invocation.
+function isSubrequestLimit(reason: string | null | undefined): boolean {
+  if (!reason) return false;
+  const r = reason.toLowerCase();
+  return r.includes("too many subrequests") || r.includes("subrequest_budget");
+}
+
 function shouldEscalate(reason: string | null): boolean {
   if (!reason) return false;
+  // Task #70: a subrequest-limit failure must never escalate — the next tier is
+  // one more doomed subrequest in an already-poisoned invocation.
+  if (isSubrequestLimit(reason)) return false;
   // "Tier unavailable / not configured" reasons must always escalate so that a
   // missing browser binding or unset proxy doesn't short-circuit the chain.
   if (
@@ -576,6 +612,15 @@ export async function fetchPage(env: Env, url: string, opts: FetchOptions = {}):
 
   let last: FetchResult | null = null;
   for (const fn of tiers) {
+    // Task #70: pre-empt a tier attempt that would cross the shared
+    // invocation budget — never fire the subrequest that would trip
+    // Cloudflare's ceiling. tier2Proxy additionally charges each of its
+    // providers, so a proxy escalation is counted conservatively.
+    if (opts.budget?.wouldExceed(1)) {
+      last = blockResult(url, last?.tier ?? 0, "subrequest_budget_exhausted");
+      break;
+    }
+    opts.budget?.spend(1);
     const r = await fn(env, url, opts);
     await logAttempt(env, opts.jobId, host, url, r);
     if (r.ok) {
@@ -601,7 +646,22 @@ export async function fetchPage(env: Env, url: string, opts: FetchOptions = {}):
     return last ?? blockResult(url, 0, "no_tiers_available");
   }
 
+  // Task #70: when the live tiers stopped because of the subrequest ceiling,
+  // do NOT escalate to Wayback — that is one more doomed subrequest in an
+  // already-poisoned invocation. Surface the limit so the classifier marks
+  // the job transient/retryable.
+  if (last && isSubrequestLimit(last.blockReason)) {
+    return last;
+  }
+
   // Task #5: Brave Search cache fallback (tier 5) was removed.
+
+  // Task #70: the Wayback fetch is itself a subrequest — pre-empt it when the
+  // budget is exhausted rather than firing a doomed final fetch.
+  if (opts.budget?.wouldExceed(1)) {
+    return last ?? blockResult(url, 4, "subrequest_budget_exhausted");
+  }
+  opts.budget?.spend(1);
 
   // Final fallback: Wayback Machine. Logged whether or not a snapshot exists
   // so /api/scrapers/health reflects the true attempt count.
@@ -664,6 +724,13 @@ export async function fetchBytes(
     }
     await waitForRateLimit(env, host, Math.max(opts.minIntervalMs ?? 4000, robots.crawlDelayMs));
   }
+  // Task #70: the binary fetch is a subrequest — pre-empt it (no network,
+  // no logAttempt) when it would cross the shared invocation budget, and
+  // surface `subrequest_budget_exhausted` so the job is retried.
+  if (opts.budget?.wouldExceed(1)) {
+    return { ok: false, bytes: new ArrayBuffer(0), status: 0, contentType: "", blockReason: "subrequest_budget_exhausted", durationMs: 0 };
+  }
+  opts.budget?.spend(1);
   // Task #2: hard timeout on the binary fetch path. Without this, a
   // hung PDF download could stall the queue invocation indefinitely.
   // 20s ceiling per spec policy.

@@ -1,5 +1,6 @@
 import type { Env, JobMessage, ParsedLead } from "../types";
 import { fetchPage, fetchBytes } from "./fetcher";
+import type { SubrequestBudget } from "./subrequestBudget";
 import { selectParser } from "./parsers";
 import { parsePdf } from "./parsers/pdf";
 import { extractDomain } from "./normalize";
@@ -425,6 +426,7 @@ async function fanoutProfileUrls(
   parentUrl: string,
   outbound: string[],
   parentDepth: number,
+  budget?: SubrequestBudget,
 ): Promise<number> {
   if (parentDepth >= PROFILE_FANOUT_MAX_DEPTH) return 0;
   let enqueued = 0;
@@ -445,6 +447,11 @@ async function fanoutProfileUrls(
       jobId: childId, kind: "url", target: childUrl,
       config: { parent: parentJobId, depth: parentDepth + 1 },
     });
+    // Task #70: each child is a D1 insert + a queue send — both subrequests.
+    // The children ARE the re-enqueued remaining work; charge them so the
+    // budget reflects fanout cost, but never refuse a fanout send (it has the
+    // safety headroom below the platform cap and dropping a child loses work).
+    budget?.spend(2);
     enqueued += 1;
   }
   return enqueued;
@@ -455,13 +462,14 @@ async function processProfileUrl(
   jobId: string,
   url: string,
   config?: Record<string, unknown>,
+  budget?: SubrequestBudget,
 ): Promise<{ leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number }> {
   if (await isCancelled(env, jobId)) {
     return { leadsFound: 0, pagesFetched: 0, pagesBlocked: 0, captchaHits: 0, costMs: 0 };
   }
   const depth = Number((config?.depth as number | string | undefined) ?? 0) || 0;
 
-  const dispatch = await dispatchProfile(env, url, jobId);
+  const dispatch = await dispatchProfile(env, url, jobId, budget);
 
   // Archive the actually-fetched HTML when applicable. Personal-site
   // dispatch may have followed `/about` `/contact` `/now` probes — each
@@ -472,8 +480,12 @@ async function processProfileUrl(
   if (dispatch.fetched && dispatch.fetched.ok && dispatch.fetched.html) {
     await archiveRawHtml(env, dispatch.fetched.url || url, dispatch.fetched.html);
     await touchSource(env, dispatch.fetched.url || url);
+    // Task #70: charge the R2 archive write + D1 touchSource against the
+    // shared budget so the next fetch's pre-flight sees the true spend.
+    budget?.spend(2);
   } else if (dispatch.kind === "linkedin" || dispatch.kind === "github") {
     await touchSource(env, url);
+    budget?.spend(1);
   }
   // Personal-site probes (`/about` `/contact` `/now`) live in
   // `dispatch.extraFetched`. Archive each + record a sources row so the
@@ -482,6 +494,7 @@ async function processProfileUrl(
     if (extra.result.ok && extra.result.html) {
       await archiveRawHtml(env, extra.result.url || extra.url, extra.result.html);
       await touchSource(env, extra.result.url || extra.url);
+      budget?.spend(2);
     }
   }
 
@@ -518,7 +531,7 @@ async function processProfileUrl(
   let fanoutEnqueued = 0;
   if (dispatch.outboundUrls.length > 0) {
     try {
-      fanoutEnqueued = await fanoutProfileUrls(env, jobId, url, dispatch.outboundUrls, depth);
+      fanoutEnqueued = await fanoutProfileUrls(env, jobId, url, dispatch.outboundUrls, depth, budget);
     } catch (e) {
       console.warn("profile fanout failed", (e as Error).message);
     }
@@ -556,6 +569,7 @@ async function processSingleUrl(
   jobId: string,
   url: string,
   config?: Record<string, unknown>,
+  budget?: SubrequestBudget,
 ): Promise<{ leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number }> {
   let leadsFound = 0;
   let pagesFetched = 0;
@@ -573,7 +587,7 @@ async function processSingleUrl(
   // firm upsert, and personal-site multi-page probing).
   const looksLikePdfEarly = /\.pdf(\?|#|$)/i.test(url);
   if (!looksLikePdfEarly && selectParser(url).name === "profile") {
-    return processProfileUrl(env, jobId, url, config);
+    return processProfileUrl(env, jobId, url, config, budget);
   }
 
   // PDF path: sniff by URL extension first (cheap). For URLs without a `.pdf`
@@ -581,7 +595,7 @@ async function processSingleUrl(
   // the PDF magic bytes (`%PDF-`) we re-fetch as bytes and route to parsePdf.
   const looksLikePdf = /\.pdf(\?|#|$)/i.test(url);
   if (looksLikePdf) {
-    const blob = await fetchBytes(env, url, { jobId });
+    const blob = await fetchBytes(env, url, { jobId, budget });
     costMs += blob.durationMs;
     if (!blob.ok) {
       pagesBlocked += 1;
@@ -589,6 +603,7 @@ async function processSingleUrl(
     }
     pagesFetched += 1;
     await touchSource(env, url);
+    budget?.spend(1);
     const pdfLeads = await parsePdf(blob.bytes, url);
     for (const lead of pdfLeads) {
       if (await isCancelled(env, jobId)) break;
@@ -598,7 +613,7 @@ async function processSingleUrl(
     return { leadsFound, pagesFetched, pagesBlocked, captchaHits, costMs };
   }
 
-  const fetched = await fetchPage(env, url, { jobId });
+  const fetched = await fetchPage(env, url, { jobId, budget });
   costMs += fetched.durationMs;
 
   if (!fetched.ok) {
@@ -613,9 +628,10 @@ async function processSingleUrl(
   // The HTML fetcher returns the binary as text; if it starts with `%PDF-` we
   // re-fetch as bytes and dispatch to the PDF parser instead.
   if (fetched.html.startsWith("%PDF-")) {
-    const blob = await fetchBytes(env, url, { jobId });
+    const blob = await fetchBytes(env, url, { jobId, budget });
     if (blob.ok) {
       await touchSource(env, url);
+      budget?.spend(1);
       const pdfLeads = await parsePdf(blob.bytes, url);
       for (const lead of pdfLeads) {
         if (await isCancelled(env, jobId)) break;
@@ -628,6 +644,7 @@ async function processSingleUrl(
 
   await archiveRawHtml(env, url, fetched.html);
   const isNewDomain = await touchSource(env, url);
+  budget?.spend(2);
 
   // Task #6: page-type gate. News / blog / press-release pages must NOT
   // become entity rows on the Accounts / Customers dashboard. Route
@@ -752,6 +769,7 @@ async function processLinktree(
   jobId: string,
   target: string,
   config: Record<string, unknown> | undefined,
+  budget?: SubrequestBudget,
 ): Promise<{ leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number }> {
   let leadsFound = 0;
   let pagesFetched = 0;
@@ -761,7 +779,7 @@ async function processLinktree(
 
   if (await isCancelled(env, jobId)) return { leadsFound, pagesFetched, pagesBlocked, captchaHits, costMs };
 
-  const fetched = await fetchPage(env, target, { jobId });
+  const fetched = await fetchPage(env, target, { jobId, budget });
   costMs += fetched.durationMs;
   if (!fetched.ok) {
     pagesBlocked += 1;
@@ -771,6 +789,7 @@ async function processLinktree(
   pagesFetched += 1;
   await archiveRawHtml(env, target, fetched.html);
   await touchSource(env, target);
+  budget?.spend(2);
 
   const parserName = (config?.parser as string | undefined) ?? "linktree";
   const { parser } = await import("./parsers").then((m) => ({
@@ -795,6 +814,8 @@ async function processLinktree(
         .bind(childId, `child:${childUrl}`, extractDomain(childUrl), childUrl, JSON.stringify({ parent: jobId }), now, now)
         .run();
       await env.LEAD_QUEUE.send({ jobId: childId, kind: "url", target: childUrl });
+      // Task #70: child D1 insert + queue send are subrequests; charge them.
+      budget?.spend(2);
     }
   }
 
@@ -837,6 +858,7 @@ async function processFirmlist(
   jobId: string,
   target: string,
   config: Record<string, unknown> = {},
+  budget?: SubrequestBudget,
 ): Promise<{ leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number }> {
   const start = Date.now();
   // Task #2: early cancel gate — importers can be expensive (Folk/Airtable
@@ -1017,6 +1039,8 @@ async function processFirmlist(
         target: childTarget,
         config: { firmId: upsertRes.firmId, parentJobId: jobId, homepage_hint: teamUrl },
       });
+      // Task #70: child D1 insert + queue send are subrequests; charge them.
+      budget?.spend(2);
       childJobIds.push(childId);
     }
   }
@@ -1383,6 +1407,11 @@ async function processFirmlist(
 // ----------------------------------------------------------------------------
 
 const TEAM_CRAWL_PAGE_CAP = 8;
+// Task #70: cap how many times a firm_team_crawl may re-enqueue itself after a
+// shared-budget exhaustion. The budget is per-batch, not per-job, so a fresh
+// invocation does not guarantee a fresh budget — without this cap a firm whose
+// batches stay saturated could churn the queue indefinitely.
+const MAX_BUDGET_REQUEUE_ATTEMPTS = 5;
 
 function inferPersona(role: string | null | undefined): { persona_role: string | null; seniority: string | null } {
   const t = (role || "").toLowerCase();
@@ -1694,6 +1723,7 @@ async function processFirmTeamCrawl(
   jobId: string,
   target: string,
   config: Record<string, unknown> | undefined,
+  budget?: SubrequestBudget,
 ): Promise<{ leadsFound: number; pagesFetched: number; pagesBlocked: number; captchaHits: number; costMs: number; result: Record<string, unknown> }> {
   const start = Date.now();
   let leadsFound = 0;
@@ -1726,7 +1756,7 @@ async function processFirmTeamCrawl(
   // Build the candidate seed set. buildSeedUrls actively probes the curated
   // TEAM_PATHS (Tier-0 only; 404 does not escalate) and returns up to
   // TEAM_CRAWL_PAGE_CAP pages already fetched, so we don't re-fetch here.
-  const seeds = await buildSeedUrls(env, homepage, jobId, TEAM_CRAWL_PAGE_CAP);
+  const seeds = await buildSeedUrls(env, homepage, jobId, TEAM_CRAWL_PAGE_CAP, budget);
   const fetchedPages: FetchedPage[] = seeds.pages;
   const pagesFetched = fetchedPages.length;
   // pagesBlocked = probes that didn't land in pages (404, robots, etc.)
@@ -1737,6 +1767,7 @@ async function processFirmTeamCrawl(
   for (const pg of fetchedPages) {
     if (await isCancelled(env, jobId)) break;
     await archiveRawHtml(env, pg.url, pg.html);
+    budget?.spend(1);
     const people = extractPeopleFromPage(pg.html, pg.url, firm.domain);
     for (const p of people) {
       const k = nameKeyOf(p.name);
@@ -1847,6 +1878,60 @@ async function processFirmTeamCrawl(
      WHERE id = ?`,
   ).bind(firm.id, now, firm.id).run();
 
+  // Task #70: if buildSeedUrls stopped early because the shared per-invocation
+  // budget was exhausted, the un-probed seeds were NOT crawled. Re-enqueue a
+  // fresh firm_team_crawl for the same firm so a later invocation (with a full
+  // budget) probes the remainder. Idempotent: people already persisted dedupe
+  // on re-run.
+  //
+  // Loop-safety: the budget is shared across ALL jobs in a queue batch, so a
+  // re-enqueued job can land in a batch that is ALREADY near-exhausted and
+  // immediately re-exhaust before doing useful work — a fresh invocation does
+  // NOT guarantee a fresh budget. We therefore carry a monotonic
+  // `budget_requeue_attempt` counter and stop re-enqueueing past
+  // MAX_BUDGET_REQUEUE_ATTEMPTS; the remainder is then dropped (logged) rather
+  // than churning the queue forever.
+  const requeueAttempt = Number(config?.budget_requeue_attempt) || 0;
+  let budgetRequeued = false;
+  if (seeds.budgetExhausted && requeueAttempt < MAX_BUDGET_REQUEUE_ATTEMPTS) {
+    try {
+      const nextAttempt = requeueAttempt + 1;
+      const requeueId = crypto.randomUUID();
+      const requeueConfig = {
+        firmId,
+        parentJobId: jobId,
+        homepage_hint: homepage,
+        budget_requeue: true,
+        budget_requeue_attempt: nextAttempt,
+      };
+      await env.DB.prepare(
+        `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
+         VALUES (?, ?, ?, 'queued', 'firm_team_crawl', ?, ?, ?, ?)`,
+      ).bind(
+        requeueId,
+        `firm_team_crawl:requeue:${firm.name ?? firmId}`,
+        safeHost(homepage),
+        String(firmId),
+        JSON.stringify(requeueConfig),
+        now,
+        now,
+      ).run();
+      await env.LEAD_QUEUE.send({
+        jobId: requeueId,
+        kind: "firm_team_crawl",
+        target: String(firmId),
+        config: requeueConfig,
+      });
+      budgetRequeued = true;
+    } catch (e) {
+      console.warn("firm_team_crawl budget re-enqueue failed", (e as Error).message);
+    }
+  } else if (seeds.budgetExhausted) {
+    console.warn(
+      `firm_team_crawl budget re-enqueue cap reached (firmId=${firmId}, attempts=${requeueAttempt}); dropping remainder`,
+    );
+  }
+
   // Per-job summary on the job row's result_json (and a fetch_log audit row
   // mirroring the firmlist processor's pattern).
   const summary = {
@@ -1862,6 +1947,8 @@ async function processFirmTeamCrawl(
     follow_crunchbase: followCrunchbase,
     seeds_probed: seeds.probesSpent,
     seeds_total: seeds.candidatesConsidered,
+    budget_exhausted: seeds.budgetExhausted,
+    budget_requeued: budgetRequeued,
   };
   // fetch_log audit row mirrors the firmlist processor's pattern; the
   // jobs.result_json write happens via runJob → markCompleted (which now
@@ -2039,7 +2126,7 @@ function safeHost(url: string): string {
   try { return new URL(url).hostname.toLowerCase(); } catch { return ""; }
 }
 
-export async function runJob(msg: JobMessage, env: Env): Promise<void> {
+export async function runJob(msg: JobMessage, env: Env, budget?: SubrequestBudget): Promise<void> {
   const { jobId } = msg;
   await markRunning(env, jobId);
 
@@ -2228,15 +2315,15 @@ export async function runJob(msg: JobMessage, env: Env): Promise<void> {
     // timeout, same semantics as Workers AI bound).
     const executorPromise = timedStep(env, jobId, stepName, async () => {
       if (msg.kind === "linktree" || msg.kind === "profile_list") {
-        return processLinktree(env, jobId, msg.target, msg.config);
+        return processLinktree(env, jobId, msg.target, msg.config, budget);
       } else if (msg.kind === "discover") {
         return processDiscover(env, jobId, msg.target, msg.config);
       } else if (msg.kind === "firmlist") {
-        return processFirmlist(env, jobId, msg.target, msg.config);
+        return processFirmlist(env, jobId, msg.target, msg.config, budget);
       } else if (msg.kind === "firm_team_crawl") {
-        return processFirmTeamCrawl(env, jobId, msg.target, msg.config);
+        return processFirmTeamCrawl(env, jobId, msg.target, msg.config, budget);
       } else {
-        return processSingleUrl(env, jobId, msg.target, msg.config);
+        return processSingleUrl(env, jobId, msg.target, msg.config, budget);
       }
     }, { meta: { target: msg.target, kind: msg.kind } });
     let deadlineTimer: ReturnType<typeof setTimeout> | null = null;

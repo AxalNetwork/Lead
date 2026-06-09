@@ -24,6 +24,7 @@
 import type { Env, ParsedLead } from "../../types";
 import type { FetchResult } from "../fetcher";
 import { fetchPage } from "../fetcher";
+import type { SubrequestBudget } from "../subrequestBudget";
 import type { FirmCandidate } from "./firmlists/types";
 
 import { isLinkedInProfileUrl, parseLinkedIn } from "./profile/linkedin";
@@ -126,7 +127,7 @@ function collectOutboundFromLeads(leads: ParsedLead[], primaryUrl: string): stri
  * rewrites to Nitter; GitHub hits the REST API). Returns leads + outbound
  * URLs for depth-1 fanout. Throws with `NFX_ERROR` for gated sources.
  */
-export async function dispatchProfile(env: Env, url: string, jobId: string): Promise<ProfileDispatchResult> {
+export async function dispatchProfile(env: Env, url: string, jobId: string, budget?: SubrequestBudget): Promise<ProfileDispatchResult> {
   const kind = detectProfileKind(url);
   const start = Date.now();
 
@@ -167,7 +168,7 @@ export async function dispatchProfile(env: Env, url: string, jobId: string): Pro
 
   // Remaining kinds (crunchbase_person, crunchbase_org, personal) all
   // need the standard tiered fetcher.
-  const fetched = await fetchPage(env, url, { jobId });
+  const fetched = await fetchPage(env, url, { jobId, budget });
   if (!fetched.ok) {
     throw new Error(`fetch_failed:${fetched.blockReason ?? "unknown"}:status=${fetched.status}`);
   }
@@ -194,7 +195,7 @@ export async function dispatchProfile(env: Env, url: string, jobId: string): Pro
   }
 
   // Personal site — primary + secondary probes via personExtract.
-  const personal = await parsePersonal(env, url, jobId, fetched);
+  const personal = await parsePersonal(env, url, jobId, fetched, budget);
   // First entry of personal.fetched is the primary; expose the rest as
   // `extraFetched` so processProfileUrl can archive each probe page.
   const extras = personal.fetched.slice(1);

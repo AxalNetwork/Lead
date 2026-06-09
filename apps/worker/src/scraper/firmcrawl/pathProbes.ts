@@ -13,6 +13,7 @@
 
 import type { Env } from "../../types";
 import { fetchPage } from "../fetcher";
+import type { SubrequestBudget } from "../subrequestBudget";
 
 /**
  * Ordered list of likely team-page paths. Longest / most specific first so
@@ -57,6 +58,12 @@ export interface SeedSet {
   probesSpent: number;
   /** Total candidate URLs considered before the page cap. */
   candidatesConsidered: number;
+  /** Task #70: true when seed probing stopped early because the shared
+   *  per-invocation subrequest budget was near-exhausted (not because the
+   *  page cap / candidate list was exhausted). The caller re-enqueues the
+   *  crawl as a fresh job so the remaining curated paths are probed in a
+   *  later invocation with a full budget. */
+  budgetExhausted: boolean;
 }
 
 function originOf(url: string): string | null {
@@ -145,18 +152,20 @@ export async function buildSeedUrls(
   homepage: string,
   jobId: string,
   maxPages = 8,
+  budget?: SubrequestBudget,
 ): Promise<SeedSet> {
   const origin = originOf(homepage);
-  if (!origin) return { pages: [], probesSpent: 0, candidatesConsidered: 0 };
+  if (!origin) return { pages: [], probesSpent: 0, candidatesConsidered: 0, budgetExhausted: false };
 
   const pages: FetchedPage[] = [];
   let probesSpent = 0;
+  let budgetExhausted = false;
   const homepageCanonical = canonicalize(homepage) ?? homepage;
   const seenUrls = new Set<string>();
 
   // (a) Homepage — always our first fetch. The HTML doubles as the source
   // for the anchor scan and as a fallback team listing on small firm sites.
-  const hp = await fetchPage(env, homepage, { jobId, minIntervalMs: 1500, liveOnly: true });
+  const hp = await fetchPage(env, homepage, { jobId, minIntervalMs: 1500, liveOnly: true, budget });
   probesSpent += 1;
   let homepageAnchors: string[] = [];
   if (hp.ok && hp.html) {
@@ -168,7 +177,7 @@ export async function buildSeedUrls(
   // (b) sitemap.xml — discovery only, never extracted from.
   let sitemapMatches: string[] = [];
   try {
-    const sm = await fetchPage(env, `${origin}/sitemap.xml`, { jobId, minIntervalMs: 1500, liveOnly: true });
+    const sm = await fetchPage(env, `${origin}/sitemap.xml`, { jobId, minIntervalMs: 1500, liveOnly: true, budget });
     probesSpent += 1;
     if (sm.ok && sm.html) sitemapMatches = extractSitemapMatches(sm.html);
   } catch {
@@ -194,9 +203,13 @@ export async function buildSeedUrls(
   //      fetched_from in the result.
   for (const url of queue) {
     if (pages.length >= maxPages) break;
+    // Task #70: stop probing further curated paths once the shared
+    // invocation budget is near-exhausted. Flag it so the caller re-enqueues
+    // the crawl as a fresh job rather than fetching every seed inline.
+    if (budget?.wouldExceed(1)) { budgetExhausted = true; break; }
     let r;
     try {
-      r = await fetchPage(env, url, { jobId, minIntervalMs: 1500, liveOnly: true });
+      r = await fetchPage(env, url, { jobId, minIntervalMs: 1500, liveOnly: true, budget });
     } catch {
       probesSpent += 1;
       continue;
@@ -210,5 +223,5 @@ export async function buildSeedUrls(
     }
   }
 
-  return { pages, probesSpent, candidatesConsidered: queue.length + 1 };
+  return { pages, probesSpent, candidatesConsidered: queue.length + 1, budgetExhausted };
 }
