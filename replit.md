@@ -27,10 +27,13 @@ Two GitHub Actions workflows matter:
 `cd apps/worker && npx wrangler@3.99.0 deploy`. This bypasses every gate
 and ships whatever local commits exist, so prefer the GitHub Action.
 Last manual deploy: 2026-06-09 (Version ID
-`5d5728e5-7e8f-4ef0-a87a-46b0026f9944`) shipping the Task #68
-`/api/dd/scores/by-ref` SQL-variable-overflow fix (id batch chunking) at
-explicit user request. Because `wrangler deploy` bundles the whole worker,
-this build also carries everything merged through Task #67. Prior live
+`6f169ead-ba88-4eb3-84e6-25dfa0c31943`) shipping the Task #72
+robots.txt/ToS-block-as-benign-skip fix at explicit user request.
+Because `wrangler deploy` bundles the whole worker, this build also
+carries everything merged through Task #72. Prior manual deploy was
+Version ID `5d5728e5-7e8f-4ef0-a87a-46b0026f9944`, shipping the Task #68
+`/api/dd/scores/by-ref` SQL-variable-overflow fix (id batch chunking);
+that build carried everything merged through Task #67. Prior live
 prod version was `334d2ef7-3f06-47ae-a7a2-1eb4e5ae81b1`, shipped
 2026-06-09 18:25 UTC by `deploy-worker.yml` (the Task #57 push); that
 build first resolved the Power Nodes "HTTP 404" by including the influence
