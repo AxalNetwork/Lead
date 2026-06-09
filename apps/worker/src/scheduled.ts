@@ -44,6 +44,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const swept = await sweepStuckJobs(env);
         if (swept > 0) console.log("hourly sweepStuckJobs", swept);
       } catch (e) {
+        await logError(env, { err: e, step: "hourly sweepStuckJobs" });
         console.warn("hourly sweepStuckJobs failed", (e as Error).message);
       }
       // Task #2 (monitoring): hourly monitor-batch + digest run. Free-plan
@@ -62,6 +63,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
           await retryPendingDeliveries(env, 50).catch((e) => logError(env, { err: e, step: "hourly.monitor.retryPendingDeliveries" }));
         }
       } catch (e) {
+        await logError(env, { err: e, step: "hourly monitor-batch" });
         console.error("hourly monitor-batch failed", (e as Error).message);
       }
       try {
@@ -72,6 +74,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
           await runDigest(env, { limit: 500 }).catch((e) => logError(env, { err: e, step: "hourly.digest.runDigest" }));
         }
       } catch (e) {
+        await logError(env, { err: e, step: "hourly digest" });
         console.error("hourly digest failed", (e as Error).message);
       }
       // Task #3: hourly seed sweep. Idempotent — touches last_crawled_at
@@ -87,6 +90,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         if (seedRes.picked > 0) console.log("hourly seed sweep", JSON.stringify(seedRes));
         }
       } catch (e) {
+        await logError(env, { err: e, step: "hourly seed sweep" });
         console.error("hourly seed sweep failed", (e as Error).message);
       }
       // Task #3 (review fix): drain smart_frontier into crawl_frontier so
@@ -97,6 +101,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const drainRes = await drainSmartFrontier(env, 200);
         if (drainRes.picked > 0) console.log("hourly smart_frontier drain", JSON.stringify(drainRes));
       } catch (e) {
+        await logError(env, { err: e, step: "hourly smart_frontier drain" });
         console.error("hourly smart_frontier drain failed", (e as Error).message);
       }
       // Task #1: SEC EDGAR discovery tick. RSS hourly + daily-index pass
@@ -110,6 +115,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
           console.log("hourly edgar discovery", JSON.stringify(edgarRes));
         }
       } catch (e) {
+        await logError(env, { err: e, step: "hourly edgar discovery" });
         console.error("hourly edgar discovery failed", (e as Error).message);
       }
       // Task #2 (People-at-Firms Tracker): weekly firm team-page
@@ -123,6 +129,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const snapRes = await runWeeklySnapshotSweep(env, 25);
         if (snapRes.picked > 0) console.log("hourly movements snapshot", JSON.stringify(snapRes));
       } catch (e) {
+        await logError(env, { err: e, step: "hourly movements snapshot" });
         console.error("hourly movements snapshot failed", (e as Error).message);
       }
       try {
@@ -130,6 +137,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const diffRes = await runDiffSweep(env, 50);
         if (diffRes.firms > 0) console.log("hourly movements diff", JSON.stringify(diffRes));
       } catch (e) {
+        await logError(env, { err: e, step: "hourly movements diff" });
         console.error("hourly movements diff failed", (e as Error).message);
       }
       try {
@@ -137,6 +145,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const corrRes = await runCorroborationSweep(env, 100);
         if (corrRes.picked > 0) console.log("hourly movements corroborate", JSON.stringify(corrRes));
       } catch (e) {
+        await logError(env, { err: e, step: "hourly movements corroborate" });
         console.error("hourly movements corroborate failed", (e as Error).message);
       }
       try {
@@ -144,6 +153,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const spinRes = await runSpinoutSweep(env, 50);
         if (spinRes.spinouts_emitted > 0) console.log("hourly movements spinout", JSON.stringify(spinRes));
       } catch (e) {
+        await logError(env, { err: e, step: "hourly movements spinout" });
         console.error("hourly movements spinout failed", (e as Error).message);
       }
       try {
@@ -151,6 +161,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const carryRes = await runCarrySweep(env, 25);
         if (carryRes.firms > 0) console.log("hourly movements carry", JSON.stringify(carryRes));
       } catch (e) {
+        await logError(env, { err: e, step: "hourly movements carry" });
         console.error("hourly movements carry failed", (e as Error).message);
       }
       // Task #2: hourly adapter-drift check. Compares parse-success rate
@@ -232,6 +243,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
           console.log("hourly drift check flagged", JSON.stringify({ count: (drift.results ?? []).length }));
         }
       } catch (e) {
+        await logError(env, { err: e, step: "hourly drift check" });
         console.warn("hourly drift check failed", (e as Error).message);
       }
       try {
@@ -244,6 +256,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
           for (const mod of MODULES) await runSource(env, mod).catch((e) => console.warn("hourly runSource failed", mod.slug, (e as Error).message));
         }
       } catch (e) {
+        await logError(env, { err: e, step: "hourly crawl-signals" });
         console.error("hourly crawl-signals failed", (e as Error).message);
       }
 
@@ -259,6 +272,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         await markCronTick(env, "0 * * * *");
         console.log("hourly system-health snapshot", JSON.stringify(snap));
       } catch (e) {
+        await logError(env, { err: e, step: "hourly system-health snapshot" });
         console.error("hourly system-health snapshot failed", (e as Error).message);
       }
       try {
@@ -268,6 +282,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
           console.log("hourly system-health alerts", JSON.stringify(r));
         }
       } catch (e) {
+        await logError(env, { err: e, step: "hourly system-health alerts" });
         console.error("hourly system-health alerts failed", (e as Error).message);
       }
     })());
@@ -299,6 +314,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const { markCronTick } = await import("./services/systemHealth/snapshot");
         await markCronTick(env, "15 3 * * *");
       } catch (e) {
+        await logError(env, { err: e, step: "nightly external-api probes" });
         console.error("nightly external-api probes failed", (e as Error).message);
       }
 
@@ -312,6 +328,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const r = await runOverrideUnlockSweep(env, 500);
         if (r.unlocked > 0) console.log("nightly override unlock sweep", r.unlocked);
       } catch (e) {
+        await logError(env, { err: e, step: "nightly override unlock sweep" });
         console.error("nightly override unlock sweep failed", (e as Error).message);
       }
 
@@ -324,15 +341,26 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const { runAllActive } = await import("./services/mlOps/runner");
         const { predictorFor } = await import("./services/mlOps/predictors");
         await runAllActive(env, predictorFor, { triggered_by: "nightly", model_version: "heuristic:v1" });
-      } catch (e) { console.error("nightly ml eval sweep failed", (e as Error).message); }
+      } catch (e) {
+        await logError(env, { err: e, step: "nightly ml eval sweep" });
+        console.error("nightly ml eval sweep failed", (e as Error).message);
+      }
       try {
         const { runCalibrationGrade } = await import("./services/mlOps/calibration");
         const r = await runCalibrationGrade(env);
         console.log("nightly calibration grade", r.graded, "per type", r.perType.length);
-      } catch (e) { console.error("nightly calibration grade failed", (e as Error).message); }
+      } catch (e) {
+        await logError(env, { err: e, step: "nightly calibration grade" });
+        console.error("nightly calibration grade failed", (e as Error).message);
+      }
 
       // 1. Analytics aggregator
-      try { await runNightlyAggregator(env); } catch (e) { console.error("nightly aggregator failed", (e as Error).message); }
+      try {
+        await runNightlyAggregator(env);
+      } catch (e) {
+        await logError(env, { err: e, step: "nightly aggregator" });
+        console.error("nightly aggregator failed", (e as Error).message);
+      }
 
       // 2. Account-score refresh. Task #54: batched sweep — a fixed read
       // budget (accounts + signals + buyers + one taxonomy load) plus
@@ -343,6 +371,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const r = await recomputeStaleAccountScores(env, 1000);
         console.log("nightly account scores done", JSON.stringify(r));
       } catch (e) {
+        await logError(env, { err: e, step: "nightly account scores" });
         console.error("nightly account scores failed", (e as Error).message);
       }
 
@@ -355,6 +384,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const r = await materializeInvestorPortfolio(env);
         console.log("investor portfolio materialize done", JSON.stringify(r));
       } catch (e) {
+        await logError(env, { err: e, step: "investor portfolio materialize" });
         console.error("investor portfolio materialize failed", (e as Error).message);
       }
 
@@ -363,6 +393,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const r = await runInvestorStats(env);
         console.log("investor stats done", JSON.stringify(r));
       } catch (e) {
+        await logError(env, { err: e, step: "investor stats" });
         console.error("investor stats failed", (e as Error).message);
       }
 
@@ -371,6 +402,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const r = await runRelationshipDerivation(env);
         console.log("relationship derivation done", JSON.stringify(r));
       } catch (e) {
+        await logError(env, { err: e, step: "relationship derivation" });
         console.error("relationship derivation failed", (e as Error).message);
       }
 
@@ -382,6 +414,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const n = await sweepStaleEntities(env, 90, 2000);
         console.log("staleness sweep done", n);
       } catch (e) {
+        await logError(env, { err: e, step: "staleness sweep" });
         console.error("staleness sweep failed", (e as Error).message);
       }
 
@@ -435,6 +468,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         }
       } catch (e) {
         const msg = (e as Error).message;
+        await logError(env, { err: e, step: "nightly persona-match-refresh" });
         console.error("nightly persona-match-refresh failed", msg);
         // Re-throw migration-order failures so the cron tick actually
         // fails (the inner guard intentionally throws in production).
@@ -465,6 +499,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         }
         console.log("fund strategy drift done", drifts);
       } catch (e) {
+        await logError(env, { err: e, step: "nightly fund refresh" });
         console.error("nightly fund refresh failed", (e as Error).message);
       }
 
@@ -483,6 +518,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const cal = await rebuildCalibration(env);
         console.log("nightly fund return calibration done", JSON.stringify(cal));
       } catch (e) {
+        await logError(env, { err: e, step: "nightly fund return sweep" });
         console.error("nightly fund return sweep failed", (e as Error).message);
       }
 
@@ -497,6 +533,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const syndRefreshed = await refreshAllSyndicateAnalytics(env);
         console.log("syndicate analytics rebuild done", syndRefreshed);
       } catch (e) {
+        await logError(env, { err: e, step: "nightly angel/syndicate refresh" });
         console.error("nightly angel/syndicate refresh failed", (e as Error).message);
       }
 
@@ -518,6 +555,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         }), { seen: 0, persisted: 0, fx_errors: 0, translated: 0 });
         console.log("intl filings drain done", totals);
       } catch (e) {
+        await logError(env, { err: e, step: "nightly intl drain" });
         console.error("nightly intl drain failed", (e as Error).message);
       }
 
@@ -535,6 +573,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const compRes = await refreshStaleCompPanels(env);
         console.log("comp-panel refresh sweep done", JSON.stringify(compRes));
       } catch (e) {
+        await logError(env, { err: e, step: "nightly comp-panel refresh" });
         console.error("nightly comp-panel refresh failed", (e as Error).message);
       }
 
@@ -547,6 +586,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const r = await runCapitalMarketsWeeklyDigest(env);
         console.log("capital-markets weekly digest done", JSON.stringify(r));
       } catch (e) {
+        await logError(env, { err: e, step: "capital-markets weekly digest" });
         console.error("capital-markets weekly digest failed", (e as Error).message);
       }
 
@@ -575,6 +615,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         }
         console.log("nightly reference-network build done", JSON.stringify({ rebuilt: rebuildIds.length, graph_changed: graphPicks.length, candidates: refs }));
       } catch (e) {
+        await logError(env, { err: e, step: "nightly verification sweep" });
         console.error("nightly verification sweep failed", (e as Error).message);
       }
 
@@ -589,6 +630,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const leaks = await harvestRecentLeaks(env);
         console.log("nightly leak harvest", JSON.stringify({ status: leaks.status, candidates: leaks.candidates.length, reason: leaks.reason }));
       } catch (e) {
+        await logError(env, { err: e, step: "nightly leak harvest" });
         console.error("nightly leak harvest failed", (e as Error).message);
       }
       try {
@@ -627,6 +669,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         }
         console.log("nightly delaware coi sweep", JSON.stringify({ probed, extracted, unconfigured }));
       } catch (e) {
+        await logError(env, { err: e, step: "nightly delaware coi sweep" });
         console.error("nightly delaware coi sweep failed", (e as Error).message);
       }
 
@@ -642,6 +685,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const r = await runEdgeQualitySweep(env);
         console.log("edge quality sweep done", JSON.stringify(r));
       } catch (e) {
+        await logError(env, { err: e, step: "nightly edge quality sweep" });
         console.error("nightly edge quality sweep failed", (e as Error).message);
       }
 
@@ -656,6 +700,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const r = await runNightlyIntroRetrain(env);
         console.log("intro retrain done", JSON.stringify(r));
       } catch (e) {
+        await logError(env, { err: e, step: "nightly intro retrain" });
         console.error("nightly intro retrain failed", (e as Error).message);
       }
 
@@ -669,6 +714,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const r = await rebuildTermBenchmarks(env);
         console.log("term benchmarks rebuild done", JSON.stringify(r));
       } catch (e) {
+        await logError(env, { err: e, step: "nightly term-benchmarks rebuild" });
         console.error("nightly term-benchmarks rebuild failed", (e as Error).message);
       }
 
@@ -692,6 +738,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const full = await runAllExtractors(env, {});
         console.log("relationship inference done", JSON.stringify({ drained, full_total_edges: full.total_edges, duration_ms: full.duration_ms }));
       } catch (e) {
+        await logError(env, { err: e, step: "nightly relationship inference" });
         console.error("nightly relationship inference failed", (e as Error).message);
       }
 
@@ -707,6 +754,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const r = await runNightlyReputationSweep(env, 1000);
         console.log("nightly investor reputation sweep done", JSON.stringify(r));
       } catch (e) {
+        await logError(env, { err: e, step: "nightly investor reputation sweep" });
         console.error("nightly investor reputation sweep failed", (e as Error).message);
       }
 
@@ -725,6 +773,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const r = await runCleanupSweep(env, { mode: "recent", lookbackHours: 30, limit: 5000, source: "cron_sweep" });
         console.log("garbage sweep done", JSON.stringify(r));
       } catch (e) {
+        await logError(env, { err: e, step: "nightly garbage sweep" });
         console.error("nightly garbage sweep failed", (e as Error).message);
       }
 
@@ -744,6 +793,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
           console.log("compute watchdog done", JSON.stringify(r));
         }
       } catch (e) {
+        await logError(env, { err: e, step: "nightly compute watchdog" });
         console.error("nightly compute watchdog failed", (e as Error).message);
       }
 
@@ -761,6 +811,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
           }
         }
       } catch (e) {
+        await logError(env, { err: e, step: "nightly project match refresh" });
         console.error("nightly project match refresh failed", (e as Error).message);
       }
     })());
@@ -789,6 +840,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
           console.log("refresh-saved-research inline", JSON.stringify(r));
         }
       } catch (e) {
+        await logError(env, { err: e, step: "refresh-saved-research" });
         console.error("refresh-saved-research failed", (e as Error).message);
       }
     })());
@@ -808,6 +860,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
           console.log("dd batch scan", JSON.stringify(sc));
         }
       } catch (e) {
+        await logError(env, { err: e, step: "daily dd-scan-batch" });
         console.error("daily dd-scan-batch failed", (e as Error).message);
       }
       // Task #2: nightly news refresh for the top-N highest-quality
@@ -835,6 +888,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         }
         console.log("nightly news refresh dispatched", dispatched);
       } catch (e) {
+        await logError(env, { err: e, step: "nightly news refresh batch" });
         console.error("nightly news refresh batch failed", (e as Error).message);
       }
       // Task #3: nightly profile classification. Picks the next N
@@ -851,6 +905,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
           console.log("classify-batch inline", JSON.stringify(r));
         }
       } catch (e) {
+        await logError(env, { err: e, step: "nightly classify-batch" });
         console.error("nightly classify-batch failed", (e as Error).message);
       }
       // Task #3 (this task): nightly AI Profile Filler — picks the 200
@@ -867,6 +922,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
           console.log("ai-profile-filler-batch inline", JSON.stringify(r));
         }
       } catch (e) {
+        await logError(env, { err: e, step: "nightly ai-profile-filler-batch" });
         console.error("nightly ai-profile-filler-batch failed", (e as Error).message);
       }
       // Task #3 (this task): nightly OSINT batch + 90-day reverify sweep.
@@ -892,6 +948,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
           }
         }
       } catch (e) {
+        await logError(env, { err: e, step: "nightly osint-batch" });
         console.error("nightly osint-batch failed", (e as Error).message);
       }
       try {
@@ -904,6 +961,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
           console.log("osint-reverify inline", JSON.stringify(r));
         }
       } catch (e) {
+        await logError(env, { err: e, step: "nightly osint-reverify" });
         console.error("nightly osint-reverify failed", (e as Error).message);
       }
       // Task #7: identity backfill — promote scraped social/website facts
@@ -914,6 +972,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const r = await runIdentityBackfill(env, { limit: 50 });
         console.log("identity-backfill inline", JSON.stringify(r));
       } catch (e) {
+        await logError(env, { err: e, step: "nightly identity-backfill" });
         console.error("nightly identity-backfill failed", (e as Error).message);
       }
       // Task #13: geo backfill — resolve firms.hq_country_iso2 left NULL by
@@ -932,6 +991,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
           await materializeFirmAnalytics(env);
         }
       } catch (e) {
+        await logError(env, { err: e, step: "nightly firm-geo-backfill" });
         console.error("nightly firm-geo-backfill failed", (e as Error).message);
       }
     })());
@@ -960,6 +1020,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
           const r = await loadSeedSources(env);
           console.log("source_registry first-deploy bootstrap", JSON.stringify(r));
         } catch (e) {
+          await logError(env, { err: e, step: "source_registry bootstrap" });
           console.warn("source_registry bootstrap failed", (e as Error).message);
         }
       }
@@ -1028,7 +1089,7 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
     }
   };
 
-  ctx.waitUntil(enqueueRegistry());
-  ctx.waitUntil(enqueueScrapes());
-  ctx.waitUntil(reEnrichStale());
+  ctx.waitUntil(enqueueRegistry().catch((e) => logError(env, { err: e, step: "6h enqueueRegistry" })));
+  ctx.waitUntil(enqueueScrapes().catch((e) => logError(env, { err: e, step: "6h enqueueScrapes" })));
+  ctx.waitUntil(reEnrichStale().catch((e) => logError(env, { err: e, step: "6h reEnrichStale" })));
 }
