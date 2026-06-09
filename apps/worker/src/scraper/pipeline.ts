@@ -30,6 +30,7 @@ import { guessEmails } from "./firmcrawl/emailGuess";
 import { enqueueLinkedinDiscovery, enqueueCrunchbaseUrl } from "./firmcrawl/profileFollow";
 import { dispatchProfile } from "./parsers/profile";
 import { classifyPage, isNewsLike } from "../services/pageClassifier";
+import { isBenignSkip } from "../errors";
 import { ingestNewsPage } from "../news/page_ingest";
 
 /**
@@ -115,7 +116,7 @@ async function markRunning(env: Env, jobId: string): Promise<void> {
  * + a human-readable error field for debugging). Status guard mirrors
  * `markFailed` so a sweep/operator-set terminal state can't be clobbered.
  */
-async function markSkipped(
+export async function markSkipped(
   env: Env,
   jobId: string,
   skipCode: string,
@@ -2379,7 +2380,15 @@ export async function runJob(msg: JobMessage, env: Env, budget?: SubrequestBudge
       customResult ?? { kind: msg.kind, target: msg.target },
     );
   } catch (e) {
-    await markFailed(env, jobId, (e as Error).message, Date.now() - start);
+    // Task #72: robots.txt / ToS policy blocks are benign skips, not failures.
+    // End the job in `skipped` (no error_log, never retried) instead of failed
+    // so honoring a host's robots.txt stops surfacing as a red 422 error.
+    const skip = isBenignSkip(e);
+    if (skip) {
+      await markSkipped(env, jobId, skip.skip_code, skip.reason, Date.now() - start);
+    } else {
+      await markFailed(env, jobId, (e as Error).message, Date.now() - start);
+    }
     throw e;
   }
 }

@@ -167,8 +167,17 @@ export async function timedStep<T>(
     await logStep(env, { job_id, step, status: "ok", duration_ms: Date.now() - t0, count_in: opts.count_in, count_out, meta: opts.meta, workflow_run_id, attempt });
     return out;
   } catch (e) {
+    const { classify, isBenignSkip } = await import("../errors.js");
+    // Task #72: robots.txt / ToS blocks are benign policy skips, not errors.
+    // Don't write an error_log row (it would surface as a red 422 in the
+    // operator console) — record the step as `skipped` instead and rethrow so
+    // the caller routes the job to the `skipped` terminal status.
+    const skip = isBenignSkip(e);
+    if (skip) {
+      await logStep(env, { job_id, step, status: "skipped", duration_ms: Date.now() - t0, count_in: opts.count_in, meta: opts.meta, workflow_run_id, attempt, error_code: skip.skip_code });
+      throw e;
+    }
     const error_id = await logError(env, { err: e, job_id, step });
-    const { classify } = await import("../errors.js");
     const cls = classify(e);
     await logStep(env, { job_id, step, status: "error", duration_ms: Date.now() - t0, count_in: opts.count_in, error_id, meta: opts.meta, workflow_run_id, attempt, error_code: cls?.code });
     throw e;

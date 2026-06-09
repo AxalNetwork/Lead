@@ -20,6 +20,10 @@ export type ErrorKind =
   | "auth"
   | "validation"
   | "upstream"
+  // Task #72: benign policy outcomes (robots.txt / ToS blocks). Honoring a
+  // host's robots.txt is expected behavior, not an internal error — jobs that
+  // hit a `skip` end in the `skipped` terminal status (no error_log, no retry).
+  | "skip"
   | "internal";
 
 // Closed enumeration of error codes the worker emits. New code paths must add
@@ -151,6 +155,8 @@ function defaultStatusForKind(kind: ErrorKind): number {
     case "config": return 500;
     case "upstream": return 502;
     case "transient": return 503;
+    // Task #72: a benign skip is not an error surface — neutral 200.
+    case "skip": return 200;
     case "internal":
     default: return 500;
   }
@@ -317,9 +323,22 @@ export function classify(err: unknown): { code: ErrCode; kind: ErrorKind; retrya
       msg.includes("puppeteer_module_missing")) {
     return { code: "config_missing", kind: "config", retryable: false };
   }
-  if (msg.includes("gated_source_use_manual_paste") ||
-      msg.includes("robots_disallowed") ||
-      msg.includes("tos_blocked")) {
+  // Task #72: robots.txt / ToS blocks are EXPECTED, benign policy outcomes,
+  // not internal errors — honoring a host's robots.txt is correct behavior.
+  // Classify them as the `skip` kind so the queue routes them to the `skipped`
+  // terminal status (no error_log row, never retried) instead of failing /
+  // dead-lettering them as scrape errors. NB: the scraper emits the token
+  // `robots_disallow` (see scraper/robots.ts); the old code only matched the
+  // `robots_disallowed` spelling and silently fell through to the generic
+  // fetch_failed → permanent rule, so the block surfaced as a red 422.
+  if (msg.includes("robots_disallow") || msg.includes("tos_blocked")) {
+    const code: ErrCode = msg.includes("tos_blocked") ? "tos_blocked" : "robots_disallowed";
+    return { code, kind: "skip", retryable: false };
+  }
+  // Gated sources still need an operator manual-paste; that's a permanent
+  // scrape block (the queue preflight already skips it earlier — this is the
+  // fetcher backstop, kept permanent so its behavior is unchanged).
+  if (msg.includes("gated_source_use_manual_paste")) {
     return { code: "scrape_blocked", kind: "permanent", retryable: false };
   }
   if (msg.includes("no_table_found")) {
@@ -379,6 +398,23 @@ export function classify(err: unknown): { code: ErrCode; kind: ErrorKind; retrya
     return { code: "unauthorized", kind: "auth", retryable: false };
   }
   return null;
+}
+
+/**
+ * Task #72: is this thrown value a benign policy skip (robots.txt / ToS)
+ * rather than a real fetch failure? Benign skips end a job in the `skipped`
+ * terminal status (no error_log, no retry), NOT failed/dead_letter. Returns
+ * the stable `skip_code` + a human reason, or null for everything else (which
+ * the caller then classifies / retries / dead-letters normally).
+ */
+export function isBenignSkip(err: unknown): { skip_code: string; reason: string } | null {
+  const cls = err instanceof AppError
+    ? { code: err.code, kind: err.kind }
+    : classify(err);
+  if (!cls || cls.kind !== "skip") return null;
+  const skip_code = cls.code === "tos_blocked" ? "tos_blocked" : "robots_disallow";
+  const reason = err instanceof Error ? err.message : String(err ?? skip_code);
+  return { skip_code, reason };
 }
 
 function safeJson(v: unknown): string {

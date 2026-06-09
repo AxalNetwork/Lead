@@ -94,12 +94,12 @@ export { RefreshSavedResearchWorkflow } from "./agent/workflow";
 import { piiAuditOnLeadGet } from "./middleware/pii_audit";
 import { accessGuard, adminOnly } from "./middleware/access";
 import { requestId } from "./middleware/request_id";
-import { runJob } from "./scraper/pipeline";
+import { runJob, markSkipped } from "./scraper/pipeline";
 import { SubrequestBudget } from "./scraper/subrequestBudget";
 import { scheduled as scheduledHandler } from "./scheduled";
 import { errors as errorsRoute } from "./routes/errors";
 import { admin, sweepStuckJobs } from "./routes/admin";
-import { AppError, wrapUnknown } from "./errors";
+import { AppError, wrapUnknown, isBenignSkip } from "./errors";
 import { logError } from "./db/error_log";
 
 const API_HOST = "api.aidatasignal.com";
@@ -317,6 +317,7 @@ export default {
     let batchRetried = 0;
     let batchDeadLettered = 0;
     let batchFailed = 0;
+    let batchSkipped = 0;
     try {
     batchSwept = await sweepStuckJobs(env);
     } catch (e) {
@@ -397,6 +398,23 @@ export default {
       } catch (e) {
         const appErr = e instanceof AppError ? e : wrapUnknown(e, "queue_run_failed", { msgId: msg.id, jobId });
         const attempts = msg.attempts;
+        // Task #72: robots.txt / ToS policy blocks are benign skips, not errors.
+        // Route them to the `skipped` terminal status with a stable skip_reason,
+        // suppress the error_log write (so they stop surfacing as red 422s in the
+        // operator console), and never retry — the host has told us not to crawl.
+        // (The executor already marked the job skipped; this is an idempotent
+        // backstop guarded by markSkipped's queued/running status check.)
+        const benignSkip = isBenignSkip(appErr);
+        if (benignSkip) {
+          if (jobId) {
+            try { await markSkipped(env, jobId, benignSkip.skip_code, benignSkip.reason, Date.now() - stepStart); } catch { }
+          }
+          msg.ack();
+          batchAcked++;
+          batchSkipped++;
+          console.log("queue.step_end", JSON.stringify({ step: "runJob", msg_id: msg.id, job_id: jobId, ms: Date.now() - stepStart, ok: false, final_state: "skipped", error_code: appErr.code }));
+          continue;
+        }
         await logError(env, { err: appErr, job_id: jobId, step: "queue.runJob", retry_count: attempts });
         const transient = appErr.retryable;
         const now = new Date().toISOString();
@@ -436,7 +454,7 @@ export default {
     } finally {
       console.log("queue.batch_end", JSON.stringify({
         size: batchSize, swept: batchSwept, acked: batchAcked, retried: batchRetried,
-        failed: batchFailed, dead_lettered: batchDeadLettered, ms: Date.now() - batchStartedAt,
+        failed: batchFailed, dead_lettered: batchDeadLettered, skipped: batchSkipped, ms: Date.now() - batchStartedAt,
       }));
     }
   },
