@@ -12,6 +12,7 @@
 <script>
   (function () {
     var TABLE = {{ include.table | jsonify }};
+    function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c];});}
     document.addEventListener("DOMContentLoaded", async function () {
       var p = new URLSearchParams(window.location.search);
       var ref = p.get("id") || p.get("ref");
@@ -29,7 +30,7 @@
           window.ADS.MarkMap.mount({ rootId: "ads-embedded-mark-map-body", entityId: j.entity_id });
         }
       } catch (e) {
-        body.innerHTML = '<div class="ads-muted" style="font-size:12px">Mark map unavailable: ' + e.message + '</div>';
+        body.innerHTML = '<div class="ads-muted" style="font-size:12px">Mark map unavailable: ' + esc(e && e.message ? e.message : e) + '</div>';
       }
     });
   })();

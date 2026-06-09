@@ -38,6 +38,7 @@
 <script>
   (function () {
     var TABLE = {{ include.table | jsonify }};
+    function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c];});}
     document.addEventListener("DOMContentLoaded", async function () {
       var p = new URLSearchParams(window.location.search);
       var ref = p.get("id") || p.get("ref");
@@ -54,7 +55,7 @@
           window.ADS.News.mount({ rootId: "ads-embedded-news-section", entityId: j.entity_id, minRep: 0.7 });
         }
       } catch (e) {
-        document.getElementById("ads-news-timeline").innerHTML = '<div class="ads-muted">News unavailable: ' + e.message + '</div>';
+        document.getElementById("ads-news-timeline").innerHTML = '<div class="ads-muted">News unavailable: ' + esc(e && e.message ? e.message : e) + '</div>';
       }
     });
   })();
