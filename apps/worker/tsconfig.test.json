@@ -255,6 +255,7 @@
     "src/services/systemHealth/snapshot.ts",
     "src/services/systemHealth/probes.ts",
     "src/ai/search_sync.ts",
-    "src/routes/valuation.ts"
+    "src/routes/valuation.ts",
+    "src/prospects/repo.ts"
   ]
 }

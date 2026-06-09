@@ -4,7 +4,8 @@ import { runNightlyAggregator } from "./services/analytics_v2.aggregator";
 import { runRelationshipDerivation } from "./scraper/relationships/derive";
 import { runInvestorStats } from "./services/investor_stats";
 import { materializeInvestorPortfolio } from "./services/investor_portfolio";
-import { recomputeAccountScore } from "./prospects/repo";
+import { recomputeStaleAccountScores } from "./prospects/repo";
+import type { Lead } from "./db/leads.types";
 import { ensureRoleTaxonomySeeded } from "./prospects/seedRoles";
 // Task #5: source registry — drives the 6h cron + nightly staleness sweep.
 import { enqueueSourceRun, sweepStaleEntities, type SourceRow } from "./sources/registry";
@@ -23,12 +24,6 @@ import { logError } from "./db/error_log";
 interface LegacySourceRow {
   id: string;
   domain: string;
-}
-
-interface LeadRow {
-  id: string;
-  priority: string | null;
-  last_enriched_at: string | null;
 }
 
 /**
@@ -339,21 +334,14 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       // 1. Analytics aggregator
       try { await runNightlyAggregator(env); } catch (e) { console.error("nightly aggregator failed", (e as Error).message); }
 
-      // 2. Account-score refresh
+      // 2. Account-score refresh. Task #54: batched sweep — a fixed read
+      // budget (accounts + signals + buyers + one taxonomy load) plus
+      // chunked batch updates, instead of the prior per-account N+1 of up
+      // to 1000 × (getAccount + signals + listBuyers + taxonomy reload).
       try {
         await ensureRoleTaxonomySeeded(env);
-        const r = await env.DB.prepare(
-          `SELECT id FROM accounts
-            WHERE status NOT IN ('lost','disqualified')
-              AND (score_recomputed_at IS NULL OR datetime(score_recomputed_at) < datetime('now','-1 day'))
-            ORDER BY score_recomputed_at IS NULL DESC, score_recomputed_at ASC
-            LIMIT 1000`,
-        ).all<{ id: string }>();
-        let n = 0;
-        for (const row of r.results ?? []) {
-          try { await recomputeAccountScore(env, row.id); n += 1; } catch (e) { console.warn("nightly account score failed", row.id, (e as Error).message); }
-        }
-        console.log("nightly account scores done", n);
+        const r = await recomputeStaleAccountScores(env, 1000);
+        console.log("nightly account scores done", JSON.stringify(r));
       } catch (e) {
         console.error("nightly account scores failed", (e as Error).message);
       }
@@ -1015,9 +1003,12 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
 
   const reEnrichStale = async () => {
     // p0/p1: re-enrich after 7d. Everything else: 30d. Cap at 500.
+    // Task #54: select the FULL lead rows in this one query and hand each to
+    // enrichLead via preloadedLead, so the orchestrator skips its own
+    // per-lead getById (was a 500× N+1 read on top of this selection).
     const stale = await env.DB
       .prepare(
-        `SELECT id, priority, last_enriched_at FROM leads
+        `SELECT * FROM leads
            WHERE merged_into IS NULL
              AND (
                (priority IN ('p0','p1') AND (last_enriched_at IS NULL OR datetime(last_enriched_at) < datetime('now','-7 days')))
@@ -1027,10 +1018,10 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
            ORDER BY (last_enriched_at IS NULL) DESC, last_enriched_at ASC
            LIMIT 500`,
       )
-      .all<LeadRow>();
+      .all<Lead>();
     for (const lead of stale.results ?? []) {
       try {
-        await enrichLead(env, lead.id);
+        await enrichLead(env, lead.id, { preloadedLead: lead });
       } catch (e) {
         console.warn("scheduled enrich failed", lead.id, (e as Error).message);
       }

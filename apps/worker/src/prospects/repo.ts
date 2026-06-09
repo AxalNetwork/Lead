@@ -439,9 +439,10 @@ export async function backfillBuyerRoles(env: Env, opts?: { limit?: number; forc
   ).bind(limit).all<{ id: string; title: string | null; role_slug: string | null; seniority: string | null; department: string | null; is_decision_maker: number }>();
   const rows = r.results ?? [];
   const tax = await getTaxonomyCached(env);
-  let matched = 0; let unmatched = 0; let updated = 0;
+  let matched = 0; let unmatched = 0;
   const now = new Date().toISOString();
   const force = !!opts?.force;
+  const updates: D1PreparedStatement[] = [];
   for (const row of rows) {
     const hit = classifyTitle(row.title, tax);
     if (!hit) { unmatched += 1; continue; }
@@ -460,13 +461,18 @@ export async function backfillBuyerRoles(env: Env, opts?: { limit?: number; forc
       newDepartment !== row.department ||
       newDM !== row.is_decision_maker
     ) {
-      await env.DB.prepare(
+      updates.push(env.DB.prepare(
         `UPDATE buyers SET role_slug = ?, seniority = ?, department = ?, is_decision_maker = ?, updated_at = ? WHERE id = ?`,
-      ).bind(newRoleSlug, newSeniority, newDepartment, newDM, now, row.id).run();
-      updated += 1;
+      ).bind(newRoleSlug, newSeniority, newDepartment, newDM, now, row.id));
     }
   }
-  return { scanned: rows.length, matched, unmatched, updated };
+  // Task #54: flush in chunked batches so a 10k-row run stays within the
+  // Worker CPU/wall budget instead of issuing up to 10k serial UPDATEs.
+  const CHUNK = 50;
+  for (let i = 0; i < updates.length; i += CHUNK) {
+    await env.DB.batch(updates.slice(i, i + CHUNK));
+  }
+  return { scanned: rows.length, matched, unmatched, updated: updates.length };
 }
 
 // Task #52: count buyers whose title couldn't be classified, so the
@@ -610,13 +616,17 @@ async function loadRoleTaxonomy(env: Env): Promise<Map<string, RoleTaxonomyRow>>
   return out;
 }
 
-export async function recomputeAccountScore(env: Env, accountId: string): Promise<{ intent: IntentResult; fit: FitResult; account: number } | null> {
-  const cur = await getAccount(env, accountId);
-  if (!cur) return null;
-  const sigs = await env.DB.prepare(`SELECT kind, weight, confidence, occurred_at FROM signals WHERE account_id = ?`).bind(accountId).all<{ kind: string; weight: number; confidence: number; occurred_at: string }>();
-  const intent = computeIntent(sigs.results ?? []);
-  const buyers = await listBuyers(env, accountId);
-  const taxonomy = await loadRoleTaxonomy(env);
+// Shared pure payload builder so the single-row recompute and the batched
+// nightly sweep (Task #54) produce byte-identical score rows. Given an
+// account, its signals, its buyers and the role taxonomy it returns the
+// three scores plus the two breakdown JSON payloads exactly as persisted.
+function buildAccountScorePayload(
+  cur: AccountRow,
+  sigs: Array<{ kind: string; weight: number | null; confidence: number | null; occurred_at: string }>,
+  buyers: BuyerRow[],
+  taxonomy: Map<string, RoleTaxonomyRow>,
+): { intent: IntentResult; fit: FitResult; account: number; intentBreakdownPayload: string; fitBreakdownPayload: string } {
+  const intent = computeIntent(sigs);
   const fit = computeFit(cur, buyers, taxonomy, DEFAULT_ICP);
   const account = blendAccountScore(intent.intent_score, fit.fit_score);
   const intentBreakdownPayload = JSON.stringify({ by_kind: intent.by_kind, raw_sum: intent.raw_sum, signal_count: intent.signal_count, newest_at: intent.newest_at });
@@ -624,9 +634,76 @@ export async function recomputeAccountScore(env: Env, accountId: string): Promis
     icp_id: fit.icp_id, icp_name: fit.icp_name,
     components: fit.components, computed_at: fit.computed_at,
   });
+  return { intent, fit, account, intentBreakdownPayload, fitBreakdownPayload };
+}
+
+export async function recomputeAccountScore(env: Env, accountId: string, taxonomy?: Map<string, RoleTaxonomyRow>): Promise<{ intent: IntentResult; fit: FitResult; account: number } | null> {
+  const cur = await getAccount(env, accountId);
+  if (!cur) return null;
+  const sigs = await env.DB.prepare(`SELECT kind, weight, confidence, occurred_at FROM signals WHERE account_id = ?`).bind(accountId).all<{ kind: string; weight: number; confidence: number; occurred_at: string }>();
+  const buyers = await listBuyers(env, accountId);
+  // Allow the caller (the nightly sweep) to inject a once-loaded taxonomy so
+  // we don't re-scan role_taxonomy per account; default to a fresh load so
+  // route callers keep working unchanged.
+  const tax = taxonomy ?? await loadRoleTaxonomy(env);
+  const built = buildAccountScorePayload(cur, sigs.results ?? [], buyers, tax);
   const now = new Date().toISOString();
   await env.DB.prepare(`UPDATE accounts SET intent_score = ?, fit_score = ?, account_score = ?, intent_breakdown_json = ?, fit_breakdown_json = ?, score_recomputed_at = ?, updated_at = ? WHERE id = ?`)
-    .bind(intent.intent_score, fit.fit_score, account, intentBreakdownPayload, fitBreakdownPayload, now, now, accountId).run();
-  return { intent, fit, account };
+    .bind(built.intent.intent_score, built.fit.fit_score, built.account, built.intentBreakdownPayload, built.fitBreakdownPayload, now, now, accountId).run();
+  return { intent: built.intent, fit: built.fit, account: built.account };
+}
+
+// Task #54: batched nightly account-score sweep. Replaces the per-account
+// N+1 (getAccount + signals + listBuyers + a full role_taxonomy reload, ×N)
+// with a fixed read budget: one accounts read, one signals read and one
+// buyers read (both scoped to the same stale set via an IN-subquery so we
+// never blow the D1 bound-parameter cap), plus a single taxonomy load.
+// Updates are flushed in chunked DB.batch() calls. Output is byte-identical
+// to calling recomputeAccountScore() per row (same pure payload builder).
+const STALE_ACCOUNT_PREDICATE = `status NOT IN ('lost','disqualified')
+      AND (score_recomputed_at IS NULL OR datetime(score_recomputed_at) < datetime('now','-1 day'))`;
+// The `id ASC` tiebreaker makes the LIMITed set deterministic so the accounts
+// read and the signals/buyers IN-subqueries resolve to the identical rows.
+const STALE_ACCOUNT_ORDER = `ORDER BY score_recomputed_at IS NULL DESC, score_recomputed_at ASC, id ASC`;
+
+export async function recomputeStaleAccountScores(env: Env, limit = 1000): Promise<{ scanned: number; updated: number }> {
+  const cap = Math.min(Math.max(1, limit), 1000);
+  const idSubquery = `SELECT id FROM accounts WHERE ${STALE_ACCOUNT_PREDICATE} ${STALE_ACCOUNT_ORDER} LIMIT ?`;
+  const acctRes = await env.DB.prepare(
+    `SELECT ${ACCOUNT_COLS} FROM accounts WHERE ${STALE_ACCOUNT_PREDICATE} ${STALE_ACCOUNT_ORDER} LIMIT ?`,
+  ).bind(cap).all<AccountRow>();
+  const accounts = acctRes.results ?? [];
+  if (!accounts.length) return { scanned: 0, updated: 0 };
+
+  const sigRes = await env.DB.prepare(
+    `SELECT account_id, kind, weight, confidence, occurred_at FROM signals WHERE account_id IN (${idSubquery})`,
+  ).bind(cap).all<{ account_id: string; kind: string; weight: number; confidence: number; occurred_at: string }>();
+  const buyerRes = await env.DB.prepare(
+    `SELECT * FROM buyers WHERE account_id IN (${idSubquery}) ORDER BY account_id ASC, is_decision_maker DESC, influence_score DESC, lower(name) ASC`,
+  ).bind(cap).all<BuyerRow>();
+  const taxonomy = await loadRoleTaxonomy(env);
+
+  const sigsByAcct = new Map<string, Array<{ kind: string; weight: number; confidence: number; occurred_at: string }>>();
+  for (const s of sigRes.results ?? []) {
+    const arr = sigsByAcct.get(s.account_id);
+    if (arr) arr.push(s); else sigsByAcct.set(s.account_id, [s]);
+  }
+  const buyersByAcct = new Map<string, BuyerRow[]>();
+  for (const b of buyerRes.results ?? []) {
+    const arr = buyersByAcct.get(b.account_id);
+    if (arr) arr.push(b); else buyersByAcct.set(b.account_id, [b]);
+  }
+
+  const now = new Date().toISOString();
+  const stmts = accounts.map((cur) => {
+    const built = buildAccountScorePayload(cur, sigsByAcct.get(cur.id) ?? [], buyersByAcct.get(cur.id) ?? [], taxonomy);
+    return env.DB.prepare(`UPDATE accounts SET intent_score = ?, fit_score = ?, account_score = ?, intent_breakdown_json = ?, fit_breakdown_json = ?, score_recomputed_at = ?, updated_at = ? WHERE id = ?`)
+      .bind(built.intent.intent_score, built.fit.fit_score, built.account, built.intentBreakdownPayload, built.fitBreakdownPayload, now, now, cur.id);
+  });
+  const CHUNK = 50;
+  for (let i = 0; i < stmts.length; i += CHUNK) {
+    await env.DB.batch(stmts.slice(i, i + CHUNK));
+  }
+  return { scanned: accounts.length, updated: stmts.length };
 }
 

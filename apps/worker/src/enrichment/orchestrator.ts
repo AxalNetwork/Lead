@@ -15,6 +15,9 @@ import { envFloat, type EnrichResult, type Provider } from "./types";
 export interface EnrichOptions {
   providers?: string[];     // restrict to a subset (by name)
   forceRefresh?: boolean;   // bypass KV cache
+  // Task #54: lets the nightly sweep hand in a lead row it already loaded
+  // in one batched read, so enrichLead skips its own per-lead getById.
+  preloadedLead?: Lead;
 }
 
 export interface EnrichOutcome {
@@ -70,7 +73,7 @@ async function runOneProvider(
 
 export async function enrichLead(env: Env, leadId: string, opts: EnrichOptions = {}): Promise<EnrichOutcome> {
   const repo = new LeadsRepo(env.DB, env);
-  const lead = await repo.getById(leadId);
+  const lead = opts.preloadedLead ?? await repo.getById(leadId);
   if (!lead) {
     return {
       leadId, providers_called: [], providers_blocked: [], providers_skipped: [],
