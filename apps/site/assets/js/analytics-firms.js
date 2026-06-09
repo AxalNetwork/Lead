@@ -2,7 +2,7 @@
 // using window.adsCharts where applicable.
 (function () {
   if (!document.getElementById("ads-fa-funnel")) return;
-  var API_BASE = (window.ADS && window.ADS.apiBase) || "https://api.aidatasignal.com";
+  var API_BASE = (window.ADS && window.ADS.apiBase);
   var charts = window.adsCharts || {};
 
   // ---- Static cartogram of country tiles. Each cell is one country at a

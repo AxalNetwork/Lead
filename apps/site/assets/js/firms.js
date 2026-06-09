@@ -5,7 +5,7 @@
 (function () {
   if (!document.getElementById("ads-firms-filters")) return;
 
-  var API_BASE = (window.ADS && window.ADS.apiBase) || "https://api.aidatasignal.com";
+  var API_BASE = (window.ADS && window.ADS.apiBase);
 
   var DEFAULT_COLS = ["name", "kind", "hq", "stages", "sectors", "check_size_typical_usd", "aum_usd", "lead_or_co", "portfolio_count", "last_modified"];
   var ALL_COLS = DEFAULT_COLS.concat(["website", "founded_year", "team_size", "unicorns_count", "exits_count", "contact_email", "status", "quality_score"]);

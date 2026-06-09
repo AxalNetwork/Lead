@@ -190,7 +190,7 @@ permalink: /dashboard/firms/detail/
         var ref = new URLSearchParams(window.location.search).get("id");
         if (!ref || !window.ADS || !window.ADS.News) return;
         try {
-          var API = (window.ADS_API_BASE || "https://api.aidatasignal.com").replace(/\/+$/, "");
+          var API = (window.ADS_API_BASE).replace(/\/+$/, "");
           var r = await fetch(API + "/api/entities/resolve?table=firms&ref=" + encodeURIComponent(ref), { credentials: "include" });
           var j = r.ok ? await r.json() : null;
           if (!j || !j.entity_id) {

@@ -1,6 +1,6 @@
 // Task #5: incidents list + detail page.
 (function () {
-  var API = "https://api.aidatasignal.com/api/ops/system-health";
+  var API = window.ADS_API_BASE + "/api/ops/system-health";
 
   function esc(s) {
     return (s == null ? "" : String(s)).replace(/[&<>"']/g, function (c) {

@@ -3,7 +3,7 @@
 // pre-flight against /api/ops/crawler/ on load and replaces the page
 // with a 403 message if the caller is not on the ops admin allowlist.
 (function () {
-  var API = "https://api.aidatasignal.com/api/ops/crawler";
+  var API = window.ADS_API_BASE + "/api/ops/crawler";
   var REFRESH_MS = 10000;
   var timer = null;
   var hostFilter = { q: "", status: "" };

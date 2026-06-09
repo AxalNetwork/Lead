@@ -75,7 +75,7 @@ permalink: /dashboard/discovery/
 
 <script>
 (function () {
-  var API = (window.ADS_API_BASE || "https://api.aidatasignal.com").replace(/\/+$/, "");
+  var API = (window.ADS_API_BASE).replace(/\/+$/, "");
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
   function tile(label, value, hint) {
     return '<div style="background:#f6f7f9;border-radius:8px;padding:10px"><div style="font-size:10px;color:#666;text-transform:uppercase;letter-spacing:.05em">' + esc(label) + '</div><div style="font-size:22px;font-weight:600">' + esc(value) + '</div>' + (hint ? '<div style="font-size:10px;color:#888">' + esc(hint) + '</div>' : '') + '</div>';

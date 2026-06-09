@@ -1,6 +1,6 @@
 // Task #13 — Document intelligence UI.
 (function () {
-  var API = window.adsApiBase || "https://api.aidatasignal.com";
+  var API = window.adsApiBase;
   function esc(s) {
     return (s == null ? "" : String(s)).replace(/[&<>"']/g, function (c) {
       return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];

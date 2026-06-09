@@ -4,7 +4,7 @@
 // Per the Task #4 static-routing constraint every deep link uses
 // `?id=<node_id>` query strings.
 (function () {
-  var API = "https://api.aidatasignal.com/api/ops/compute-nodes";
+  var API = window.ADS_API_BASE + "/api/ops/compute-nodes";
   var REFRESH_MS = 15000;
   var timer = null;
 

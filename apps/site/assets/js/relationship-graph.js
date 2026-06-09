@@ -17,7 +17,7 @@
 
   async function api(path) {
     if (window.adsApiFetch) return window.adsApiFetch(path);
-    var base = (window.ADS && window.ADS.apiBase) || "https://api.aidatasignal.com";
+    var base = (window.ADS && window.ADS.apiBase);
     return fetch(base + path, { credentials: "include" }).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
   }
 
@@ -166,7 +166,7 @@
 
     function apiPost(path, body) {
       if (window.adsApiFetch) return window.adsApiFetch(path, { method: "POST", body: JSON.stringify(body) });
-      var base = (window.ADS && window.ADS.apiBase) || "https://api.aidatasignal.com";
+      var base = (window.ADS && window.ADS.apiBase);
       return fetch(base + path, { method: "POST", body: JSON.stringify(body), credentials: "include" }).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
     }
     function influenceHtml() {

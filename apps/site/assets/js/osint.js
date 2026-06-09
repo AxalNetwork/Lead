@@ -3,7 +3,7 @@
 // page (Identities tab) AND backs the candidates review page.
 
 (function () {
-  const API = (window.ADS_API_BASE || "https://api.aidatasignal.com").replace(/\/$/, "");
+  const API = (window.ADS_API_BASE).replace(/\/$/, "");
   function el(tag, attrs, children) {
     const e = document.createElement(tag);
     if (attrs) for (const k of Object.keys(attrs)) {

@@ -19,7 +19,7 @@
 // rest: selection state, header click semantics, sticky bar, modals, toasts.
 
 (function () {
-  var API = window.adsApiBase || "https://api.aidatasignal.com";
+  var API = window.adsApiBase;
   function api(path, opts) {
     var fn = window.adsApiFetch || function (p, o) {
       return fetch(API + p, Object.assign({ credentials: "include" }, o || {})).then(function (r) {

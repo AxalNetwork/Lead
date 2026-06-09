@@ -3,7 +3,7 @@
 // dashboard.js).
 
 (function () {
-  var API_BASE = window.adsApiBase || "https://api.aidatasignal.com";
+  var API_BASE = window.adsApiBase;
   var apiFetch = window.adsApiFetch || function (path, opts) {
     return fetch(API_BASE + path, Object.assign({ credentials: "include" }, opts || {})).then(function (r) {
       if (!r.ok) return r.text().then(function (t) { throw new Error(t || ("HTTP " + r.status)); });

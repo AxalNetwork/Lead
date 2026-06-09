@@ -3,7 +3,7 @@
 // page text, right = structured extraction payload. Per Task #4 static-
 // routing constraint, the room id is carried in the ?id= query string.
 (function () {
-  var API = window.adsApiBase || "https://api.aidatasignal.com";
+  var API = window.adsApiBase;
   function esc(s) {
     return (s == null ? "" : String(s)).replace(/[&<>"']/g, function (c) {
       return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];

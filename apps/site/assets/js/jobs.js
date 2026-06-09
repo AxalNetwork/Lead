@@ -1,5 +1,5 @@
 (function () {
-  var API_BASE = window.adsApiBase || "https://api.aidatasignal.com";
+  var API_BASE = window.adsApiBase;
   // Reuse the shared apiFetch from dashboard.js so the Cloudflare Access cookie
   // and JSON error parsing are identical across pages.
   var apiFetch = window.adsApiFetch || function (path, opts) {

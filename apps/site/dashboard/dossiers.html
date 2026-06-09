@@ -35,7 +35,7 @@ permalink: /dashboard/dossiers/
 
 <script>
 (function () {
-  var API = (window.ADS && window.ADS.API_BASE) || "https://api.aidatasignal.com";
+  var API = (window.ADS && window.ADS.API_BASE);
   var qs = new URLSearchParams(location.search);
   var id = qs.get("id");
   var root = document.getElementById("ads-dossiers-root");

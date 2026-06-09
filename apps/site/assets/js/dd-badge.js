@@ -4,7 +4,7 @@
 // entity has never been scanned.
 (function () {
   "use strict";
-  var API = (window.ADS && window.ADS.apiBase) || window.ADS_API_BASE || "https://api.aidatasignal.com";
+  var API = (window.ADS && window.ADS.apiBase) || window.ADS_API_BASE;
 
   function bandClass(b) {
     return ({

@@ -1,7 +1,7 @@
 // Task #6 — Diligence run detail page.
 // Per Task #4 static-routing constraint, the run id is carried in ?id=.
 (function () {
-  var API = (window.ADS && window.ADS.API) || "https://api.aidatasignal.com";
+  var API = (window.ADS && window.ADS.API);
   var OPTS = { credentials: "include" };
 
   function esc(s) {

@@ -47,7 +47,7 @@
     var id = new URLSearchParams(window.location.search).get("id");
     if (!id) { fail("Open an investor page to view term aggressiveness."); return; }
     try {
-      var apiBase = (window.ADS && window.ADS.API_BASE) || "https://api.aidatasignal.com";
+      var apiBase = (window.ADS && window.ADS.API_BASE);
       var res = await fetch(apiBase + "/api/investors/" + encodeURIComponent(id) + "/term-aggressiveness", { credentials: "include" });
       if (res.status === 403) { fail("Sign in to view term aggressiveness."); return; }
       if (!res.ok) { fail("Failed to load (HTTP " + res.status + ")."); return; }

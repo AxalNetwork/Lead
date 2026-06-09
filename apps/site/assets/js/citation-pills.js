@@ -17,7 +17,7 @@
   if (window.ADS && window.ADS.CitationPills) return;
   window.ADS = window.ADS || {};
 
-  var API = (window.ADS_API_BASE || "https://api.aidatasignal.com").replace(/\/+$/, "");
+  var API = (window.ADS_API_BASE).replace(/\/+$/, "");
   var cache = new Map();
   var popoverEl = null;
 

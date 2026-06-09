@@ -10,7 +10,7 @@
   if (window.ADS && window.ADS.News) return;
   window.ADS = window.ADS || {};
 
-  var API = (window.ADS_API_BASE || "https://api.aidatasignal.com").replace(/\/+$/, "");
+  var API = (window.ADS_API_BASE).replace(/\/+$/, "");
 
   function qs() {
     var p = new URLSearchParams(window.location.search);

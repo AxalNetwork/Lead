@@ -3,7 +3,7 @@
 // reveals content only on 2xx. List paginates via offset; Restore /
 // Permanently Delete post to the worker.
 (function () {
-  var API = "https://api.aidatasignal.com/api/ops/garbage-review";
+  var API = window.ADS_API_BASE + "/api/ops/garbage-review";
   var state = { offset: 0, limit: 50, q: "", nextOffset: null };
 
   function $(s) { return document.querySelector(s); }

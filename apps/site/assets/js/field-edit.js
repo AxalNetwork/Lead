@@ -21,7 +21,7 @@
   if (window.adsFieldEditMounted) return;
   window.adsFieldEditMounted = true;
 
-  var API = "https://api.aidatasignal.com";
+  var API = window.ADS_API_BASE;
 
   function el(tag, attrs, children) {
     var node = document.createElement(tag);

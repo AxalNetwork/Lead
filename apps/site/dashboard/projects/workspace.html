@@ -26,7 +26,7 @@ permalink: /dashboard/projects/workspace/
     root.innerHTML = '<div class="ads-muted">No project id in URL. Use /dashboard/projects/workspace/?id={id}.</div>';
     return;
   }
-  const API = 'https://api.aidatasignal.com/api/projects/' + id;
+  const API = window.ADS_API_BASE + '/api/projects/' + id;
   const AUD = ['customer','investor','partner','hire','design_partner'];
   const AUD_LABEL = { customer:'Customers', investor:'Investors', partner:'Partners', hire:'Hires', design_partner:'Design partners' };
   const STATUSES = ['new','shortlisted','contacted','replied','qualified','won','lost','snoozed'];

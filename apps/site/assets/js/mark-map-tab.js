@@ -12,7 +12,7 @@
 // javascript: URLs.
 
 (function () {
-  var API = (window.ADS_API_BASE || "https://api.aidatasignal.com").replace(/\/+$/, "");
+  var API = (window.ADS_API_BASE).replace(/\/+$/, "");
   var SVG_NS = "http://www.w3.org/2000/svg";
 
   function fmtUsd(v) {

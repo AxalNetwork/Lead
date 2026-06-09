@@ -6,7 +6,7 @@
   if (!document.getElementById("ads-people-list-root")) return;
   if (document.getElementById("ads-people-list-root").hidden) return;
 
-  var API = window.adsApiBase || "https://api.aidatasignal.com";
+  var API = window.adsApiBase;
   function esc(s) {
     return (s == null ? "" : String(s)).replace(/[&<>"']/g, function (c) {
       return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];

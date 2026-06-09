@@ -2,7 +2,7 @@
 // Pre-flights /api/ops/system-health/ for admin gating; refreshes every 15s
 // while the tab is visible.
 (function () {
-  var API = "https://api.aidatasignal.com/api/ops/system-health";
+  var API = window.ADS_API_BASE + "/api/ops/system-health";
   var REFRESH_MS = 15000;
   var timer = null;
 

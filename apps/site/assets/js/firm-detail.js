@@ -2,7 +2,7 @@
 (function () {
   var root = document.getElementById("ads-firm-detail");
   if (!root) return;
-  var API_BASE = (window.ADS && window.ADS.apiBase) || "https://api.aidatasignal.com";
+  var API_BASE = (window.ADS && window.ADS.apiBase);
 
   var firmId = Number(new URLSearchParams(window.location.search).get("id"));
   if (!Number.isFinite(firmId)) {

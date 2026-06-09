@@ -1,6 +1,6 @@
 // Task #6 — Diligence list/start page.
 (function () {
-  var API = (window.ADS && window.ADS.API) || "https://api.aidatasignal.com";
+  var API = (window.ADS && window.ADS.API);
   var OPTS = { credentials: "include" };
 
   function esc(s) {

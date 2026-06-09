@@ -50,7 +50,7 @@ permalink: /dashboard/politicians/
 
 <script>
   (function () {
-    var API = (window.ADS_API_BASE || "https://api.aidatasignal.com").replace(/\/+$/, "");
+    var API = (window.ADS_API_BASE).replace(/\/+$/, "");
     function esc(s) {
       return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
         return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];

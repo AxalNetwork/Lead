@@ -10,7 +10,7 @@
   if (window.ADS && window.ADS.Profile) return;
   window.ADS = window.ADS || {};
 
-  var API = (window.ADS_API_BASE || "https://api.aidatasignal.com").replace(/\/+$/, "");
+  var API = (window.ADS_API_BASE).replace(/\/+$/, "");
 
   var AXIS_LABELS = {
     left_right: ["Far left", "Center", "Far right"],

@@ -1,6 +1,6 @@
 (function () {
   "use strict";
-  var API = window.ADS_API_BASE || "https://api.aidatasignal.com";
+  var API = window.ADS_API_BASE;
   var $ = function (id) { return document.getElementById(id); };
 
   function esc(s) {

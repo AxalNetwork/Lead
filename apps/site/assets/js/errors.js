@@ -1,6 +1,6 @@
 // Task #27: errors dashboard.
 (function () {
-  const API = "https://api.aidatasignal.com";
+  const API = window.ADS_API_BASE;
 
   const $ = (id) => document.getElementById(id);
   function fmtTime(s) { try { return new Date(s).toLocaleString(); } catch { return s; } }

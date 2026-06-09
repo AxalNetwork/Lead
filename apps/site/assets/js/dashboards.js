@@ -15,7 +15,7 @@
 //   .charts.heatmap(el, items, opts?)
 //   .charts.worldArcs(el, items, opts?)
 (function () {
-  var API = "https://api.aidatasignal.com/api/dashboards";
+  var API = window.ADS_API_BASE + "/api/dashboards";
   // Shared helpers (window.adsUtil from ads-utils.js, loaded first in <head>).
   var esc = window.adsUtil.escapeHtml;
   var fmtUsd = window.adsUtil.fmtUsd;

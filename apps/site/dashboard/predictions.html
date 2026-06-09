@@ -230,7 +230,7 @@ permalink: /dashboard/predictions/
     ], "influence");
   }
 
-  var ADS_API = (window.ADS && window.ADS.API_BASE) || "https://api.aidatasignal.com";
+  var ADS_API = (window.ADS && window.ADS.API_BASE);
   fetch(ADS_API + "/api/predictions/summary?limit=50", { credentials: "include" })
     .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
     .then(function (data) {

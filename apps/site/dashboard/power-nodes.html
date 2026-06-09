@@ -54,7 +54,7 @@ permalink: /dashboard/power-nodes/
   var limitEl = document.getElementById("ads-pn-limit");
   var listEl = document.getElementById("ads-pn-list");
   var form = document.getElementById("ads-pn-filters");
-  var ADS_API = (window.ADS && window.ADS.API_BASE) || "https://api.aidatasignal.com";
+  var ADS_API = (window.ADS && window.ADS.API_BASE);
 
   // Sortable state — column key + direction.
   var sort = { key: "pagerank_score", dir: "desc" };

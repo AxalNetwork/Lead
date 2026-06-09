@@ -7,7 +7,7 @@
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]; }); }
   function api(path) {
     if (window.adsApiFetch) return window.adsApiFetch(path);
-    var base = (window.ADS && window.ADS.apiBase) || "https://api.aidatasignal.com";
+    var base = (window.ADS && window.ADS.apiBase);
     return fetch(base + path, { credentials: "include" }).then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status); return r.json();
     });

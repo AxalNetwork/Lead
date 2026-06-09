@@ -34,7 +34,7 @@ permalink: /dashboard/projects/
 
 <script>
 (function () {
-  var API = 'https://api.aidatasignal.com';
+  var API = window.ADS_API_BASE;
   var fmt = function (n) { return Number(n || 0).toLocaleString(); };
   var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
     return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];

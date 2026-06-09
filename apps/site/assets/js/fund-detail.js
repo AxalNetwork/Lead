@@ -4,7 +4,7 @@
 (function () {
   var root = document.getElementById("ads-fund-detail");
   if (!root) return;
-  var API_BASE = (window.ADS && window.ADS.apiBase) || "https://api.aidatasignal.com";
+  var API_BASE = (window.ADS && window.ADS.apiBase);
   var fundId = new URLSearchParams(window.location.search).get("id");
   if (!fundId) {
     root.innerHTML = '<div class="ads-card"><p class="ads-muted">Missing <code>?id=&lt;fund_id&gt;</code>.</p></div>';

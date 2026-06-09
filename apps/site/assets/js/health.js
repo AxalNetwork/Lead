@@ -1,6 +1,6 @@
 // Task #27: health dashboard.
 (function () {
-  const API = "https://api.aidatasignal.com";
+  const API = window.ADS_API_BASE;
   const $ = (id) => document.getElementById(id);
   function esc(s) { return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 

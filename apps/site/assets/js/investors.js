@@ -2,7 +2,7 @@
 // Uses window.adsApiFetch (set by dashboard.js) so the CF Access cookie
 // rides along on every API call.
 (function () {
-  var API = window.adsApiBase || "https://api.aidatasignal.com";
+  var API = window.adsApiBase;
 
   function esc(s) {
     return (s == null ? "" : String(s)).replace(/[&<>"']/g, function (c) {

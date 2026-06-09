@@ -61,7 +61,7 @@ permalink: /dashboard/profile/
   // possible on GitHub Pages; the verification/backchannel tabs are
   // therefore API-gated — unauth viewers never see the tab shell.
   var section = document.getElementById("ads-profile-vf-section");
-  var apiBase = (window.ADS && window.ADS.API_BASE) || "https://api.aidatasignal.com";
+  var apiBase = (window.ADS && window.ADS.API_BASE);
   var vEl = document.getElementById("ads-profile-vf-verifications");
   var rEl = document.getElementById("ads-profile-vf-references");
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]); }); }
@@ -128,7 +128,7 @@ permalink: /dashboard/profile/
   var qs = new URLSearchParams(location.search);
   var entity = qs.get("id") || qs.get("entity");
   if (!entity) return;
-  var apiBase = (window.ADS && window.ADS.API_BASE) || "https://api.aidatasignal.com";
+  var apiBase = (window.ADS && window.ADS.API_BASE);
   var section = document.getElementById("ads-intros-section");
   var askEl   = document.getElementById("ads-intros-ask");
   var btn     = document.getElementById("ads-intros-find");

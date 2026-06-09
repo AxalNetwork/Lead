@@ -11,7 +11,7 @@
 (function () {
   "use strict";
   var API = (location.hostname === "aidatasignal.com" || location.hostname === "www.aidatasignal.com")
-    ? "https://api.aidatasignal.com" : "";
+    ? window.ADS_API_BASE : "";
 
   function $(s, root) { return (root || document).querySelector(s); }
   function $$(s, root) { return Array.from((root || document).querySelectorAll(s)); }

@@ -38,7 +38,7 @@ permalink: /dashboard/verification/
     rTab.style.display = tab === "references" ? "" : "none";
   }));
 
-  const apiBase = (window.ADS && window.ADS.API_BASE) || "https://api.aidatasignal.com";
+  const apiBase = (window.ADS && window.ADS.API_BASE);
   const opts = { credentials: "include" };
 
   async function loadVerifications() {

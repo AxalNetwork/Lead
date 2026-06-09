@@ -1,5 +1,5 @@
 (function () {
-  var API_BASE = "https://api.aidatasignal.com";
+  var API_BASE = window.ADS_API_BASE;
 
   async function api(path, opts) {
     try {

@@ -5,7 +5,7 @@
 // constraint, deep links use ?id=<pipeline_id>.
 
 (function () {
-  const API = "https://api.aidatasignal.com";
+  const API = window.ADS_API_BASE;
   const STAGES = [
     "not_contacted","intro_requested","first_meeting","diligence",
     "partners_meeting","term_sheet","committed","passed","ghosted",
