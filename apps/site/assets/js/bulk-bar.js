@@ -335,7 +335,7 @@
       var sample = (info.sample || []).map(function (s) { return '<li><code>' + esc(s) + '</code></li>'; }).join("");
       openModal(
         '<h3 style="margin:0 0 8px">Confirm bulk ' + esc(action) + '</h3>' +
-        '<p>This will affect <strong>' + info.affected_count + '</strong> entities.</p>' +
+        '<p>This will affect <strong>' + esc(info.affected_count) + '</strong> entities.</p>' +
         '<p>Sample:</p><ul style="margin:0 0 12px;padding-left:18px">' + sample + '</ul>' +
         (strict ? '<label style="display:block;margin-bottom:12px">Type <code>CONFIRM</code> to proceed: <input id="ads-bulk-strict" style="width:100%;margin-top:4px"></label>' : '') +
         '<div style="display:flex;gap:8px;justify-content:flex-end">' +
@@ -358,14 +358,14 @@
     function showSuccessToast(action, r) {
       var opId = r && r.operation_id;
       var msg = '<strong>' + esc(action) + '</strong> ok · ' +
-        (r && (r.affected != null ? r.affected : (r.dispatched != null ? r.dispatched : (r.results ? r.results.length : ""))) + ' affected') +
+        esc(r && (r.affected != null ? r.affected : (r.dispatched != null ? r.dispatched : (r.results ? r.results.length : "")))) + ' affected' +
         (opId ? ' · <a href="#" data-undo="' + esc(opId) + '">Undo</a>' : '');
       var t = toast(msg, { ttl: 24000 });
       var undo = t.querySelector("a[data-undo]");
       if (undo) undo.addEventListener("click", function (e) {
         e.preventDefault();
         api("/api/bulk/undo/" + encodeURIComponent(opId), { method: "POST" })
-          .then(function (u) { toast("Undone · reverted " + (u.reverted || 0) + " · conflicts " + (u.conflicts || 0)); })
+          .then(function (u) { toast("Undone · reverted " + esc(u.reverted || 0) + " · conflicts " + esc(u.conflicts || 0)); })
           .catch(function (e) { toast("Undo failed: " + esc(e.message)); });
       });
     }

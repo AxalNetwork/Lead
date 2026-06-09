@@ -185,7 +185,7 @@
           if (!target) { pathResult.textContent = "No matching firm."; return; }
           api("/api/relationships/path?src=" + fromEntityId + "&dst=" + target.id + "&max_hops=4").then(function (p) {
             if (!p.nodes || !p.nodes.length || p.hops < 0) { pathResult.textContent = "No path within 4 hops."; return; }
-            pathResult.innerHTML = "<strong>" + p.hops + "-hop path</strong>: " +
+            pathResult.innerHTML = "<strong>" + esc(p.hops) + "-hop path</strong>: " +
               p.nodes.map(function (n) { return "<span style='padding:1px 5px;background:#eef;border-radius:3px;margin-right:2px'>" + esc(n.name) + "</span>"; }).join(" → ");
           });
         });

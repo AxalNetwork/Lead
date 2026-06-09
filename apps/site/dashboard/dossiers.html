@@ -166,9 +166,9 @@ permalink: /dashboard/dossiers/
           }).join("") + '</tbody></table>');
       }
       if (ita) {
-        parts.push('<div style="margin-top:10px;font-size:12px">Investor terms (averaged over <strong>' + ita.series_count + '</strong> series): '
+        parts.push('<div style="margin-top:10px;font-size:12px">Investor terms (averaged over <strong>' + esc(ita.series_count) + '</strong> series): '
           + 'avg LP× <strong>' + fmtNum(ita.avg_lp_x, 2) + '</strong> · '
-          + '<strong>' + ita.aggressive_count + '</strong> aggressive of ' + ita.series_count + '.</div>');
+          + '<strong>' + esc(ita.aggressive_count) + '</strong> aggressive of ' + esc(ita.series_count) + '.</div>');
       }
       termBody = parts.join("");
     }
@@ -182,7 +182,7 @@ permalink: /dashboard/dossiers/
           var conf = p.predicted_conversion_pct == null
             ? '<span class="ads-dossier__pill ads-dossier__pill--neutral">limited signal</span>'
             : '<span class="ads-dossier__pill ads-dossier__pill--ok">' + fmtPct(p.predicted_conversion_pct) + '</span>';
-          return '<tr><td>' + p.hops + '</td><td>' + conf + '</td><td>' + fmtNum(p.weakest_edge_quality, 2) + '</td>'
+          return '<tr><td>' + esc(p.hops) + '</td><td>' + conf + '</td><td>' + fmtNum(p.weakest_edge_quality, 2) + '</td>'
             + '<td style="font-size:11px;color:#444;max-width:340px">' + esc((p.suggested_opener || "").slice(0, 200)) + '</td></tr>';
         }).join("") + '</tbody></table>';
     }
@@ -208,7 +208,7 @@ permalink: /dashboard/dossiers/
         + '<tr><td>Broker score</td><td>' + fmtNum(d.influence.broker_score, 4) + '</td></tr>'
         + '<tr><td>Power node</td><td>' + (d.influence.is_power_node ? '<span class="ads-dossier__pill ads-dossier__pill--ok">yes</span>' : 'no') + '</td></tr>'
         + '<tr><td>Primary sector</td><td>' + esc(d.influence.primary_sector || "—") + '</td></tr>'
-        + '<tr><td>Total degree</td><td>' + (d.influence.total_degree || 0) + '</td></tr>'
+        + '<tr><td>Total degree</td><td>' + esc(d.influence.total_degree || 0) + '</td></tr>'
         + '</tbody></table>';
     }
 

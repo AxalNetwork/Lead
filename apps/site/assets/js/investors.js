@@ -271,7 +271,7 @@
             + p.history.map(function (h) {
                 return '<tr><td>' + esc(h.changed_at) + '</td><td>' + esc(h.field) + '</td>'
                   + '<td><span class="ads-muted">' + esc(String(h.old_value || "")).slice(0, 40) + '</span> → ' + esc(String(h.new_value || "")).slice(0, 40) + '</td>'
-                  + '<td>' + esc(h.source || "—") + (h.evidence_url ? ' · <a target="_blank" rel="noopener" href="' + esc(h.evidence_url) + '">evidence</a>' : "") + '</td></tr>';
+                  + '<td>' + esc(h.source || "—") + (h.evidence_url ? ' · <a target="_blank" rel="noopener" href="' + esc(safeHref(h.evidence_url)) + '">evidence</a>' : "") + '</td></tr>';
               }).join("") + '</tbody></table></div>'
           : empty("No history yet.")),
     ];
@@ -286,8 +286,8 @@
     var sidebar = '<aside class="ads-card ads-detail-side">'
       + '<h3 style="margin-top:0">Actions</h3>'
       + '<button class="ads-btn" id="ads-inv-enrich" data-id="' + esc(p.id) + '" style="width:100%;margin-bottom:6px">Enrich now</button>'
-      + (c.email ? '<a class="ads-btn ads-btn--ghost" style="display:block;text-align:center;margin-bottom:6px" href="mailto:' + esc(c.email) + '">Email</a>' : '')
-      + (c.linkedin_url ? '<a class="ads-btn ads-btn--ghost" style="display:block;text-align:center;margin-bottom:6px" target="_blank" rel="noopener" href="' + esc(c.linkedin_url) + '">LinkedIn</a>' : '')
+      + (c.email ? '<a class="ads-btn ads-btn--ghost" style="display:block;text-align:center;margin-bottom:6px" href="' + esc(safeHref('mailto:' + c.email)) + '">Email</a>' : '')
+      + (c.linkedin_url ? '<a class="ads-btn ads-btn--ghost" style="display:block;text-align:center;margin-bottom:6px" target="_blank" rel="noopener" href="' + esc(safeHref(c.linkedin_url)) + '">LinkedIn</a>' : '')
       + '<hr><div class="ads-muted" style="font-size:12px">Last enriched: ' + esc(p.last_enriched_at || "never") + '</div>'
       + '<div class="ads-muted" style="font-size:12px">Lead id: <code>' + esc(p.id) + '</code></div>'
       + '</aside>';
@@ -350,7 +350,7 @@
             // Format result whether it's a {nodes,edges,hops} (relationships) or {path:[...]} (legacy).
             if (r.nodes && r.edges) {
               if (r.hops < 0 || !r.nodes.length) { resultEl.innerHTML = empty("No path found within 4 hops."); return; }
-              resultEl.innerHTML = '<p><strong>' + r.hops + '-hop path:</strong></p>'
+              resultEl.innerHTML = '<p><strong>' + esc(r.hops) + '-hop path:</strong></p>'
                 + '<ol>' + r.nodes.map(function (nd) { return '<li>' + esc(nd.name) + ' <span class="ads-muted">(' + esc(nd.kind) + ')</span></li>'; }).join("") + '</ol>';
             } else if (Array.isArray(r.path)) {
               resultEl.innerHTML = '<ol>' + r.path.map(function (link) {
