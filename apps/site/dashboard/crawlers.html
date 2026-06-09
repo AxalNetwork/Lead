@@ -55,24 +55,25 @@ permalink: /dashboard/crawlers/
   const tbody = document.querySelector("#ads-crawlers-table tbody");
   const runsBody = document.querySelector("#ads-crawler-runs tbody");
   function fmt(s) { return s ? new Date(s).toLocaleString() : "—"; }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]; }); }
   async function refresh() {
     try {
       const r = await fetch("https://api.aidatasignal.com/api/crawlers", { credentials: "include" });
       const j = await r.json();
       tbody.innerHTML = (j.modules || []).map(m => `
         <tr>
-          <td><strong>${m.label}</strong><br><code class="ads-mono">${m.slug}</code></td>
-          <td>${m.schedule}</td>
-          <td><label class="ads-switch"><input type="checkbox" data-toggle="${m.slug}" ${m.enabled ? "checked" : ""}><span></span></label></td>
-          <td>${m.envReady ? "<span class='ads-pill ads-pill--ok'>ready</span>" : `<span class='ads-pill ads-pill--warn'>missing ${m.requiresEnv || "env"}</span>`}${m.bravePoweredOnly ? " <span class='ads-pill'>Brave only</span>" : ""}</td>
+          <td><strong>${esc(m.label)}</strong><br><code class="ads-mono">${esc(m.slug)}</code></td>
+          <td>${esc(m.schedule)}</td>
+          <td><label class="ads-switch"><input type="checkbox" data-toggle="${esc(m.slug)}" ${m.enabled ? "checked" : ""}><span></span></label></td>
+          <td>${m.envReady ? "<span class='ads-pill ads-pill--ok'>ready</span>" : `<span class='ads-pill ads-pill--warn'>missing ${esc(m.requiresEnv || "env")}</span>`}${m.bravePoweredOnly ? " <span class='ads-pill'>Brave only</span>" : ""}</td>
           <td>${fmt(m.lastRun?.started_at)}</td>
-          <td>${m.lastRun ? `${m.lastRun.signals_inserted} / ${m.lastRun.signals_skipped}` : "—"}</td>
-          <td>${m.lastRun ? `<span class='ads-pill ads-pill--${m.lastRun.status}'>${m.lastRun.status}</span>` : "—"}</td>
-          <td><button class="ads-btn" data-run="${m.slug}">Run now</button></td>
+          <td>${m.lastRun ? `${esc(m.lastRun.signals_inserted)} / ${esc(m.lastRun.signals_skipped)}` : "—"}</td>
+          <td>${m.lastRun ? `<span class='ads-pill ads-pill--${esc(m.lastRun.status)}'>${esc(m.lastRun.status)}</span>` : "—"}</td>
+          <td><button class="ads-btn" data-run="${esc(m.slug)}">Run now</button></td>
         </tr>
       `).join("");
     } catch (e) {
-      tbody.innerHTML = `<tr><td colspan="8">Failed to load: ${e.message}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="8">Failed to load: ${esc(e && e.message ? e.message : e)}</td></tr>`;
     }
     try {
       const r = await fetch("https://api.aidatasignal.com/api/crawlers/runs?limit=50", { credentials: "include" });
@@ -80,17 +81,17 @@ permalink: /dashboard/crawlers/
       runsBody.innerHTML = (j.items || []).map(x => `
         <tr>
           <td>${fmt(x.started_at)}</td>
-          <td><code class="ads-mono">${x.source}</code></td>
-          <td><span class="ads-pill ads-pill--${x.status}">${x.status}</span></td>
-          <td>${x.events_emitted}</td>
-          <td>${x.signals_inserted}</td>
-          <td>${x.signals_skipped}</td>
-          <td>+${x.accounts_created} / ${x.accounts_resolved}</td>
-          <td>${x.error || ""}</td>
+          <td><code class="ads-mono">${esc(x.source)}</code></td>
+          <td><span class="ads-pill ads-pill--${esc(x.status)}">${esc(x.status)}</span></td>
+          <td>${esc(x.events_emitted)}</td>
+          <td>${esc(x.signals_inserted)}</td>
+          <td>${esc(x.signals_skipped)}</td>
+          <td>+${esc(x.accounts_created)} / ${esc(x.accounts_resolved)}</td>
+          <td>${esc(x.error || "")}</td>
         </tr>
       `).join("");
     } catch (e) {
-      runsBody.innerHTML = `<tr><td colspan="8">Failed to load: ${e.message}</td></tr>`;
+      runsBody.innerHTML = `<tr><td colspan="8">Failed to load: ${esc(e && e.message ? e.message : e)}</td></tr>`;
     }
   }
   document.addEventListener("change", async (e) => {

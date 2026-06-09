@@ -11,6 +11,7 @@
   }
 
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]; }); }
+  function safeHref(u) { if (!u) return "#"; try { var p = new URL(u, location.href).protocol; return (p === "http:" || p === "https:") ? u : "#"; } catch (e) { return "#"; } }
   function fmtMoney(n) { if (!n) return "—"; if (n >= 1e9) return "$" + (n / 1e9).toFixed(1) + "B"; if (n >= 1e6) return "$" + (n / 1e6).toFixed(1) + "M"; if (n >= 1e3) return "$" + (n / 1e3).toFixed(0) + "k"; return "$" + n; }
   function fmtArr(j) { try { var a = JSON.parse(j); return Array.isArray(a) ? a.join(", ") : ""; } catch (_) { return ""; } }
   function api(path, opts) { return fetch(API_BASE + path, Object.assign({ credentials: "include" }, opts || {})).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }); }
@@ -44,7 +45,7 @@
     byKey("founded").textContent = firm.founded_year || "—";
     byKey("aum").textContent = fmtMoney(firm.aum_usd);
     byKey("lead_or_co").textContent = firm.lead_or_co || "—";
-    if (firm.website) { var a = byKey("website"); a.textContent = firm.website.replace(/^https?:\/\//, ""); a.href = firm.website; }
+    if (firm.website) { var a = byKey("website"); a.textContent = firm.website.replace(/^https?:\/\//, ""); a.href = /^https?:\/\//i.test(firm.website) ? firm.website : "#"; }
     var ddLink = byKey("dd-link");
     if (ddLink) ddLink.href = "/dashboard/dd-entity/?table=firms&ref=" + encodeURIComponent(firm.id);
     var newsLink = byKey("news-link");
@@ -61,11 +62,11 @@
     var people = firm.people || [];
     byKey("people-rows").innerHTML = people.length ? people.map(function (p) {
       return "<tr>" +
-        "<td>" + (p.id ? '<a href="/dashboard/lead/?id=' + p.id + '">' + esc(p.name || "—") + "</a>" : esc(p.name || "—")) + "</td>" +
+        "<td>" + (p.id ? '<a href="/dashboard/lead/?id=' + encodeURIComponent(p.id) + '">' + esc(p.name || "—") + "</a>" : esc(p.name || "—")) + "</td>" +
         "<td>" + esc(p.role || "") + "</td>" +
         "<td>" + (p.is_decision_maker ? "✓" : "") + "</td>" +
         "<td>" + esc(p.email || "") + "</td>" +
-        "<td>" + (p.linkedin_url ? '<a href="' + esc(p.linkedin_url) + '" target="_blank" rel="noopener">link</a>' : "") + "</td>" +
+        "<td>" + (p.linkedin_url ? '<a href="' + esc(safeHref(p.linkedin_url)) + '" target="_blank" rel="noopener">link</a>' : "") + "</td>" +
         "<td>" + esc(p.country_iso2 || "") + "</td>" +
         "<td>" + esc(p.last_enriched_at || "") + "</td>" +
         "</tr>";
@@ -76,7 +77,7 @@
       return "<tr>" +
         "<td>" + esc(p.company_name || "") + "</td>" +
         "<td>" + esc(p.company_domain || "") + "</td>" +
-        "<td>" + (p.investment_year || "") + "</td>" +
+        "<td>" + esc(p.investment_year || "") + "</td>" +
         "<td>" + esc(p.stage || "") + "</td>" +
         "<td>" + fmtMoney(p.amount_usd) + "</td>" +
         "<td>" + (p.is_lead ? "lead" : "") + "</td>" +
@@ -220,11 +221,11 @@
       var items = data.items || [];
       tbody.innerHTML = items.length ? items.map(function (s) {
         return "<tr>" +
-          "<td>" + (s.url ? '<a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.url) + "</a>" : "") + "</td>" +
+          "<td>" + (s.url ? '<a href="' + esc(safeHref(s.url)) + '" target="_blank" rel="noopener">' + esc(s.url) + "</a>" : "") + "</td>" +
           "<td>" + esc(s.tier_label || "") + "</td>" +
-          "<td>" + (s.status || "") + "</td>" +
+          "<td>" + esc(s.status || "") + "</td>" +
           "<td>" + esc(s.created_at || "") + "</td>" +
-          "<td>" + (s.bytes != null ? s.bytes : "") + "</td>" +
+          "<td>" + (s.bytes != null ? esc(s.bytes) : "") + "</td>" +
           "<td>" + esc(s.block_reason || "") + "</td>" +
           "</tr>";
       }).join("") : '<tr><td colspan="6" class="ads-muted">No fetches recorded.</td></tr>';

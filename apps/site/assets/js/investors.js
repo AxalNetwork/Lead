@@ -9,6 +9,11 @@
       return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
     });
   }
+  function safeHref(u) {
+    if (!u) return "#";
+    try { var p = new URL(u, location.href).protocol; return (p === "http:" || p === "https:" || p === "mailto:") ? u : "#"; }
+    catch (e) { return "#"; }
+  }
   function fmtInt(n) { return n == null ? "—" : new Intl.NumberFormat("en-US").format(n); }
   function fmtUsd(n) {
     if (n == null) return "—";
@@ -241,7 +246,7 @@
       tab("media", "Media",
         (p.media || []).length
           ? '<ul>' + p.media.slice(0, 50).map(function (m) {
-              return '<li><a target="_blank" rel="noopener" href="' + esc(m.url) + '">' + esc(m.title || m.url) + '</a> <span class="ads-muted">— ' + esc(m.company_name || "") + ' · ' + esc(m.published_at || "") + '</span></li>';
+              return '<li><a target="_blank" rel="noopener" href="' + esc(safeHref(m.url)) + '">' + esc(m.title || m.url) + '</a> <span class="ads-muted">— ' + esc(m.company_name || "") + ' · ' + esc(m.published_at || "") + '</span></li>';
             }).join("") + '</ul>'
           : empty("No media yet.")),
 
@@ -303,7 +308,7 @@
   }
   function linkRow(label, href, txt) {
     if (!txt) return '<tr><th>' + esc(label) + '</th><td class="ads-muted">—</td></tr>';
-    return '<tr><th>' + esc(label) + '</th><td><a target="_blank" rel="noopener" href="' + esc(href) + '">' + esc(txt) + '</a></td></tr>';
+    return '<tr><th>' + esc(label) + '</th><td><a target="_blank" rel="noopener" href="' + esc(safeHref(href)) + '">' + esc(txt) + '</a></td></tr>';
   }
 
   function wireProfileActions(p) {
