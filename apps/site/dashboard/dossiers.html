@@ -51,7 +51,7 @@ permalink: /dashboard/dossiers/
   }
   function fmtPct(x) { return x == null ? "—" : (Math.round(x * 1000) / 10) + "%"; }
   function fmtNum(x, d) { return x == null ? "—" : (Math.round(x * Math.pow(10, d || 2)) / Math.pow(10, d || 2)).toString(); }
-  function fmtDate(s) { if (!s) return "—"; try { return new Date(s).toISOString().slice(0,10); } catch (e) { return s; } }
+  function fmtDate(s) { if (!s) return "—"; try { var d = new Date(s); return isNaN(d.getTime()) ? "—" : d.toISOString().slice(0,10); } catch (e) { return "—"; } }
 
   if (!id) {
     renderPicker();
