@@ -15,8 +15,8 @@
 //   await stub.fetch("https://lock/merge_lead", { method: "POST", body: JSON.stringify(...) });
 
 import type { Env } from "../types";
-import { upsertEntityVector } from "../dedupe/vector";
-import { indexEntity } from "../ai/search_sync";
+import { upsertEntityVector, type EntityKind, type VectorMatchInput } from "../dedupe/vector";
+import { indexEntity, type SearchDoc } from "../ai/search_sync";
 // Task #51: route previously-swallowed merge-lock failures through the
 // structured error logger instead of console-only / silent swallow.
 import { logError } from "../db/error_log";
@@ -29,6 +29,38 @@ interface MergeRequest {
 
 type LockKind = "lead" | "firm" | "company" | "account" | "buyer";
 type LockOp = "merge_lead" | "merge_firm" | "merge_company" | "merge_account" | "merge_buyer";
+
+// Task #52: secondary-store sync + reconcile types. After the D1 write, the
+// merge fans out to Vectorize and/or AI Search; failures are flagged here
+// for durable retry via the DO alarm so D1 never silently diverges.
+type SecondaryStore = "vector" | "search";
+
+interface SecondarySync {
+  vector?: { kind: EntityKind; input: VectorMatchInput };
+  search?: SearchDoc;
+}
+
+interface MergeResult {
+  ok: true;
+  id: string;
+  updated: number;
+  /** Secondary stores left divergent from D1 (flagged for reconcile). */
+  reconcile_pending: SecondaryStore[];
+}
+
+interface ReconcileRecord {
+  kind: LockKind;
+  id: string;
+  sync: SecondarySync;
+  stores: SecondaryStore[];
+  attempts: number;
+  first_failed_at: string;
+  last_failed_at: string;
+}
+
+const RECONCILE_PREFIX = "reconcile:";
+const RECONCILE_DELAY_MS = 30_000;
+const MAX_RECONCILE_ATTEMPTS = 5;
 
 export class EntityLock {
   state: DurableObjectState;
@@ -110,80 +142,192 @@ export class EntityLock {
   // ensures serialization. Drift from task plan: we don't yet migrate every
   // INSERT/UPDATE in pipeline/enrichment/importers through the DO — that's
   // tracked as the followup "migrate-merges-through-DO" task.
-  private async mergeLead(body: MergeRequest): Promise<{ ok: true; id: string; updated: number }> {
+  private async mergeLead(body: MergeRequest): Promise<MergeResult> {
     const updated = await applyMerge(this.env, "leads", body);
     const name = String(body.fields.name ?? "");
     const org = String(body.fields.org ?? "");
-    await upsertEntityVector(this.env, "leads", body.id, {
-      name, org,
-      city: String(body.fields.city ?? ""),
-      role: String(body.fields.title ?? ""),
-      bio: String(body.fields.bio ?? ""),
-      email: String(body.fields.email ?? ""),
+    const reconcile_pending = await this.syncSecondary("lead", body.id, {
+      vector: {
+        kind: "leads",
+        input: {
+          name, org,
+          city: String(body.fields.city ?? ""),
+          role: String(body.fields.title ?? ""),
+          bio: String(body.fields.bio ?? ""),
+          email: String(body.fields.email ?? ""),
+        },
+      },
+      search: {
+        id: body.id, type: "lead",
+        title: name || org || body.id,
+        body: [name, org, body.fields.title, body.fields.bio].filter(Boolean).join(" — "),
+        url: typeof body.fields.source_url === "string" ? body.fields.source_url : undefined,
+      },
     });
-    await indexEntity(this.env, {
-      id: body.id, type: "lead",
-      title: name || org || body.id,
-      body: [name, org, body.fields.title, body.fields.bio].filter(Boolean).join(" — "),
-      url: typeof body.fields.source_url === "string" ? body.fields.source_url : undefined,
-    });
-    return { ok: true, id: body.id, updated };
+    return { ok: true, id: body.id, updated, reconcile_pending };
   }
 
-  private async mergeFirm(body: MergeRequest): Promise<{ ok: true; id: string; updated: number }> {
+  private async mergeFirm(body: MergeRequest): Promise<MergeResult> {
     const updated = await applyMerge(this.env, "firms", body);
     const name = String(body.fields.name ?? "");
-    await upsertEntityVector(this.env, "firms", body.id, {
-      name,
-      city: String(body.fields.hq_city ?? ""),
-      bio: String(body.fields.thesis ?? ""),
+    const reconcile_pending = await this.syncSecondary("firm", body.id, {
+      vector: {
+        kind: "firms",
+        input: {
+          name,
+          city: String(body.fields.hq_city ?? ""),
+          bio: String(body.fields.thesis ?? ""),
+        },
+      },
+      search: {
+        id: body.id, type: "firm",
+        title: name || body.id,
+        body: [name, body.fields.thesis, body.fields.hq_city].filter(Boolean).join(" — "),
+        url: typeof body.fields.website === "string" ? body.fields.website : undefined,
+      },
     });
-    await indexEntity(this.env, {
-      id: body.id, type: "firm",
-      title: name || body.id,
-      body: [name, body.fields.thesis, body.fields.hq_city].filter(Boolean).join(" — "),
-      url: typeof body.fields.website === "string" ? body.fields.website : undefined,
-    });
-    return { ok: true, id: body.id, updated };
+    return { ok: true, id: body.id, updated, reconcile_pending };
   }
 
-  private async mergeCompany(body: MergeRequest): Promise<{ ok: true; id: string; updated: number }> {
+  private async mergeCompany(body: MergeRequest): Promise<MergeResult> {
     const updated = await applyMerge(this.env, "companies", body);
     const name = String(body.fields.name ?? "");
-    await upsertEntityVector(this.env, "companies", body.id, {
-      name,
-      city: String(body.fields.hq_city ?? ""),
-      bio: String(body.fields.description ?? ""),
+    const reconcile_pending = await this.syncSecondary("company", body.id, {
+      vector: {
+        kind: "companies",
+        input: {
+          name,
+          city: String(body.fields.hq_city ?? ""),
+          bio: String(body.fields.description ?? ""),
+        },
+      },
+      search: {
+        id: body.id, type: "company",
+        title: name || body.id,
+        body: [name, body.fields.description, body.fields.hq_city].filter(Boolean).join(" — "),
+        url: typeof body.fields.website === "string" ? body.fields.website : undefined,
+      },
     });
-    await indexEntity(this.env, {
-      id: body.id, type: "company",
-      title: name || body.id,
-      body: [name, body.fields.description, body.fields.hq_city].filter(Boolean).join(" — "),
-      url: typeof body.fields.website === "string" ? body.fields.website : undefined,
-    });
-    return { ok: true, id: body.id, updated };
+    return { ok: true, id: body.id, updated, reconcile_pending };
   }
 
   // Task #44: account merge. Indexes into the `axal-accounts` AI Search
   // namespace so prospect-account text search stays isolated from the
   // investor/firm/company `axal-profiles` namespace.
-  private async mergeAccount(body: MergeRequest): Promise<{ ok: true; id: string; updated: number }> {
+  private async mergeAccount(body: MergeRequest): Promise<MergeResult> {
     const updated = await applyMerge(this.env, "accounts", body);
     const name = String(body.fields.name ?? "");
-    await indexEntity(this.env, {
-      id: body.id, type: "account", namespace: "axal-accounts",
-      title: name || body.id,
-      body: [name, body.fields.industry, body.fields.description, body.fields.hq_city, body.fields.hq_country_iso2].filter(Boolean).join(" — "),
-      url: typeof body.fields.website === "string" ? body.fields.website : undefined,
+    const reconcile_pending = await this.syncSecondary("account", body.id, {
+      search: {
+        id: body.id, type: "account", namespace: "axal-accounts",
+        title: name || body.id,
+        body: [name, body.fields.industry, body.fields.description, body.fields.hq_city, body.fields.hq_country_iso2].filter(Boolean).join(" — "),
+        url: typeof body.fields.website === "string" ? body.fields.website : undefined,
+      },
     });
-    return { ok: true, id: body.id, updated };
+    return { ok: true, id: body.id, updated, reconcile_pending };
   }
 
   // Task #44: buyer merge. No vectorize index for buyers yet; AI Search
   // is also skipped (we surface buyers under their account doc instead).
-  private async mergeBuyer(body: MergeRequest): Promise<{ ok: true; id: string; updated: number }> {
+  private async mergeBuyer(body: MergeRequest): Promise<MergeResult> {
     const updated = await applyMerge(this.env, "buyers", body);
-    return { ok: true, id: body.id, updated };
+    // Buyers have no Vectorize index and are not AI-Search indexed (they
+    // surface under their account doc), so there are no secondary stores to
+    // keep in sync — nothing can diverge from D1 here.
+    return { ok: true, id: body.id, updated, reconcile_pending: [] };
+  }
+
+  // Task #52: run the post-D1 secondary-store updates (Vectorize, AI Search)
+  // each guarded independently. A throw or a soft-failure (vector upsert
+  // rejected) is logged AND recorded as a durable reconcile flag in DO
+  // storage with a retry alarm — so D1 is never left silently out of sync
+  // with the secondary stores. Returns the stores still divergent.
+  private async syncSecondary(kind: LockKind, id: string, sync: SecondarySync): Promise<SecondaryStore[]> {
+    const failed: SecondaryStore[] = [];
+    if (sync.vector) {
+      try {
+        const ok = await upsertEntityVector(this.env, sync.vector.kind, id, sync.vector.input);
+        if (!ok) {
+          await logError(this.env, { err: new Error("vector_upsert_rejected"), step: `entityLock.sync.vector.${kind}` });
+          failed.push("vector");
+        }
+      } catch (e) {
+        await logError(this.env, { err: e, step: `entityLock.sync.vector.${kind}` });
+        failed.push("vector");
+      }
+    }
+    if (sync.search) {
+      try {
+        const ok = await indexEntity(this.env, sync.search);
+        if (!ok) {
+          await logError(this.env, { err: new Error("search_index_failed"), step: `entityLock.sync.search.${kind}` });
+          failed.push("search");
+        }
+      } catch (e) {
+        await logError(this.env, { err: e, step: `entityLock.sync.search.${kind}` });
+        failed.push("search");
+      }
+    }
+    if (failed.length) await this.flagReconcile(kind, id, sync, failed);
+    return failed;
+  }
+
+  // Persist a reconcile record (idempotent per entity) and ensure a retry
+  // alarm is scheduled. The stored payload carries everything alarm() needs
+  // to re-run the failed store updates without re-reading D1.
+  private async flagReconcile(kind: LockKind, id: string, sync: SecondarySync, stores: SecondaryStore[]): Promise<void> {
+    const key = `${RECONCILE_PREFIX}${kind}:${id}`;
+    const now = new Date().toISOString();
+    const prior = await this.state.storage.get<ReconcileRecord>(key);
+    const rec: ReconcileRecord = {
+      kind, id, sync, stores,
+      attempts: prior?.attempts ?? 0,
+      first_failed_at: prior?.first_failed_at ?? now,
+      last_failed_at: now,
+    };
+    await this.state.storage.put(key, rec);
+    const existing = await this.state.storage.getAlarm();
+    if (existing == null) await this.state.storage.setAlarm(Date.now() + RECONCILE_DELAY_MS);
+  }
+
+  // Retry pending secondary-store reconciles. Successful stores are cleared;
+  // records that exhaust MAX_RECONCILE_ATTEMPTS are logged (so a permanent
+  // divergence stays visible) and dropped. Any remaining work re-arms the alarm.
+  async alarm(): Promise<void> {
+    const pending = await this.state.storage.list<ReconcileRecord>({ prefix: RECONCILE_PREFIX });
+    let remaining = false;
+    for (const [key, rec] of pending) {
+      const attempts = rec.attempts + 1;
+      const stillFailed: SecondaryStore[] = [];
+      if (rec.stores.includes("vector") && rec.sync.vector) {
+        try {
+          const ok = await upsertEntityVector(this.env, rec.sync.vector.kind, rec.id, rec.sync.vector.input);
+          if (!ok) stillFailed.push("vector");
+        } catch { stillFailed.push("vector"); }
+      }
+      if (rec.stores.includes("search") && rec.sync.search) {
+        try {
+          const ok = await indexEntity(this.env, rec.sync.search);
+          if (!ok) stillFailed.push("search");
+        } catch { stillFailed.push("search"); }
+      }
+      if (!stillFailed.length) {
+        await this.state.storage.delete(key);
+        continue;
+      }
+      if (attempts >= MAX_RECONCILE_ATTEMPTS) {
+        await logError(this.env, {
+          err: new Error(`reconcile_exhausted kind=${rec.kind} id=${rec.id} stores=${stillFailed.join(",")} attempts=${attempts}`),
+          step: `entityLock.reconcile.exhausted.${rec.kind}`,
+        });
+        await this.state.storage.delete(key);
+        continue;
+      }
+      await this.state.storage.put(key, { ...rec, stores: stillFailed, attempts, last_failed_at: new Date().toISOString() });
+      remaining = true;
+    }
+    if (remaining) await this.state.storage.setAlarm(Date.now() + RECONCILE_DELAY_MS);
   }
 }
 

@@ -26,18 +26,31 @@ const TYPE_NAMESPACE: Partial<Record<SearchDoc["type"], string>> = {
   account: "axal-accounts",
 };
 
-export async function indexEntity(env: Env, doc: SearchDoc): Promise<void> {
+// Returns true when the entity is consistent with the AI Search store —
+// either the live document write succeeded, or no live AI_SEARCH binding is
+// configured (deferral to `ai_search_pending` is the designed steady state).
+// Returns false ONLY when a configured live AI_SEARCH write was attempted and
+// failed, so the caller (EntityLock) can schedule a durable reconcile retry
+// rather than leaving D1 and the search index silently divergent. The
+// `ai_search_pending` row is still written as a best-effort backfill record.
+export async function indexEntity(env: Env, doc: SearchDoc): Promise<boolean> {
   const ns = doc.namespace ?? TYPE_NAMESPACE[doc.type] ?? env.AI_SEARCH_NAMESPACE ?? "axal-profiles";
+  let liveFailed = false;
   if (env.AI_SEARCH) {
     try {
-      await env.AI_SEARCH.fetch(`https://ai-search/${encodeURIComponent(ns)}/documents`, {
+      const res = await env.AI_SEARCH.fetch(`https://ai-search/${encodeURIComponent(ns)}/documents`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...doc, id: `${doc.type}:${doc.id}` }),
       });
-      return;
+      // A non-2xx response is a failure too — it never throws, so without this
+      // check a 4xx/5xx would silently report success and leave D1 divergent.
+      if (res.ok) return true;
+      console.warn("ai-search index non-ok", res.status);
+      liveFailed = true;
     } catch (e) {
       console.warn("ai-search index failed", (e as Error).message);
+      liveFailed = true;
     }
   }
   // Defer: queue a row for later backfill.
@@ -48,4 +61,5 @@ export async function indexEntity(env: Env, doc: SearchDoc): Promise<void> {
        ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json, created_at = excluded.created_at`,
     ).bind(`${doc.type}:${doc.id}`, doc.type, JSON.stringify(doc), new Date().toISOString()).run();
   } catch { /* table may not exist yet */ }
+  return !liveFailed;
 }

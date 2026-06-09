@@ -98,25 +98,33 @@ export async function resolveByVector(
   return { action: "insert" };
 }
 
+// Returns true when the vector store is consistent with D1 — either the
+// upsert succeeded or there is genuinely nothing to write (no index binding,
+// empty text, no embedding, or a deliberate budget skip). Returns false ONLY
+// when an upsert was attempted but the index rejected it, so the caller
+// (EntityLock) can flag the entity for reconcile instead of silently leaving
+// D1 and Vectorize divergent.
 export async function upsertEntityVector(
   env: Env,
   kind: EntityKind,
   id: string,
   input: VectorMatchInput,
   metadata?: Record<string, unknown>,
-): Promise<void> {
+): Promise<boolean> {
   const idx = getIndex(env, kind);
-  if (!idx) return;
+  if (!idx) return true;
   const text = buildText(input);
-  if (!text) return;
+  if (!text) return true;
   const vec = await aiEmbed(env, text);
-  if (!vec) return;
+  if (!vec) return true;
   const ok = await assertBudget(env, "vectorize");
-  if (!ok.ok) return;
+  if (!ok.ok) return true;
   try {
     await idx.upsert([{ id, values: vec, metadata: { ...metadata, name: input.name ?? "", org: input.org ?? "" } }]);
     trackVectorize(env, { op: "upsert", index: kind });
+    return true;
   } catch (e) {
     console.warn(`vectorize.${kind}.upsert failed`, (e as Error).message);
+    return false;
   }
 }
