@@ -21,6 +21,22 @@ type Vars = { email: string; is_admin: boolean };
 export const valuationCompaniesRoute = new Hono<{ Bindings: Env; Variables: Vars }>();
 export const compPanelsRoute = new Hono<{ Bindings: Env; Variables: Vars }>();
 
+// Bound for the snapshot member list — comp panels are admin-curated and
+// small by design, but cap the read so a pathological panel can't blow the
+// Worker memory budget. ORDER BY puts public members (which drive the
+// medians) first, so a cap never silently drops a public comp before a
+// private one.
+const SNAPSHOT_MEMBER_CAP = 1000;
+
+// Clamp a query-string integer to [min, max], falling back to `def` for
+// missing/garbage input. Used to bound paginated list reads.
+function clampInt(raw: string | undefined, def: number, min: number, max: number): number {
+  if (raw == null || raw === "") return def;
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || Number.isNaN(n)) return def;
+  return Math.max(min, Math.min(max, n));
+}
+
 async function resolveEntityIdFromCompanyParam(
   env: Env, idParam: string,
 ): Promise<string | null> {
@@ -53,14 +69,22 @@ interface MarkRow {
 valuationCompaniesRoute.get("/:id/marks", async (c) => {
   const entityId = await resolveEntityIdFromCompanyParam(c.env, c.req.param("id"));
   if (!entityId) return c.json({ error: "company_not_resolved" }, 404);
+  // Bound the history read: a single company can accumulate thousands of
+  // marks (every filing / press mention / model run), which would load the
+  // whole set into Worker memory. Default 1000 comfortably covers any
+  // normal company so the blended line stays complete; ?limit=&?offset=
+  // allow explicit paging, capped at 5000 rows/request.
+  const limit = clampInt(c.req.query("limit"), 1000, 1, 5000);
+  const offset = clampInt(c.req.query("offset"), 0, 0, Number.MAX_SAFE_INTEGER);
   const rows = await c.env.DB.prepare(
     `SELECT id, company_entity_id, company_name_raw, as_of, source_kind,
             source_url, source_ref, implied_valuation_usd, share_price_usd,
             fully_diluted_shares, mark_kind, confidence, holder_name_raw, notes
        FROM valuation_marks
       WHERE company_entity_id = ?
-      ORDER BY as_of ASC, confidence DESC`,
-  ).bind(entityId).all<MarkRow>();
+      ORDER BY as_of ASC, confidence DESC
+      LIMIT ? OFFSET ?`,
+  ).bind(entityId, limit, offset).all<MarkRow>();
   const marks = (rows.results ?? []).map((r) => ({
     mark_id: r.id, as_of: r.as_of, source_kind: r.source_kind,
     source_url: r.source_url, source_ref: r.source_ref,
@@ -87,6 +111,7 @@ valuationCompaniesRoute.get("/:id/marks", async (c) => {
     .map(([month, b]) => ({ month, blended_valuation_usd: Math.round(b.sum / b.weight) }));
   return c.json({
     entity_id: entityId, count: marks.length,
+    limit, offset, has_more: marks.length === limit,
     source_confidence: SOURCE_CONFIDENCE,
     marks, blended_line: blended,
   });
@@ -137,8 +162,9 @@ compPanelsRoute.get("/:id/snapshot", async (c) => {
              WHERE cm2.company_entity_id = m.company_entity_id
           )
       WHERE m.panel_id = ? AND m.removed_at IS NULL
-      ORDER BY m.is_public DESC, cm.ev_arr_multiple DESC NULLS LAST`,
-  ).bind(panelId).all<{
+      ORDER BY m.is_public DESC, cm.ev_arr_multiple DESC NULLS LAST
+      LIMIT ?`,
+  ).bind(panelId, SNAPSHOT_MEMBER_CAP).all<{
     company_entity_id: string; company_name_raw: string; is_public: number;
     ticker: string | null; match_reason: string;
     revenue_usd: number | null; arr_usd: number | null;
