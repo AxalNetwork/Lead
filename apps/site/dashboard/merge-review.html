@@ -11,6 +11,35 @@ permalink: /dashboard/merge-review/
      site-wide via _layouts/default.html cannot leak light/white
      backgrounds or dark text onto this page. Structural styling rides on
      the shared dashboard classes (.ads-card / .ads-table / .ads-btn). */
+
+  /* Force-dark, theme-independent. The page previously pinned its surfaces to
+     var(--ads-panel)/var(--ads-text), but those tokens flip to WHITE under
+     [data-theme="light"] — and the dashboard theme defaults to `auto`, which
+     follows the OS, so an operator on a light-mode OS got white cards with
+     near-invisible light text. Re-declaring the DARK token values scoped to the
+     .ads-mr wrapper makes every `var(--ads-*)` rule below resolve dark in ANY
+     theme (auto / light / dark), without touching the global theme system. */
+  .ads-mr {
+    --ads-bg: #0b1020;
+    --ads-bg-elev: #070b1c;
+    --ads-panel: #121933;
+    --ads-panel-2: #1a2347;
+    --ads-border: #243066;
+    --ads-border-strong: #324585;
+    --ads-text: #e6ebff;
+    --ads-text-strong: #ffffff;
+    --ads-muted: #8b94c2;
+    --ads-accent: #5b8cff;
+    --ads-accent-2: #23d6a4;
+    --ads-warn: #ffb547;
+    --ads-danger: #ff5d6c;
+    color-scheme: dark;
+    background: var(--ads-bg);
+    color: var(--ads-text);
+    border-radius: 10px;
+    padding: 4px;
+  }
+
   .ads-mr__card { margin-bottom: 16px; }
   .ads-mr__head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid var(--ads-border); margin-bottom: 14px; }
   .ads-mr__score { font-size: 18px; font-weight: 600; color: var(--ads-accent); }
