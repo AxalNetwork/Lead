@@ -93,7 +93,7 @@ export async function insertFact(env: Env, f: FactInput): Promise<string | null>
     // No `relationship_infer` JobKind exists, so we fall back to the
     // nightly tick per the spec's explicit instruction.
     try {
-      const { enqueueRelInfer } = await import("../services/relationships/orchestrator");
+      const { enqueueRelInfer } = await import("../services/relationships/orchestrator.js");
       void enqueueRelInfer(env, f.entity_id, `fact:${f.predicate}`).catch(() => undefined);
     } catch { /* best-effort */ }
     return id;

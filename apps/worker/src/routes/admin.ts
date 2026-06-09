@@ -800,7 +800,7 @@ admin.post("/backfill-identity", async (c) => {
   const limitRaw = Number(c.req.query("limit") ?? body?.limit ?? 50);
   const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 500) : 50;
   const runOsint = body?.osint !== false && c.req.query("osint") !== "0";
-  const { runIdentityBackfill } = await import("../services/identity/backfill");
+  const { runIdentityBackfill } = await import("../services/identity/backfill.js");
   const result = await runIdentityBackfill(c.env, { limit, runOsint });
   return c.json({ ok: true, ...result });
 });

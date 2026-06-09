@@ -130,7 +130,7 @@ export async function createEntity(
   // relationship_infer_queue (migration 377). The consolidated nightly
   // slot drains the queue with the per-entity orchestrator pass.
   try {
-    const { enqueueRelInfer } = await import("../services/relationships/orchestrator");
+    const { enqueueRelInfer } = await import("../services/relationships/orchestrator.js");
     void enqueueRelInfer(env, id, `created:${effectiveKind}`).catch(() => undefined);
   } catch { /* best-effort */ }
   return (await env.DB.prepare(`SELECT * FROM u_entities WHERE id = ?`).bind(id).first<EntityRow>())!;
