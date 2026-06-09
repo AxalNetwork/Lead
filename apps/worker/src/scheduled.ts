@@ -13,6 +13,7 @@ import { loadSeedSources } from "./sources/seed_loader";
 // Task #2: periodic stuck-job sweeper. Guarantees timeout convergence
 // even when queue traffic is too low to trigger the batch-head sweep.
 import { sweepStuckJobs } from "./routes/admin";
+import { sweepStuckImports } from "./imports/import";
 // Task #3: hourly crawler-seed sweep — picks up to 100 stalest enabled
 // seeds whose refresh interval has elapsed and enqueues them.
 import { runSeedSweep } from "./services/crawlerSeeds/sweep";
@@ -46,6 +47,16 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       } catch (e) {
         await logError(env, { err: e, step: "hourly sweepStuckJobs" });
         console.warn("hourly sweepStuckJobs failed", (e as Error).message);
+      }
+      // Task #63: recover legacy file imports stuck in 'importing'. Resumes
+      // chunked imports from their persisted cursor; escalates true no-progress
+      // stalls to 'error' so a killed isolate never leaves a permanent spinner.
+      try {
+        const r = await sweepStuckImports(env);
+        if (r.resumed > 0 || r.failed > 0) console.log("hourly sweepStuckImports", r);
+      } catch (e) {
+        await logError(env, { err: e, step: "hourly sweepStuckImports" });
+        console.warn("hourly sweepStuckImports failed", (e as Error).message);
       }
       // Task #2 (monitoring): hourly monitor-batch + digest run. Free-plan
       // cron slot cap (5) means the `*/15` cadence from the spec was

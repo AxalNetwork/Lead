@@ -41,8 +41,22 @@ import { looksLikeTypeString } from "../services/csv/headerDetector";
 
 const BATCH_SIZE = 200;
 
+// Task #63: resumable chunking. D1/KV/R2/queue calls all count toward the
+// per-invocation subrequest cap, so each queue invocation processes rows only
+// until it has spent ~SUBREQUEST_BUDGET worth of estimated subrequests, then
+// checkpoints its cursor and re-enqueues a resume job. Per-intent cost keeps
+// the heavy leads path (DNC + resolveIncoming fact chain + match/merge) from
+// blowing the budget while the lighter firms path moves more rows per chunk.
+const SUBREQUEST_BUDGET = 700;
+const ROW_COST = { leads: 14, firms: 6, metrics: 8 } as const;
+// A stalled 'importing' row is re-enqueued up to this many times WITHOUT making
+// progress before being marked 'error'. Every progress checkpoint resets
+// import_attempts to 0, so a healthy large import never trips this.
+const MAX_WATCHDOG_RECOVERIES = 5;
+
 interface FileImportRow {
   id: string;
+  status: string | null;
   filename: string;
   mime: string | null;
   r2_key: string;
@@ -50,6 +64,15 @@ interface FileImportRow {
   scrape_urls: number;
   format: string | null;
   created_by: string | null;
+  import_phase: string | null;
+  import_cursor_tab: number | null;
+  import_cursor_row: number | null;
+  rows_imported: number | null;
+  firms_created: number | null;
+  firms_updated: number | null;
+  leads_created: number | null;
+  leads_updated: number | null;
+  queued_jobs: number | null;
 }
 
 interface TabRow {
@@ -62,21 +85,22 @@ interface TabRow {
   column_map_json: string | null;
 }
 
-interface TabSummary {
-  index: number;
-  sheet: string | null;
-  intent: TabIntent;
-  intent_subkind: string | null;
-  rows_in: number;
+/** Per-tab cumulative counters carried across chunks (persisted to
+ *  file_import_tabs so finalize can rebuild the summary from the DB). */
+interface TabCum {
   rows_imported: number;
+  rows_updated: number;
   rows_skipped: number;
-  firms_created: number;
-  firms_updated: number;
   metrics_inserted: number;
-  leads_created: number;
-  leads_updated: number;
   errors: string[];
 }
+const ZERO_TAB = { rows_imported: 0, rows_updated: 0, rows_skipped: 0, metrics_inserted: 0 };
+
+type ParseTab = {
+  index: number; sheet?: string | null; intent?: string;
+  rows_seen?: number; rows_imported?: number; rows_updated?: number;
+  rows_rejected?: number; low_confidence_cells?: number; ocr_disagreements?: number;
+};
 
 export async function processImportFile(env: Env, importId: string, opts: { jobId?: string } = {}): Promise<void> {
   // Cancellation gate: if this job was cancelled before the queue
@@ -92,10 +116,14 @@ export async function processImportFile(env: Env, importId: string, opts: { jobI
     if (job?.status === "cancelled") return;
   }
   const row = await env.DB
-    .prepare("SELECT id, filename, mime, r2_key, entity, scrape_urls, format, created_by FROM file_imports WHERE id = ?")
+    .prepare("SELECT id, status, filename, mime, r2_key, entity, scrape_urls, format, created_by, import_phase, import_cursor_tab, import_cursor_row, rows_imported, firms_created, firms_updated, leads_created, leads_updated, queued_jobs FROM file_imports WHERE id = ?")
     .bind(importId)
     .first<FileImportRow>();
   if (!row) throw new Error(`file_import_not_found:${importId}`);
+  // Terminal-state guard: a late-delivered/duplicate resume message (e.g. a
+  // watchdog re-enqueue racing a stale original) must NOT flip a finished import
+  // back to 'importing' and re-run all chunks. 'done'/'error' are terminal.
+  if (row.status === "done" || row.status === "error") return;
 
   await env.DB
     .prepare("UPDATE file_imports SET status = 'importing', updated_at = ? WHERE id = ?")
@@ -143,14 +171,57 @@ export async function processImportFile(env: Env, importId: string, opts: { jobI
 
     const sourceUrl = `upload://${importId}/${row.filename}`;
     const importedFrom = `upload:multi`;
-    const summaries: TabSummary[] = [];
-    let totalImported = 0, totalFirmsCreated = 0, totalFirmsUpdated = 0;
-    let totalMetricsInserted = 0, totalLeadsCreated = 0, totalLeadsUpdated = 0;
-    let totalSkipped = 0;
-    let firmsCreatedHere = 0, firmsUpdatedHere = 0; // for legacy file_imports counters
+    // Load per-tab cumulative counters so a resume seeds the in-progress tab
+    // and finalize can rebuild the summary purely from the DB.
+    const tabCounterRaw = await env.DB
+      .prepare("SELECT tab_index, rows_imported, rows_updated, rows_skipped, metrics_inserted FROM file_import_tabs WHERE import_id = ?")
+      .bind(importId)
+      .all<{ tab_index: number; rows_imported: number; rows_updated: number; rows_skipped: number; metrics_inserted: number }>();
+    const tabCounters = new Map<number, typeof ZERO_TAB>();
+    for (const r of tabCounterRaw.results ?? []) {
+      tabCounters.set(r.tab_index, {
+        rows_imported: r.rows_imported | 0, rows_updated: r.rows_updated | 0,
+        rows_skipped: r.rows_skipped | 0, metrics_inserted: r.metrics_inserted | 0,
+      });
+    }
+
+    // Accumulators seeded from the persisted columns so multi-chunk imports
+    // keep a single running total across invocations.
+    const acc = {
+      imported: row.rows_imported ?? 0, firmsC: row.firms_created ?? 0, firmsU: row.firms_updated ?? 0,
+      leadsC: row.leads_created ?? 0, leadsU: row.leads_updated ?? 0,
+    };
+    let accQueued = row.queued_jobs ?? 0;
+    const phase0 = (row.import_phase ?? "rows") as string;
+    const cursorTab = row.import_cursor_tab ?? 0;
+    const cursorRow = row.import_cursor_row ?? 0;
+
     const firmIdsTouched = new Set<number>();
     /** Firm-id resolved from filename for portfolio/metrics fallback. */
     let fallbackFirmId: number | null = null;
+    const insertBuffer: D1PreparedStatement[] = [];
+    const flushLeads = async (): Promise<void> => {
+      if (insertBuffer.length) await env.DB.batch(insertBuffer.splice(0));
+    };
+    let spent = 0; // estimated subrequests consumed this invocation
+
+    // Build the running-totals + cursor UPDATE. import_attempts resets to 0 on
+    // every progress checkpoint so the watchdog only escalates true no-progress
+    // stalls. Returned as a statement so a checkpoint can batch it ATOMICALLY
+    // with the per-tab counter UPDATE — a mid-checkpoint isolate kill then can't
+    // desync the cursor from the per-tab counters.
+    const accStmt = (phase: string, ct: number, cr: number): D1PreparedStatement =>
+      env.DB.prepare(
+        `UPDATE file_imports
+            SET rows_imported = ?, firms_created = ?, firms_updated = ?,
+                leads_created = ?, leads_updated = ?, queued_jobs = ?,
+                import_phase = ?, import_cursor_tab = ?, import_cursor_row = ?,
+                import_attempts = 0, updated_at = ?
+          WHERE id = ?`,
+      ).bind(
+        acc.imported, acc.firmsC, acc.firmsU, acc.leadsC, acc.leadsU, accQueued,
+        phase, ct, cr, new Date().toISOString(), importId,
+      );
 
     // Iterate by DB tab_index so per-tab intents/maps route to the right
     // snapshot tab even if an earlier tab is empty. Fail fast if the DB
@@ -159,171 +230,113 @@ export async function processImportFile(env: Env, importId: string, opts: { jobI
     const allIndices = dbTabIndices.length
       ? dbTabIndices
       : Array.from(tablesByIdx.keys()).sort((a, b) => a - b);
-    for (const i of allIndices) {
-      const t = tablesByIdx.get(i);
-      if (!t) {
-        // DB has a tab the snapshot doesn't — refuse to misroute silently.
-        throw new Error(`tab_snapshot_missing:${i}`);
-      }
-      const tabRow = tabRows.find((r) => r.tab_index === i);
-      const intent: TabIntent = (tabRow?.intent ?? "firms") as TabIntent;
-      const subkind = tabRow?.intent_subkind ?? null;
-      const columnMap = parseMap(tabRow?.column_map_json ?? null);
-      const sum: TabSummary = {
-        index: i,
-        sheet: t.sheetName ?? tabRow?.sheet_name ?? null,
-        intent,
-        intent_subkind: subkind,
-        rows_in: t.rows.length,
-        rows_imported: 0,
-        rows_skipped: 0,
-        firms_created: 0,
-        firms_updated: 0,
-        metrics_inserted: 0,
-        leads_created: 0,
-        leads_updated: 0,
-        errors: [],
-      };
 
-      if (intent === "discard" || intent === "notes") {
-        sum.rows_skipped = t.rows.length;
-        totalSkipped += t.rows.length;
-        summaries.push(sum);
-        await persistTabResult(env, tabRow?.id, sum);
-        continue;
-      }
+    if (phase0 === "rows") {
+      for (const i of allIndices) {
+        if (i < cursorTab) continue; // completed in an earlier chunk
+        const t = tablesByIdx.get(i);
+        if (!t) {
+          // DB has a tab the snapshot doesn't — refuse to misroute silently.
+          throw new Error(`tab_snapshot_missing:${i}`);
+        }
+        const tabRow = tabRows.find((r) => r.tab_index === i);
+        const intent: TabIntent = (tabRow?.intent ?? "firms") as TabIntent;
+        const subkind = tabRow?.intent_subkind ?? null;
+        const columnMap = parseMap(tabRow?.column_map_json ?? null);
+        // Resume seeds the in-progress tab from its persisted cumulative row;
+        // later tabs start from zero.
+        const seed = (i === cursorTab) ? (tabCounters.get(i) ?? ZERO_TAB) : ZERO_TAB;
+        const sum: TabCum = {
+          rows_imported: seed.rows_imported, rows_updated: seed.rows_updated,
+          rows_skipped: seed.rows_skipped, metrics_inserted: seed.metrics_inserted, errors: [],
+        };
 
-      if (intent === "firms") {
-        for (let off = 0; off < t.rows.length; off += BATCH_SIZE) {
-          const slice = t.rows.slice(off, off + BATCH_SIZE);
-          for (const raw of slice) {
+        if (intent === "discard" || intent === "notes") {
+          sum.rows_skipped = t.rows.length;
+          await commitTabEnd(env, tabRow?.id, sum, accStmt, i);
+          continue;
+        }
+
+        const cost = intent === "leads" ? ROW_COST.leads
+          : intent === "firms" ? ROW_COST.firms : ROW_COST.metrics;
+        const startOff = (i === cursorTab) ? cursorRow : 0;
+        for (let off = startOff; off < t.rows.length; off++) {
+          // Budget exhausted → checkpoint at the CURRENT (unprocessed) row and
+          // hand off a resume job. Flush buffered lead inserts BEFORE
+          // persisting the cursor so counters never run ahead of the writes.
+          if (spent + cost > SUBREQUEST_BUDGET) {
+            await flushLeads();
+            const stmts = [tabCumStmt(env, tabRow?.id, sum), accStmt("rows", i, off)]
+              .filter((s): s is D1PreparedStatement => s != null);
+            await env.DB.batch(stmts);
+            await enqueueImportResume(env, importId);
+            return;
+          }
+          const raw = t.rows[off];
+          if (intent === "firms") {
             const projected = projectAndCoerceRow(raw, columnMap, env);
             // Force kind=gov_fund when the tab subkind says so.
             if (subkind === "gov_fund" && !projected.fields.kind) projected.fields.kind = "gov_fund";
             const r = await tryUpsertFirm(env, await projected.awaited(), sourceUrl, importedFrom);
-            if (r.action === "created") { sum.firms_created++; firmsCreatedHere++; sum.rows_imported++; }
-            else if (r.action === "updated") { sum.firms_updated++; firmsUpdatedHere++; sum.rows_imported++; }
+            if (r.action === "created") { acc.firmsC++; acc.imported++; sum.rows_imported++; }
+            else if (r.action === "updated") { acc.firmsU++; acc.imported++; sum.rows_imported++; sum.rows_updated++; }
             else if (r.action === "skip") sum.rows_skipped++;
             else if (r.action === "error") { sum.rows_skipped++; sum.errors.push(`firm:${(projected.fields.name ?? "?").slice(0, 40)}`); }
-            if (r.firmId != null) {
-              firmIdsTouched.add(r.firmId);
-              if (fallbackFirmId == null) fallbackFirmId = r.firmId;
-            }
-          }
-          await env.DB.prepare(
-            `UPDATE file_imports SET rows_imported = ?, firms_created = ?, firms_updated = ?, updated_at = ? WHERE id = ?`,
-          ).bind(
-            totalImported + sum.rows_imported,
-            totalFirmsCreated + sum.firms_created,
-            totalFirmsUpdated + sum.firms_updated,
-            new Date().toISOString(), importId,
-          ).run();
-        }
-      } else if (intent === "leads") {
-        for (let off = 0; off < t.rows.length; off += BATCH_SIZE) {
-          const slice = t.rows.slice(off, off + BATCH_SIZE);
-          const inserts: D1PreparedStatement[] = [];
-          for (const raw of slice) {
+            if (r.firmId != null) { firmIdsTouched.add(r.firmId); if (fallbackFirmId == null) fallbackFirmId = r.firmId; }
+          } else if (intent === "leads") {
             const projected = projectAndCoerceRow(raw, columnMap, env);
             const fields = (await projected.awaited()).fields;
-            const r = await tryInsertLead(env, fields, importId, importedFrom, sourceUrl, inserts);
-            if (r === "created") { sum.leads_created++; sum.rows_imported++; }
-            else if (r === "merged") { sum.leads_updated++; sum.rows_imported++; }
+            const r = await tryInsertLead(env, fields, importId, importedFrom, sourceUrl, insertBuffer);
+            if (r === "created") { acc.leadsC++; acc.imported++; sum.rows_imported++; }
+            else if (r === "merged") { acc.leadsU++; acc.imported++; sum.rows_imported++; sum.rows_updated++; }
             else if (r === "skip") sum.rows_skipped++;
             else if (r === "error") { sum.rows_skipped++; sum.errors.push(`lead:${(fields.name ?? "?").slice(0, 40)}`); }
+            if (insertBuffer.length >= BATCH_SIZE) await flushLeads();
+          } else {
+            // firm_metrics | firm_kpi | firm_geo. Resolve firm context: explicit
+            // `firms.name`/`firms.domain` columns, else firmIdsTouched, else
+            // synthesize from filename. Pass coerced numerics so $1.2M lands as
+            // 1200000 — not 1.2 — in firm_metrics.value_num.
+            const projected = await (projectAndCoerceRow(raw, columnMap, env)).awaited();
+            const { firmId, created } = await resolveFirmIdForMetric(
+              env, projected.fields, firmIdsTouched, fallbackFirmId, row.filename, sourceUrl, importedFrom);
+            if (created) acc.firmsC++;
+            if (firmId != null) { firmIdsTouched.add(firmId); if (fallbackFirmId == null) fallbackFirmId = firmId; }
+            if (firmId == null) { sum.rows_skipped++; }
+            else {
+              const ins = await insertMetricsForRow(env, firmId, projected.fields, projected.numeric, intent, sourceUrl, importedFrom);
+              sum.metrics_inserted += ins; acc.imported++; sum.rows_imported++;
+            }
           }
-          if (inserts.length) await env.DB.batch(inserts);
+          spent += cost;
         }
-      } else if (intent === "firm_metrics" || intent === "firm_kpi" || intent === "firm_geo") {
-        // Resolve firm context for metrics rows. Order: explicit `firms.name` /
-        // `firms.domain` columns on the row, else fallback to firmIdsTouched
-        // first entry, else synthesize from filename.
-        for (const raw of t.rows) {
-          const projected = await (projectAndCoerceRow(raw, columnMap, env)).awaited();
-          const firmId = await resolveFirmIdForMetric(env, projected.fields, firmIdsTouched, fallbackFirmId, row.filename, sourceUrl, importedFrom)
-            .then(({ firmId, created }) => {
-              if (created) { firmsCreatedHere++; sum.firms_created++; }
-              if (firmId != null) {
-                firmIdsTouched.add(firmId);
-                if (fallbackFirmId == null) fallbackFirmId = firmId;
-              }
-              return firmId;
-            });
-          if (firmId == null) { sum.rows_skipped++; continue; }
-          // Pass coerced numeric (k/m/b-scaled, FX→USD) values so $1.2M lands as
-          // 1200000 — not 1.2 — in firm_metrics.value_num.
-          const ins = await insertMetricsForRow(env, firmId, projected.fields, projected.numeric, intent, sourceUrl, importedFrom);
-          sum.metrics_inserted += ins;
-          sum.rows_imported++;
-        }
+        // Tab finished within budget — flush, then ATOMICALLY persist its
+        // cumulative counters AND advance the cursor past it. Doing both in one
+        // batch means an isolate kill between them can't leave the tab counted
+        // while the cursor still points inside it (which would double-count on
+        // resume).
+        await flushLeads();
+        await commitTabEnd(env, tabRow?.id, sum, accStmt, i);
       }
-      totalImported += sum.rows_imported;
-      totalFirmsCreated += sum.firms_created;
-      totalFirmsUpdated += sum.firms_updated;
-      totalMetricsInserted += sum.metrics_inserted;
-      totalLeadsCreated += sum.leads_created;
-      totalLeadsUpdated += sum.leads_updated;
-      totalSkipped += sum.rows_skipped;
-      summaries.push(sum);
-      await persistTabResult(env, tabRow?.id, sum);
     }
 
-    // Enqueue scrape jobs for every extracted URL when toggled on.
-    let queuedJobs = 0;
+    // ---- URL-scrape phase. Its own phase so a large URL set can't blow the
+    // budget the row work already spent; resumes from the persisted url offset.
+    let urlOffset = (phase0 === "urls") ? cursorRow : 0;
     if (row.scrape_urls) {
       const urlsRaw = await env.SCRAPE_CACHE.get(`upload_urls:${importId}`);
       const urls: string[] = urlsRaw ? (JSON.parse(urlsRaw) as string[]) : [];
-      for (const u of urls) {
-        const ok = await enqueueScrapeJob(env, u, importId);
-        if (ok) queuedJobs += 1;
+      for (; urlOffset < urls.length; urlOffset++) {
+        if (spent + 2 > SUBREQUEST_BUDGET) {
+          await accStmt("urls", 0, urlOffset).run();
+          await enqueueImportResume(env, importId);
+          return;
+        }
+        const ok = await enqueueScrapeJob(env, urls[urlOffset], importId);
+        if (ok) accQueued++;
+        spent += 2;
       }
     }
-
-    // Merge per-tab outcomes back into the parse-time summary so we end up
-    // with ONE canonical schema (no separate tabs_outcome/totals object).
-    // Required per-tab keys: name, intent, rows_seen, rows_imported,
-    // rows_updated, rows_rejected, low_confidence_cells, ocr_disagreements.
-    // Required aggregate keys: newFirms, updatedFirms, newCompanies,
-    // urlsExtracted, jobsQueued, warnings.
-    const existingSummaryRaw = await env.DB.prepare("SELECT summary_json FROM file_imports WHERE id = ?")
-      .bind(importId).first<{ summary_json: string | null }>();
-    let merged: Record<string, unknown> = {};
-    try { if (existingSummaryRaw?.summary_json) merged = JSON.parse(existingSummaryRaw.summary_json) as Record<string, unknown>; } catch { /* ignore */ }
-    type ParseTab = { index: number; sheet?: string | null; intent?: string;
-      rows_seen?: number; rows_imported?: number; rows_updated?: number;
-      rows_rejected?: number; low_confidence_cells?: number; ocr_disagreements?: number };
-    const parseTabs: ParseTab[] = Array.isArray(merged.tabs) ? (merged.tabs as ParseTab[]) : [];
-    // TabSummary uses `index` (not `tab_index`) — must match the parse-time
-    // tabs[].index so per-tab counters land correctly.
-    const byIdx = new Map<number, TabSummary>();
-    for (const s of summaries) byIdx.set(s.index, s);
-    for (const t of parseTabs) {
-      const s = byIdx.get(t.index);
-      t.rows_imported = s?.rows_imported ?? 0;
-      t.rows_updated = (s?.firms_updated ?? 0) + (s?.leads_updated ?? 0);
-      t.rows_rejected = s?.rows_skipped ?? 0;
-      t.rows_seen = t.rows_seen ?? 0;
-      t.low_confidence_cells = t.low_confidence_cells ?? 0;
-      t.ocr_disagreements = t.ocr_disagreements ?? 0;
-    }
-    merged.tabs = parseTabs;
-    // Aggregate totals (canonical names per acceptance contract).
-    const urlsRaw = await env.SCRAPE_CACHE.get(`upload_urls:${importId}`);
-    const urlsExtracted = urlsRaw ? (JSON.parse(urlsRaw) as string[]).length : 0;
-    const warnings = summaries.flatMap((s) => s.errors).slice(0, 50);
-    merged.newFirms = totalFirmsCreated;
-    merged.updatedFirms = totalFirmsUpdated;
-    merged.newCompanies = 0;
-    merged.urlsExtracted = urlsExtracted;
-    merged.jobsQueued = queuedJobs;
-    merged.warnings = warnings;
-    merged.rows_imported_total = totalImported;
-    // Aggregate matches per-tab semantics (firms + leads updates).
-    merged.rows_updated_total = totalFirmsUpdated + totalLeadsUpdated;
-    merged.rows_rejected_total = totalSkipped;
-    merged.metrics_inserted = totalMetricsInserted;
-    merged.leads_created = totalLeadsCreated;
-    merged.leads_updated = totalLeadsUpdated;
 
     // Final-boundary cancellation gate: if the operator cancelled this
     // job mid-run (e.g. via /confirm-map?force=1 enqueuing a replacement),
@@ -338,23 +351,7 @@ export async function processImportFile(env: Env, importId: string, opts: { jobI
         .first<{ status: string }>();
       if (job?.status === "cancelled") return;
     }
-    const errFlat = summaries.flatMap((s) => s.errors).slice(0, 20).join("; ");
-    await env.DB.prepare(
-      `UPDATE file_imports
-         SET status = 'done',
-             rows_imported = ?, firms_created = ?, firms_updated = ?,
-             leads_created = ?, leads_updated = ?, queued_jobs = ?,
-             summary_json = ?,
-             error = CASE WHEN ? = '' THEN NULL ELSE ? END,
-             updated_at = ?
-       WHERE id = ?`,
-    ).bind(
-      totalImported, totalFirmsCreated, totalFirmsUpdated,
-      totalLeadsCreated, totalLeadsUpdated, queuedJobs,
-      JSON.stringify(merged),
-      errFlat, errFlat,
-      new Date().toISOString(), importId,
-    ).run();
+    await finalizeImport(env, importId, acc, accQueued);
   } catch (e) {
     await env.DB.prepare(
       "UPDATE file_imports SET status = 'error', error = ?, updated_at = ? WHERE id = ?",
@@ -363,11 +360,180 @@ export async function processImportFile(env: Env, importId: string, opts: { jobI
   }
 }
 
-async function persistTabResult(env: Env, tabId: string | undefined, s: TabSummary): Promise<void> {
-  if (!tabId) return;
+/** Build a tab's CUMULATIVE-counter UPDATE (across chunks). error uses
+ *  COALESCE(NULLIF(...)) so a later no-error chunk doesn't wipe an earlier
+ *  chunk's recorded errors. Returns null when there is no tab row id. */
+function tabCumStmt(env: Env, tabId: string | undefined, s: TabCum): D1PreparedStatement | null {
+  if (!tabId) return null;
+  const errStr = s.errors.length ? s.errors.slice(0, 5).join("; ").slice(0, 500) : "";
+  return env.DB.prepare(
+    `UPDATE file_import_tabs
+        SET rows_imported = ?, rows_updated = ?, rows_skipped = ?, metrics_inserted = ?,
+            error = COALESCE(NULLIF(?, ''), error)
+      WHERE id = ?`,
+  ).bind(s.rows_imported, s.rows_updated, s.rows_skipped, s.metrics_inserted, errStr, tabId);
+}
+
+/** Commit a finished tab: write its cumulative counters AND advance the cursor
+ *  past it (to the next tab, row 0) in ONE atomic D1 batch. `accStmt` carries
+ *  the live top-level accumulators, so totals + cursor + per-tab counters all
+ *  move together — an isolate kill mid-commit can never desync them. */
+async function commitTabEnd(
+  env: Env,
+  tabId: string | undefined,
+  s: TabCum,
+  accStmt: (phase: string, ct: number, cr: number) => D1PreparedStatement,
+  tabIndex: number,
+): Promise<void> {
+  const stmts = [tabCumStmt(env, tabId, s), accStmt("rows", tabIndex + 1, 0)]
+    .filter((stmt): stmt is D1PreparedStatement => stmt != null);
+  await env.DB.batch(stmts);
+}
+
+/** Re-enqueue an import_file job to resume a chunked import from its persisted
+ *  cursor. The jobs row is inserted 'queued' BEFORE the queue send; if the send
+ *  fails we immediately mark that orphan job 'failed' so sweepStuckImports does
+ *  NOT mistake it for an in-flight chunk (which would deadlock the import in
+ *  'importing' forever). On a clean failure the watchdog re-enqueues next sweep. */
+async function enqueueImportResume(env: Env, importId: string): Promise<void> {
+  const jobId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO jobs (id, name, source, status, kind, target, config_json, started_at, created_at)
+       VALUES (?, ?, ?, 'queued', 'import_file', ?, ?, ?, ?)`,
+    ).bind(jobId, `import_file:resume:${importId}`, "upload", importId, JSON.stringify({ importId, resume: true }), now, now).run();
+  } catch (e) {
+    console.warn("enqueueImportResume insert failed", importId, (e as Error).message);
+    return; // no orphan row created; watchdog recovers later
+  }
+  try {
+    const msg: JobMessage = { jobId, kind: "import_file", target: importId, config: { importId, resume: true } };
+    await env.LEAD_QUEUE.send(msg);
+  } catch (e) {
+    console.warn("enqueueImportResume send failed", importId, (e as Error).message);
+    // Demote the never-delivered job so the watchdog's active-job check skips it.
+    await env.DB.prepare(
+      "UPDATE jobs SET status = 'failed', error = ?, finished_at = ? WHERE id = ? AND status = 'queued'",
+    ).bind("queue_send_failed", now, jobId).run().catch(() => {});
+  }
+}
+
+/** Finalize a completed import: rebuild summary_json purely from the per-tab DB
+ *  rows (so it is correct no matter how many chunks contributed), set the
+ *  canonical aggregate totals from the persisted accumulators, and flip the row
+ *  to 'done' while clearing the resume cursor. */
+async function finalizeImport(
+  env: Env, importId: string,
+  acc: { imported: number; firmsC: number; firmsU: number; leadsC: number; leadsU: number },
+  accQueued: number,
+): Promise<void> {
+  const tabAggRaw = await env.DB
+    .prepare("SELECT tab_index, rows_imported, rows_updated, rows_skipped, metrics_inserted, error FROM file_import_tabs WHERE import_id = ?")
+    .bind(importId)
+    .all<{ tab_index: number; rows_imported: number; rows_updated: number; rows_skipped: number; metrics_inserted: number; error: string | null }>();
+  const tabAgg = tabAggRaw.results ?? [];
+  let totalSkipped = 0, totalMetrics = 0;
+  const byIdx = new Map<number, { rows_imported: number; rows_updated: number; rows_skipped: number }>();
+  const warnings: string[] = [];
+  for (const t of tabAgg) {
+    totalSkipped += t.rows_skipped | 0;
+    totalMetrics += t.metrics_inserted | 0;
+    byIdx.set(t.tab_index, { rows_imported: t.rows_imported | 0, rows_updated: t.rows_updated | 0, rows_skipped: t.rows_skipped | 0 });
+    if (t.error) warnings.push(String(t.error));
+  }
+
+  const existingSummaryRaw = await env.DB.prepare("SELECT summary_json FROM file_imports WHERE id = ?")
+    .bind(importId).first<{ summary_json: string | null }>();
+  let merged: Record<string, unknown> = {};
+  try { if (existingSummaryRaw?.summary_json) merged = JSON.parse(existingSummaryRaw.summary_json) as Record<string, unknown>; } catch { /* ignore */ }
+  const parseTabs: ParseTab[] = Array.isArray(merged.tabs) ? (merged.tabs as ParseTab[]) : [];
+  for (const t of parseTabs) {
+    const s = byIdx.get(t.index);
+    t.rows_imported = s?.rows_imported ?? 0;
+    t.rows_updated = s?.rows_updated ?? 0;
+    t.rows_rejected = s?.rows_skipped ?? 0;
+    t.rows_seen = t.rows_seen ?? 0;
+    t.low_confidence_cells = t.low_confidence_cells ?? 0;
+    t.ocr_disagreements = t.ocr_disagreements ?? 0;
+  }
+  merged.tabs = parseTabs;
+  const urlsRaw = await env.SCRAPE_CACHE.get(`upload_urls:${importId}`);
+  const urlsExtracted = urlsRaw ? (JSON.parse(urlsRaw) as string[]).length : 0;
+  merged.newFirms = acc.firmsC;
+  merged.updatedFirms = acc.firmsU;
+  merged.newCompanies = 0;
+  merged.urlsExtracted = urlsExtracted;
+  merged.jobsQueued = accQueued;
+  merged.warnings = warnings.slice(0, 50);
+  merged.rows_imported_total = acc.imported;
+  merged.rows_updated_total = acc.firmsU + acc.leadsU;
+  merged.rows_rejected_total = totalSkipped;
+  merged.metrics_inserted = totalMetrics;
+  merged.leads_created = acc.leadsC;
+  merged.leads_updated = acc.leadsU;
+
+  const errFlat = warnings.slice(0, 20).join("; ");
   await env.DB.prepare(
-    `UPDATE file_import_tabs SET rows_imported = ?, rows_skipped = ?, error = ? WHERE id = ?`,
-  ).bind(s.rows_imported, s.rows_skipped, s.errors.length ? s.errors.slice(0, 5).join("; ").slice(0, 500) : null, tabId).run();
+    `UPDATE file_imports
+       SET status = 'done',
+           rows_imported = ?, firms_created = ?, firms_updated = ?,
+           leads_created = ?, leads_updated = ?, queued_jobs = ?,
+           summary_json = ?,
+           error = CASE WHEN ? = '' THEN NULL ELSE ? END,
+           import_phase = 'done', import_cursor_tab = 0, import_cursor_row = 0,
+           import_attempts = 0, updated_at = ?
+     WHERE id = ?`,
+  ).bind(
+    acc.imported, acc.firmsC, acc.firmsU, acc.leadsC, acc.leadsU, accQueued,
+    JSON.stringify(merged), errFlat, errFlat, new Date().toISOString(), importId,
+  ).run();
+}
+
+/** Task #63 watchdog: recover legacy file imports stuck in 'importing'. A row
+ *  is "stuck" when status='importing', it hasn't been touched in >10 min, and
+ *  no import_file job is queued/running for it (so no chunk is in flight).
+ *  Re-enqueue a resume job (which continues from the persisted cursor); after
+ *  MAX_WATCHDOG_RECOVERIES with no progress (import_attempts is reset to 0 by
+ *  every successful chunk checkpoint) give up and mark the row 'error'. */
+export async function sweepStuckImports(env: Env): Promise<{ resumed: number; failed: number }> {
+  const cutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const rows = await env.DB
+    .prepare("SELECT id, import_attempts FROM file_imports WHERE status = 'importing' AND updated_at < ?")
+    .bind(cutoff)
+    .all<{ id: string; import_attempts: number | null }>();
+  let resumed = 0, failed = 0;
+  for (const r of rows.results ?? []) {
+    // Only a RECENT import_file job counts as in-flight. The import row is
+    // already >10 min stale (filtered above) and a live chunk refreshes
+    // updated_at on every checkpoint, so a queued/running job started before the
+    // cutoff is an orphan (e.g. a worker that died between the jobs INSERT and
+    // the queue send, leaving a 'queued' row that was never delivered). Treating
+    // those as active would deadlock the import in 'importing' forever.
+    const active = await env.DB
+      .prepare("SELECT 1 FROM jobs WHERE target = ? AND kind = 'import_file' AND status IN ('queued','running') AND started_at >= ? LIMIT 1")
+      .bind(r.id, cutoff)
+      .first();
+    if (active) continue; // a chunk is still in flight
+    const now = new Date().toISOString();
+    // Demote any stale orphan jobs so they don't linger / re-trip the check.
+    await env.DB.prepare(
+      "UPDATE jobs SET status = 'failed', error = 'import_orphan_stale', finished_at = ? WHERE target = ? AND kind = 'import_file' AND status IN ('queued','running') AND started_at < ?",
+    ).bind(now, r.id, cutoff).run().catch(() => {});
+    if ((r.import_attempts ?? 0) >= MAX_WATCHDOG_RECOVERIES) {
+      await env.DB.prepare(
+        "UPDATE file_imports SET status = 'error', error = ?, updated_at = ? WHERE id = ? AND status = 'importing'",
+      ).bind(`import_stalled: exceeded ${MAX_WATCHDOG_RECOVERIES} recovery attempts`, now, r.id).run();
+      failed++;
+      continue;
+    }
+    await env.DB.prepare(
+      "UPDATE file_imports SET import_attempts = import_attempts + 1, updated_at = ? WHERE id = ? AND status = 'importing'",
+    ).bind(now, r.id).run();
+    await enqueueImportResume(env, r.id);
+    resumed++;
+  }
+  return { resumed, failed };
 }
 
 function parseMap(raw: string | null): Record<string, MappedField | null> {

@@ -254,6 +254,23 @@ uploads.post("/:id/confirm-map", async (c) => {
   binds.push(id);
   await c.env.DB.prepare(`UPDATE file_imports SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
 
+  // Task #63: a (re-)confirm starts a FRESH import — reset the resume cursor,
+  // attempts, and all running counters on the parent + every tab so the
+  // chunked processor begins from row 0 and doesn't double-count against a
+  // prior partial run.
+  const resetNow = new Date().toISOString();
+  await c.env.DB.prepare(
+    `UPDATE file_imports
+        SET import_phase = 'rows', import_cursor_tab = 0, import_cursor_row = 0, import_attempts = 0,
+            rows_imported = 0, firms_created = 0, firms_updated = 0,
+            leads_created = 0, leads_updated = 0, queued_jobs = 0,
+            updated_at = ?
+      WHERE id = ?`,
+  ).bind(resetNow, id).run();
+  await c.env.DB.prepare(
+    "UPDATE file_import_tabs SET rows_imported = 0, rows_updated = 0, rows_skipped = 0, metrics_inserted = 0, error = NULL WHERE import_id = ?",
+  ).bind(id).run();
+
   const jobId = crypto.randomUUID();
   const now = new Date().toISOString();
   try {
@@ -443,6 +460,23 @@ uploads.post("/:id/retry", async (c) => {
   const kind: JobKind = lastJob?.kind === "import_file" ? "import_file" : "parse_file";
   const nextStatus = kind === "import_file" ? "mapped" : "uploaded";
   const priorStatus = row.status;
+  // Task #63: an import_file retry restarts the import from scratch — clear the
+  // resume cursor, attempts, and all running counters (parent + tabs) so the
+  // chunked processor begins fresh and doesn't double-count a prior partial run.
+  if (kind === "import_file") {
+    const resetNow = new Date().toISOString();
+    await c.env.DB.prepare(
+      `UPDATE file_imports
+          SET import_phase = 'rows', import_cursor_tab = 0, import_cursor_row = 0, import_attempts = 0,
+              rows_imported = 0, firms_created = 0, firms_updated = 0,
+              leads_created = 0, leads_updated = 0, queued_jobs = 0,
+              updated_at = ?
+        WHERE id = ?`,
+    ).bind(resetNow, id).run();
+    await c.env.DB.prepare(
+      "UPDATE file_import_tabs SET rows_imported = 0, rows_updated = 0, rows_skipped = 0, metrics_inserted = 0, error = NULL WHERE import_id = ?",
+    ).bind(id).run();
+  }
   // Insert the audit row + flip status FIRST, then attempt the queue
   // send. If the send throws we revert the import status back to its
   // prior terminal state and surface the failure, so the operator can
