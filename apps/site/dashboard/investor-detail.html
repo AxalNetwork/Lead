@@ -4,7 +4,7 @@ title: Investor
 permalink: /dashboard/investors/detail/
 ---
 
-<link rel="stylesheet" href="/assets/css/investor-tabs.css">
+<link rel="stylesheet" href="/assets/css/investor-tabs.css?v={{ site.time | date: '%s' }}">
 <div id="ads-investor-detail-root">
   <p><a href="/dashboard/investors/">&larr; All investors</a></p>
   <div id="ads-investor-detail"><div class="ads-loading">Loading…</div></div>
@@ -14,7 +14,7 @@ permalink: /dashboard/investors/detail/
 {% include components/embedded-profile.html table="investors" %}
 {% include components/embedded-term-aggressiveness.html %}
 
-<script src="/assets/js/investors.js"></script>
+<script src="/assets/js/investors.js?v={{ site.time | date: '%s' }}"></script>
 <script src="/assets/js/field-edit.js?v={{ site.time | date: '%s' }}"></script>
 <script src="/assets/js/citation-pills.js?v={{ site.time | date: '%s' }}" defer></script>
 <script>document.addEventListener("DOMContentLoaded", function(){

@@ -18,7 +18,7 @@ permalink: /dashboard/osint-candidates/
   <div class="ads-loading">Loading…</div>
 </div>
 
-<script src="/assets/js/osint.js"></script>
+<script src="/assets/js/osint.js?v={{ site.time | date: '%s' }}"></script>
 <script>
 (function () {
   if (window.ADSOsint) window.ADSOsint.renderCandidates("ads-osint-candidates");

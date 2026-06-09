@@ -8,5 +8,5 @@ permalink: /dashboard/vintage-benchmarks/snapshot/
   <p class="ads-sub">Immutable view, hydrated from stored payload. No live re-query.</p>
   {% include charts/snapshot_viewer.html %}
 </section>
-<script src="/assets/js/dashboards.js"></script>
-<script src="/assets/js/snapshot-viewer.js"></script>
+<script src="/assets/js/dashboards.js?v={{ site.time | date: '%s' }}"></script>
+<script src="/assets/js/snapshot-viewer.js?v={{ site.time | date: '%s' }}"></script>
