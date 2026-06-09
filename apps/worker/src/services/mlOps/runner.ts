@@ -235,8 +235,8 @@ function computeMetrics(task: TaskKey, preds: { predicted: unknown; gold: unknow
     let brier: ReturnType<typeof calibrationMetrics> | null = null;
     if (preds.some((p) => typeof p.probability === "number")) {
       brier = calibrationMetrics(preds.map((p) => ({
-        predicted: typeof p.probability === "number" ? p.probability : (Boolean((p.predicted as { supported?: boolean })?.supported) ? 1 : 0),
-        actual: (Boolean((p.gold as { supported?: boolean })?.supported) ? 1 : 0) as 0 | 1,
+        predicted: typeof p.probability === "number" ? p.probability : ((p.predicted as { supported?: boolean })?.supported ? 1 : 0),
+        actual: ((p.gold as { supported?: boolean })?.supported ? 1 : 0) as 0 | 1,
       })));
     }
     return { ...pr, ...(brier ? { brier: brier.brier, log_loss: brier.log_loss } : {}) } as Record<string, unknown>;

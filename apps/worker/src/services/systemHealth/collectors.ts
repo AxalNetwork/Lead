@@ -158,12 +158,9 @@ export function nodeStatus(n: {
 
 // ---------- queues ----------------------------------------------------------
 
-const KNOWN_QUEUES = [
-  "aidatasignal-lead-jobs",
-  "csv_imports",
-  "crawl_frontier",
-  "smart_frontier",
-] as const;
+// Known queues (for reference): aidatasignal-lead-jobs, csv_imports,
+// crawl_frontier, smart_frontier. The live queue list is built in
+// collectQueues below.
 
 export async function collectQueues(env: Env): Promise<QueueCard[]> {
   // jobs table is the canonical job queue (Task #2 stuck-job sweep
@@ -259,7 +256,6 @@ export async function collectQueues(env: Env): Promise<QueueCard[]> {
     }, [] as Array<{ bucket_start: string; value: number }>);
     card.sparkline = sp.map((p) => ({ bucket: p.bucket_start, depth: Number(p.value ?? 0) }));
   }
-  KNOWN_QUEUES; // referenced for documentation; queue list is built above
   return out;
 }
 
