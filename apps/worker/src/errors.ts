@@ -326,7 +326,22 @@ export function classify(err: unknown): { code: ErrCode; kind: ErrorKind; retrya
     return { code: "parse_error", kind: "validation", retryable: false };
   }
   if (msg.startsWith("fetch_failed:") || msg.includes(":fetch_failed:")) {
-    // Generic fetch_failed without a more specific token → upstream/permanent.
+    // Task #71: a `fetch_failed:` message can carry an embedded upstream HTTP
+    // status (e.g. "fetch_failed:status_429:status=429"). A 429 rate-limit and
+    // any 5xx are TRANSIENT — the page is fine, the upstream is just briefly
+    // refusing — so they must retry with backoff, not get dropped as a
+    // permanent scrape block on attempt 1. Parse the embedded status BEFORE the
+    // generic permanent fallback. A genuine 4xx (403/404/...) or a
+    // fetch_failed with no recoverable status still resolves to permanent
+    // scrape_blocked (prior behavior preserved). The dedicated scrape sentinels
+    // (robots/tos/gated/config) matched above stay permanent regardless.
+    const embedded = msg.match(/status[_=: ]\s*(\d{3})/) ?? msg.match(/\b(4\d{2}|5\d{2})\b/);
+    if (embedded) {
+      const s = Number(embedded[1]);
+      if (s === 429) return { code: "rate_limited", kind: "transient", retryable: true };
+      if (s >= 500) return { code: "fetch.http_5xx", kind: "transient", retryable: true };
+    }
+    // Generic fetch_failed without a recoverable status → upstream/permanent.
     return { code: "scrape_blocked", kind: "permanent", retryable: false };
   }
 
