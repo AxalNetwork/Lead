@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "fflate": "^0.8.2",
-    "hono": "^4.6.14",
+    "hono": "^4.12.25",
     "pdfjs-dist": "^4.10.38",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
