@@ -22,7 +22,7 @@
   var API = window.adsApiBase;
   function api(path, opts) {
     var fn = window.adsApiFetch || function (p, o) {
-      return fetch(API + p, Object.assign({ credentials: "include" }, o || {})).then(function (r) {
+      return window.adsUtil.request(API + p, Object.assign({ credentials: "include" }, o || {})).then(function (r) {
         if (!r.ok) return r.json().then(function (j) { var e = new Error(j.message || ("HTTP " + r.status)); e.body = j; throw e; }, function () { throw new Error("HTTP " + r.status); });
         return r.json();
       });
@@ -386,7 +386,7 @@
     function runExport(ids, extra) {
       var idem = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
       var body = Object.assign({ entity_ids: ids }, extra || {});
-      fetch(API + "/api/bulk/export", {
+      window.adsUtil.request(API + "/api/bulk/export", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json", "Idempotency-Key": idem },

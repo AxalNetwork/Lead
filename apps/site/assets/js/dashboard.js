@@ -277,7 +277,7 @@
       tellMsg("Uploading " + file.name + " (" + Math.round(file.size / 1024) + " KB)…", "warn");
       var fd = new FormData(); fd.append("file", file);
       try {
-        var res = await fetch(API_BASE + "/api/uploads", { method: "POST", credentials: "include", body: fd });
+        var res = await window.adsUtil.request(API_BASE + "/api/uploads", { method: "POST", credentials: "include", body: fd });
         if (!res.ok) throw new Error(await res.text() || ("HTTP " + res.status));
         var row = await res.json();
         current.id = row.id;
@@ -294,7 +294,7 @@
       var loop = async function () {
         tries += 1;
         try {
-          var res = await fetch(API_BASE + "/api/uploads/" + current.id, { credentials: "include" });
+          var res = await window.adsUtil.request(API_BASE + "/api/uploads/" + current.id, { credentials: "include" });
           if (!res.ok) throw new Error("HTTP " + res.status);
           var data = await res.json();
           if (data.status === "mapped") return showMapping(data);
@@ -517,7 +517,7 @@
       rerunBtn.addEventListener("click", async function () {
         rerunMsg.textContent = "Re-running…"; rerunMsg.style.color = "#666";
         try {
-          var res = await fetch(API_BASE + "/api/uploads/" + current.id + "/rerun", {
+          var res = await window.adsUtil.request(API_BASE + "/api/uploads/" + current.id + "/rerun", {
             method: "POST", credentials: "include",
             body: JSON.stringify({ skip_ocr: true }),
           });
@@ -536,7 +536,7 @@
       diffBtn.addEventListener("click", async function () {
         diffOut.innerHTML = '<em style="color:#666">Computing…</em>';
         try {
-          var res = await fetch(API_BASE + "/api/uploads/" + current.id + "/diff-preview", {
+          var res = await window.adsUtil.request(API_BASE + "/api/uploads/" + current.id + "/diff-preview", {
             method: "POST", credentials: "include",
             body: "{}",
           });
@@ -595,7 +595,7 @@
               column_map: t.column_map,
             };
           });
-          var res = await fetch(API_BASE + "/api/uploads/" + current.id + "/save-template", {
+          var res = await window.adsUtil.request(API_BASE + "/api/uploads/" + current.id + "/save-template", {
             method: "POST", credentials: "include",
             body: JSON.stringify({ name: name, tabs: tabsPayload }),
           });
@@ -683,7 +683,7 @@
         tabs: tabsPayload,
       };
       var url = API_BASE + "/api/uploads/" + current.id + "/confirm-map" + (force ? "?force=1" : "");
-      var res = await fetch(url, {
+      var res = await window.adsUtil.request(url, {
         method: "POST", credentials: "include",
         body: JSON.stringify(body),
       });
@@ -740,7 +740,7 @@
       stopPoll();
       var loop = async function () {
         try {
-          var res = await fetch(API_BASE + "/api/uploads/" + current.id, { credentials: "include" });
+          var res = await window.adsUtil.request(API_BASE + "/api/uploads/" + current.id, { credentials: "include" });
           if (!res.ok) throw new Error("HTTP " + res.status);
           var d = await res.json();
           var imported = d.rows_imported || 0;
@@ -1113,7 +1113,7 @@
 
   function loadExportMenu() {
     var menu = document.getElementById("ads-export-menu");
-    fetch(API_BASE + "/api/exports/templates", { credentials: "include" })
+    window.adsUtil.request(API_BASE + "/api/exports/templates", { credentials: "include" })
       .then(function (r) { return r.json(); })
       .then(function (data) {
         var items = (data && data.items) || [];
@@ -1146,7 +1146,7 @@
           b.addEventListener("click", async function (e) {
             e.preventDefault(); e.stopPropagation();
             if (!(await window.ADS.ui.confirm({ title: "Delete export template?", body: "This template will no longer appear in the export menu.", confirmLabel: "Delete", danger: true }))) return;
-            fetch(API_BASE + "/api/exports/templates/" + b.dataset.id, { method: "DELETE", credentials: "include" })
+            window.adsUtil.request(API_BASE + "/api/exports/templates/" + b.dataset.id, { method: "DELETE", credentials: "include" })
               .then(function () { loadExportMenu(); });
           });
         });
@@ -1264,7 +1264,7 @@
   }
 
   function postExportDownload(payload) {
-    return fetch(API_BASE + "/api/exports/csv", {
+    return window.adsUtil.request(API_BASE + "/api/exports/csv", {
       method: "POST",
       credentials: "include",
       body: JSON.stringify(payload),
@@ -1288,7 +1288,7 @@
     if (!exportState.selected.length) { document.getElementById("ads-export-msg").textContent = "Add at least one column."; return; }
     var payload = buildModalPayload();
     payload.name = name;
-    fetch(API_BASE + "/api/exports/templates", {
+    window.adsUtil.request(API_BASE + "/api/exports/templates", {
       method: "POST", credentials: "include",
       body: JSON.stringify(payload),
     }).then(function (r) {

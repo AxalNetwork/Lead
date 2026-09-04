@@ -87,7 +87,7 @@ permalink: /dashboard/politicians/
       var countEl = document.getElementById("ads-pol-count");
       host.innerHTML = '<div class="ads-loading">Loading…</div>';
       try {
-        var r = await fetch(API + "/api/profile/politicians?" + p.toString(), { credentials: "include" });
+        var r = await window.adsUtil.request(API + "/api/profile/politicians?" + p.toString(), { credentials: "include" });
         if (!r.ok) throw new Error("HTTP " + r.status);
         var data = await r.json();
         var items = data.items || [];

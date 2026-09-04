@@ -9,7 +9,7 @@
     });
   }
   function api(path, opts) {
-    return fetch(API + path, Object.assign({}, OPTS, opts || {})).then(function (r) {
+    return window.adsUtil.request(API + path, Object.assign({}, OPTS, opts || {})).then(function (r) {
       if (!r.ok) return r.text().then(function (t) { throw new Error("HTTP " + r.status + ": " + t.slice(0, 200)); });
       return r.json();
     });

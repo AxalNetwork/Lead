@@ -24,7 +24,9 @@ export const investors = new Hono<{ Bindings: Env; Variables: { email: string } 
 
 const PROFILE_TTL_SEC = 300;
 const INVESTOR_KINDS = new Set(["gp", "angel", "operator", "lp", "scout", "principal", "associate"]);
-const INVESTORS_SORTABLE: Record<string, string> = {
+// Prototype-free map: a plain object literal would resolve `?sort_by=constructor`
+// (or toString/__proto__) to an inherited function and crash the ORDER BY.
+const INVESTORS_SORTABLE: Record<string, string> = Object.assign(Object.create(null) as Record<string, string>, {
   name: "l.name",
   investor_kind: "l.investor_kind",
   org: "l.org",
@@ -32,7 +34,7 @@ const INVESTORS_SORTABLE: Record<string, string> = {
   investment_count: "l.investment_count",
   unicorn_count: "l.unicorn_count",
   avg_check_usd: "l.avg_check_usd",
-};
+});
 interface InvestorRow {
   id: string;
   name: string | null;

@@ -29,15 +29,23 @@ export async function insertFact(env: Env, f: FactInput): Promise<string | null>
   // the diff strip can show the AI/scrape attempt) but stamped with
   // superseded_by_override=1 so it never wins the read race. The override
   // layer overlays at read time via getEffectiveFacts.
-  const lock = await env.DB.prepare(
-    `SELECT 1 FROM field_overrides
-      WHERE entity_id = ? AND predicate = ? AND locked = 1
-        AND (unlock_after IS NULL OR unlock_after > datetime('now'))
-      LIMIT 1`,
-  ).bind(f.entity_id, f.predicate).first().catch(async (e) => {
-    await logError(env, { err: e, step: "facts.insertFact.override_lock_check" });
-    return null;
-  });
+  // Wrapped in try/catch (not just `.catch`) so a missing `field_overrides`
+  // table — fresh install ahead of migration 376, or a minimal test DB whose
+  // prepare() throws synchronously — is logged and degrades to "no lock"
+  // instead of failing the fact write.
+  const lock = await (async () => {
+    try {
+      return await env.DB.prepare(
+        `SELECT 1 FROM field_overrides
+          WHERE entity_id = ? AND predicate = ? AND locked = 1
+            AND (unlock_after IS NULL OR unlock_after > datetime('now'))
+          LIMIT 1`,
+      ).bind(f.entity_id, f.predicate).first();
+    } catch (e) {
+      await logError(env, { err: e, step: "facts.insertFact.override_lock_check" });
+      return null;
+    }
+  })();
   const supersededByOverride = lock ? 1 : 0;
   try {
     await env.DB.prepare(

@@ -51,7 +51,9 @@ export async function sweepStuckJobs(env: Env): Promise<number> {
     `SELECT id, kind, budget_ms, running_started_at
        FROM jobs
       WHERE status = 'running'
-        AND running_started_at IS NOT NULL`,
+        AND running_started_at IS NOT NULL
+      ORDER BY running_started_at ASC
+      LIMIT 200`,
   ).all<{ id: string; kind: string | null; budget_ms: number | null; running_started_at: string }>();
   const overdue: Array<{ id: string; kind: string | null }> = [];
   for (const row of candidates.results ?? []) {

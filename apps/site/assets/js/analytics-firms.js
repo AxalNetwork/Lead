@@ -25,7 +25,7 @@
   };
 
   function api(path) {
-    return fetch(API_BASE + path, { credentials: "include" }).then(function (r) {
+    return window.adsUtil.request(API_BASE + path, { credentials: "include" }).then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     });

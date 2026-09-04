@@ -256,6 +256,8 @@
     "src/services/systemHealth/probes.ts",
     "src/ai/search_sync.ts",
     "src/routes/valuation.ts",
-    "src/prospects/repo.ts"
+    "src/prospects/repo.ts",
+    "src/middleware/simple_request.ts",
+    "src/middleware/pagination.ts"
   ]
 }

@@ -95,11 +95,11 @@ permalink: /dashboard/profile/
       }).join("") + '</tbody></table>';
     }
   }
-  fetch(apiBase + "/api/persons/" + encodeURIComponent(entity) + "/verifications", { credentials: "include" })
+  window.adsUtil.request(apiBase + "/api/persons/" + encodeURIComponent(entity) + "/verifications", { credentials: "include" })
     .then(function (r) { if (!r.ok) throw new Error("forbidden"); return r.json(); })
     .then(function (body) { vfBody = body; vfOk = true; maybeReveal(); })
     .catch(function () { /* keep section hidden on 401/403/error */ });
-  fetch(apiBase + "/api/persons/" + encodeURIComponent(entity) + "/references", { credentials: "include" })
+  window.adsUtil.request(apiBase + "/api/persons/" + encodeURIComponent(entity) + "/references", { credentials: "include" })
     .then(function (r) { if (!r.ok) throw new Error("forbidden"); return r.json(); })
     .then(function (body) { refBody = body; refOk = true; maybeReveal(); })
     .catch(function () { /* keep section hidden on 401/403/error */ });
@@ -142,7 +142,7 @@ permalink: /dashboard/profile/
   // Pre-flight: only reveal the section if the API responds 2xx to a
   // probe. We use the read-only /api/intros/by-target endpoint for
   // this because it's idempotent and gated by the same access guard.
-  fetch(apiBase + "/api/intros/by-target/" + encodeURIComponent(entity) + "?limit=1", { credentials: "include" })
+  window.adsUtil.request(apiBase + "/api/intros/by-target/" + encodeURIComponent(entity) + "?limit=1", { credentials: "include" })
     .then(function (r) { if (!r.ok) throw new Error("forbidden"); return r.json(); })
     .then(function () { section.hidden = false; })
     .catch(function () { /* keep hidden on 401/403 */ });
@@ -184,7 +184,7 @@ permalink: /dashboard/profile/
         var stat = resEl.querySelector('.ads-intros-req-status[data-for="' + pid + '"]');
         b.disabled = true;
         stat.textContent = "logging…";
-        fetch(apiBase + "/api/intros/" + encodeURIComponent(pid) + "/log-outcome", {
+        window.adsUtil.request(apiBase + "/api/intros/" + encodeURIComponent(pid) + "/log-outcome", {
           method: "POST", credentials: "include",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ status: "requested" }),
@@ -199,7 +199,7 @@ permalink: /dashboard/profile/
     var ask = (askEl.value || "").trim();
     btn.disabled = true;
     resEl.innerHTML = '<div class="ads-loading">Finding paths…</div>';
-    fetch(apiBase + "/api/intros/find", {
+    window.adsUtil.request(apiBase + "/api/intros/find", {
       method: "POST", credentials: "include",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ target_entity_id: entity, ask_context: ask, max_paths: 3 }),

@@ -231,7 +231,7 @@ permalink: /dashboard/predictions/
   }
 
   var ADS_API = (window.ADS && window.ADS.API_BASE);
-  fetch(ADS_API + "/api/predictions/summary?limit=50", { credentials: "include" })
+  window.adsUtil.request(ADS_API + "/api/predictions/summary?limit=50", { credentials: "include" })
     .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
     .then(function (data) {
       renderStrip(data);

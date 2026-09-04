@@ -55,7 +55,7 @@
     if (!ids.length) return Promise.resolve({});
     var url = API + "/api/dd/scores/by-ref?table=" + encodeURIComponent(table)
       + "&ids=" + encodeURIComponent(ids.join(","));
-    return fetch(url, { credentials: "include" })
+    return window.adsUtil.request(url, { credentials: "include" })
       .then(function (r) { return r.ok ? r.json() : { items: {} }; })
       .catch(function () { return { items: {} }; })
       .then(function (j) {

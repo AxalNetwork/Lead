@@ -76,3 +76,32 @@ test("EntityLock.ts applyMerge routes DB failure through logError, not a silent 
   assert.match(entityLockSrc, /logError\(env, \{ err: e, step: `entityLock\.applyMerge\.\$\{table\}` \}\)/);
   assert.ok(!/applyMerge \$\{table\} failed/.test(entityLockSrc), "applyMerge must not console-warn-and-swallow the DB error");
 });
+
+// Regression: the nightly chain runs ~25 sweeps inside ONE ctx.waitUntil.
+// A sweep that rethrows aborts every sweep after it, and because the chain is
+// already detached the cron tick still reports success — so the rethrow bought
+// nothing and silently truncated the night's work.
+test("nightly chain never rethrows out of a sweep's catch block", () => {
+  const nightlyStart = scheduledSrc.indexOf('cron === "15 3 * * *"');
+  const nightlyEnd = scheduledSrc.indexOf('cron === "30 4 * * *"');
+  assert.ok(nightlyStart > 0 && nightlyEnd > nightlyStart);
+  const chain = scheduledSrc.slice(nightlyStart, nightlyEnd);
+  const rethrows = chain.split("\n").filter((l) => /^\s*(if \(.*\) )?throw e;?\s*$/.test(l));
+  assert.deepEqual(rethrows, [], `sweep catch blocks must not rethrow:\n${rethrows.join("\n")}`);
+});
+
+// Regression: every cron slot in wrangler.toml must call markCronTick, or the
+// /ops/system-health cron panel shows it as never having run.
+test("every wrangler cron slot marks a cron tick", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
+  const { dirname, resolve } = await import("node:path");
+  const here = dirname(fileURLToPath(import.meta.url));
+  const toml = readFileSync(resolve(here, "../wrangler.toml"), "utf8");
+  const line = /^crons\s*=\s*\[(.+)\]/m.exec(toml);
+  assert.ok(line, "crons not found in wrangler.toml");
+  const crons = [...line[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(crons.length, 5, "Free plan cap is 5 cron slots");
+  const missing = crons.filter((c) => !scheduledSrc.includes(`markCronTick(env, "${c}")`));
+  assert.deepEqual(missing, [], `cron slots with no markCronTick call: ${missing.join(", ")}`);
+});

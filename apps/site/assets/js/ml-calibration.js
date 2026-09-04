@@ -6,7 +6,7 @@
   const fmt = (n) => (typeof n === "number" ? n.toFixed(4) : "—");
 
   async function api(path) {
-    const r = await fetch(path, { credentials: "include" });
+    const r = await window.adsUtil.request(path, { credentials: "include" });
     if (!r.ok) throw new Error("api " + r.status);
     return r.json();
   }

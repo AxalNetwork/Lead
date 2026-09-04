@@ -29,6 +29,7 @@ constants and this table.
 | `/health` | Cheap liveness probe; not under `/api/*` | None — DB ping only, no PII |
 | `/api/health` | Health/readiness probe under `/api/*` namespace | None — DB ping only, no PII |
 | `/api/webhooks/*` (currently `/api/webhooks/campaigns`) | Inbound HMAC-signed events from marketing / third-party tools that can't carry a Cloudflare Access cookie | Per-subapp HMAC signature verification |
+| `/api/compute/*` (`register-exchange`, `heartbeat`, `pull`, `complete`) | External compute-pool runners (non-browser clients) that cannot carry a Cloudflare Access cookie | Per-node HMAC envelope (`src/services/compute/envelope.ts`); the registration exchange consumes a one-time admin-minted token |
 
 ## Breaking-change callout (Task #6 fix)
 Relocating the marketing webhook from `/api/campaigns/:id/webhook`
@@ -43,3 +44,23 @@ None proposed via `proposeFollowUpTasks` — Task #4 ("Fix Critical Bugs
 Blocking Migrations & Routes") already depends on this task and absorbs
 the deferred migration-order FK / ON-CONFLICT audit work (items #2 and
 #3 above).
+
+## Platform audit pass (2026-09)
+
+Findings confirmed by reading both sides of each code path, fixed with a
+regression test each. Listed newest-first; every item shipped in one branch.
+
+| Area | Defect | Failure it caused | Fix |
+|---|---|---|---|
+| `routes/compute.ts`, `services/compute/dispatcher.ts` | `last_heartbeat_at` / `deadline_at` written with SQLite `datetime('now')` (space-separated) but compared against a JS ISO cutoff (`T`-separated). D1 compares TEXT bytewise and `' ' < 'T'`. | Every registered compute node was disabled with `heartbeat_timeout` on its *next* heartbeat and its open assignments flipped to `reassigned`; elapsed deadlines were invisible until the UTC date rolled over. | Bind ISO on both sides. `src/services/compute/__tests__/watchdog.test.mjs` asserts neither file uses `datetime('now')` for these columns. |
+| `middleware/pagination.ts` (new) | ~30 list routes clamped only the upper bound of `limit`/`offset`. SQLite treats a negative LIMIT as unbounded; `Number("abc")` → NaN → bound as NULL. | `?limit=-1` dumped whole tables (`error_log`, `jobs`, `documents`); `?offset=abc` returned a 500. | One `/api/*` middleware rejects non-integer / out-of-range pagination with a 400. `test/pagination_guard.test.mjs`. |
+| `routes/{firms,investors,people,leads}.ts` | Sort whitelists were plain object literals, so `?sort_by=constructor` resolved to an inherited function. | Whitelist failed *open* into `ORDER BY function Object() …` → SQL syntax error → 500. | Prototype-free maps (`Object.create(null)`). |
+| `scheduled.ts` (nightly) | The persona-match sweep re-threw `migration_order_stub_active` out of its catch. The chain runs inside `ctx.waitUntil`, so the throw never failed the cron tick. | The ~17 sweeps after it (fund refresh … project match) silently never ran. | Log the SLO violation and continue. `test/error_surfacing.test.mjs` forbids any rethrow in the nightly chain. |
+| `scheduled.ts` (6-hourly) | Two candidate `SELECT`s ran outside any try/catch *and* outside `waitUntil`. | One D1 error rejected `scheduled()` and skipped all three 6-hourly sweeps. | Both wrapped; failures land in `error_log`. |
+| `scheduled.ts` (cron panel) | Only 2 of the 5 cron slots called `markCronTick`. | `/ops/system-health/` showed three crons as never having run. | All five marked; a test derives the list from `wrangler.toml`. |
+| `services/systemHealth/alerts.ts` | `node_down` skipped every `enabled = 0` node, but the watchdog disables at 90 s and the alert needs 5 min. | The `node_down` alert could never fire. | Exempt only admin-parked nodes (`last_error !== 'heartbeat_timeout'`). |
+| `services/systemHealth/collectors.ts` | Queue depth counted `status IN ('pending','running')`; the jobs table never writes `pending`. | Depth read ~0 against any backlog, so `queue_age` could never fire; `failed_24h` ignored `dead_letter`/`timed_out`. | Count `queued`/`running` and all three terminal failure states. |
+| `scraper/pipeline.ts` | The executor promise was left unobserved when the deadline won the race. | Unhandled rejection in the Worker whenever a timed-out job later failed. | Attach a no-op catch alongside the race. |
+| `routes/admin.ts` | `sweepStuckJobs` selected every `running` job with no LIMIT, at the head of every queue batch. | After an outage the sweep could spend the batch's whole subrequest budget, failing every message in it. | `ORDER BY running_started_at ASC LIMIT 200`; the hourly cron drains the rest. |
+| `entities/facts.ts` | The override lock check used `.catch()` on a promise, which cannot catch a synchronous `prepare()` throw. | A missing `field_overrides` table failed the whole fact write instead of degrading to "no lock". | Wrapped in try/catch. |
+| `apps/site` (all dashboard JS) + `middleware/simple_request.ts` (new) | 145 call sites used bare `fetch` with a JSON content-type, a custom header, or a PUT/PATCH/DELETE — each triggers a CORS preflight that Cloudflare Access answers with a login redirect. | Every authenticated write from the dashboard failed in production. | All calls routed through `adsUtil.request`, which emits a CORS-simple request; the Worker reverses the tunnel before routing. Two tests, including a guard that fails if any bare `fetch(` reappears in dashboard code. |

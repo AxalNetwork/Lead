@@ -75,7 +75,7 @@
       var fmt = document.getElementById("ads-camp-format").value;
       var url = window.adsApiBase + "/api/campaigns/" + encodeURIComponent(CURRENT) + "/export?format=" + encodeURIComponent(fmt);
       try {
-        var res = await fetch(url, { method: "POST", credentials: "include" });
+        var res = await window.adsUtil.request(url, { method: "POST", credentials: "include" });
         if (!res.ok) throw new Error("HTTP " + res.status);
         var blob = await res.blob();
         var a = document.createElement("a");

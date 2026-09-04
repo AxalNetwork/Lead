@@ -40,7 +40,7 @@
     init = init || {};
     init.credentials = init.credentials || "include";
     init.headers = Object.assign({ "content-type": "application/json" }, init.headers || {});
-    var res = await fetch(API + path, init);
+    var res = await window.adsUtil.request(API + path, init);
     if (!res.ok) throw new Error(path + " -> " + res.status);
     return res.json();
   }

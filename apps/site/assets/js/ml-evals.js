@@ -8,7 +8,7 @@
   const fmtPct = (n) => (typeof n === "number" ? (n * 100).toFixed(1) + "%" : "—");
 
   async function api(path, opts) {
-    const r = await fetch(path, { credentials: "include", ...(opts || {}) });
+    const r = await window.adsUtil.request(path, { credentials: "include", ...(opts || {}) });
     if (!r.ok) throw new Error("api " + r.status);
     return r.json();
   }

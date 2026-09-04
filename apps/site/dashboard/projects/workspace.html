@@ -40,7 +40,7 @@ permalink: /dashboard/projects/workspace/
   for (const a of AUD) selected[a] = new Set();
 
   async function loadProject() {
-    const r = await fetch(API, { credentials: 'include' });
+    const r = await window.adsUtil.request(API, { credentials: 'include' });
     if (!r.ok) { root.innerHTML = '<div class="ads-muted">Project not found.</div>'; return; }
     const { project } = await r.json();
     curProject = project;
@@ -64,7 +64,7 @@ permalink: /dashboard/projects/workspace/
       <div id="ads-tab-body"><div class="ads-muted">Loading…</div></div>
     `;
     document.getElementById('ads-recompute').addEventListener('click', async () => {
-      await fetch(API + '/recompute', { method: 'POST', credentials: 'include' });
+      await window.adsUtil.request(API + '/recompute', { method: 'POST', credentials: 'include' });
       alert('Recompute dispatched. Refresh in ~60s.');
     });
     document.getElementById('ads-edit-toggle').addEventListener('click', () => {
@@ -111,7 +111,7 @@ permalink: /dashboard/projects/workspace/
         target_industries: String(fd.get('target_industries') || '').split(',').map((s) => s.trim()).filter(Boolean),
         target_geos: String(fd.get('target_geos') || '').split(',').map((s) => s.trim().toUpperCase()).filter(Boolean),
       };
-      const r = await fetch(API, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const r = await window.adsUtil.request(API, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       if (r.ok) { panel.hidden = true; loadProject(); } else { alert('Save failed'); }
     });
   }
@@ -155,7 +155,7 @@ permalink: /dashboard/projects/workspace/
     document.getElementById('ads-x-lemlist').href = xBase + '&format=lemlist';
     document.getElementById('ads-x-hubspot').href = xBase + '&format=hubspot';
 
-    const r = await fetch(API + '/matches?' + qs.toString(), { credentials: 'include' });
+    const r = await window.adsUtil.request(API + '/matches?' + qs.toString(), { credentials: 'include' });
     const mb = document.getElementById('ads-matches-body');
     if (!r.ok) { mb.innerHTML = '<div class="ads-muted">Failed to load.</div>'; return; }
     const { matches, total } = await r.json();
@@ -227,7 +227,7 @@ permalink: /dashboard/projects/workspace/
     }));
     bulkBtn.addEventListener('click', async () => {
       const keys = [...selected[audience]].map((k) => { const [kind, eid] = k.split(':'); return { kind, id: eid }; });
-      const r = await fetch(API + '/matches/' + audience + '/bulk-status', {
+      const r = await window.adsUtil.request(API + '/matches/' + audience + '/bulk-status', {
         method: 'POST', credentials: 'include',
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keys, status: 'shortlisted' }),
       });
@@ -238,7 +238,7 @@ permalink: /dashboard/projects/workspace/
     });
     mb.querySelectorAll('.ads-status').forEach((sel) => {
       sel.addEventListener('change', async () => {
-        await fetch(API + '/matches/' + audience + '/' + sel.dataset.kind + '/' + sel.dataset.eid + '/status', {
+        await window.adsUtil.request(API + '/matches/' + audience + '/' + sel.dataset.kind + '/' + sel.dataset.eid + '/status', {
           method: 'POST', credentials: 'include',
           headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: sel.value }),
         });
@@ -248,7 +248,7 @@ permalink: /dashboard/projects/workspace/
       btn.addEventListener('click', async () => {
         btn.disabled = true; btn.textContent = '…';
         try {
-          const r = await fetch(API + '/matches/' + audience + '/' + btn.dataset.kind + '/' + btn.dataset.eid + '/practice-pitch', {
+          const r = await window.adsUtil.request(API + '/matches/' + audience + '/' + btn.dataset.kind + '/' + btn.dataset.eid + '/practice-pitch', {
             method: 'POST', credentials: 'include',
           });
           const j = await r.json();
@@ -325,7 +325,7 @@ permalink: /dashboard/projects/workspace/
       }
       let j = {};
       try {
-        const r = await fetch(API + '/materials', { method: 'POST', credentials: 'include', body: fd });
+        const r = await window.adsUtil.request(API + '/materials', { method: 'POST', credentials: 'include', body: fd });
         j = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error((j && j.error) || ('http ' + r.status));
       } catch (err) {
@@ -378,7 +378,7 @@ permalink: /dashboard/projects/workspace/
         target_industries: document.getElementById('ads-s-ind').value.split(',').map((x) => x.trim()).filter(Boolean),
         target_geos: document.getElementById('ads-s-geo').value.split(',').map((x) => x.trim().toUpperCase()).filter(Boolean),
       };
-      const r = await fetch(API, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const r = await window.adsUtil.request(API, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       if (r.ok) { alert('Applied.'); loadProject(); } else { alert('Failed.'); }
     });
   }
@@ -386,7 +386,7 @@ permalink: /dashboard/projects/workspace/
   async function renderTimeline() {
     const body = document.getElementById('ads-tab-body');
     body.innerHTML = '<div class="ads-muted">Loading…</div>';
-    const r = await fetch(API + '/history', { credentials: 'include' });
+    const r = await window.adsUtil.request(API + '/history', { credentials: 'include' });
     const { history } = await r.json();
     body.innerHTML = '<table style="width:100%;font-size:13px"><thead><tr><th style="text-align:left">When</th><th style="text-align:left">Field</th><th style="text-align:left">Change</th><th style="text-align:left">By</th></tr></thead><tbody>'
       + (history || []).map((h) => `<tr style="border-top:1px solid var(--ads-border)"><td>${esc(h.changed_at)}</td><td>${esc(h.field)}${h.audience?' ('+esc(h.audience)+')':''}</td><td>${esc(h.old_value||'')} → ${esc(h.new_value||'')}</td><td>${esc(h.changed_by||'')}</td></tr>`).join('')

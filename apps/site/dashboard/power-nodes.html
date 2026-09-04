@@ -60,7 +60,7 @@ permalink: /dashboard/power-nodes/
   var sort = { key: "pagerank_score", dir: "desc" };
 
   function loadSummary() {
-    return fetch(ADS_API + "/api/power-nodes/summary", { credentials: "include" })
+    return window.adsUtil.request(ADS_API + "/api/power-nodes/summary", { credentials: "include" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) {
         if (!data) { stripEl.innerHTML = '<div class="ads-empty">Summary unavailable.</div>'; return; }
@@ -149,7 +149,7 @@ permalink: /dashboard/power-nodes/
     // Reflect filters into the URL so deep-links work.
     history.replaceState(null, "", location.pathname + (p.toString() ? "?" + p.toString() : ""));
     listEl.innerHTML = '<div class="ads-loading">Loading…</div>';
-    return fetch(ADS_API + "/api/power-nodes?" + p.toString(), { credentials: "include" })
+    return window.adsUtil.request(ADS_API + "/api/power-nodes?" + p.toString(), { credentials: "include" })
       .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(function (data) {
         lastRows = data.power_nodes || [];

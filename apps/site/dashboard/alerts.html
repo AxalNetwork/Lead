@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Alerts
-permalink: /dashboard/alerts.html
+permalink: /dashboard/alerts/
 ---
 
 <h1 class="ads-page-title">Alerts</h1>
@@ -90,7 +90,7 @@ permalink: /dashboard/alerts.html
     return p.toString();
   }
 
-  fetch(api("/api/watchlists"), { credentials: "include" })
+  window.adsUtil.request(api("/api/watchlists"), { credentials: "include" })
     .then(function (r) { return r.ok ? r.json() : { items: [] }; })
     .then(function (j) {
       (j.items || j.watchlists || []).forEach(function (w) {
@@ -100,7 +100,7 @@ permalink: /dashboard/alerts.html
       });
     });
 
-  fetch(api("/api/alerts/trigger-kinds"), { credentials: "include" })
+  window.adsUtil.request(api("/api/alerts/trigger-kinds"), { credentials: "include" })
     .then(function (r) { return r.ok ? r.json() : { kinds: [] }; })
     .then(function (j) {
       (j.kinds || []).forEach(function (k) {
@@ -111,7 +111,7 @@ permalink: /dashboard/alerts.html
 
   function load() {
     body.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:24px">Loading…</td></tr>';
-    fetch(api("/api/alerts/events?" + qs()), { credentials: "include" })
+    window.adsUtil.request(api("/api/alerts/events?" + qs()), { credentials: "include" })
       .then(function (r) { return r.ok ? r.json() : { items: [] }; })
       .then(function (j) { render(j.items || []); });
   }
@@ -160,7 +160,7 @@ permalink: /dashboard/alerts.html
     var t = e.target;
     if (t.dataset && t.dataset.ack) {
       e.preventDefault();
-      fetch(api("/api/alerts/events/" + encodeURIComponent(t.dataset.ack) + "/ack"),
+      window.adsUtil.request(api("/api/alerts/events/" + encodeURIComponent(t.dataset.ack) + "/ack"),
         { method: "POST", credentials: "include" }).then(load);
     }
   });
@@ -169,7 +169,7 @@ permalink: /dashboard/alerts.html
       body.querySelectorAll('input[type="checkbox"][data-id]:checked'),
       function (cb) { return cb.dataset.id; });
     if (!ids.length) return;
-    fetch(api("/api/alerts/events/ack-bulk"), {
+    window.adsUtil.request(api("/api/alerts/events/ack-bulk"), {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids: ids }),

@@ -58,7 +58,7 @@ permalink: /dashboard/crawlers/
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]; }); }
   async function refresh() {
     try {
-      const r = await fetch(window.ADS_API_BASE + "/api/crawlers", { credentials: "include" });
+      const r = await window.adsUtil.request(window.ADS_API_BASE + "/api/crawlers", { credentials: "include" });
       const j = await r.json();
       tbody.innerHTML = (j.modules || []).map(m => `
         <tr>
@@ -76,7 +76,7 @@ permalink: /dashboard/crawlers/
       tbody.innerHTML = `<tr><td colspan="8">Failed to load: ${esc(e && e.message ? e.message : e)}</td></tr>`;
     }
     try {
-      const r = await fetch(window.ADS_API_BASE + "/api/crawlers/runs?limit=50", { credentials: "include" });
+      const r = await window.adsUtil.request(window.ADS_API_BASE + "/api/crawlers/runs?limit=50", { credentials: "include" });
       const j = await r.json();
       runsBody.innerHTML = (j.items || []).map(x => `
         <tr>
@@ -98,7 +98,7 @@ permalink: /dashboard/crawlers/
     const t = e.target;
     if (t && t.matches("input[data-toggle]")) {
       const slug = t.getAttribute("data-toggle");
-      await fetch(`${window.ADS_API_BASE}/api/crawlers/${slug}/toggle`, {
+      await window.adsUtil.request(`${window.ADS_API_BASE}/api/crawlers/${slug}/toggle`, {
         method: "POST", credentials: "include",
         body: JSON.stringify({ enabled: t.checked }),
       });
@@ -110,7 +110,7 @@ permalink: /dashboard/crawlers/
       const slug = t.getAttribute("data-run");
       t.disabled = true; t.textContent = "Running…";
       try {
-        const r = await fetch(`${window.ADS_API_BASE}/api/crawlers/${slug}/run`, { method: "POST", credentials: "include" });
+        const r = await window.adsUtil.request(`${window.ADS_API_BASE}/api/crawlers/${slug}/run`, { method: "POST", credentials: "include" });
         const j = await r.json();
         t.textContent = j.outcome ? `+${j.outcome.signals_inserted}` : "kicked";
       } catch (err) { t.textContent = "error"; }

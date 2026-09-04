@@ -19,9 +19,12 @@ Two GitHub Actions workflows matter:
   migrations apply → `wrangler deploy`. **Typecheck is GREEN** — it is
   NOT the blocker.
 - **`check.yml`** — runs on push/PR: typecheck → **lint** → anti-pattern
-  gates → **test** (`npm test`). This workflow is currently **RED**, and
-  the blockers are **lint + a broken test build** (NodeNext/extensionless-
-  import issues in the test tsconfig), **not** typecheck.
+  gates → **test** (`npm test`). As of the platform-audit pass this is
+  **GREEN locally** (typecheck clean, lint 0 errors / warnings only,
+  820+ tests passing). The historical blockers were an extensionless
+  dynamic `import()` in `routes/valuation.ts` (NodeNext test build) plus
+  nine stale test expectations; both are fixed. Note `npm ci` needs
+  network access to `cdn.sheetjs.com` for the `xlsx` tarball.
 
 **Manual deploy escape hatch** (use only with explicit user approval):
 `cd apps/worker && npx wrangler@3.99.0 deploy`. This bypasses every gate
@@ -68,16 +71,42 @@ real operator browser session.
   git commands (push/rebase/reset/merge) and must delegate to a
   background project task.
 - **Cloudflare Access bounces CORS preflights on authenticated
-  cross-origin POSTs.** A dashboard `fetch` to `api.aidatasignal.com`
-  that sets `Content-Type: application/json` triggers a preflight
-  `OPTIONS`; preflights carry no cookie, so Access 302s them to login
-  and the browser surfaces "The string did not match the expected
-  pattern". Fix WITHOUT any Zero Trust config: **drop the
-  `Content-Type` header** so the POST is a CORS-safe *simple* request
-  (`text/plain`) — no preflight, the cookie rides along, and the Hono
-  handler still parses the body via `c.req.json()`. Applied to the
-  ops-quality sweep buttons; the same systemic bug affects every other
-  authenticated dashboard POST/PUT/DELETE.
+  cross-origin requests.** A preflight `OPTIONS` carries no cookie, so
+  Access 302s it to login and the browser surfaces "The string did not
+  match the expected pattern" / a failed fetch. Anything that triggers a
+  preflight is therefore dead in prod: a `Content-Type: application/json`
+  header, a custom header (`Idempotency-Key`), or a PUT/PATCH/DELETE.
+  **Systemic fix (no Zero Trust config needed):** every dashboard API
+  call goes through `window.adsUtil.request(url, opts)` (or
+  `adsUtil.apiFetch`) in `apps/site/assets/js/ads-utils.js`, which
+  rewrites the call into a CORS *simple* request — drops the JSON
+  content-type (Hono's `c.req.json()` parses the body regardless),
+  tunnels PUT/PATCH/DELETE as `POST ?_method=<VERB>`, and moves
+  `Idempotency-Key` to `?_idempotency_key=`. The Worker reverses the
+  tunnel before routing in `apps/worker/src/middleware/simple_request.ts`
+  (unit-tested in `test/simple_request.test.mjs`), so handlers still see
+  the real verb/header. **Never call bare `fetch()` against the API from
+  dashboard code.** The long-term alternative is the Access app setting
+  "Bypass OPTIONS requests to origin" in Zero Trust, which would let the
+  Worker's own `cors()` middleware answer preflights.
+- **Timestamp format is load-bearing in D1.** SQLite's `datetime('now')`
+  renders `2026-09-04 10:00:00` (space) while JS writes
+  `2026-09-04T10:00:00.000Z` (`T`). D1 compares TEXT bytewise and
+  `' ' < 'T'`, so a space-separated value sorts BELOW every ISO value of
+  the same day. Mixing the two in one comparison silently inverts it —
+  this disabled every compute node on its next heartbeat and hid every
+  elapsed assignment deadline until the UTC date rolled over. **Write and
+  compare a column in ONE format**; prefer binding
+  `new Date().toISOString()` on both sides.
+- **The nightly chain is one invocation.** All ~25 sweeps under
+  `15 3 * * *` share a single `ctx.waitUntil`, so they share one
+  subrequest and CPU budget, and a sweep that rethrows aborts every sweep
+  after it — while the cron tick still reports success (the chain is
+  already detached). Sweeps log and continue; never rethrow. A guard
+  test in `test/error_surfacing.test.mjs` enforces this.
+- **`jobs.status` vocabulary.** Producers write `queued`; the terminal
+  states are `done`, `failed`, `dead_letter`, `timed_out`, `skipped`.
+  There is no `pending` — querying for it silently returns nothing.
 - **Dashboard asset cache-busting.** Per-page `<script>`/`<link>` tags
   append `?v={{ site.time | date: '%s' }}` so deployed JS/CSS fixes
   actually reach operators. New dashboard pages must follow this.

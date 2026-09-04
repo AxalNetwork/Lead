@@ -13,12 +13,12 @@
   const KIND_COLORS = { transient: "#d4a017", permanent: "#b3261e", config: "#5b3fa5", auth: "#1c5fa5", validation: "#1f6e3f", upstream: "#c97e2a", internal: "#6b2826" };
 
   async function jget(path) {
-    const r = await fetch(API + path, { credentials: "include" });
+    const r = await window.adsUtil.request(API + path, { credentials: "include" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     return r.json();
   }
   async function jpost(path, body) {
-    const r = await fetch(API + path, {
+    const r = await window.adsUtil.request(API + path, {
       method: "POST",
       credentials: "include",
       headers: body ? { "Content-Type": "application/json" } : {},

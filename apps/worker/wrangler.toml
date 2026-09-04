@@ -11,6 +11,12 @@ workers_dev = false
 browser = { binding = "BROWSER" }
 
 [vars]
+# Production marker. `adminOnly` (src/middleware/access.ts) only honours the
+# `X-Admin: true` escape hatch when this is NOT "production", and `onError`
+# only returns sanitized error envelopes when it IS — so it must be set on
+# the deployed Worker. Override to "staging"/"dev" in a wrangler env or
+# .dev.vars for local work.
+ENVIRONMENT = "production"
 ALLOWED_EMAIL = "guillaumelauzier@gmail.com"
 ACCESS_TEAM_DOMAIN = "axalnetwork.cloudflareaccess.com"
 ACCESS_AUD = "f9cbce05165afb5af93e5929ff93dc4591aa18cd8234244327e78fd29fa849dd"

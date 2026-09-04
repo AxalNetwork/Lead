@@ -225,3 +225,19 @@ test("collectRecentErrors: groups by (code, normalized message), counts, picks m
   assert.equal(dbErr.count, 2);
   assert.equal(dbErr.last_seen, "2026-05-20T10:05:00Z");
 });
+
+// Regression: the jobs table has no 'pending' status — producers write
+// 'queued' (src/scraper/pipeline.ts, src/scheduled.ts, src/index.ts). Counting
+// 'pending' made queue depth read ~0 no matter how deep the backlog was, so
+// the queue_age alert could never fire. Terminal failures are likewise
+// 'failed' | 'dead_letter' | 'timed_out'.
+test("collectQueues counts the job statuses the code actually writes", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
+  const { dirname, resolve } = await import("node:path");
+  const here = dirname(fileURLToPath(import.meta.url));
+  const src = readFileSync(resolve(here, "../collectors.ts"), "utf8");
+  assert.ok(!/status IN \('pending','running'\)/.test(src), "'pending' is not a status this codebase writes");
+  assert.match(src, /status IN \('queued','running'\)/);
+  assert.match(src, /status IN \('failed','dead_letter','timed_out'\)/);
+});

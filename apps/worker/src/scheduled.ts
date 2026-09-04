@@ -481,9 +481,15 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const msg = (e as Error).message;
         await logError(env, { err: e, step: "nightly persona-match-refresh" });
         console.error("nightly persona-match-refresh failed", msg);
-        // Re-throw migration-order failures so the cron tick actually
-        // fails (the inner guard intentionally throws in production).
-        if (msg.includes("migration_order_stub_active")) throw e;
+        // NOTE: this used to re-throw `migration_order_stub_active` so the
+        // cron tick would "fail". The chain runs inside ctx.waitUntil, so a
+        // throw here never fails the tick — it only aborted the ~17 sweeps
+        // that follow (fund refresh … project match) every night until the
+        // migration landed. The error_log row above is the durable signal;
+        // keep the chain running.
+        if (msg.includes("migration_order_stub_active")) {
+          console.error("SLO: persona-match-refresh blocked by migration order; continuing nightly chain");
+        }
       }
 
       // Task #3 (Fund Intelligence Engine): nightly per-fund ledger
@@ -838,6 +844,12 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
   if (event && (event as ScheduledEvent).cron === "30 4 * * *") {
     ctx.waitUntil((async () => {
       try {
+        const { markCronTick } = await import("./services/systemHealth/snapshot");
+        await markCronTick(env, "30 4 * * *");
+      } catch (e) {
+        await logError(env, { err: e, step: "daily 04:30 markCronTick" });
+      }
+      try {
         if (env.WF_REFRESH_SAVED_RESEARCH) {
           await env.WF_REFRESH_SAVED_RESEARCH.create({ params: {} });
           console.log("refresh-saved-research workflow dispatched");
@@ -859,6 +871,12 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
   }
   if (event && (event as ScheduledEvent).cron === "0 4 * * *") {
     ctx.waitUntil((async () => {
+      try {
+        const { markCronTick } = await import("./services/systemHealth/snapshot");
+        await markCronTick(env, "0 4 * * *");
+      } catch (e) {
+        await logError(env, { err: e, step: "daily 04:00 markCronTick" });
+      }
       try {
         if (env.WF_DD_SCAN_BATCH) {
           await env.WF_DD_SCAN_BATCH.create({ params: { limit: 100, staleDays: 7 } });
@@ -1013,14 +1031,22 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
   // passed (or is null) — capped at 200/tick so a single cron tick
   // doesn't melt the queue. On first deploy, populate the registry
   // from seed-sources.json so it isn't empty.
-  const registryDue = await env.DB.prepare(
-    `SELECT * FROM source_registry
-       WHERE enabled = 1
-         AND last_run_status != 'running'
-         AND (next_run_after IS NULL OR datetime(next_run_after) <= datetime('now'))
-       ORDER BY COALESCE(next_run_after, added_at) ASC LIMIT 200`,
-  ).all<SourceRow>();
-  const registryRows = registryDue.results ?? [];
+  // Both candidate selects are wrapped: an unhandled throw here (missing
+  // table on a fresh DB, transient D1 error) used to reject the whole
+  // scheduled() call and skip all three 6-hourly sweeps.
+  let registryRows: SourceRow[] = [];
+  try {
+    const registryDue = await env.DB.prepare(
+      `SELECT * FROM source_registry
+         WHERE enabled = 1
+           AND last_run_status != 'running'
+           AND (next_run_after IS NULL OR datetime(next_run_after) <= datetime('now'))
+         ORDER BY COALESCE(next_run_after, added_at) ASC LIMIT 200`,
+    ).all<SourceRow>();
+    registryRows = registryDue.results ?? [];
+  } catch (e) {
+    await logError(env, { err: e, step: "6h source_registry select" });
+  }
 
   const enqueueRegistry = async () => {
     if (registryRows.length === 0) {
@@ -1045,13 +1071,18 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
 
   // Legacy `sources` table — kept for backwards compatibility with
   // per-domain re-scrapes that pre-date the registry (Task #5).
-  const r = await env.DB.prepare(
-    `SELECT id, domain FROM sources
-       WHERE enabled = 1
-         AND (last_scraped_at IS NULL OR datetime(last_scraped_at) < datetime('now','-24 hours'))
-       LIMIT 200`,
-  ).all<LegacySourceRow>();
-  const rows = r.results ?? [];
+  let rows: LegacySourceRow[] = [];
+  try {
+    const r = await env.DB.prepare(
+      `SELECT id, domain FROM sources
+         WHERE enabled = 1
+           AND (last_scraped_at IS NULL OR datetime(last_scraped_at) < datetime('now','-24 hours'))
+         LIMIT 200`,
+    ).all<LegacySourceRow>();
+    rows = r.results ?? [];
+  } catch (e) {
+    await logError(env, { err: e, step: "6h legacy sources select" });
+  }
 
   const enqueueScrapes = async () => {
     for (const row of rows) {
@@ -1100,6 +1131,13 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
     }
   };
 
+  // Task #5 cron-status panel: mark this slot too (only the hourly and
+  // nightly slots were marked, so the panel showed the 6-hourly cron as
+  // never having run).
+  ctx.waitUntil((async () => {
+    const { markCronTick } = await import("./services/systemHealth/snapshot");
+    await markCronTick(env, "0 */6 * * *");
+  })().catch((e) => logError(env, { err: e, step: "6h markCronTick" })));
   ctx.waitUntil(enqueueRegistry().catch((e) => logError(env, { err: e, step: "6h enqueueRegistry" })));
   ctx.waitUntil(enqueueScrapes().catch((e) => logError(env, { err: e, step: "6h enqueueScrapes" })));
   ctx.waitUntil(reEnrichStale().catch((e) => logError(env, { err: e, step: "6h reEnrichStale" })));

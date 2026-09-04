@@ -305,7 +305,7 @@
       btn("Delete", function () {
         var reason = window.prompt("Reason for soft-delete (required):", "");
         if (!reason) return;
-        fetch(API + "/api/entities/" + encodeURIComponent(entityId) + "/soft-delete", {
+        window.adsUtil.request(API + "/api/entities/" + encodeURIComponent(entityId) + "/soft-delete", {
           method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ reason: reason }),
         }).then(function (r) { return jsonOrText(r).then(function (j) { return { ok: r.ok, j: j }; }); })
           .then(function (res) { if (!res.ok) alert("Delete failed: " + JSON.stringify(res.j)); else alert("Soft-deleted."); });
@@ -314,7 +314,7 @@
         var target = window.prompt("Target entity_id:", "");
         if (!target) return;
         if (!confirm("Merge this entity into " + target + "?")) return;
-        fetch(API + "/api/entities/" + encodeURIComponent(entityId) + "/merge", {
+        window.adsUtil.request(API + "/api/entities/" + encodeURIComponent(entityId) + "/merge", {
           method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target_entity_id: target }),
         }).then(function (r) { return jsonOrText(r).then(function (j) { return { ok: r.ok, j: j }; }); })
           .then(function (res) {
@@ -405,7 +405,7 @@
     var website = d.website || window.prompt("Website (optional):", "") || null;
     var fillAi = confirm("Run AI fill on save?");
     var url = API + "/api/entities" + (fillAi ? "?fill=ai" : "");
-    fetch(url, {
+    window.adsUtil.request(url, {
       method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: name, kind: kind, primary_role: role, website: website }),
     }).then(function (r) { return jsonOrText(r).then(function (j) { return { ok: r.ok, j: j }; }); })
@@ -422,7 +422,7 @@
     var predicate = window.prompt("Predicate (e.g. title, sector, country_iso2):", ""); if (!predicate) return;
     var value = window.prompt("New value:", ""); if (value == null) return;
     var reason = window.prompt("Reason for bulk override (required):", ""); if (!reason) { alert("Reason required."); return; }
-    fetch(API + "/api/entities/overrides/bulk", {
+    window.adsUtil.request(API + "/api/entities/overrides/bulk", {
       method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ entity_ids: entityIds, predicate: predicate, value_text: value, override_reason: reason }),
     }).then(function (r) { return jsonOrText(r).then(function (j) { return { ok: r.ok, j: j }; }); })

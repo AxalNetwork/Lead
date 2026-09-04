@@ -14,7 +14,7 @@
     return (n / 1024 / 1024).toFixed(2) + " MB";
   }
   function api(path, opts) {
-    return fetch(API + path, Object.assign({ credentials: "include" }, opts || {}))
+    return window.adsUtil.request(API + path, Object.assign({ credentials: "include" }, opts || {}))
       .then(function (r) {
         if (!r.ok) return r.text().then(function (t) { throw new Error("HTTP " + r.status + ": " + t.slice(0, 200)); });
         return r.json();
@@ -147,7 +147,7 @@
     if (tgt) fd.append("target_entity_id", tgt);
     if (f.allow_raw_text.checked) fd.append("allow_raw_text", "1");
     msg.textContent = "Uploading " + files.length + " file" + (files.length > 1 ? "s" : "") + "…";
-    fetch(API + "/api/documents/upload", { method: "POST", body: fd, credentials: "include" })
+    window.adsUtil.request(API + "/api/documents/upload", { method: "POST", body: fd, credentials: "include" })
       .then(function (r) {
         if (!r.ok) return r.text().then(function (t) { throw new Error("HTTP " + r.status + ": " + t.slice(0, 200)); });
         return r.json();

@@ -281,3 +281,29 @@ test("runAlertEvaluator: cold install (all tables throw) is a no-op", async () =
   assert.equal(r.opened, 0);
   assert.equal(r.closed, 0);
 });
+
+// Regression: the compute watchdog disables a node after 90s of missed
+// heartbeats, but `node_down` needs 5 minutes of staleness. Skipping every
+// disabled node therefore meant the alert could never fire — the watchdog
+// always won the race. Only ADMIN-parked nodes (disabled with no
+// heartbeat_timeout error) are exempt.
+test("evaluateBreaches: node_down DOES fire for a node the watchdog auto-disabled", async () => {
+  const env = {
+    DB: makeDb({
+      incidents: [],
+      jobs: { depth: 0, oldest: null, failed_24h: 0 },
+      nodes: [{
+        id: "n_watchdog", name: "Runner", provider: "p", kind: "k",
+        supported_job_types: "[]", max_concurrent_jobs: 1, current_active_jobs: 0,
+        enabled: 0, drain: 0,
+        last_heartbeat_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+        last_error: "heartbeat_timeout",
+      }],
+    }),
+    SESSIONS: makeKv(),
+  };
+  const b = await evaluateBreaches(env);
+  const nd = b.filter((x) => x.kind === "node_down");
+  assert.equal(nd.length, 1);
+  assert.equal(nd[0].signature, "node_down:n_watchdog");
+});

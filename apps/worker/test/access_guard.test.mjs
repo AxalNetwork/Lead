@@ -26,6 +26,11 @@ const src = readFileSync(indexPath, "utf8");
 const PUBLIC_ALLOW_LIST = new Set([
   "/api/health",
   "/api/webhooks/campaigns",
+  // Task #9 (external worker pool): runner endpoints authenticate with a
+  // per-node HMAC envelope (src/services/compute/envelope.ts), not the
+  // Access JWT, so external (non-browser) runners can reach them. The
+  // route itself rejects any request without a valid signature.
+  "/api/compute",
 ]);
 const PUBLIC_PREFIX_ALLOW_LIST = ["/api/webhooks/"];
 

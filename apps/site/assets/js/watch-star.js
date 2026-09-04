@@ -27,7 +27,7 @@
       btn.querySelector(".ads-watch-label").textContent = on ? "Watching" : "Watch";
     }
 
-    fetch(apiUrl("/api/watchlists/watch/" + encodeURIComponent(entityId)), { credentials: "include" })
+    window.adsUtil.request(apiUrl("/api/watchlists/watch/" + encodeURIComponent(entityId)), { credentials: "include" })
       .then(function (r) { return r.ok ? r.json() : { watching: false, lists: [] }; })
       .then(function (j) {
         render(!!j.watching);
@@ -43,7 +43,7 @@
       var on = btn.getAttribute("aria-pressed") === "true";
       btn.disabled = true;
       var method = on ? "DELETE" : "POST";
-      fetch(apiUrl("/api/watchlists/watch/" + encodeURIComponent(entityId)), {
+      window.adsUtil.request(apiUrl("/api/watchlists/watch/" + encodeURIComponent(entityId)), {
         method: method, credentials: "include",
       })
         .then(function (r) { return r.ok ? r.json() : {}; })

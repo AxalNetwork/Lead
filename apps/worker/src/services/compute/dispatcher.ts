@@ -293,11 +293,16 @@ export async function runComputeWatchdog(env: Env, nowMs = Date.now()): Promise<
 
   // Independent of node health: any dispatched/running assignment
   // whose deadline has elapsed is marked timeout.
+  // deadline_at is written as ISO-8601 (see dispatchExternalJob), so compare
+  // against an ISO 'now' — datetime('now') is space-separated and sorts BELOW
+  // every ISO timestamp of the same day, which made elapsed deadlines
+  // invisible until the next UTC date rollover.
   const elapsed = await env.DB.prepare(
     `SELECT id, node_id FROM compute_job_assignments
       WHERE status IN ('dispatched','running')
-        AND deadline_at < datetime('now')`,
-  ).all<{ id: string; node_id: string }>().catch(() => ({ results: [] as { id: string; node_id: string }[] }));
+        AND deadline_at < ?`,
+  ).bind(new Date(nowMs).toISOString())
+    .all<{ id: string; node_id: string }>().catch(() => ({ results: [] as { id: string; node_id: string }[] }));
   for (const asg of elapsed.results ?? []) {
     await env.DB.prepare(
       `UPDATE compute_job_assignments

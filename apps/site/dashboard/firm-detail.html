@@ -191,7 +191,7 @@ permalink: /dashboard/firms/detail/
         if (!ref || !window.ADS || !window.ADS.News) return;
         try {
           var API = (window.ADS_API_BASE).replace(/\/+$/, "");
-          var r = await fetch(API + "/api/entities/resolve?table=firms&ref=" + encodeURIComponent(ref), { credentials: "include" });
+          var r = await window.adsUtil.request(API + "/api/entities/resolve?table=firms&ref=" + encodeURIComponent(ref), { credentials: "include" });
           var j = r.ok ? await r.json() : null;
           if (!j || !j.entity_id) {
             document.getElementById("ads-news-timeline").innerHTML = '<div class="ads-muted">No unified entity mapped for this firm yet.</div>';

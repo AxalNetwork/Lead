@@ -58,7 +58,7 @@ permalink: /dashboard/dossiers/
     return;
   }
 
-  fetch(API + "/api/dossiers/" + encodeURIComponent(id), { credentials: "include" })
+  window.adsUtil.request(API + "/api/dossiers/" + encodeURIComponent(id), { credentials: "include" })
     .then(function (r) {
       if (r.status === 404) throw new Error("entity_not_found");
       if (!r.ok) throw new Error("http_" + r.status);
@@ -89,7 +89,7 @@ permalink: /dashboard/dossiers/
       var q = input.value.trim();
       if (q.length < 2) { results.innerHTML = ""; return; }
       t = setTimeout(function () {
-        fetch(API + "/api/dossiers/search?q=" + encodeURIComponent(q), { credentials: "include" })
+        window.adsUtil.request(API + "/api/dossiers/search?q=" + encodeURIComponent(q), { credentials: "include" })
           .then(function (r) { return r.ok ? r.json() : { items: [] }; })
           .then(function (b) {
             var items = b.items || [];

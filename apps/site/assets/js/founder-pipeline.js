@@ -18,7 +18,7 @@
   };
 
   const $ = (id) => document.getElementById(id);
-  const fetchJson = (path, opts) => fetch(API + path, Object.assign({
+  const fetchJson = (path, opts) => window.adsUtil.request(API + path, Object.assign({
     credentials: "include", headers: { "Content-Type": "application/json" },
   }, opts || {})).then((r) => r.json().then((j) => ({ ok: r.ok, status: r.status, body: j })));
 

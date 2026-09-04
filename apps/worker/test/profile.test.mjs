@@ -78,7 +78,9 @@ test("parseCrunchbaseOrg returns a FirmCandidate matching firms schema", () => {
   assert.equal(firm.founded_year, 2018);
   assert.equal(firm.hq_city, "San Francisco");
   assert.equal(firm.hq_region, "California");
-  assert.equal(firm.hq_country_iso2, null);
+  // Crunchbase emits country NAMES; the parser resolves them to ISO2 and
+  // keeps the raw name in notes for provenance.
+  assert.equal(firm.hq_country_iso2, "US");
   assert.ok(firm.notes && firm.notes.includes("United States"));
   assert.deepEqual(firm.sectors, ["Artificial Intelligence", "Software"]);
   assert.equal(firm.crunchbase_url, url);

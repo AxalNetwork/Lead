@@ -89,7 +89,7 @@ permalink: /dashboard/discovery/
   var IMPLEMENTED = { outbound:1, sitemap:1, rss_atom:1, opengraph_meta:1, jsonld_sameas:1, archive_wayback:1, sister_pages:1, citations:1 };
   async function loadMethods() {
     try {
-      var r = await fetch(API + "/api/discovery/methods", { credentials: "include" });
+      var r = await window.adsUtil.request(API + "/api/discovery/methods", { credentials: "include" });
       var data = await r.json();
       var host = document.getElementById("ads-disc-methods");
       var select = document.getElementById("ads-disc-method");
@@ -109,7 +109,7 @@ permalink: /dashboard/discovery/
   }
   async function loadStats() {
     try {
-      var r = await fetch(API + "/api/discovery/stats", { credentials: "include" });
+      var r = await window.adsUtil.request(API + "/api/discovery/stats", { credentials: "include" });
       var data = await r.json();
       var statusMap = {}; (data.by_status || []).forEach(function (s) { statusMap[s.status] = s.n; });
       document.getElementById("ads-disc-tiles").innerHTML =
@@ -138,7 +138,7 @@ permalink: /dashboard/discovery/
     var host = document.getElementById("ads-disc-table");
     host.innerHTML = '<div class="ads-loading">Loading…</div>';
     try {
-      var r = await fetch(API + "/api/discovery/urls?" + p.toString(), { credentials: "include" });
+      var r = await window.adsUtil.request(API + "/api/discovery/urls?" + p.toString(), { credentials: "include" });
       var data = await r.json();
       var items = data.items || [];
       if (!items.length) { host.innerHTML = '<div class="ads-muted" style="font-size:13px">No URLs match.</div>'; return; }
@@ -168,7 +168,7 @@ permalink: /dashboard/discovery/
         btn.addEventListener("click", async function () {
           var id = btn.getAttribute("data-id");
           var act = btn.getAttribute("data-act");
-          await fetch(API + "/api/discovery/urls/" + encodeURIComponent(id) + "/" + act, { method: "POST", credentials: "include", body: "{}" });
+          await window.adsUtil.request(API + "/api/discovery/urls/" + encodeURIComponent(id) + "/" + act, { method: "POST", credentials: "include", body: "{}" });
           loadUrls(); loadStats();
         });
       });
@@ -215,7 +215,7 @@ permalink: /dashboard/discovery/
     var payload = { ids: ids, action: action };
     if (action === "reject") payload.reason = "manual_bulk";
     try {
-      var r = await fetch(API + "/api/discovery/urls/bulk", { method: "POST", credentials: "include", body: JSON.stringify(payload) });
+      var r = await window.adsUtil.request(API + "/api/discovery/urls/bulk", { method: "POST", credentials: "include", body: JSON.stringify(payload) });
       var data = await r.json();
       if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
       window.__ads_disc_sel = {};
@@ -235,7 +235,7 @@ permalink: /dashboard/discovery/
       var methods = selectedMethods();
       var payload = { url: url, depth: depth, max_per_host: max_per_host };
       if (methods.length && methods.length < Object.keys(IMPLEMENTED).length) payload.methods = methods;
-      var r = await fetch(API + "/api/discovery/seed", { method: "POST", credentials: "include", body: JSON.stringify(payload) });
+      var r = await window.adsUtil.request(API + "/api/discovery/seed", { method: "POST", credentials: "include", body: JSON.stringify(payload) });
       var data = await r.json();
       if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
       // Preserve the runId so subsequent Crawl-frontier clicks recurse
@@ -250,7 +250,7 @@ permalink: /dashboard/discovery/
     try {
       var crawlPayload = { limit: 25 };
       if (window.__ads_last_run_id) crawlPayload.run_id = window.__ads_last_run_id;
-      await fetch(API + "/api/discovery/crawl", { method: "POST", credentials: "include", body: JSON.stringify(crawlPayload) });
+      await window.adsUtil.request(API + "/api/discovery/crawl", { method: "POST", credentials: "include", body: JSON.stringify(crawlPayload) });
       loadStats(); loadUrls();
     } finally { this.disabled = false; this.textContent = "Crawl frontier"; }
   });
@@ -259,7 +259,7 @@ permalink: /dashboard/discovery/
     var host = document.getElementById("ads-disc-graph");
     host.innerHTML = '<div class="ads-loading" style="padding:20px">Building graph…</div>';
     try {
-      var r = await fetch(API + "/api/discovery/graph/" + encodeURIComponent(rootId) + "?depth=2", { credentials: "include" });
+      var r = await window.adsUtil.request(API + "/api/discovery/graph/" + encodeURIComponent(rootId) + "?depth=2", { credentials: "include" });
       var data = await r.json();
       var nodes = data.nodes || [], edges = data.edges || [];
       if (!nodes.length) { host.innerHTML = '<div class="ads-muted" style="padding:20px;font-size:12px">No graph data for this URL.</div>'; return; }

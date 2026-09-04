@@ -153,7 +153,7 @@ test("sidenav preserves every existing dashboard URL (no link 404s)", () => {
     "/dashboard/imports/",
     "/dashboard/uploads/",
     "/dashboard/crawlers/",
-    "/dashboard/review/",
+    "/dashboard/merge-review/",
     "/dashboard/jobs/",
     "/dashboard/errors/",
     "/dashboard/health/",
@@ -167,11 +167,27 @@ test("sidenav preserves every existing dashboard URL (no link 404s)", () => {
 });
 
 test("sidenav new items without a page route to /dashboard/coming-soon/", () => {
-  for (const feat of ["power-nodes", "predictions", "saved-research", "agent", "dossiers", "dedupe-review", "quality-console"]) {
+  for (const feat of ["saved-research", "agent"]) {
     assert.ok(
       sidenavTpl.includes(`coming-soon/?feature=${feat}`),
       `Coming-soon link missing for feature: ${feat}`,
     );
+  }
+});
+
+test("sidenav items that shipped a real page no longer point at coming-soon", () => {
+  // Once a feature ships, its rail link must go to the real route so the
+  // coming-soon stub doesn't shadow a working page.
+  const shipped = {
+    "power-nodes": "/dashboard/power-nodes/",
+    predictions: "/dashboard/predictions/",
+    dossiers: "/dashboard/dossiers/",
+    "dedupe-review": "/dashboard/merge-review/",
+    "quality-console": "/ops/quality/",
+  };
+  for (const [feat, href] of Object.entries(shipped)) {
+    assert.ok(!sidenavTpl.includes(`coming-soon/?feature=${feat}`), `${feat} still routes to coming-soon`);
+    assert.ok(sidenavTpl.includes(`href="${href}"`), `sidenav missing shipped route ${href} for ${feat}`);
   }
 });
 

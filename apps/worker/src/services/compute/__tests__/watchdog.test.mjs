@@ -66,8 +66,8 @@ function fakeDb(state) {
               .map((a) => ({ id: a.id, job_id: a.job_id, job_type: a.job_type })) };
           }
           // Deadline-elapsed assignments — emulate by walking state.
-          if (/deadline_at < datetime\('now'\)/.test(sql)) {
-            const now = state.now ?? Date.now();
+          if (/deadline_at < \?/.test(sql)) {
+            const now = Date.parse(this._binds[0]);
             return { results: state.assignments
               .filter((a) => (a.status === "dispatched" || a.status === "running") && Date.parse(a.deadline_at) < now)
               .map((a) => ({ id: a.id, node_id: a.node_id })) };
@@ -117,4 +117,37 @@ test("deadline-elapsed in-flight is marked timeout", async () => {
   const a1 = state.assignments[0];
   assert.equal(a1.status, "timeout");
   assert.equal(a1.error, "deadline_exceeded");
+});
+
+// Regression: last_heartbeat_at / deadline_at are compared against ISO
+// cutoffs, so they MUST be stored as ISO-8601. SQLite's datetime('now')
+// ("2026-09-04 10:00:00") compares bytewise BELOW any ISO timestamp of the
+// same day (' ' < 'T'), which used to disable every live node on its next
+// heartbeat and hide every elapsed deadline until the UTC date rolled over.
+test("compute timestamps are written in ISO-8601, not datetime('now')", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
+  const { dirname, resolve } = await import("node:path");
+  const here = dirname(fileURLToPath(import.meta.url));
+  const routeSrc = readFileSync(resolve(here, "../../../routes/compute.ts"), "utf8");
+  const dispatcherSrc = readFileSync(resolve(here, "../dispatcher.ts"), "utf8");
+
+  assert.ok(!/last_heartbeat_at\s*=\s*datetime\('now'\)/.test(routeSrc),
+    "heartbeat must bind an ISO timestamp, not datetime('now')");
+  assert.match(routeSrc, /SET last_heartbeat_at = \?/);
+  assert.ok(!/deadline_at\s*<\s*datetime\('now'\)/.test(dispatcherSrc),
+    "deadline comparison must bind an ISO cutoff, not datetime('now')");
+  assert.match(dispatcherSrc, /deadline_at < \?/);
+});
+
+test("a node whose heartbeat is fresh in ISO form is NOT swept", async () => {
+  // Guards the ordering bug directly: an ISO heartbeat from one second ago
+  // must sort ABOVE the ISO cutoff and survive the sweep.
+  const state = {
+    nodes: [{ id: "iso", enabled: 1, last_heartbeat_at: new Date(Date.now() - 1000).toISOString(), last_error: null, current_active_jobs: 1 }],
+    assignments: [],
+  };
+  const r = await runComputeWatchdog({ DB: fakeDb(state) });
+  assert.equal(r.nodes_disabled, 0);
+  assert.equal(state.nodes[0].enabled, 1);
 });

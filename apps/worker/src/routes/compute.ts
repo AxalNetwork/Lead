@@ -57,7 +57,7 @@ computeRunnerRoute.post("/register-exchange", async (c) => {
         supported_job_types, capabilities_json, max_concurrent_jobs,
         current_active_jobs, cost_per_hour_usd, cost_per_1k_tokens_usd,
         enabled, drain, registered_by, registered_at, last_heartbeat_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 1, 0, ?, datetime('now'), datetime('now'))`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 1, 0, ?, datetime('now'), ?)`,
   ).bind(
     nodeId,
     reg.name,
@@ -71,6 +71,9 @@ computeRunnerRoute.post("/register-exchange", async (c) => {
     reg.cost_per_hour_usd,
     reg.cost_per_1k_tokens_usd,
     reg.registered_by,
+    // last_heartbeat_at in ISO-8601 to match the watchdog's ISO cutoff
+    // (see the heartbeat handler below).
+    new Date().toISOString(),
   ).run();
 
   return c.json({
@@ -117,14 +120,18 @@ computeRunnerRoute.post("/heartbeat", async (c) => {
   let body: { current_active_jobs?: number; last_error?: string | null } = {};
   if (bodyText) { try { body = JSON.parse(bodyText); } catch { /* tolerate */ } }
   const active = Math.max(0, Number(body.current_active_jobs ?? 0));
+  // ISO-8601, NOT datetime('now'): the watchdog compares this column against
+  // an ISO cutoff, and SQLite compares TEXT bytewise ("2026-.. 10:00" sorts
+  // below "2026-..T09:59" because ' ' < 'T'), which used to disable every
+  // node on its very next heartbeat.
   await c.env.DB.prepare(
     `UPDATE compute_nodes
-        SET last_heartbeat_at = datetime('now'),
+        SET last_heartbeat_at = ?,
             current_active_jobs = ?,
             last_error = ?,
             enabled = CASE WHEN last_error = 'heartbeat_timeout' THEN 1 ELSE enabled END
       WHERE id = ?`,
-  ).bind(active, body.last_error ?? null, auth.node.id).run();
+  ).bind(new Date().toISOString(), active, body.last_error ?? null, auth.node.id).run();
   // Piggyback watchdog on every heartbeat — cheap and bounded.
   // Skip on the heartbeating node itself by short-circuiting in the
   // sweep (it just refreshed last_heartbeat_at to now).

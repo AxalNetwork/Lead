@@ -26,12 +26,12 @@
   }
 
   async function jget(path) {
-    const r = await fetch(API + path, { credentials: "include" });
+    const r = await window.adsUtil.request(API + path, { credentials: "include" });
     if (!r.ok) throw new Error("HTTP " + r.status + " " + path);
     return r.json();
   }
   async function jsend(method, path, body) {
-    const r = await fetch(API + path, {
+    const r = await window.adsUtil.request(API + path, {
       method, credentials: "include",
       headers: body ? { "Content-Type": "application/json" } : {},
       body: body ? JSON.stringify(body) : undefined,

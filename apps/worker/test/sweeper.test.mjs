@@ -18,14 +18,16 @@ const { sweepStuckJobs } = await import("../test-dist/routes/admin.js");
 test("budgetForPipeline: unknown kind → null, known kind → ms", () => {
   assert.equal(budgetForPipeline(null), null);
   assert.equal(budgetForPipeline(""), null);
-  assert.equal(budgetForPipeline("url"), null); // not in the override map
+  assert.equal(budgetForPipeline("profile_list"), null); // not in the override map
+  // Task #10 deliberately lifted single-URL scrape jobs to the heavy budget.
+  assert.equal(budgetForPipeline("url"), 180_000);
   assert.equal(budgetForPipeline("firm_team_crawl"), 180_000);
   assert.equal(budgetForPipeline("csv_import"), 240_000);
 });
 
 test("effectiveBudgetMs: override only LIFTS — never lowers operator-set budgets", () => {
   // No per-job budget, no override → default.
-  assert.equal(effectiveBudgetMs(null, "url"), DEFAULT_BUDGET_MS);
+  assert.equal(effectiveBudgetMs(null, "profile_list"), DEFAULT_BUDGET_MS);
   // No per-job budget, override present → override.
   assert.equal(effectiveBudgetMs(null, "firm_team_crawl"), PIPELINE_BUDGETS_MS.firm_team_crawl);
   // Per-job budget LARGER than override → per-job wins.
@@ -33,9 +35,9 @@ test("effectiveBudgetMs: override only LIFTS — never lowers operator-set budge
   // Per-job budget SMALLER than override → override lifts it.
   assert.equal(effectiveBudgetMs(60_000, "firm_team_crawl"), 180_000);
   // Per-job budget present, no override → per-job.
-  assert.equal(effectiveBudgetMs(120_000, "url"), 120_000);
+  assert.equal(effectiveBudgetMs(120_000, "profile_list"), 120_000);
   // Zero / negative jobBudget treated as "unset" so default applies.
-  assert.equal(effectiveBudgetMs(0, "url"), DEFAULT_BUDGET_MS);
+  assert.equal(effectiveBudgetMs(0, "profile_list"), DEFAULT_BUDGET_MS);
 });
 
 // ---------- 2. Sweeper step attribution -----------------------------------
@@ -300,4 +302,21 @@ test("groupDbErrors: groups by (normalized_message, route) and sorts by count de
   assert.equal(groups[0].count, 2);
   assert.equal(groups[0].route, "/api/a");
   assert.match(groups[0].normalized_message, /no such table: foo/);
+});
+
+// Regression: the candidate SELECT runs at the head of EVERY queue batch
+// (src/index.ts) and hourly. Unbounded, a post-outage backlog of `running`
+// rows could spend the whole invocation's subrequest budget in the sweep and
+// fail every message in the batch. Oldest-first + LIMIT keeps it bounded; the
+// hourly cron drains the remainder.
+test("sweepStuckJobs candidate query is bounded and oldest-first", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
+  const { dirname, resolve } = await import("node:path");
+  const here = dirname(fileURLToPath(import.meta.url));
+  const src = readFileSync(resolve(here, "../src/routes/admin.ts"), "utf8");
+  const q = src.slice(src.indexOf("SELECT id, kind, budget_ms, running_started_at"));
+  const stmt = q.slice(0, q.indexOf("`"));
+  assert.match(stmt, /ORDER BY running_started_at ASC/);
+  assert.match(stmt, /LIMIT \d+/);
 });

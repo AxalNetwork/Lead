@@ -7,3 +7,11 @@
 
 # Replit-uploaded user attachments — not part of the source tree
 attached_assets/
+
+# dependency trees (installed by npm ci / bundle install)
+node_modules/
+
+# Locally-installed Jekyll gems. apps/site/vendor/bundle/ruby/3.2.0 IS tracked
+# (it is what the GitHub Pages / Replit build uses); a bundle install on any
+# other Ruby writes a sibling tree that must not be committed.
+apps/site/vendor/bundle/ruby/3.3.0/

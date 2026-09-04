@@ -12,7 +12,7 @@
 // javascript: URLs.
 
 (function () {
-  var API = (window.ADS_API_BASE).replace(/\/+$/, "");
+  var API = String(window.ADS_API_BASE || "").replace(/\/+$/, "");
   var SVG_NS = "http://www.w3.org/2000/svg";
 
   function fmtUsd(v) {
@@ -313,8 +313,8 @@
     root.appendChild(el("div", { "class": "ads-loading" }, "Loading valuation marks…"));
     try {
       var [marksR, ivR] = await Promise.all([
-        fetch(API + "/api/companies/" + encodeURIComponent(opts.entityId) + "/marks", { credentials: "include" }),
-        fetch(API + "/api/companies/" + encodeURIComponent(opts.entityId) + "/implied-valuation", { credentials: "include" }),
+        window.adsUtil.request(API + "/api/companies/" + encodeURIComponent(opts.entityId) + "/marks", { credentials: "include" }),
+        window.adsUtil.request(API + "/api/companies/" + encodeURIComponent(opts.entityId) + "/implied-valuation", { credentials: "include" }),
       ]);
       var marksJson = marksR.ok ? await marksR.json() : { marks: [], blended_line: [] };
       var ivJson = ivR.ok ? await ivR.json() : null;
@@ -323,7 +323,7 @@
       var snap = null;
       if (ivJson && ivJson.panel_id) {
         try {
-          var snapR = await fetch(API + "/api/comp-panels/" + encodeURIComponent(ivJson.panel_id) + "/snapshot", { credentials: "include" });
+          var snapR = await window.adsUtil.request(API + "/api/comp-panels/" + encodeURIComponent(ivJson.panel_id) + "/snapshot", { credentials: "include" });
           if (snapR.ok) snap = await snapR.json();
         } catch (_) { /* peer panel is optional */ }
       }

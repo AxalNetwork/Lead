@@ -17,7 +17,7 @@
   function $$(s, root) { return Array.from((root || document).querySelectorAll(s)); }
   function escHtml(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" })[c]; }); }
   function fetchJson(path, opts) {
-    return fetch(API + path, Object.assign({ credentials: "include" }, opts || {}))
+    return window.adsUtil.request(API + path, Object.assign({ credentials: "include" }, opts || {}))
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); });
   }
   function commaList(s) {

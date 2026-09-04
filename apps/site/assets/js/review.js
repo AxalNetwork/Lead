@@ -3,7 +3,7 @@
 
   async function api(path, opts) {
     try {
-      var res = await fetch(API_BASE + path, Object.assign({ credentials: "include" }, opts || {}));
+      var res = await window.adsUtil.request(API_BASE + path, Object.assign({ credentials: "include" }, opts || {}));
       if (!res.ok) throw new Error("HTTP " + res.status);
       return await res.json();
     } catch (e) {

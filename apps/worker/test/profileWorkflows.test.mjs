@@ -171,15 +171,34 @@ function makeEnv() {
       is_current INTEGER NOT NULL DEFAULT 1,
       hash TEXT NOT NULL UNIQUE,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      verified INTEGER NOT NULL DEFAULT 0
+      verified INTEGER NOT NULL DEFAULT 0,
+      superseded_by_override INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE ai_cost_daily (
       day TEXT NOT NULL,
       purpose TEXT NOT NULL,
+      model TEXT NOT NULL DEFAULT '',
       neurons REAL NOT NULL DEFAULT 0,
       cost_usd REAL NOT NULL DEFAULT 0,
       calls INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (day, purpose)
+      PRIMARY KEY (day, purpose, model)
+    );
+    -- Task #3 (Editable Profiles, migration 376): insertFact consults the
+    -- lock table on every write. Mirror the prod shape so the canonical
+    -- write path runs exactly as it does in D1.
+    CREATE TABLE field_overrides (
+      id TEXT PRIMARY KEY,
+      entity_id TEXT NOT NULL,
+      predicate TEXT NOT NULL,
+      value_text TEXT,
+      value_numeric REAL,
+      value_json TEXT,
+      override_reason TEXT,
+      overridden_by_email TEXT NOT NULL,
+      overridden_at TEXT NOT NULL DEFAULT (datetime('now')),
+      locked INTEGER NOT NULL DEFAULT 1,
+      unlock_after TEXT,
+      bulk_operation_id TEXT
     );
     CREATE TABLE profile_workflow_runs (
       id TEXT PRIMARY KEY,
