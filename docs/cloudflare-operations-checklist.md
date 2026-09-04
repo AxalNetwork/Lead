@@ -79,6 +79,46 @@ Vars already in `wrangler.toml` (`[vars]`): `ENVIRONMENT = "production"`
 on sanitized error envelopes), `ALLOWED_EMAIL`, `ACCESS_*`, AI model ids
 and budget caps, aggregator page budgets.
 
+## 4b. Deploy paths — there are currently TWO (verify this)
+
+`.github/workflows/deploy-worker.yml` is the intended deploy path. Its own
+header says it "replaces the Cloudflare-hosted Workers Build pipeline,
+which kept failing because the repo is a monorepo". That replacement is
+**not complete**: the Cloudflare Git integration is still connected and
+still building this repository.
+
+Observed on 2026-09-04, on pull request #29 (a draft, on a feature
+branch, never merged): the `cloudflare-workers-and-pages` bot posted
+"Deployment successful" for two branch commits, linking to
+`dash.cloudflare.com/.../workers/services/view/lead/production/builds/…`.
+A `Workers Builds: lead` check ran on the PR and passed.
+
+Why this matters: **Workers Builds bypasses every gate in
+`deploy-worker.yml`** — typecheck, the ML-eval regression gate, R2 /
+Vectorize / Queue / KV pre-create, drift detection, and
+`d1 migrations apply --remote`. A branch whose code needs a migration
+could therefore reach the Worker before its migration reaches D1. The
+root `package.json` still carries `"deploy": "cd apps/worker && npx
+wrangler deploy"`, which is exactly what a Workers Builds deploy command
+would invoke, and it deploys the real Worker.
+
+This could not be verified from the session that wrote this file: its
+Cloudflare connection is to a different account, so the build settings
+were not readable. **Check in the dashboard** (Workers & Pages → `lead` →
+Settings → Builds) and pick one:
+
+- **Disable the Git integration** — `deploy-worker.yml` becomes the only
+  path, matching the stated intent, or
+- **Restrict it to the production branch** and confirm non-production
+  branches produce preview deployments only, or
+- **Keep it and retire `deploy-worker.yml`** — but then the gates it runs
+  (especially `d1 migrations apply`) must move into the Workers Builds
+  deploy command, or they simply stop running.
+
+Whichever is chosen, record it here and in `replit.md`, which currently
+documents `deploy-worker.yml` as the deploy path and does not mention
+Workers Builds at all.
+
 ## 5. GitHub Actions
 
 | Secret | Scopes |

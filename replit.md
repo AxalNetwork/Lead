@@ -26,6 +26,17 @@ Two GitHub Actions workflows matter:
   nine stale test expectations; both are fixed. Note `npm ci` needs
   network access to `cdn.sheetjs.com` for the `xlsx` tarball.
 
+- **`Workers Builds` (Cloudflare Git integration) is ALSO still
+  connected**, despite `deploy-worker.yml`'s header saying it replaced
+  it. It built and reported "Deployment successful" for feature-branch
+  commits on draft PR #29. It bypasses every gate the workflow runs —
+  typecheck, ML-eval gate, resource pre-create, drift detection, and
+  `d1 migrations apply --remote` — so code can reach the Worker ahead of
+  its migrations. Decide which path is authoritative and disable or
+  restrict the other; see `docs/cloudflare-operations-checklist.md`
+  section 4b. Not verifiable from a workspace without dashboard access
+  to account `30c9362191318777b71647145decda48`.
+
 **Manual deploy escape hatch** (use only with explicit user approval):
 `cd apps/worker && npx wrangler@3.99.0 deploy`. This bypasses every gate
 and ships whatever local commits exist, so prefer the GitHub Action.
