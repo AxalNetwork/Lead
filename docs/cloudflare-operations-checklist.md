@@ -148,7 +148,18 @@ This also explains why the still-connected Workers Builds integration
 
 | Secret | Scopes |
 | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | Workers Scripts: Edit · Workers KV Storage: Edit · Workers R2 Storage: Edit · D1: Edit · Vectorize: Edit · Queues: Edit · Workers AI: Read · Account Analytics: Read (see `apps/worker/README.md` for symptoms of a missing scope). |
+| `CLOUDFLARE_API_TOKEN` | **Account:** Workers Scripts: Edit · Workers KV Storage: Edit · Workers R2 Storage: Edit · D1: Edit · Vectorize: Edit · Queues: Edit · Workers AI: Read · Account Analytics: Read. **Zone (`aidatasignal.com`):** Workers Routes: Edit. See `apps/worker/README.md` for symptoms of each missing scope. |
+
+> **The zone scope is currently missing** (observed 2026-09-05). The
+> deploy now completes every earlier step — including applying D1
+> migrations remotely and uploading the Worker bundle — then fails
+> attaching the `api.aidatasignal.com` custom-domain route with
+> `Authentication error [code: 10000]` on `/zones/…/workers/routes`.
+> Mint a replacement token that adds **Zone → Workers Routes → Edit** on
+> `aidatasignal.com` and rotate the `CLOUDFLARE_API_TOKEN` repo secret;
+> the rotation procedure is in `apps/worker/README.md`. Until then
+> `deploy-worker.yml` cannot finish, and the Workers Builds integration
+> (section 4b) remains the only path that deploys the Worker.
 
 ## 6. Verifying an environment
 
