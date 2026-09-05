@@ -119,6 +119,31 @@ Whichever is chosen, record it here and in `replit.md`, which currently
 documents `deploy-worker.yml` as the deploy path and does not mention
 Workers Builds at all.
 
+## 4c. Both deploy workflows were broken until 2026-09-05
+
+Neither shipped anything in recorded history; worth knowing when reading
+"last deployed" claims in `replit.md`.
+
+- **`pages.yml`** (dashboard → GitHub Pages) hit the same
+  Ruby-patch-locked vendored gems as `check.yml`'s site job.
+- **`deploy-worker.yml`** (Worker → Cloudflare) died in the *remote*
+  ML-eval gate. `scripts/eval-gate.mjs` calls `api.aidatasignal.com` from
+  an unauthenticated runner; Access redirects to a login page rather than
+  returning 401/403, so the script got `200 text/html` and threw
+  `SyntaxError: Unexpected token '<'` out of `res.json()` — after the
+  local gate had already passed.
+
+  Two ways to make the remote gate actually run rather than soft-pass:
+  add an Access **service token** for the API app and set its id/secret
+  as `GATE_API_TOKEN`, or add an Access **bypass policy** for the single
+  path `/api/ml/eval/gate`. Until one of those exists the gate soft-passes
+  with a warning and `scripts/eval-local.mjs` — which runs against the
+  candidate commit and is the primary gate by design — is the real
+  protection.
+
+This also explains why the still-connected Workers Builds integration
+(section 4b) is the only path that has been deploying the Worker.
+
 ## 5. GitHub Actions
 
 | Secret | Scopes |

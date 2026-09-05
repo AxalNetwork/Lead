@@ -74,7 +74,32 @@ if (!res.ok) {
   process.exit(1);
 }
 
-const report = await res.json();
+// Cloudflare Access fronts api.aidatasignal.com. An unauthenticated caller —
+// which is what this runner is — is not answered with 401/403: Access
+// redirects to its login page, and `fetch` follows that to a 200 carrying
+// HTML. So the JSON parse below used to throw an unhandled SyntaxError
+// ("Unexpected token '<'") and brick the deploy on every run.
+//
+// Same reasoning as the 401/403 branch above: no token means the remote gate
+// is not provisioned, and the PRIMARY defense is the local candidate-commit
+// gate (scripts/eval-local.mjs) that already ran earlier in this workflow.
+// Soft-pass loudly. With a token set, a non-JSON body is a real misconfig
+// (wrong URL, or a service token Access rejects), so fail hard.
+const rawBody = await res.text();
+let report;
+try {
+  report = JSON.parse(rawBody);
+} catch {
+  const looksLikeAccess = /<!DOCTYPE|<html/i.test(rawBody.slice(0, 200));
+  const what = looksLikeAccess ? "an HTML page (Cloudflare Access login)" : "a non-JSON body";
+  if (!TOKEN) {
+    console.warn(`eval-gate: got ${what} instead of JSON and no GATE_API_TOKEN set — remote gate not provisioned, soft-passing. Local eval-local.mjs gate already ran earlier in this workflow.`);
+    process.exit(0);
+  }
+  console.error(`eval-gate: got ${what} instead of JSON with GATE_API_TOKEN set — check GATE_BASE_URL and that the token satisfies Cloudflare Access. Set GATE_SKIP=1 to bypass.`);
+  console.error(`eval-gate: first 200 bytes: ${rawBody.slice(0, 200)}`);
+  process.exit(1);
+}
 console.log(`eval-gate: passed=${report.passed} threshold=${report.thresholdPct}% rows=${(report.rows || []).length}`);
 for (const r of report.rows || []) {
   const skip = r.skipped_reason ? ` [${r.skipped_reason}]` : "";

@@ -23,12 +23,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # `apps/site/vendor/bundle` is committed and carries native extensions
+      # — bigdecimal, ffi, eventmachine, google-protobuf — compiled against
+      # the exact libruby of whatever machine built them
+      # (`libruby-3.2.2.so.3.2`). The runner ships a different Ruby 3.2 patch
+      # build, so reusing them fails at load with "cannot open shared object
+      # file" and no page is ever published.
+      #
+      # Point bundler at a runner-local path so the build compiles gems
+      # against the Ruby it actually runs. BUNDLE_APP_CONFIG is required as
+      # well as BUNDLE_PATH: a local `.bundle/config` (which pins
+      # `vendor/bundle`) outranks the BUNDLE_PATH env var on its own. Neither
+      # the committed gem tree nor `.bundle/config` is modified.
+      #
+      # Kept in step with the identical block in check.yml — change both.
+      - name: Point bundler away from the committed vendor/bundle
+        run: |
+          echo "BUNDLE_APP_CONFIG=$RUNNER_TEMP/bundle-config" >> "$GITHUB_ENV"
+          echo "BUNDLE_PATH=$RUNNER_TEMP/bundle" >> "$GITHUB_ENV"
+
       - name: Setup Ruby
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.2"
-          bundler-cache: true
           working-directory: apps/site
+
+      # Not `bundler-cache: true`: that installs into `vendor/bundle` before
+      # the step above can take effect, which is the failure this avoids.
+      - name: Install gems
+        run: bundle install --jobs 4 --retry 3
 
       - name: Setup Pages
         id: pages
