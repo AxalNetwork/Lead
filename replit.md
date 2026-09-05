@@ -35,6 +35,16 @@ Two GitHub Actions workflows matter:
   `GATE_API_TOKEN` is set — matching its existing 401/403-without-token
   branch, since the local candidate-commit gate is the primary defense —
   and fails hard on non-JSON when a token IS set.
+  **Still blocked, one step from the end:** with that fixed the workflow
+  now runs every step — resource pre-create, drift detection,
+  `d1 migrations apply --remote`, and the bundle upload — and then fails
+  attaching the `api.aidatasignal.com` custom-domain route:
+  `A request to the Cloudflare API (/zones/…/workers/routes) failed.
+  Authentication error [code: 10000]`. `CLOUDFLARE_API_TOKEN` holds the
+  account scopes but not the **zone** scope
+  **Zone → Workers Routes → Edit** on `aidatasignal.com`. Minting a
+  replacement token and rotating the repo secret is the only fix — it
+  cannot be done from the repo.
 - **`check.yml`** — runs on push/PR: typecheck → **lint** → anti-pattern
   gates → **test** (`npm test`). As of the platform-audit pass this is
   **GREEN locally** (typecheck clean, lint 0 errors / warnings only,

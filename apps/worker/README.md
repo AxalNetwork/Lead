@@ -143,9 +143,15 @@ All of the following scopes are **mandatory** — the deploy workflow
 fails hard on any missing scope (auth errors return `code:10000`,
 which the affected step surfaces with a pointer back to this section):
 
+All rows below except the last are **account**-scoped; the last is
+**zone**-scoped on `aidatasignal.com`
+(`696c7cc93293750db3fca9aa3015eceb`). A token holding every account scope
+and no zone scope gets *most* of the way through a deploy — see the note
+under the table.
+
 | Scope                          | Used by                                                              |
 | ------------------------------ | -------------------------------------------------------------------- |
-| **Workers Scripts: Edit**      | `wrangler deploy` (uploads the worker bundle, custom domain route)   |
+| **Workers Scripts: Edit**      | `wrangler deploy` (uploads the worker bundle)                        |
 | **Workers KV Storage: Edit**   | `Ensure KV namespaces exist` step + KV writes during deploy          |
 | **Workers R2 Storage: Edit**   | `Ensure R2 buckets exist` step + R2 binding validation               |
 | **D1: Edit**                   | `Apply D1 migrations (remote)` step + D1 binding validation          |
@@ -153,6 +159,21 @@ which the affected step surfaces with a pointer back to this section):
 | **Queues: Edit**               | `Ensure Queues exist` step + queue producer/consumer binding         |
 | **Workers AI: Read**           | runtime AI binding validation                                        |
 | **Account Analytics: Read**    | `Ensure Analytics Engine datasets are reachable` step (AE SQL probe) |
+| **Zone → Workers Routes: Edit** (zone `aidatasignal.com`) | `wrangler deploy` attaching the `[[routes]] custom_domain` `api.aidatasignal.com`. **This is a ZONE scope, not an account scope** — every other row is account-scoped, so it is easy to miss when minting the token. |
+
+> **Observed 2026-09-05.** With every account scope granted but this zone
+> scope missing, the deploy runs all the way through resource
+> pre-create, drift detection, `d1 migrations apply --remote`, and the
+> bundle upload (`Uploaded lead`), then fails on the very last call:
+>
+> ```
+> ✘ [ERROR] A request to the Cloudflare API (/zones/696c7cc93293750db3fca9aa3015eceb/workers/routes) failed.
+>   Authentication error [code: 10000]
+> ```
+>
+> The failure is easy to misread as a broken deploy step, because the
+> upload immediately above it succeeded. The `/zones/…` in the URL is the
+> tell: an account-scoped token cannot write a zone's Worker routes.
 
 Symptoms of a missing scope: the affected workflow step exits 1 with
 `AUTH FAILURE: token is missing <Scope>` and the raw Cloudflare API
