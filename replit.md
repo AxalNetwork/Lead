@@ -18,6 +18,23 @@ Two GitHub Actions workflows matter:
   resource pre-create (R2 / Vectorize / Queues / KV / AE) → D1
   migrations apply → `wrangler deploy`. **Typecheck is GREEN** — it is
   NOT the blocker.
+- **`pages.yml`** — publishes `apps/site` to GitHub Pages on every push
+  to `main`. **Had never succeeded** in recorded history: it carried the
+  same vendored-native-gem bug as `check.yml`'s site job (see below), so
+  the dashboard was not being republished by CI at all. Fixed by the same
+  runner-local bundler redirect; the two blocks are kept in step.
+- **`deploy-worker.yml`** — **had never succeeded** either, in any
+  recorded run since 2026-06-02, which is why every worker deploy in this
+  repo's history was manual. The remote ML-eval gate
+  (`scripts/eval-gate.mjs`) GETs `api.aidatasignal.com` from an
+  unauthenticated runner; Cloudflare Access does not answer that with
+  401/403 but redirects to a login page, so the script received
+  `200 text/html`, threw `SyntaxError: Unexpected token '<'` out of
+  `res.json()`, and bricked the deploy after the local gate had already
+  passed. The script now soft-passes a non-JSON body when no
+  `GATE_API_TOKEN` is set — matching its existing 401/403-without-token
+  branch, since the local candidate-commit gate is the primary defense —
+  and fails hard on non-JSON when a token IS set.
 - **`check.yml`** — runs on push/PR: typecheck → **lint** → anti-pattern
   gates → **test** (`npm test`). As of the platform-audit pass this is
   **GREEN locally** (typecheck clean, lint 0 errors / warnings only,
