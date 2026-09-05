@@ -1,0 +1,26 @@
+{%- comment -%}
+Breadcrumb for detail pages — artboard 2f.
+
+Turn 1 of the design canvas flagged that detail pages have no breadcrumb;
+that is true of all six (`*-detail.html`). Two of them carried an ad-hoc
+`<p><a>&larr; All companies</a></p>`; this replaces those so all six agree.
+
+Below 768px it collapses to the back affordance alone (mobile.css hides the
+separator and the trailing name) because the entity name is already the
+<h1> immediately below. `here` is seeded with the page title so the trail
+never renders a dangling separator; mobile.js replaces it with the entity
+name once the page has fetched one.
+
+Detail pages are addressed by query string (`?id=…`), so the parent link is
+a real href rather than history.back(): a cold load from a shared link has
+no history to go back to.
+
+Usage:
+  {% include components/crumb.html parent="Firms" parent_url="/dashboard/firms/" %}
+Optional: here="…" to override the trailing label.
+{%- endcomment -%}
+<nav class="ads-crumb" aria-label="Breadcrumb">
+  <a href="{{ include.parent_url }}"><span aria-hidden="true">&lsaquo;</span><span>{{ include.parent }}</span></a>
+  <span class="ads-crumb__sep" aria-hidden="true">/</span>
+  <span class="ads-crumb__here" id="ads-crumb-here">{{ include.here | default: page.title }}</span>
+</nav>

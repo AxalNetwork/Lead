@@ -4,9 +4,10 @@ title: Investor
 permalink: /dashboard/investors/detail/
 ---
 
+{% include components/crumb.html parent="Investors" parent_url="/dashboard/investors/" %}
+
 <link rel="stylesheet" href="/assets/css/investor-tabs.css?v={{ site.time | date: '%s' }}">
 <div id="ads-investor-detail-root">
-  <p><a href="/dashboard/investors/">&larr; All investors</a></p>
   <div id="ads-investor-detail"><div class="ads-loading">Loading…</div></div>
 </div>
 

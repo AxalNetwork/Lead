@@ -148,6 +148,18 @@ real operator browser session.
 - **Dashboard asset cache-busting.** Per-page `<script>`/`<link>` tags
   append `?v={{ site.time | date: '%s' }}` so deployed JS/CSS fixes
   actually reach operators. New dashboard pages must follow this.
+- **Mobile nav is a second inventory.** Below 768px the rail is hidden
+  and `_includes/shell/tabbar.html` + `_includes/shell/more-sheet.html`
+  take over. The sheet mirrors `shell/sidenav.html` 1:1 except for the
+  two links the tab bar carries (Home, Merge Review), so **a link added
+  to the rail must be added to the sheet too** or it is unreachable on a
+  phone.
+- **Mobile lists come from `.ads-table`, not from the page.**
+  `assets/js/mobile.js` stamps every body cell with its column header as
+  `data-label` and `assets/css/mobile.css` restyles that same markup as a
+  card below 768px — so any list built as `<table class="ads-table">`
+  with a real `<thead>` gets the card layout free, and a list rendered
+  any other way gets nothing. Build lists as `.ads-table`.
 
 ## Global conventions
 These durable rules are shared by every feature; later sections only
