@@ -29,7 +29,7 @@
 
   async function fetchFact(factId) {
     if (cache.has(factId)) return cache.get(factId);
-    var p = fetch(API + "/api/facts/" + encodeURIComponent(factId) + "/citations", { credentials: "include" })
+    var p = window.adsUtil.request(API + "/api/facts/" + encodeURIComponent(factId) + "/citations", { credentials: "include" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .catch(function () { return null; });
     cache.set(factId, p);
@@ -156,7 +156,7 @@
         var factId = btn.getAttribute("data-fact-id");
         var competing = btn.getAttribute("data-competing") || null;
         try {
-          var res = await fetch(API + "/api/facts/" + encodeURIComponent(factId) + "/resolve-dispute", {
+          var res = await window.adsUtil.request(API + "/api/facts/" + encodeURIComponent(factId) + "/resolve-dispute", {
             method: "POST", credentials: "include",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ competing_fact_id: competing, decision: "canonical" }),

@@ -2327,6 +2327,10 @@ export async function runJob(msg: JobMessage, env: Env, budget?: SubrequestBudge
         return processSingleUrl(env, jobId, msg.target, msg.config, budget);
       }
     }, { meta: { target: msg.target, kind: msg.kind } });
+    // Observe the executor independently of the race: when the deadline
+    // wins we return early and a later executor rejection would otherwise
+    // surface as an unhandled rejection in the Worker.
+    executorPromise.catch(() => undefined);
     let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
     const deadlinePromise: Promise<"__deadline__"> = new Promise((resolve) => {
       const remaining = Math.max(0, deadline - Date.now());

@@ -115,8 +115,23 @@ pages in this task beyond the People list").
     <a class="ads-rail__link {% if p contains '/dashboard/merge-review' or p contains '/dashboard/review' %}active{% endif %}" href="/dashboard/merge-review/" data-cmdk-nav="Merge Review">
       <span class="ads-rail__icon">⇌</span><span>Merge Review</span>
     </a>
-    <a class="ads-rail__link" href="/ops/quality/" data-cmdk-nav="Quality Console">
+    <a class="ads-rail__link {% if p contains '/ops/quality' %}active{% endif %}" href="/ops/quality/" data-cmdk-nav="Quality Console">
       <span class="ads-rail__icon">◑</span><span>Quality Console</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/ops/crawler' %}active{% endif %}" href="/ops/crawler/" data-cmdk-nav="Crawler Ops">
+      <span class="ads-rail__icon">◉</span><span>Crawler Ops</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/ops/system-health' %}active{% endif %}" href="/ops/system-health/" data-cmdk-nav="Ops Health">
+      <span class="ads-rail__icon">✚</span><span>Ops Health</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/ops/incidents' %}active{% endif %}" href="/ops/incidents/" data-cmdk-nav="Incidents">
+      <span class="ads-rail__icon">◭</span><span>Incidents</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/ops/compute-nodes' %}active{% endif %}" href="/ops/compute-nodes/" data-cmdk-nav="Compute Nodes">
+      <span class="ads-rail__icon">⬡</span><span>Compute Nodes</span>
+    </a>
+    <a class="ads-rail__link {% if p contains '/ops/garbage-review' %}active{% endif %}" href="/ops/garbage-review/" data-cmdk-nav="Garbage Review">
+      <span class="ads-rail__icon">⌫</span><span>Garbage Review</span>
     </a>
     <a class="ads-rail__link {% if p contains '/dashboard/jobs' %}active{% endif %}" href="/dashboard/jobs/" data-cmdk-nav="Jobs">
       <span class="ads-rail__icon">≡</span><span>Jobs</span>

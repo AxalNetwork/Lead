@@ -43,7 +43,7 @@
   function fmtPct(n) { return n == null ? "—" : (n * 100).toFixed(1) + "%"; }
 
   async function api(path) {
-    var res = await fetch(API + path, { credentials: "include" });
+    var res = await window.adsUtil.request(API + path, { credentials: "include" });
     if (!res.ok) throw new Error(path + " -> " + res.status);
     return res.json();
   }

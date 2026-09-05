@@ -3,7 +3,7 @@
   // Reuse the shared apiFetch from dashboard.js so the Cloudflare Access cookie
   // and JSON error parsing are identical across pages.
   var apiFetch = window.adsApiFetch || function (path, opts) {
-    return fetch(API_BASE + path, Object.assign({ credentials: "include" }, opts || {})).then(function (r) {
+    return window.adsUtil.request(API_BASE + path, Object.assign({ credentials: "include" }, opts || {})).then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     });

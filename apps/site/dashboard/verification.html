@@ -43,7 +43,7 @@ permalink: /dashboard/verification/
 
   async function loadVerifications() {
     try {
-      const r = await fetch(apiBase + "/api/persons/" + encodeURIComponent(id) + "/verifications", opts);
+      const r = await window.adsUtil.request(apiBase + "/api/persons/" + encodeURIComponent(id) + "/verifications", opts);
       if (r.status === 403) { vTab.innerHTML = '<div class="ads-card">Access denied.</div>'; return; }
       const body = await r.json();
       if (!body.items || !body.items.length) { vTab.innerHTML = '<div class="ads-card">No verification findings yet.</div>'; return; }
@@ -66,7 +66,7 @@ permalink: /dashboard/verification/
 
   async function loadReferences() {
     try {
-      const r = await fetch(apiBase + "/api/persons/" + encodeURIComponent(id) + "/references", opts);
+      const r = await window.adsUtil.request(apiBase + "/api/persons/" + encodeURIComponent(id) + "/references", opts);
       if (r.status === 403) { rTab.innerHTML = '<div class="ads-card">Access denied.</div>'; return; }
       const body = await r.json();
       if (!body.items || !body.items.length) { rTab.innerHTML = '<div class="ads-card">No reference candidates yet.</div>'; return; }

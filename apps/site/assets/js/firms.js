@@ -138,7 +138,7 @@
     if (window.ADS_DDBadge) window.ADS_DDBadge.decorate("firms", tbody);
   }
 
-  function api(path, opts) { return fetch(API_BASE + path, Object.assign({ credentials: "include" }, opts || {})).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }); }
+  function api(path, opts) { return window.adsUtil.request(API_BASE + path, Object.assign({ credentials: "include" }, opts || {})).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }); }
 
   function loadResults(append) {
     var p = buildQS(document.getElementById("ads-firms-filters"));
@@ -178,7 +178,7 @@
         b.addEventListener("click", async function (e) {
           e.preventDefault();
           if (!(await window.ADS.ui.confirm({ title: "Delete saved view?", body: "This filter will be removed from your saved views.", confirmLabel: "Delete", danger: true }))) return;
-          fetch(API_BASE + "/api/saved-filters/" + b.dataset.id, { method: "DELETE", credentials: "include" }).then(loadViews);
+          window.adsUtil.request(API_BASE + "/api/saved-filters/" + b.dataset.id, { method: "DELETE", credentials: "include" }).then(loadViews);
         });
       });
     }).catch(function () { ul.innerHTML = '<li class="ads-muted">Failed to load.</li>'; });
@@ -432,7 +432,7 @@
     document.getElementById("ads-firms-save-view").addEventListener("click", function () {
       var name = prompt("Name this view:"); if (!name) return;
       var qs = buildQS(document.getElementById("ads-firms-filters")).toString();
-      fetch(API_BASE + "/api/saved-filters", {
+      window.adsUtil.request(API_BASE + "/api/saved-filters", {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: name, entity: "firms", querystring: qs }),
@@ -445,7 +445,7 @@
         window.adsExport.openCustom({ entity: "firms", filter: filter });
         return;
       }
-      fetch(API_BASE + "/api/exports/csv", {
+      window.adsUtil.request(API_BASE + "/api/exports/csv", {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

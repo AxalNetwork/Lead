@@ -20,7 +20,7 @@
       if (!ref) { body.innerHTML = '<div class="ads-muted" style="font-size:12px">No entity ref.</div>'; return; }
       try {
         var API = (window.ADS_API_BASE).replace(/\/+$/, "");
-        var r = await fetch(API + "/api/entities/resolve?table=" + encodeURIComponent(TABLE) + "&ref=" + encodeURIComponent(ref), { credentials: "include" });
+        var r = await window.adsUtil.request(API + "/api/entities/resolve?table=" + encodeURIComponent(TABLE) + "&ref=" + encodeURIComponent(ref), { credentials: "include" });
         var j = r.ok ? await r.json() : null;
         if (!j || !j.entity_id) {
           body.innerHTML = '<div class="ads-muted" style="font-size:12px">No unified entity mapped for this company yet.</div>';

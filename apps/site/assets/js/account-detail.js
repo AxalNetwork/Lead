@@ -9,7 +9,7 @@
   function fmt(n) { if (n == null || isNaN(n)) return "—"; return Math.round(Number(n) * 10) / 10; }
   function api(path, opts) {
     var fn = window.adsApiFetch || function (p, o) {
-      return fetch(API + p, Object.assign({ credentials: "include" }, o || {})).then(function (r) {
+      return window.adsUtil.request(API + p, Object.assign({ credentials: "include" }, o || {})).then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status); return r.json();
       });
     };

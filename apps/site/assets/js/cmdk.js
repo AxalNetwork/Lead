@@ -70,7 +70,7 @@
     var rid = ++lastReqId;
     var ctl = new AbortController();
     var to = setTimeout(function () { ctl.abort(); }, 1500);
-    fetch(API.replace(/\/$/, "") + "/api/search?q=" + encodeURIComponent(q) + "&limit=8", {
+    window.adsUtil.request(API.replace(/\/$/, "") + "/api/search?q=" + encodeURIComponent(q) + "&limit=8", {
       credentials: "include", signal: ctl.signal
     }).then(function (r) { return r.ok ? r.json() : []; })
       .then(function (json) {

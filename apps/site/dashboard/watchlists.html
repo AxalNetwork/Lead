@@ -94,7 +94,7 @@ permalink: /dashboard/watchlists/
 
   function load() {
     body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:24px">Loading…</td></tr>';
-    fetch(api("/api/watchlists"), { credentials: "include" })
+    window.adsUtil.request(api("/api/watchlists"), { credentials: "include" })
       .then(function (r) { return r.ok ? r.json() : { items: [] }; })
       .then(function (j) { render(j.items || []); });
   }
@@ -120,7 +120,7 @@ permalink: /dashboard/watchlists/
     }).join("");
   }
 
-  fetch(api("/api/alerts/trigger-kinds"), { credentials: "include" })
+  window.adsUtil.request(api("/api/alerts/trigger-kinds"), { credentials: "include" })
     .then(function (r) { return r.ok ? r.json() : { kinds: [] }; })
     .then(function (j) {
       (j.kinds || []).forEach(function (k) {
@@ -139,7 +139,7 @@ permalink: /dashboard/watchlists/
     };
     var fj = (fd.get("filter_json") || "").toString().trim();
     if (fj) { try { body.filter_json = JSON.parse(fj); } catch (e) { alert("filter_json must be valid JSON"); return; } }
-    fetch(api("/api/watchlists"), {
+    window.adsUtil.request(api("/api/watchlists"), {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     }).then(function (r) { return r.json(); }).then(function () { createForm.reset(); load(); });
@@ -152,17 +152,17 @@ permalink: /dashboard/watchlists/
       openDetail(t.dataset.open);
     } else if (t.dataset && t.dataset.delete) {
       if (!confirm("Delete this watchlist?")) return;
-      fetch(api("/api/watchlists/" + encodeURIComponent(t.dataset.delete)),
+      window.adsUtil.request(api("/api/watchlists/" + encodeURIComponent(t.dataset.delete)),
         { method: "DELETE", credentials: "include" }).then(load);
     } else if (t.dataset && t.dataset.reeval) {
-      fetch(api("/api/watchlists/" + encodeURIComponent(t.dataset.reeval) + "/reevaluate"),
+      window.adsUtil.request(api("/api/watchlists/" + encodeURIComponent(t.dataset.reeval) + "/reevaluate"),
         { method: "POST", credentials: "include" }).then(load);
     }
   });
 
   function openDetail(id, opts) {
     var preserveResult = !!(opts && opts.preserveResult);
-    fetch(api("/api/watchlists/" + encodeURIComponent(id)), { credentials: "include" })
+    window.adsUtil.request(api("/api/watchlists/" + encodeURIComponent(id)), { credentials: "include" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (w) {
         if (!w) return;
@@ -211,7 +211,7 @@ permalink: /dashboard/watchlists/
     };
     var cc = (fd.get("channel_config") || "").toString().trim();
     if (cc) { try { body.channel_config = JSON.parse(cc); } catch (e) { alert("channel_config must be valid JSON"); return; } }
-    fetch(api("/api/alerts/rules"), {
+    window.adsUtil.request(api("/api/alerts/rules"), {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     }).then(function (r) { return r.json(); }).then(function (j) {
@@ -231,7 +231,7 @@ permalink: /dashboard/watchlists/
     var t = e.target;
     if (t.dataset && t.dataset.ruleDelete) {
       if (!confirm("Delete this rule?")) return;
-      fetch(api("/api/alerts/rules/" + encodeURIComponent(t.dataset.ruleDelete)),
+      window.adsUtil.request(api("/api/alerts/rules/" + encodeURIComponent(t.dataset.ruleDelete)),
         { method: "DELETE", credentials: "include" }).then(function () {
           openDetail(ruleForm.elements.watchlist_id.value);
         });

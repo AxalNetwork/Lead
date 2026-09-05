@@ -184,7 +184,7 @@ permalink: /dashboard/merge-review/
   }
 
   function load() {
-    fetch(API + "/api/dedupe/review", { credentials: "include" })
+    window.adsUtil.request(API + "/api/dedupe/review", { credentials: "include" })
       .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(function (data) {
         var items = (data && data.items) || [];
@@ -216,12 +216,12 @@ permalink: /dashboard/merge-review/
     // (default text/plain) lets the auth cookie ride along; the Hono
     // handlers still parse the body via c.req.json(). See Task #25.
     if (action === "merge") {
-      return fetch(API + "/api/dedupe/review/" + encodeURIComponent(id) + "/merge", {
+      return window.adsUtil.request(API + "/api/dedupe/review/" + encodeURIComponent(id) + "/merge", {
         method: "POST", credentials: "include", body: "{}"
       });
     }
     var body = action === "needs-more-info" ? { skip_days: 14 } : {};
-    return fetch(API + "/api/dedupe/review/" + encodeURIComponent(id) + "/reject", {
+    return window.adsUtil.request(API + "/api/dedupe/review/" + encodeURIComponent(id) + "/reject", {
       method: "POST", credentials: "include", body: JSON.stringify(body)
     });
   }

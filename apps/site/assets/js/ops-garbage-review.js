@@ -15,7 +15,7 @@
   function fmt(s) { return s ? new Date(s).toLocaleString() : "—"; }
 
   async function api(path, opts) {
-    var r = await fetch(API + path, Object.assign({ credentials: "include" }, opts || {}));
+    var r = await window.adsUtil.request(API + path, Object.assign({ credentials: "include" }, opts || {}));
     if (r.status === 403) { showForbidden(); throw new Error("forbidden"); }
     if (!r.ok) throw new Error("HTTP " + r.status);
     return r.json();

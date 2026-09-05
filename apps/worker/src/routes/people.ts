@@ -16,12 +16,14 @@ export const peopleRoute = new Hono<{ Bindings: Env; Variables: { email: string 
 
 // Click-to-sort allowlist: public sort key -> SQL column. Unknown keys fall
 // back to the default created_at order so ORDER BY is injection-safe.
-const PEOPLE_SORTABLE: Record<string, string> = {
+// Prototype-free map: a plain object literal would resolve `?sort_by=constructor`
+// (or toString/__proto__) to an inherited function and crash the ORDER BY.
+const PEOPLE_SORTABLE: Record<string, string> = Object.assign(Object.create(null) as Record<string, string>, {
   name: "e.display_name",
   domain: "e.primary_domain",
   email: "e.primary_email_key",
   created: "e.created_at",
-};
+});
 
 interface PeopleRow {
   id: string;

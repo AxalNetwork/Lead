@@ -172,9 +172,9 @@ export async function collectQueues(env: Env): Promise<QueueCard[]> {
   const jobsCard = await safeQuery(async () => {
     const r = await env.DB.prepare(
       `SELECT
-         SUM(CASE WHEN status IN ('pending','running') THEN 1 ELSE 0 END) AS depth,
-         MIN(CASE WHEN status IN ('pending','running') THEN created_at END) AS oldest,
-         SUM(CASE WHEN status='failed' AND created_at >= datetime('now','-1 day') THEN 1 ELSE 0 END) AS failed_24h
+         SUM(CASE WHEN status IN ('queued','running') THEN 1 ELSE 0 END) AS depth,
+         MIN(CASE WHEN status IN ('queued','running') THEN created_at END) AS oldest,
+         SUM(CASE WHEN status IN ('failed','dead_letter','timed_out') AND created_at >= datetime('now','-1 day') THEN 1 ELSE 0 END) AS failed_24h
          FROM jobs`,
     ).first<{ depth: number | null; oldest: string | null; failed_24h: number | null }>();
     return r;

@@ -17,7 +17,7 @@
     return (n / 1024 / 1024).toFixed(2) + " MB";
   }
   function api(p) {
-    return fetch(API + p, { credentials: "include" }).then(function (r) {
+    return window.adsUtil.request(API + p, { credentials: "include" }).then(function (r) {
       if (!r.ok) return r.text().then(function (t) { throw new Error("HTTP " + r.status + ": " + t.slice(0, 200)); });
       return r.json();
     });

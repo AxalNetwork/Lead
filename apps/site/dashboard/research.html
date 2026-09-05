@@ -201,7 +201,7 @@ permalink: /dashboard/research/
 
   // ---------- API helpers --------------------------------------------------
   const apiFetch = async (path, opts = {}) => {
-    const r = await fetch(`${API}/api/agent${path}`, {
+    const r = await window.adsUtil.request(`${API}/api/agent${path}`, {
       credentials: "include",
       ...opts,
       headers: { "content-type": "application/json", ...(opts.headers || {}) },
@@ -423,14 +423,14 @@ permalink: /dashboard/research/
     }
     if (action === "watch") {
       // The watchlist endpoint lives outside the /api/agent namespace, so
-      // we use an absolute fetch (apiFetch hard-prefixes /api/agent and
-      // would route this to the wrong path). Best-effort: if the server
-      // returns 404 (no per-entity watchlist toggle wired yet) we fall
-      // back to prefilling the compose box so the user can still queue
-      // a follow-up action without a runtime error.
-      fetch(`${API}/api/entities/${encodeURIComponent(id)}/watchlist`, {
+      // we call it directly (apiFetch hard-prefixes /api/agent and would
+      // route this to the wrong path). POST /api/watchlists/watch/:id is
+      // the single-click "watch this entity" toggle (adds to the default
+      // watchlist, creating it lazily). If it fails we fall back to
+      // prefilling the compose box so the user can still queue a
+      // follow-up action without a runtime error.
+      window.adsUtil.request(`${API}/api/watchlists/watch/${encodeURIComponent(id)}`, {
         method: "POST", credentials: "include",
-        headers: { "content-type": "application/json" },
       }).then((r) => {
         if (r.ok) { btn.textContent = "✓ On watchlist"; btn.disabled = true; return; }
         const inp = $("ads-research-input");
@@ -510,7 +510,7 @@ permalink: /dashboard/research/
     const ctrl = new AbortController();
     state.streaming = ctrl;
     try {
-      const res = await fetch(`${API}/api/agent/ask`, {
+      const res = await window.adsUtil.request(`${API}/api/agent/ask`, {
         method: "POST",
         credentials: "include",
         headers: { "content-type": "application/json", Accept: "text/event-stream" },

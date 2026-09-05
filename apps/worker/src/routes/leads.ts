@@ -23,14 +23,16 @@ const RICH_COLUMNS = [
 // Click-to-sort allowlist: public sort key -> SQL column. Anything not in
 // this map is ignored (default order is used) so the ORDER BY clause can
 // never be injected with arbitrary SQL.
-const LEADS_SORTABLE: Record<string, string> = {
+// Prototype-free map: a plain object literal would resolve `?sort_by=constructor`
+// (or toString/__proto__) to an inherited function and crash the ORDER BY.
+const LEADS_SORTABLE: Record<string, string> = Object.assign(Object.create(null) as Record<string, string>, {
   name: "name",
   org: "org",
   email: "email",
   status: "status",
   country: "country_iso2",
   updated: "updated_at",
-};
+});
 
 leads.get("/", async (c) => {
   const limit = Math.min(Number(c.req.query("limit") ?? "50"), 200);

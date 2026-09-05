@@ -10,6 +10,7 @@
 
 import { Hono } from "hono";
 import type { Env } from "../types";
+import { normalizeCompanyName } from "../services/deals/dedupe";
 import {
   computeImpliedValuation, createCompPanel, refreshPanelMembership,
   SOURCE_CONFIDENCE,
@@ -45,7 +46,6 @@ async function resolveEntityIdFromCompanyParam(
       `SELECT name FROM companies WHERE id = ?`,
     ).bind(Number(idParam)).first<{ name: string }>();
     if (!c) return null;
-    const { normalizeCompanyName } = await import("../services/deals/dedupe");
     const norm = normalizeCompanyName(c.name);
     if (!norm) return null;
     const r = await env.DB.prepare(

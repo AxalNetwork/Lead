@@ -16,7 +16,7 @@
 
   async function loadQueue() {
     try {
-      const r = await fetch(API + "/api/admin/queue-health", { credentials: "include" });
+      const r = await window.adsUtil.request(API + "/api/admin/queue-health", { credentials: "include" });
       if (!r.ok) return;
       const j = await r.json();
       if ($("ads-health-q-depth")) $("ads-health-q-depth").textContent = j.depth ?? "—";
@@ -34,7 +34,7 @@
     const msgEl = $("ads-health-action-msg");
     if (msgEl) msgEl.textContent = label + "…";
     try {
-      const r = await fetch(API + path, { method: "POST", credentials: "include", body: "{}" });
+      const r = await window.adsUtil.request(API + path, { method: "POST", credentials: "include", body: "{}" });
       const j = await r.json();
       if (msgEl) msgEl.textContent = label + ": " + JSON.stringify(j);
     } catch (e) {
@@ -49,7 +49,7 @@
     banner.style.background = "#f4f4f6"; banner.style.color = "#444"; banner.textContent = "Probing…";
     loadQueue();
     try {
-      const r = await fetch(API + "/api/health/deep", { credentials: "include" });
+      const r = await window.adsUtil.request(API + "/api/health/deep", { credentials: "include" });
       const j = await r.json();
       const palette = { ok: ["#dcf5e3", "#0a4f1f"], degraded: ["#fff3cd", "#7a4f04"], fail: ["#f8d7da", "#7c1d24"] };
       const [bg, fg] = palette[j.status] || palette.fail;

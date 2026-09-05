@@ -54,7 +54,11 @@ export async function evaluateBreaches(env: Env): Promise<Breach[]> {
   // time an operator parks a node.
   const nodes = await collectComputePool(env);
   for (const n of nodes) {
-    if (!n.enabled || n.drain) continue;
+    if (n.drain) continue;
+    // A node the watchdog auto-disabled for a missed heartbeat is a
+    // failure, not an admin-parked node — without this exemption the
+    // 90s watchdog always won the race and `node_down` (5m) never fired.
+    if (!n.enabled && n.last_error !== "heartbeat_timeout") continue;
     if (n.status === "red" && n.last_heartbeat_at) {
       const ageMs = Date.now() - new Date(n.last_heartbeat_at).getTime();
       if (ageMs > THRESHOLDS.NODE_DOWN_SECONDS * 1000) {

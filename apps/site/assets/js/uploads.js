@@ -5,7 +5,7 @@
 (function () {
   var API_BASE = window.adsApiBase;
   var apiFetch = window.adsApiFetch || function (path, opts) {
-    return fetch(API_BASE + path, Object.assign({ credentials: "include" }, opts || {})).then(function (r) {
+    return window.adsUtil.request(API_BASE + path, Object.assign({ credentials: "include" }, opts || {})).then(function (r) {
       if (!r.ok) return r.text().then(function (t) { throw new Error(t || ("HTTP " + r.status)); });
       return r.json();
     });
@@ -124,7 +124,7 @@
     var fd = new FormData();
     fd.append("file", file);
     setMsg(msgEl, "Uploading " + file.name + "…", "warn");
-    return fetch(API_BASE + "/api/uploads", { method: "POST", credentials: "include", body: fd })
+    return window.adsUtil.request(API_BASE + "/api/uploads", { method: "POST", credentials: "include", body: fd })
       .then(function (r) {
         if (!r.ok) return r.text().then(function (t) { throw new Error(t || ("HTTP " + r.status)); });
         return r.json();

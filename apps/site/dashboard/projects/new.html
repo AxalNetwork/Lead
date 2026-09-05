@@ -81,7 +81,7 @@ document.getElementById('ads-new-project').addEventListener('submit', async func
   const status = document.getElementById('ads-new-status');
   status.textContent = 'Creating…';
   try {
-    const r = await fetch(window.ADS_API_BASE + '/api/projects', {
+    const r = await window.adsUtil.request(window.ADS_API_BASE + '/api/projects', {
       method: 'POST', credentials: 'include',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });

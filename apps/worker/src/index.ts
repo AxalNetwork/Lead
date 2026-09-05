@@ -94,6 +94,8 @@ export { RefreshSavedResearchWorkflow } from "./agent/workflow";
 import { piiAuditOnLeadGet } from "./middleware/pii_audit";
 import { accessGuard, adminOnly } from "./middleware/access";
 import { requestId } from "./middleware/request_id";
+import { unwrapSimpleRequest } from "./middleware/simple_request";
+import { boundedPagination } from "./middleware/pagination";
 import { runJob, markSkipped } from "./scraper/pipeline";
 import { SubrequestBudget } from "./scraper/subrequestBudget";
 import { scheduled as scheduledHandler } from "./scheduled";
@@ -114,6 +116,8 @@ api.use(
       const allowed = new Set([
         "https://aidatasignal.com",
         "https://www.aidatasignal.com",
+        // README/Replit deployment target for the dashboard (DNS pending).
+        "https://app.aidatasignal.com",
       ]);
       if (origin && allowed.has(origin)) return origin;
       return null;
@@ -132,6 +136,9 @@ api.route("/api/webhooks/campaigns", campaignsWebhook);
 // reach /api/compute/* without an Access cookie.
 api.route("/api/compute", computeRunnerRoute);
 api.use("/api/*", accessGuard);
+// Reject negative / non-numeric limit+offset once, for every list route
+// (SQLite treats a negative LIMIT as unbounded; NaN binds as NULL → 500).
+api.use("/api/*", boundedPagination);
 api.use("/api/ops/*", adminOnly);
 api.use("/api/leads/:id", piiAuditOnLeadGet);
 api.route("/api/auth", auth);
@@ -305,7 +312,9 @@ export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
     const host = url.hostname.toLowerCase();
-    if (host === API_HOST) return api.fetch(req, env, ctx);
+    // Reverse the dashboard's CORS-simple tunnel (POST + ?_method=PUT|PATCH|DELETE,
+    // ?_idempotency_key=) before routing — see middleware/simple_request.ts.
+    if (host === API_HOST) return api.fetch(unwrapSimpleRequest(req), env, ctx);
     return new Response("Not found", { status: 404 });
   },
 

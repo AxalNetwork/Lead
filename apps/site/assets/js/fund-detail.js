@@ -15,7 +15,7 @@
   function fmtMoney(n){ if(n==null||!isFinite(n)) return "—"; if(Math.abs(n)>=1e9) return "$"+(n/1e9).toFixed(2)+"B"; if(Math.abs(n)>=1e6) return "$"+(n/1e6).toFixed(2)+"M"; if(Math.abs(n)>=1e3) return "$"+(n/1e3).toFixed(1)+"k"; return "$"+n; }
   function fmtX(n){ return n==null||!isFinite(n) ? "—" : Number(n).toFixed(2)+"x"; }
   function fmtPct(n){ return n==null||!isFinite(n) ? "—" : Number(n).toFixed(1)+"%"; }
-  function api(path){ return fetch(API_BASE+path,{credentials:"include"}).then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); }); }
+  function api(path){ return window.adsUtil.request(API_BASE+path,{credentials:"include"}).then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); }); }
 
   var loaded = { overview:true };
   function activateTab(name){

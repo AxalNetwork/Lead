@@ -89,7 +89,7 @@
     if (!id) { fail("Open a company page to view preferred stack."); return; }
     try {
       var apiBase = (window.ADS && window.ADS.API_BASE);
-      var res = await fetch(apiBase + "/api/companies/" + encodeURIComponent(id) + "/preferred-stack", { credentials: "include" });
+      var res = await window.adsUtil.request(apiBase + "/api/companies/" + encodeURIComponent(id) + "/preferred-stack", { credentials: "include" });
       if (res.status === 403) { fail("Sign in to view preferred stack."); return; }
       if (!res.ok) { fail("Failed to load (HTTP " + res.status + ")."); return; }
       var data = await res.json();

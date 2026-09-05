@@ -26,7 +26,7 @@
   function dollars(v) { return "$" + (Number(v) || 0).toFixed(4); }
 
   async function api(path, opts) {
-    var r = await fetch(API + path, Object.assign({ credentials: "include" }, opts || {}));
+    var r = await window.adsUtil.request(API + path, Object.assign({ credentials: "include" }, opts || {}));
     if (r.status === 403) { showForbidden(); throw new Error("forbidden"); }
     if (!r.ok) throw new Error("HTTP " + r.status);
     return r.json();
@@ -196,7 +196,7 @@
     if (act === "delete" && !confirm("Delete node " + id + "? This removes the HMAC secret from KV.")) return;
     try {
       if (act === "delete") {
-        var r = await fetch(API + "/nodes/by-id?id=" + encodeURIComponent(id), {
+        var r = await window.adsUtil.request(API + "/nodes/by-id?id=" + encodeURIComponent(id), {
           method: "DELETE", credentials: "include",
         });
         if (!r.ok) throw new Error("HTTP " + r.status);

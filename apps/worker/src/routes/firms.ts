@@ -43,14 +43,16 @@ function intOrNull(v: string | undefined): number | null {
 // stay consistent with the search page. Cursor pagination is layered on top.
 // Allowed sort columns. Whitelist prevents SQL injection — anything not in
 // this set falls through to the default `id DESC`.
-const SORTABLE: Record<string, string> = {
+// Prototype-free map: a plain object literal would resolve `?sort_by=constructor`
+// (or toString/__proto__) to an inherited function and crash the ORDER BY.
+const SORTABLE: Record<string, string> = Object.assign(Object.create(null) as Record<string, string>, {
   name: "name", kind: "kind", hq_country_iso2: "hq_country_iso2",
   hq_city: "hq_city", check_size_typical_usd: "check_size_typical_usd",
   aum_usd: "aum_usd", portfolio_count: "portfolio_count",
   unicorns_count: "unicorns_count", exits_count: "exits_count",
   last_modified: "last_modified", created_at: "created_at",
   founded_year: "founded_year", quality_score: "quality_score",
-};
+});
 
 firms.get("/", async (c) => {
   const url = new URL(c.req.url);

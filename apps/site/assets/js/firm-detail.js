@@ -14,7 +14,7 @@
   function safeHref(u) { if (!u) return "#"; try { var p = new URL(u, location.href).protocol; return (p === "http:" || p === "https:") ? u : "#"; } catch (e) { return "#"; } }
   function fmtMoney(v) { if (!v) return "—"; var n = Number(v); if (!isFinite(n)) return "—"; if (n >= 1e9) return "$" + (n / 1e9).toFixed(1) + "B"; if (n >= 1e6) return "$" + (n / 1e6).toFixed(1) + "M"; if (n >= 1e3) return "$" + (n / 1e3).toFixed(0) + "k"; return "$" + n; }
   function fmtArr(j) { try { var a = JSON.parse(j); return Array.isArray(a) ? a.join(", ") : ""; } catch (_) { return ""; } }
-  function api(path, opts) { return fetch(API_BASE + path, Object.assign({ credentials: "include" }, opts || {})).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }); }
+  function api(path, opts) { return window.adsUtil.request(API_BASE + path, Object.assign({ credentials: "include" }, opts || {})).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }); }
 
   function setupTabs() {
     var tabs = root.querySelectorAll(".ads-tab");
