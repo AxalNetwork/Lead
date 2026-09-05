@@ -1,0 +1,374 @@
+/* Mobile UI — Turn 2 of the design canvas (artboards 2a–2i).
+ *
+ * Every value here is a --ads-* token from design.css, so both themes work
+ * and nothing needs a second definition.
+ *
+ * Scope rule: desktop is untouched. Everything that REPLACES a desktop
+ * pattern lives inside `@media (max-width: 767px)`; the pieces that read
+ * correctly at every width (ads-score, ads-crumb) are defined unscoped.
+ *
+ * Wired up by this change:
+ *   ads-tabbar   — _includes/shell/tabbar.html
+ *   ads-sheet    — _includes/shell/more-sheet.html
+ *   ads-crumb    — _includes/components/crumb.html, on all six detail pages
+ *   the .ads-table → card transform, driven by assets/js/mobile.js
+ *
+ * Declared but not adopted yet — the canvas's vocabulary for the per-page
+ * pass that follows, deliberately unused so far rather than accidentally so:
+ *   ads-score     (score badge; lists still render ui.js's ads-score-bar)
+ *   ads-bulkbar   (bulk action bar; list pages still use their own)
+ *   ads-factrow   (fact row with provenance on a detail page)
+ *
+ * The canvas calls the last one `ads-fact`; that class was already taken —
+ * see the note at its rule.
+ */
+
+/* ---------------------------------------------------------------- score --
+ * Quality score badge. The operator's main triage signal, so it carries the
+ * score colour ramp rather than a generic accent.
+ */
+.ads-score {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: var(--ads-r-1, 6px);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  color: var(--ads-muted);
+}
+.ads-score[data-tier="great"] { color: var(--ads-score-great); }
+.ads-score[data-tier="good"]  { color: var(--ads-score-good); }
+.ads-score[data-tier="mid"]   { color: var(--ads-score-mid); }
+.ads-score[data-tier="low"]   { color: var(--ads-score-low); }
+/* color-mix is widely supported, but keep a readable fallback. */
+@supports not (background: color-mix(in srgb, red 10%, transparent)) {
+  .ads-score { background: var(--ads-panel-2); }
+}
+
+/* --------------------------------------------------------------- crumb --
+ * The breadcrumb detail pages lack. At 390px it collapses to a single
+ * back affordance; from 768px it can show the full trail.
+ */
+.ads-crumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--ads-muted);
+}
+.ads-crumb a {
+  color: var(--ads-muted);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+}
+.ads-crumb a:hover { color: var(--ads-text); }
+.ads-crumb__sep { opacity: .5; }
+.ads-crumb__here {
+  color: var(--ads-text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* At 390px the entity name is already the <h1> directly below, so the crumb
+ * collapses to the one thing the page was missing: a way back. */
+@media (max-width: 767px) {
+  .ads-crumb__sep, .ads-crumb__here { display: none; }
+}
+
+/* =========================================================== < 768px === */
+@media (max-width: 767px) {
+
+  /* Leave room for the fixed tab bar (plus the home indicator on iOS). */
+  .ads-main {
+    padding-bottom: calc(68px + env(safe-area-inset-bottom, 0px) + 16px);
+  }
+
+  /* ------------------------------------------------------------ tabbar --
+   * Five destinations, fixed to the bottom, thumb-reachable. Everything
+   * else lives in the More sheet.
+   */
+  .ads-tabbar {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 60;
+    display: flex;
+    align-items: flex-start;
+    padding-top: 6px;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: var(--ads-bg-elev);
+    border-top: 1px solid var(--ads-border);
+  }
+  .ads-tabbar__item {
+    flex: 1;
+    min-height: 48px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    position: relative;
+    text-decoration: none;
+    color: var(--ads-muted);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .ads-tabbar__item.active { color: var(--ads-accent); }
+  .ads-tabbar__icon { font-size: 17px; line-height: 1; }
+  .ads-tabbar__label { font-size: 10px; font-weight: 600; }
+  .ads-tabbar__badge {
+    position: absolute;
+    top: 0; left: 50%;
+    margin-left: 5px;
+    min-width: 17px;
+    height: 17px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--ads-danger);
+    color: #fff;                 /* on danger, in both themes */
+    font-size: 10px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .ads-tabbar__badge[hidden] { display: none; }
+
+  /* ------------------------------------------------------------- sheet --
+   * Bottom sheet. Extends the modal vocabulary rather than forking it:
+   * same backdrop and focus behaviour, different anchoring.
+   */
+  .ads-sheet-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    background: rgba(0, 0, 0, .55);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--ads-dur, .18s) var(--ads-ease, ease);
+  }
+  .ads-sheet {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 71;
+    max-height: 86vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--ads-bg-elev);
+    border-top: 1px solid var(--ads-border);
+    border-radius: 16px 16px 0 0;
+    box-shadow: var(--ads-shadow-3, 0 12px 32px rgba(0, 0, 0, .45));
+    transform: translateY(100%);
+    transition: transform var(--ads-dur, .18s) var(--ads-ease, ease);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .ads-sheet[data-open="true"] { transform: translateY(0); }
+  .ads-sheet-backdrop[data-open="true"] { opacity: 1; pointer-events: auto; }
+  /* The `display` above outranks the UA sheet's `[hidden]{display:none}`,
+     so the closed sheet has to be hidden explicitly or it stays in the a11y
+     tree (parked off-screen by the transform). */
+  .ads-sheet[hidden], .ads-sheet-backdrop[hidden] { display: none; }
+  .ads-sheet__grip {
+    width: 38px; height: 4px;
+    margin: 8px auto 4px;
+    border-radius: 999px;
+    background: var(--ads-border-strong);
+    flex: 0 0 auto;
+  }
+  .ads-sheet__head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 16px 10px;
+    border-bottom: 1px solid var(--ads-border);
+    flex: 0 0 auto;
+  }
+  .ads-sheet__title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ads-text-strong);
+    margin: 0;
+  }
+  .ads-sheet__body {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 8px 8px 16px;
+  }
+  .ads-sheet__group-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--ads-muted);
+    padding: 12px 12px 6px;
+  }
+  .ads-sheet__link {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    padding: 8px 12px;
+    border-radius: var(--ads-r-2, 8px);
+    font-size: 14px;
+    color: var(--ads-text);
+    text-decoration: none;
+  }
+  .ads-sheet__link:hover,
+  .ads-sheet__link:focus-visible { background: var(--ads-panel-2); color: var(--ads-text-strong); }
+  .ads-sheet__link.active { background: var(--ads-panel-2); color: var(--ads-text-strong); }
+  .ads-sheet__icon {
+    width: 18px; height: 18px; flex: 0 0 18px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 14px; line-height: 1;
+  }
+  /* Filtered out by the sheet's search box. */
+  .ads-sheet__link[hidden],
+  .ads-sheet__group[hidden] { display: none; }
+
+  /* The desktop rail and its toggle have no role once tabs + sheet exist. */
+  .ads-rail, .ads-rail-backdrop, .ads-rail-toggle { display: none !important; }
+
+  /* ---------------------------------------------------------- row card --
+   * Tables become cards. Rather than rewriting ~40 page scripts, the
+   * generic labeller in mobile.js stamps each cell with the header text as
+   * `data-label`, and these rules restyle the SAME markup as a card. Any
+   * list built with .ads-table gets this for free, including tables
+   * rendered after load.
+   */
+  .ads-table-wrap { overflow: visible; }
+  .ads-table,
+  .ads-table tbody,
+  .ads-table tbody tr { display: block; width: auto; }
+  .ads-table thead { display: none; }
+  .ads-table tbody tr {
+    background: var(--ads-panel);
+    border: 1px solid var(--ads-border);
+    border-radius: var(--ads-r-2, 8px);
+    padding: 12px 14px;
+    margin: 0 0 10px;
+  }
+  /* Both cell types: a few lists put a <th> in the body row, and
+     HTMLTableRowElement.cells (what the labeller walks) includes them. */
+  .ads-table tbody td,
+  .ads-table tbody th {
+    padding: 3px 0;
+    border-bottom: none;
+    text-align: left;
+    color: var(--ads-text);
+    display: flex;
+    gap: 10px;
+    align-items: baseline;
+    font-size: 13px;
+  }
+  /* The label the labeller stamped, shown as the leading column. */
+  .ads-table tbody [data-label]::before {
+    content: attr(data-label);
+    flex: 0 0 40%;
+    max-width: 40%;
+    color: var(--ads-muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  /* First cell is the card's title line — full width, no label. */
+  .ads-table tbody tr > :first-child {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ads-text-strong);
+    padding-bottom: 6px;
+  }
+  .ads-table tbody tr > :first-child::before { content: none; }
+  /* A cell the page marked as empty shouldn't take a row in the card. */
+  .ads-table tbody [data-empty="true"] { display: none; }
+  /* A "no rows" / "loading" row spans the table and has no label. */
+  .ads-table tbody tr > :first-child[colspan] {
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--ads-muted);
+  }
+
+  /* --------------------------------------------------------- bulk bar --
+   * Sits above the tab bar so both stay reachable.
+   */
+  .ads-bulkbar {
+    position: fixed;
+    left: 8px; right: 8px;
+    bottom: calc(68px + env(safe-area-inset-bottom, 0px) + 8px);
+    z-index: 61;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: var(--ads-r-2, 8px);
+    background: var(--ads-panel-2);
+    border: 1px solid var(--ads-border-strong);
+    box-shadow: var(--ads-shadow-2, 0 4px 12px rgba(0, 0, 0, .35));
+    font-size: 13px;
+    color: var(--ads-text);
+  }
+  .ads-bulkbar__actions { margin-left: auto; display: flex; gap: 8px; }
+
+  /* ---------------------------------------------------------- fact row --
+   * Labelled fact with provenance on a detail page. Touch has no hover, so
+   * the edit affordance is always present rather than revealed.
+   *
+   * The canvas calls this `ads-fact`, but that class is already a shipped
+   * inline component (dashboard.css, used by citation-pills.js, people.js
+   * and news-tab.js) — taking the name would restyle every citation pill on
+   * a phone. `ads-factrow` is the row-shaped sibling of that inline one.
+   */
+  .ads-factrow {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--ads-border);
+  }
+  .ads-factrow__label { flex: 0 0 38%; color: var(--ads-muted); font-size: 12.5px; }
+  .ads-factrow__value { flex: 1; min-width: 0; color: var(--ads-text); font-size: 13.5px; }
+  .ads-factrow__meta { display: block; margin-top: 2px; font-size: 11.5px; color: var(--ads-muted); }
+  .ads-factrow__edit { flex: 0 0 auto; min-width: 44px; min-height: 44px; }
+
+  /* Toasts are fixed to the bottom-right at z-index 9999, which is above the
+   * tab bar: without this they cover it. Full-width reads better at 390px
+   * than a 360px column anyway.
+   */
+  .ads-toast-stack {
+    left: 12px;
+    right: 12px;
+    bottom: calc(68px + env(safe-area-inset-bottom, 0px) + 12px);
+    max-width: none;
+  }
+
+  /* Touch targets. .ads-btn is already inline-flex in dashboard.css, so a
+   * min-height takes effect; a bare inline <a> would ignore one, hence the
+   * inline-flex on the card's title link — the row's primary tap target. */
+  .ads-btn { min-height: 44px; justify-content: center; }
+  .ads-table tbody tr > :first-child a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+}
+
+/* Tabs and sheet are mobile-only chrome. */
+@media (min-width: 768px) {
+  .ads-tabbar, .ads-sheet, .ads-sheet-backdrop { display: none !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ads-sheet, .ads-sheet-backdrop { transition: none; }
+}
+
+/* design.css already drops the rail, topbar, toasts, palette and modals from
+ * print; the mobile chrome belongs in that list too. */
+@media print {
+  .ads-tabbar, .ads-sheet, .ads-sheet-backdrop { display: none !important; }
+}

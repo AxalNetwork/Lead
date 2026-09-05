@@ -13,6 +13,9 @@
   <link rel="stylesheet" href="/assets/css/style.css">
   <link rel="stylesheet" href="/assets/css/design.css?v={{ site.time | date: '%s' }}">
   <link rel="stylesheet" href="/assets/css/dashboard.css?v={{ site.time | date: '%s' }}">
+  <!-- Mobile layer (Turn 2 of the design canvas). Loads last so its
+       <768px rules win over the desktop sheets without !important. -->
+  <link rel="stylesheet" href="/assets/css/mobile.css?v={{ site.time | date: '%s' }}">
   <!-- Single source of truth for the API host (from _config.yml: api_base).
        Set early (before any consumer script) and under every legacy alias
        so no dashboard script needs a hardcoded fallback literal. -->
@@ -55,6 +58,13 @@
       </main>
     </div>
   </div>
+  {%- comment -%}
+  Mobile chrome. Kept as siblings of .ads-shell rather than children: the
+  shell is a grid, and both of these are position:fixed overlays that have
+  no business being grid items. mobile.css hides them from 768px up.
+  {%- endcomment -%}
+  {% include shell/tabbar.html %}
+  {% include shell/more-sheet.html %}
   <script>
     (function () {
       var pre = document.documentElement.getAttribute("data-rail-pre");
@@ -69,6 +79,7 @@
   <script src="/assets/js/alerts-bell.js?v={{ site.time | date: '%s' }}" defer></script>
   <script src="/assets/js/watch-star.js?v={{ site.time | date: '%s' }}" defer></script>
   <script src="/assets/js/where-is-x.js?v={{ site.time | date: '%s' }}" defer></script>
+  <script src="/assets/js/mobile.js?v={{ site.time | date: '%s' }}" defer></script>
   <script src="/assets/js/charts.js" defer></script>
   <script src="/assets/js/dashboard_charts.js" defer></script>
   <script src="/assets/js/analytics.js" defer></script>

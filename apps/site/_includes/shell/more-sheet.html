@@ -1,0 +1,100 @@
+{%- comment -%}
+"More" sheet — artboard 2c, populated from the nav inventory in 2i.
+
+Holds every destination the five tabs don't, grouped exactly as the rail
+groups them and searchable, because 30+ links is past the point where
+scanning works.
+
+The inventory is a 1:1 mirror of shell/sidenav.html so nothing is
+reachable on desktop but lost on mobile — the only omissions are the two
+rail links the tab bar already carries (Home → Today, Merge Review →
+Review), which are omitted rather than duplicated. Keep the two files in
+step: a link added to the rail belongs here too.
+
+Rendered on every page but hidden ≥768px by mobile.css.
+{%- endcomment -%}
+{%- assign p = page.url -%}
+<div class="ads-sheet-backdrop" id="ads-more-backdrop" hidden></div>
+<div class="ads-sheet" id="ads-more-sheet" role="dialog" aria-modal="true"
+     aria-labelledby="ads-more-title" hidden>
+  <div class="ads-sheet__grip" aria-hidden="true"></div>
+  <div class="ads-sheet__head">
+    <h2 class="ads-sheet__title" id="ads-more-title">All destinations</h2>
+    <button type="button" class="ads-btn ads-btn--ghost" id="ads-more-close"
+            aria-label="Close" style="margin-left:auto;min-width:44px;min-height:44px">✕</button>
+  </div>
+  {%- comment -%}
+  .ads-field is a wrapper class (dashboard.css styles `.ads-field input`); the
+  visible <span> label is dropped here because the placeholder and aria-label
+  already say what the box does and a sheet has no vertical room to spare.
+  {%- endcomment -%}
+  <div class="ads-field" style="padding:10px 16px 0;margin-bottom:0">
+    <input type="search" id="ads-more-search" aria-label="Filter destinations"
+           placeholder="Filter destinations…" autocomplete="off">
+  </div>
+  <div class="ads-sheet__body" id="ads-more-body">
+
+    <div class="ads-sheet__group">
+      <div class="ads-sheet__group-label">Discover</div>
+      <a class="ads-sheet__link {% if p contains '/dashboard/people' or p contains '/dashboard/profiles' %}active{% endif %}" href="/dashboard/people/"><span class="ads-sheet__icon">☻</span><span>People</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/investors' %}active{% endif %}" href="/dashboard/investors/"><span class="ads-sheet__icon">◆</span><span>Investors</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/firms' %}active{% endif %}" href="/dashboard/firms/"><span class="ads-sheet__icon">◇</span><span>Firms</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/companies' %}active{% endif %}" href="/dashboard/companies/"><span class="ads-sheet__icon">▣</span><span>Companies</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/accounts' %}active{% endif %}" href="/dashboard/accounts/"><span class="ads-sheet__icon">◍</span><span>Customers</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/leads' %}active{% endif %}" href="/dashboard/leads/"><span class="ads-sheet__icon">✦</span><span>Leads</span></a>
+    </div>
+
+    <div class="ads-sheet__group">
+      <div class="ads-sheet__group-label">Network</div>
+      <a class="ads-sheet__link {% if p contains '/dashboard/relationships' %}active{% endif %}" href="/dashboard/relationships/"><span class="ads-sheet__icon">⟁</span><span>Relationships</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/power-nodes' %}active{% endif %}" href="/dashboard/power-nodes/"><span class="ads-sheet__icon">◉</span><span>Power Nodes</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/watchlist' %}active{% endif %}" href="/dashboard/watchlists/"><span class="ads-sheet__icon">★</span><span>Watchlists</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/personas' %}active{% endif %}" href="/dashboard/personas/"><span class="ads-sheet__icon">☉</span><span>Personas</span></a>
+    </div>
+
+    <div class="ads-sheet__group">
+      <div class="ads-sheet__group-label">Intelligence</div>
+      <a class="ads-sheet__link {% if p == '/dashboard/analytics/' %}active{% endif %}" href="/dashboard/analytics/"><span class="ads-sheet__icon">▦</span><span>Pipeline KPIs</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/analytics-firms' %}active{% endif %}" href="/dashboard/analytics-firms/"><span class="ads-sheet__icon">▥</span><span>Firm analytics</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/segments' %}active{% endif %}" href="/dashboard/segments/"><span class="ads-sheet__icon">◈</span><span>Segments</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/icps' %}active{% endif %}" href="/dashboard/icps/"><span class="ads-sheet__icon">◫</span><span>ICPs</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/predictions' %}active{% endif %}" href="/dashboard/predictions/"><span class="ads-sheet__icon">⌁</span><span>Predictions</span></a>
+    </div>
+
+    <div class="ads-sheet__group">
+      <div class="ads-sheet__group-label">Research</div>
+      <a class="ads-sheet__link {% if p contains '/dashboard/research' %}active{% endif %}" href="/dashboard/research/"><span class="ads-sheet__icon">✦</span><span>Research</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/dossiers' %}active{% endif %}" href="/dashboard/dossiers/"><span class="ads-sheet__icon">▤</span><span>Dossiers</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/projects' %}active{% endif %}" href="/dashboard/projects/"><span class="ads-sheet__icon">▤</span><span>Projects</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/campaigns' %}active{% endif %}" href="/dashboard/campaigns/"><span class="ads-sheet__icon">✉</span><span>Campaigns</span></a>
+      <a class="ads-sheet__link" href="/dashboard/coming-soon/?feature=saved-research"><span class="ads-sheet__icon">⭐</span><span>Saved Research</span></a>
+      <a class="ads-sheet__link" href="/dashboard/coming-soon/?feature=agent"><span class="ads-sheet__icon">⚙</span><span>Agent</span></a>
+    </div>
+
+    <div class="ads-sheet__group">
+      <div class="ads-sheet__group-label">Operations</div>
+      <a class="ads-sheet__link {% if p contains '/dashboard/imports' %}active{% endif %}" href="/dashboard/imports/"><span class="ads-sheet__icon">⇧</span><span>File imports</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/uploads' %}active{% endif %}" href="/dashboard/uploads/"><span class="ads-sheet__icon">▥</span><span>Past uploads</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/crawlers' %}active{% endif %}" href="/dashboard/crawlers/"><span class="ads-sheet__icon">◎</span><span>Crawlers</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/sources' %}active{% endif %}" href="/dashboard/sources/"><span class="ads-sheet__icon">⟳</span><span>Sources</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/jobs' %}active{% endif %}" href="/dashboard/jobs/"><span class="ads-sheet__icon">≡</span><span>Jobs</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/errors' %}active{% endif %}" href="/dashboard/errors/"><span class="ads-sheet__icon">⚠</span><span>Errors</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/health' %}active{% endif %}" href="/dashboard/health/"><span class="ads-sheet__icon">♥</span><span>System Health</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/compliance' %}active{% endif %}" href="/dashboard/compliance/"><span class="ads-sheet__icon">§</span><span>Compliance</span></a>
+      <a class="ads-sheet__link {% if p contains '/dashboard/dd-' %}active{% endif %}" href="/dashboard/dd-review/"><span class="ads-sheet__icon">⚖</span><span>Due diligence</span></a>
+    </div>
+
+    <div class="ads-sheet__group">
+      <div class="ads-sheet__group-label">Ops consoles</div>
+      <a class="ads-sheet__link {% if p contains '/ops/quality' %}active{% endif %}" href="/ops/quality/"><span class="ads-sheet__icon">◑</span><span>Quality Console</span></a>
+      <a class="ads-sheet__link {% if p contains '/ops/crawler' %}active{% endif %}" href="/ops/crawler/"><span class="ads-sheet__icon">◉</span><span>Crawler Ops</span></a>
+      <a class="ads-sheet__link {% if p contains '/ops/system-health' %}active{% endif %}" href="/ops/system-health/"><span class="ads-sheet__icon">✚</span><span>Ops Health</span></a>
+      <a class="ads-sheet__link {% if p contains '/ops/incidents' %}active{% endif %}" href="/ops/incidents/"><span class="ads-sheet__icon">◭</span><span>Incidents</span></a>
+      <a class="ads-sheet__link {% if p contains '/ops/compute-nodes' %}active{% endif %}" href="/ops/compute-nodes/"><span class="ads-sheet__icon">⬡</span><span>Compute Nodes</span></a>
+      <a class="ads-sheet__link {% if p contains '/ops/garbage-review' %}active{% endif %}" href="/ops/garbage-review/"><span class="ads-sheet__icon">⌫</span><span>Garbage Review</span></a>
+    </div>
+
+    <p class="ads-muted" id="ads-more-empty" hidden
+       style="padding:16px 12px;font-size:13px">No destination matches that.</p>
+  </div>
+</div>

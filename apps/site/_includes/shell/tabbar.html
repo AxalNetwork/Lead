@@ -1,0 +1,50 @@
+{%- comment -%}
+Mobile bottom tab bar — artboard 2a/2i of the design canvas.
+
+Five destinations, because they are the only things an operator opens
+without a laptop: Today (what needs me), Search (the ⌘K replacement),
+Review (the approve/reject queues — the real mobile work), Alerts (where
+push lands), More (the remaining 30+ destinations). Intelligence,
+Research and Ops dashboards deliberately stay in More: they are
+wide-canvas reading, not phone work.
+
+Hidden at ≥768px by mobile.css; the rail takes over there.
+{%- endcomment -%}
+{%- assign p = page.url -%}
+<nav class="ads-tabbar" aria-label="Primary">
+  <a class="ads-tabbar__item {% if p == '/dashboard/' %}active{% endif %}"
+     href="/dashboard/"{% if p == '/dashboard/' %} aria-current="page"{% endif %}>
+    <span class="ads-tabbar__icon" aria-hidden="true">⌂</span>
+    <span class="ads-tabbar__label">Today</span>
+  </a>
+
+  {%- comment -%}
+  Search is the ⌘K replacement. cmdk.js owns the palette; this button opens
+  it, and falls back to the People list if that script hasn't loaded.
+  {%- endcomment -%}
+  <a class="ads-tabbar__item" href="/dashboard/people/" data-ads-tab="search">
+    <span class="ads-tabbar__icon" aria-hidden="true">⌕</span>
+    <span class="ads-tabbar__label">Search</span>
+  </a>
+
+  <a class="ads-tabbar__item {% if p contains '/dashboard/merge-review' or p contains '/ops/garbage-review' or p contains '/dashboard/osint-candidates' %}active{% endif %}"
+     href="/dashboard/merge-review/">
+    <span class="ads-tabbar__icon" aria-hidden="true">⇌</span>
+    <span class="ads-tabbar__label">Review</span>
+    <span class="ads-tabbar__badge" id="ads-tab-review-badge" hidden></span>
+  </a>
+
+  <a class="ads-tabbar__item {% if p contains '/dashboard/alerts' %}active{% endif %}"
+     href="/dashboard/alerts/">
+    <span class="ads-tabbar__icon" aria-hidden="true">⚑</span>
+    <span class="ads-tabbar__label">Alerts</span>
+    <span class="ads-tabbar__badge" id="ads-tab-alerts-badge" hidden></span>
+  </a>
+
+  <button type="button" class="ads-tabbar__item" id="ads-more-open"
+          aria-controls="ads-more-sheet" aria-expanded="false"
+          style="background:none;border:0;font:inherit;cursor:pointer">
+    <span class="ads-tabbar__icon" aria-hidden="true">≡</span>
+    <span class="ads-tabbar__label">More</span>
+  </button>
+</nav>
