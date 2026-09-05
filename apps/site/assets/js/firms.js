@@ -107,7 +107,10 @@
       var ind = "";
       if (sortable && state.sort_by === SORT_KEYS[c]) ind = state.sort_dir === "asc" ? " ▲" : " ▼";
       var cursor = sortable ? "cursor:pointer" : "cursor:default";
-      return '<th data-col="' + esc(c) + '" style="text-align:left;padding:6px;border-bottom:1px solid #eee;font-size:12px;text-transform:uppercase;color:#667;' + cursor + '">' + esc(c) + esc(ind) + '</th>';
+      // Inherit .ads-table th (tokens) for colour + border so the header
+      // theme-switches with the rest of the table. Hardcoded #eee/#667 here
+      // rendered a near-invisible light-on-dark header in the default theme.
+      return '<th data-col="' + esc(c) + '" style="font-size:12px;text-transform:uppercase;' + cursor + '">' + esc(c) + esc(ind) + '</th>';
     }).join("");
     thead.querySelectorAll("th").forEach(function (th) {
       var col = th.dataset.col, key = SORT_KEYS[col];
