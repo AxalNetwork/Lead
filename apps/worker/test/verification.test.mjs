@@ -23,7 +23,7 @@ function makeDB() {
     person_verification_state: [],
     reference_candidates: [],
     publication_authors: [],
-    conference_attendees: [],
+    conference_attendance: [],
     accelerator_batches: [],
     deal_events: [],
   };
@@ -96,10 +96,13 @@ function makeDB() {
           return { pid: r.entity_id, pname: u?.display_name ?? null, title: r.publication_title, published_at: r.published_at };
         });
     }
-    if (/FROM conference_attendees a1/.test(s)) {
+    if (/FROM conference_attendance a1/.test(s)) {
+      // The real table identifies an event by (conference_name, year); there
+      // is no conference_id column, so the join key is the pair.
       const subj = args[0];
-      const subjConfs = tables.conference_attendees.filter((r) => r.entity_id === subj).map((r) => r.conference_id);
-      return tables.conference_attendees.filter((r) => subjConfs.includes(r.conference_id) && r.entity_id !== subj)
+      const key = (r) => `${r.conference_name}|${r.year}`;
+      const subjConfs = tables.conference_attendance.filter((r) => r.entity_id === subj).map(key);
+      return tables.conference_attendance.filter((r) => subjConfs.includes(key(r)) && r.entity_id !== subj)
         .map((r) => {
           const u = tables.u_entities.find((u) => u.id === r.entity_id);
           return { pid: r.entity_id, pname: u?.display_name ?? null, conf: r.conference_name, year: r.year };
@@ -259,9 +262,11 @@ test("reference builder produces rows from every wired discovery pass", async ()
     { entity_id: subject, publication_id: "pub1", publication_title: "Paper", published_at: "2020-01" },
     { entity_id: "D", publication_id: "pub1", publication_title: "Paper", published_at: "2020-01" },
   );
-  env.DB.tables.conference_attendees.push(
-    { entity_id: subject, conference_id: "c1", conference_name: "NeurIPS", year: 2022 },
-    { entity_id: "E", conference_id: "c1", conference_name: "NeurIPS", year: 2022 },
+  // No conference_id column exists on conference_attendance; the natural key
+  // is (entity_id, conference_name, year).
+  env.DB.tables.conference_attendance.push(
+    { entity_id: subject, conference_name: "NeurIPS", year: 2022 },
+    { entity_id: "E", conference_name: "NeurIPS", year: 2022 },
   );
   env.DB.tables.accelerator_batches.push(
     { entity_id: subject, accelerator: "YC", batch: "W19" },

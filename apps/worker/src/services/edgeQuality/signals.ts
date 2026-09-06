@@ -49,9 +49,13 @@ export async function signalCoInvestment(env: Env, e: EdgeIdentity): Promise<Raw
 export async function signalCoMentions(env: Env, e: EdgeIdentity): Promise<RawSignal | null> {
   return safeQuery(async () => {
     const r = await env.DB.prepare(
-      `SELECT COUNT(DISTINCT m1.source_url) AS n, MAX(m1.observed_at) AS last_seen
-         FROM entity_mentions m1
-         JOIN entity_mentions m2 ON m2.source_url = m1.source_url
+      // `entity_mentions` is created by no migration. The table that holds
+      // this data is news_entity_mentions, keyed on news_item_id rather than
+      // a source_url, with detected_at for recency. Two people named in the
+      // same article is exactly the co-mention this signal wants.
+      `SELECT COUNT(DISTINCT m1.news_item_id) AS n, MAX(m1.detected_at) AS last_seen
+         FROM news_entity_mentions m1
+         JOIN news_entity_mentions m2 ON m2.news_item_id = m1.news_item_id
         WHERE m1.entity_id = ? AND m2.entity_id = ?
           AND m1.entity_id != m2.entity_id`,
     ).bind(e.src_entity_id, e.dst_entity_id).first<{ n: number; last_seen: string | null }>();
@@ -132,9 +136,12 @@ export async function signalLinkedInEndorsements(env: Env, e: EdgeIdentity): Pro
       `SELECT COUNT(*) AS n, MAX(observed_at) AS last_seen
          FROM linkedin_endorsements
         WHERE endorser_entity_id = ? AND endorsee_entity_id = ?`,
-    ).bind(e.src_entity_id, e.dst_entity_id).first<{ n: number; last_seen: string | null }>();
+    ).bind(e.src_entity_id, e.dst_entity_id).first<{ n: number; last_year: number | null }>();
     if (!r || !r.n) return null;
-    return { value: logScale(r.n, 5), observed_at: r.last_seen ?? null };
+    return {
+      value: logScale(r.n, 5),
+      observed_at: r.last_year ? `${r.last_year}-01-01` : null,
+    };
   }, null);
 }
 
@@ -142,14 +149,24 @@ export async function signalLinkedInEndorsements(env: Env, e: EdgeIdentity): Pro
 export async function signalJointPanels(env: Env, e: EdgeIdentity): Promise<RawSignal | null> {
   return safeQuery(async () => {
     const r = await env.DB.prepare(
-      `SELECT COUNT(DISTINCT a1.event_id) AS n, MAX(a1.event_date) AS last_seen
-         FROM conference_attendees a1
-         JOIN conference_attendees a2 ON a2.event_id = a1.event_id
+      // `conference_attendees` is created by no migration; the real table is
+      // conference_attendance, which identifies an event by
+      // (conference_name, year) rather than an event_id and has no
+      // event_date. `year` is the only recency signal it carries, so the
+      // observed_at is the January of the latest shared year — coarse, but
+      // honest, and the decay model only needs a date.
+      `SELECT COUNT(*) AS n, MAX(a1.year) AS last_year
+         FROM conference_attendance a1
+         JOIN conference_attendance a2
+           ON a2.conference_name = a1.conference_name AND a2.year = a1.year
         WHERE a1.entity_id = ? AND a2.entity_id = ?
           AND (a1.role IN ('speaker','panelist') OR a2.role IN ('speaker','panelist'))`,
-    ).bind(e.src_entity_id, e.dst_entity_id).first<{ n: number; last_seen: string | null }>();
+    ).bind(e.src_entity_id, e.dst_entity_id).first<{ n: number; last_year: number | null }>();
     if (!r || !r.n) return null;
-    return { value: logScale(r.n, 5), observed_at: r.last_seen ?? null };
+    return {
+      value: logScale(r.n, 5),
+      observed_at: r.last_year ? `${r.last_year}-01-01` : null,
+    };
   }, null);
 }
 

@@ -2,7 +2,8 @@
 //
 // Boots node:sqlite with the Task #4 schema (327 + 328) + Task #5 schema
 // (329) + the small bits of older migrations the profiler reads from
-// (facts, u_entities, rel_edges, news_articles, identity_handles), then
+// (facts, u_entities, rel_edges, news_items + news_entity_mentions,
+// identity_handles), then
 // drives runProfiler against fixture entities and asserts:
 //   A. fixture with rich seeded facts → ≥ 10 structured tables populated
 //      and ≥ 5 conversation_starters + ≥ 2 warm_intro_paths in the
@@ -69,9 +70,18 @@ function makeEnv() {
       evidence_url TEXT, backing_fact_ids_json TEXT, source TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-    CREATE TABLE news_articles (
-      id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, title TEXT NOT NULL,
-      url TEXT NOT NULL, published_at TEXT NOT NULL, summary TEXT
+    -- The real schema: articles live in news_items with no entity_id, and
+    -- the entity link is news_entity_mentions. This fixture used to declare a
+    -- single news_articles table carrying entity_id, which production has
+    -- never had — so the test passed against a schema that does not exist.
+    CREATE TABLE news_items (
+      id TEXT PRIMARY KEY, url TEXT NOT NULL, host TEXT, title TEXT,
+      published_at TEXT, summary TEXT, sentiment REAL
+    );
+    CREATE TABLE news_entity_mentions (
+      id TEXT PRIMARY KEY, news_item_id TEXT NOT NULL, entity_id TEXT NOT NULL,
+      is_subject INTEGER NOT NULL DEFAULT 0,
+      detected_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE identity_handles (
       id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, platform TEXT NOT NULL,
@@ -180,10 +190,14 @@ function seedRichFixture(env) {
   // hook predicates
   insertFact(env, targetId, "person.hook.recent_post", { hook_text: "Posted about regen agriculture", hook_kind: "recent_post" }, "https://example.com/hook/regen");
 
-  // news (5 articles → fuels conversation_starters from hookProfiler)
+  // news (6 articles → fuels conversation_starters from hookProfiler),
+  // seeded through the two real tables rather than one invented one.
   for (let i = 0; i < 6; i++) {
-    env._db.prepare(`INSERT INTO news_articles (id, entity_id, title, url, published_at) VALUES (?, ?, ?, ?, datetime('now', ?))`)
-      .run(crypto.randomUUID(), targetId, `Headline #${i + 1}: notable move`, `https://news.example.com/${i}`, `-${i + 1} days`);
+    const newsId = crypto.randomUUID();
+    env._db.prepare(`INSERT INTO news_items (id, url, host, title, published_at) VALUES (?, ?, ?, ?, datetime('now', ?))`)
+      .run(newsId, `https://news.example.com/${i}`, "news.example.com", `Headline #${i + 1}: notable move`, `-${i + 1} days`);
+    env._db.prepare(`INSERT INTO news_entity_mentions (id, news_item_id, entity_id) VALUES (?, ?, ?)`)
+      .run(crypto.randomUUID(), newsId, targetId);
   }
 
   // schedule signal — observed_at spread (≥5 rows, peaked around 14:00 UTC)

@@ -13,7 +13,7 @@ export const evalAdverseMedia: EvaluatorFn = async (ctx) => {
       `SELECT nem.id AS id, na.title AS title, na.url AS url, na.published_at AS published_at,
               COALESCE(na.sentiment, '') AS sentiment
          FROM news_entity_mentions nem
-         JOIN news_articles na ON na.id = nem.article_id
+         JOIN news_items na ON na.id = nem.news_item_id
         WHERE nem.entity_id = ?
           ${since ? "AND datetime(na.published_at) > datetime(?)" : ""}
         ORDER BY na.published_at DESC LIMIT 20`,

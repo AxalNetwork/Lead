@@ -1,5 +1,5 @@
 // Pull the bare minimum of what we know about an entity to drive pivots.
-// We read from u_entities/u_channels/u_facts (Task 4 unified schema) and
+// We read from u_entities/channels/facts (Task 4 unified schema) and
 // fall back to legacy leads where needed. Everything is best-effort —
 // the caller works with whatever subset we can fill.
 
@@ -47,7 +47,7 @@ export async function loadKnownFacts(env: Env, entityId: string): Promise<KnownE
   // 2. Channels — emails / personal URLs / extra socials.
   try {
     const ch = await env.DB.prepare(
-      `SELECT kind, canonical, display FROM u_channels WHERE entity_id = ? AND is_dnc = 0`,
+      `SELECT kind, canonical, display FROM channels WHERE entity_id = ? AND is_dnc = 0`,
     ).bind(entityId).all<ChannelRow>();
     for (const c of ch.results ?? []) {
       if (c.kind === "email" && c.canonical) {
@@ -81,7 +81,7 @@ export async function loadKnownFacts(env: Env, entityId: string): Promise<KnownE
   // 4. Facts — wallet addresses, alt URLs.
   try {
     const facts = await env.DB.prepare(
-      `SELECT predicate, value_text FROM u_facts
+      `SELECT predicate, value_text FROM facts
         WHERE entity_id = ? AND predicate IN ('wallet_address','ens_name','personal_url','website')`,
     ).bind(entityId).all<FactRow>();
     for (const f of facts.results ?? []) {

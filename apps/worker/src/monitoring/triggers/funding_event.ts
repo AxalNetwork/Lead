@@ -36,7 +36,7 @@ export const evalFundingEvent: EvaluatorFn = async (ctx) => {
   try {
     const rows = await ctx.env.DB.prepare(
       `SELECT na.id AS id, na.title AS title, na.url AS url, na.published_at AS published_at
-         FROM news_entity_mentions nem JOIN news_articles na ON na.id = nem.article_id
+         FROM news_entity_mentions nem JOIN news_items na ON na.id = nem.news_item_id
         WHERE nem.entity_id = ?
           ${since ? "AND datetime(na.published_at) > datetime(?)" : ""}
         ORDER BY na.published_at DESC LIMIT 20`,

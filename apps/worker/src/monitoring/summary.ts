@@ -160,7 +160,7 @@ export async function buildCanonicalSummary(env: Env, entityId: string): Promise
   // Trust score lives on the profile classifier rollup (Task #3).
   const trust = await safeFirst<{ v: number | null }>(
     env,
-    `SELECT influence_score AS v FROM profile_axes WHERE entity_id = ?`,
+    `SELECT influence_score AS v FROM entity_profile_axes WHERE entity_id = ?`,
     entityId,
   );
 
