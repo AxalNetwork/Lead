@@ -14,6 +14,8 @@ export interface MergeResult {
   channels_moved: number;
   tags_moved: number;
   edges_rewritten: number;
+  /** Rows moved across the other 79 tables that reference a u_entities id. */
+  references_repointed: number;
 }
 
 async function pickPrimary(env: Env, aId: string, bId: string): Promise<{ primary: string; secondary: string }> {
@@ -115,6 +117,11 @@ async function mergeCore(env: Env, primary: string, secondary: string): Promise<
     ).bind(primary, r.role, r.is_primary, r.source, r.confidence).run();
   }
 
+  // Move every other table that references the secondary before the core
+  // batch records the merge — see repointEntityReferences for why the order
+  // and the OR IGNORE / DELETE split matter.
+  const repointed = await repointEntityReferences(env, primary, secondary);
+
   // Atomic body: D1.batch() runs the statements in a single SQLite
   // transaction, so any constraint abort rolls the whole merge back.
   const now = new Date().toISOString();
@@ -174,7 +181,173 @@ async function mergeCore(env: Env, primary: string, secondary: string): Promise<
     channels_moved: channelsMoved,
     tags_moved: tagsMoved,
     edges_rewritten: edgesRewritten,
+    references_repointed: repointed,
   };
+}
+
+/**
+ * Re-point every table that references the secondary entity at the primary.
+ *
+ * The merge batch below moved five tables — facts, channels, entity_tags,
+ * rel_edges and entity_legacy_map. The schema has 79 more that carry a
+ * u_entities id, and none of them were touched, so merging two duplicate
+ * people orphaned the loser's career history, board seats, identity handles,
+ * news mentions, roles, monitoring state, dossier synthesis and diligence
+ * findings — everything the profile actually renders. The merge appeared to
+ * succeed and the data simply stopped being reachable.
+ *
+ * Two rules the generated list follows:
+ *
+ *  - `UPDATE OR IGNORE`, because 45 of these tables carry a unique constraint
+ *    involving the entity column. On a collision the primary's row wins and
+ *    the secondary's is dropped by the DELETE that follows. A plain UPDATE
+ *    would abort the whole transaction — which is what the existing
+ *    `UPDATE facts` can already do, since facts has UNIQUE(hash).
+ *  - the DELETE only ever targets `entity_id`, the row's own owner. Pointer
+ *    columns (organization_entity_id, company_entity_id, issuer_entity_id …)
+ *    are re-pointed but never deleted: dropping a person's career row because
+ *    their *employer* was merged would be a far worse bug than the one this
+ *    fixes.
+ *
+ * Three tables are deliberately excluded — dd_findings, entity_risk_scores
+ * and dd_scan_runs declare entity_id as INTEGER. That is the legacy `entities`
+ * id space, not a u_entities uuid, so writing one here would be wrong.
+ *
+ * Runs BEFORE the core batch. If it fails the merge has not been recorded and
+ * can simply be retried; if it succeeds and the core batch then fails, rows
+ * have moved to the surviving entity, which is harmless and idempotent.
+ */
+async function repointEntityReferences(env: Env, primary: string, secondary: string): Promise<number> {
+  const stmts = [
+    env.DB.prepare(`UPDATE OR IGNORE alert_events SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE alert_rules SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE angel_investments SET person_entity_id = ? WHERE person_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE angel_investments SET company_entity_id = ? WHERE company_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE angels SET person_entity_id = ? WHERE person_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE appreciation_signals SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM appreciation_signals WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE avatar_phash SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE board_seats SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE board_seats SET organization_entity_id = ? WHERE organization_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM board_seats WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE bulk_operation_audit SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE cap_table_holders SET holder_entity_id = ? WHERE holder_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE cap_table_snapshots SET company_entity_id = ? WHERE company_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE career_history SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE career_history SET organization_entity_id = ? WHERE organization_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM career_history WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE comp_members SET company_entity_id = ? WHERE company_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE comp_metrics SET company_entity_id = ? WHERE company_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE conference_attendance SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM conference_attendance WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE conversation_hooks SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE conversation_hooks SET related_entity_id = ? WHERE related_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM conversation_hooks WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE data_quality_log SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE deal_events SET company_entity_id = ? WHERE company_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE deal_participants SET investor_entity_id = ? WHERE investor_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE diligence_runs SET target_entity_id = ? WHERE target_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE document_data_rooms SET target_entity_id = ? WHERE target_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE documents SET target_entity_id = ? WHERE target_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE education_history SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM education_history WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE email_hashes SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM email_hashes WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE entity_audit_log SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE entity_evidence_quotes SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE entity_history SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE entity_history SET related_entity_id = ? WHERE related_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE entity_influence SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM entity_influence WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE entity_monitor_state SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM entity_monitor_state WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE entity_profile_axes SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM entity_profile_axes WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE entity_snapshots SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM entity_snapshots WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE entity_title_embeddings SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM entity_title_embeddings WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE family_ties SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE family_ties SET related_entity_id = ? WHERE related_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM family_ties WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE field_overrides SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE founder_feedback SET investor_entity_id = ? WHERE investor_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE founder_pipeline_investors SET investor_entity_id = ? WHERE investor_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE government_appointments SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM government_appointments WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE hallucination_flags SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE handle_candidates SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM handle_candidates WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE identity_handles SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM identity_handles WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE intro_paths SET target_entity_id = ? WHERE target_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE investor_reputation SET investor_entity_id = ? WHERE investor_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE lifestyle_signals SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM lifestyle_signals WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE news_entity_mentions SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM news_entity_mentions WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE osint_entity_state SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM osint_entity_state WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE osint_negative_cache SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM osint_negative_cache WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE partner_movements SET person_entity_id = ? WHERE person_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE person_dossier_synthesis SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE person_goals SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM person_goals WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE person_identity SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM person_identity WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE person_interests SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM person_interests WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE person_preferences SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM person_preferences WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE person_verification_state SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM person_verification_state WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE persona_entity_matches SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM persona_entity_matches WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE persona_match_jobs SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE persona_match_manual_overrides SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM persona_match_manual_overrides WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE persona_matches SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM persona_matches WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE political_donations SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM political_donations WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE preferred_series SET company_entity_id = ? WHERE company_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE preferred_series_investors SET investor_entity_id = ? WHERE investor_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE profile_comments SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE profile_workflow_runs SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE profiler_enricher_logs SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE profiler_runs SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE project_audience_feedback SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM project_audience_feedback WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE project_audience_matches SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM project_audience_matches WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE project_history SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE project_matches SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM project_matches WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE reference_candidates SET subject_entity_id = ? WHERE subject_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE reference_candidates SET ref_entity_id = ? WHERE ref_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE relationship_infer_queue SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM relationship_infer_queue WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE sec_13f_holdings SET filer_entity_id = ? WHERE filer_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE sec_13f_holdings SET issuer_entity_id = ? WHERE issuer_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE sec_filings SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE sec_form_adv_funds SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE sec_form_adv_funds SET adviser_entity_id = ? WHERE adviser_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE sec_form_d_rounds SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE sec_insider_trades SET filer_entity_id = ? WHERE filer_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE sec_insider_trades SET issuer_entity_id = ? WHERE issuer_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE sec_insider_trades SET owner_entity_id = ? WHERE owner_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE stylometric_vectors SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM stylometric_vectors WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE travel_patterns SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM travel_patterns WHERE entity_id = ?`).bind(secondary),
+    env.DB.prepare(`UPDATE OR IGNORE valuation_marks SET company_entity_id = ? WHERE company_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE verification_findings SET person_entity_id = ? WHERE person_entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`UPDATE OR IGNORE watchlist_members SET entity_id = ? WHERE entity_id = ?`).bind(primary, secondary),
+    env.DB.prepare(`DELETE FROM watchlist_members WHERE entity_id = ?`).bind(secondary),
+  ];
+  const results = await env.DB.batch(stmts);
+  return results.reduce((n, r) => n + Number(r?.meta?.changes ?? 0), 0);
 }
 
 export async function mergeEntities(env: Env, idA: string, idB: string): Promise<MergeResult> {

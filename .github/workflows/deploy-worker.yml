@@ -627,25 +627,44 @@ jobs:
           # Only now involve wrangler. Its output is captured so that a silent
           # exit is at least a silent exit whose transcript is quoted back in
           # the failure, rather than something the reader has to scroll for.
+          # Run the wrangler this repo actually declares (^4.91.0, installed
+          # by the dependency step above), not a hard-pinned 3.99.0.
+          #
+          # The probes above prove the credentials are fine: the token lists
+          # the account's D1 databases, the declared database_id resolves, it
+          # can run SQL against that database, and d1_migrations already
+          # exists. wrangler 3.99.0 nonetheless exited 1 with 880 bytes of
+          # output containing only npm notices, config warnings and its own
+          # "you are out of date" banner — no error at all.
+          #
+          # Two facts point the same way. Cloudflare Workers Builds deploys
+          # this exact commit successfully, and it uses the project's own
+          # wrangler. And `npx --yes wrangler@3.99.0` pins the CLI but not its
+          # dependency tree, so a transitive release can change its behaviour
+          # with no commit here — which is what a failure that moved earlier in
+          # the pipeline with no corresponding code change looks like.
           echo "--- pending migrations ---"
           D1_LOG="${RUNNER_TEMP:-/tmp}/d1-list.log"
           set +e
-          npx --yes wrangler@3.99.0 d1 migrations list DB --remote 2>&1 | tee "$D1_LOG"
+          npx wrangler d1 migrations list DB --remote 2>&1 | tee "$D1_LOG"
           LIST_RC=${PIPESTATUS[0]}
           set -e
           if [ "$LIST_RC" -ne 0 ]; then
             echo "::group::wrangler output ($(wc -c < "$D1_LOG" | tr -d ' ') bytes)"
             cat "$D1_LOG"
             echo "::endgroup::"
-            echo "::error::wrangler d1 migrations list exited ${LIST_RC}, even though the D1 API is reachable with this token and the declared database_id resolves (both proved above). The failure is inside wrangler 3.99.0 or its config handling, not in credentials — if the captured output above is empty, that is itself the finding."
+            echo "::error::wrangler d1 migrations list exited ${LIST_RC}, even though the D1 API is reachable with this token and the declared database_id resolves (both proved above). The failure is inside wrangler or its config handling, not in credentials — if the captured output above is empty, that is itself the finding."
             exit 1
           fi
           echo "--- applying ---"
-          npx --yes wrangler@3.99.0 d1 migrations apply DB --remote
+          npx wrangler d1 migrations apply DB --remote
 
       - name: Deploy via wrangler
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           workingDirectory: apps/worker
-          wranglerVersion: "3.99.0"
+          # Must track apps/worker/package.json. Pinning this independently is
+          # how the D1 step came to run a wrangler three majors behind the one
+          # the project is developed and deployed with.
+          wranglerVersion: "4.91.0"

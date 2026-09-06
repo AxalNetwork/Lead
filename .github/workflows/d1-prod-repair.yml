@@ -40,6 +40,12 @@ jobs:
         with:
           node-version: "20"
 
+      # Installs the wrangler this repo declares. Without it `npx wrangler`
+      # downloads whatever is newest, which is the same version drift that
+      # broke the deploy workflow — just in the other direction.
+      - name: Install worker dependencies
+        run: npm ci
+
       - name: Inspect prod dashboard_snapshots
         if: ${{ inputs.mode == 'inspect' }}
         env:
@@ -48,16 +54,16 @@ jobs:
         run: |
           set -euo pipefail
           echo "=== Schema (PRAGMA table_info) ==="
-          npx --yes wrangler@3.99.0 d1 execute aidatasignal-leads --remote \
+          npx wrangler d1 execute aidatasignal-leads --remote \
             --command "PRAGMA table_info(dashboard_snapshots);"
           echo "=== Row count ==="
-          npx --yes wrangler@3.99.0 d1 execute aidatasignal-leads --remote \
+          npx wrangler d1 execute aidatasignal-leads --remote \
             --command "SELECT COUNT(*) AS n FROM dashboard_snapshots;"
           echo "=== Index list ==="
-          npx --yes wrangler@3.99.0 d1 execute aidatasignal-leads --remote \
+          npx wrangler d1 execute aidatasignal-leads --remote \
             --command "PRAGMA index_list(dashboard_snapshots);"
           echo "=== d1_migrations applied entries for 357+ ==="
-          npx --yes wrangler@3.99.0 d1 execute aidatasignal-leads --remote \
+          npx wrangler d1 execute aidatasignal-leads --remote \
             --command "SELECT name, applied_at FROM d1_migrations WHERE name LIKE '35%' OR name LIKE '36%' OR name LIKE '37%' ORDER BY name;"
 
       - name: Drop orphan dashboard_snapshots
@@ -72,10 +78,10 @@ jobs:
             exit 1
           fi
           echo "Dropping dashboard_snapshots on prod (idempotent)…"
-          npx --yes wrangler@3.99.0 d1 execute aidatasignal-leads --remote \
+          npx wrangler d1 execute aidatasignal-leads --remote \
             --command "DROP TABLE IF EXISTS dashboard_snapshots;"
           echo "Verifying it is gone…"
-          npx --yes wrangler@3.99.0 d1 execute aidatasignal-leads --remote \
+          npx wrangler d1 execute aidatasignal-leads --remote \
             --command "SELECT name FROM sqlite_master WHERE type='table' AND name='dashboard_snapshots';"
 
       - name: Re-apply migrations (after drop)
@@ -85,4 +91,4 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: 30c9362191318777b71647145decda48
         run: |
           set -euo pipefail
-          npx --yes wrangler@3.99.0 d1 migrations apply DB --remote
+          npx wrangler d1 migrations apply DB --remote
