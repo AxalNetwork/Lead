@@ -227,13 +227,19 @@ async function runOneEnricher(
 
   const t0 = Date.now();
   let result: EnricherResult;
+  // The loser of the race has to be cancelled. Without this, every
+  // enricher that finishes quickly still leaves a live 25 s timer behind
+  // — ~38 of them per profiler run — which keeps the isolate's event loop
+  // occupied long after the run is done, and holds `node --test` open for
+  // a full 25 s after the last assertion.
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     // 25 s wall-clock cap (task contract).
     result = await Promise.race<EnricherResult>([
       e.run(env, entityId, ctx),
-      new Promise<EnricherResult>((_resolve, reject) =>
-        setTimeout(() => reject(new Error("enricher_timeout_25s")), PER_ENRICHER_MS),
-      ),
+      new Promise<EnricherResult>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("enricher_timeout_25s")), PER_ENRICHER_MS);
+      }),
     ]);
   } catch (err) {
     const wall_ms = Date.now() - t0;
@@ -244,6 +250,8 @@ async function runOneEnricher(
       startedAt, finishedAt: new Date().toISOString(),
     });
     throw err;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 
   // Apply writes via EntityService helpers.

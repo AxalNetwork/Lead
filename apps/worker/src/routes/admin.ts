@@ -692,6 +692,19 @@ admin.post("/garbage-sweep", async (c) => {
   });
 });
 
+// Operator-triggered person-profiler batch. The nightly cron runs this
+// at limit 25; the "aggressive backfill, then throttle" posture needs a
+// way to run a much larger pass on demand rather than waiting a night
+// per 25 people. Dispatches Workflow instances and returns immediately —
+// poll GET /api/profilers/:entity_id/status for per-entity progress.
+admin.post("/profiler-batch", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { limit?: number } | null;
+  const limit = typeof body?.limit === "number" ? Math.min(Math.max(body.limit, 1), 500) : 100;
+  const { runStalestProfilerBatch } = await import("../services/profilers/batch.js");
+  const result = await runStalestProfilerBatch(c.env, { limit });
+  return c.json({ ok: true, requested_limit: limit, ...result });
+});
+
 // Section B: CSV column-mapping bug. Re-derives `display_name` from
 // `primary_domain` / `primary_url` for every active entity whose name
 // is a kind-string like "VC" / "Nonprofit" / "Training Program" (per

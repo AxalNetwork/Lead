@@ -60,21 +60,30 @@ export async function signalCoMentions(env: Env, e: EdgeIdentity): Promise<RawSi
   }, null);
 }
 
-/** Board time-overlap. Reads facts (predicate=person.board_seat). */
+/**
+ * Board time-overlap. Reads facts (predicate=person.board_seat).
+ *
+ * The JSON paths must match what `entities/profile.ts::addBoardSeat`
+ * actually mirrors — `organization_entity_id` / `started_at` / `ended_at`.
+ * This read used to ask for `company_entity_id` / `start_date` / `end_date`,
+ * which no writer has ever produced, so the join never matched and the
+ * signal returned a silent null on every edge.
+ */
 export async function signalBoardOverlap(env: Env, e: EdgeIdentity): Promise<RawSignal | null> {
   return safeQuery(async () => {
     const r = await env.DB.prepare(
       `SELECT
-         json_extract(f1.value_json, '$.company_entity_id') AS co1,
-         json_extract(f1.value_json, '$.start_date') AS s1,
-         json_extract(f1.value_json, '$.end_date') AS e1,
-         json_extract(f2.value_json, '$.start_date') AS s2,
-         json_extract(f2.value_json, '$.end_date') AS e2
+         json_extract(f1.value_json, '$.organization_entity_id') AS co1,
+         json_extract(f1.value_json, '$.started_at') AS s1,
+         json_extract(f1.value_json, '$.ended_at') AS e1,
+         json_extract(f2.value_json, '$.started_at') AS s2,
+         json_extract(f2.value_json, '$.ended_at') AS e2
        FROM facts f1
-       JOIN facts f2 ON json_extract(f2.value_json, '$.company_entity_id')
-                      = json_extract(f1.value_json, '$.company_entity_id')
+       JOIN facts f2 ON json_extract(f2.value_json, '$.organization_entity_id')
+                      = json_extract(f1.value_json, '$.organization_entity_id')
       WHERE f1.entity_id = ? AND f2.entity_id = ?
         AND f1.predicate = 'person.board_seat' AND f2.predicate = 'person.board_seat'
+        AND json_extract(f1.value_json, '$.organization_entity_id') IS NOT NULL
         AND f1.is_current = 1 AND f2.is_current = 1`,
     ).bind(e.src_entity_id, e.dst_entity_id).all<{ s1: string | null; e1: string | null; s2: string | null; e2: string | null }>();
     const rows = r.results ?? [];
@@ -134,26 +143,50 @@ export async function signalJointPanels(env: Env, e: EdgeIdentity): Promise<RawS
   }, null);
 }
 
-/** Same firm or school overlap. Reads facts (person.career_entry / person.education). */
+/**
+ * Same firm or school overlap. Reads facts (person.career / person.education).
+ *
+ * Three separate name drifts made this signal unreachable:
+ *
+ *   - predicate `person.career_entry` is a *verification claim* predicate
+ *     (services/verification/runner.ts), never a `facts` row. The canonical
+ *     fact predicate — registered in entities/profile-predicates.ts and
+ *     written by both entities/profile.ts and services/secEdgar/persist.ts —
+ *     is `person.career`.
+ *   - the employer id is `organization_entity_id` (profile.ts) or
+ *     `employer_entity_id` (secEdgar/persist.ts), never `firm_entity_id`.
+ *     Both shapes are live in the table, so both are coalesced here.
+ *   - the school is `institution` (profile.ts), never `school_name`.
+ *
+ * The explicit IS NOT NULL guards are not load-bearing — SQLite evaluates
+ * `NULL = NULL` to NULL, so a pair of id-less rows never joins anyway — but
+ * organization_entity_id is nullable on both writers, and stating the
+ * requirement beats relying on three-valued logic to hold by accident.
+ */
 export async function signalSameFirmOrSchool(env: Env, e: EdgeIdentity): Promise<RawSignal | null> {
   return safeQuery(async () => {
     const r = await env.DB.prepare(
       `SELECT
          (SELECT COUNT(*)
             FROM facts f1
-            JOIN facts f2 ON json_extract(f2.value_json, '$.firm_entity_id')
-                           = json_extract(f1.value_json, '$.firm_entity_id')
+            JOIN facts f2 ON COALESCE(json_extract(f2.value_json, '$.organization_entity_id'),
+                                      json_extract(f2.value_json, '$.employer_entity_id'))
+                           = COALESCE(json_extract(f1.value_json, '$.organization_entity_id'),
+                                      json_extract(f1.value_json, '$.employer_entity_id'))
            WHERE f1.entity_id = ? AND f2.entity_id = ?
-             AND f1.predicate = 'person.career_entry'
-             AND f2.predicate = 'person.career_entry'
+             AND f1.predicate = 'person.career'
+             AND f2.predicate = 'person.career'
+             AND COALESCE(json_extract(f1.value_json, '$.organization_entity_id'),
+                          json_extract(f1.value_json, '$.employer_entity_id')) IS NOT NULL
              AND f1.is_current = 1 AND f2.is_current = 1) AS firm_overlap,
          (SELECT COUNT(*)
             FROM facts f1
-            JOIN facts f2 ON json_extract(f2.value_json, '$.school_name')
-                           = json_extract(f1.value_json, '$.school_name')
+            JOIN facts f2 ON json_extract(f2.value_json, '$.institution')
+                           = json_extract(f1.value_json, '$.institution')
            WHERE f1.entity_id = ? AND f2.entity_id = ?
              AND f1.predicate = 'person.education'
              AND f2.predicate = 'person.education'
+             AND json_extract(f1.value_json, '$.institution') IS NOT NULL
              AND f1.is_current = 1 AND f2.is_current = 1) AS school_overlap`,
     ).bind(e.src_entity_id, e.dst_entity_id, e.src_entity_id, e.dst_entity_id)
       .first<{ firm_overlap: number; school_overlap: number }>();

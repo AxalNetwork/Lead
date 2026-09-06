@@ -961,6 +961,27 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         await logError(env, { err: e, step: "nightly ai-profile-filler-batch" });
         console.error("nightly ai-profile-filler-batch failed", (e as Error).message);
       }
+      // Nightly person-profiler sweep. Until now `runProfiler` had no
+      // scheduler at all — it ran only when an operator hit POST
+      // /api/profilers/:entity_id/run — so career_history,
+      // education_history and board_seats filled one hand-clicked person
+      // at a time. Six of the thirteen relationship-edge extractors read
+      // exactly those tables, which is a large part of why `rel_edges`
+      // (and therefore Power Nodes) is empty.
+      //
+      // The batch dispatches Workflow instances, so the runs it starts
+      // complete after this tick has moved on; the edges they enable are
+      // extracted on the following night's pass. Running the profiler
+      // inline to close that gap would mean up to 60 s of wall-clock per
+      // entity inside a slot that already carries ~38 sweeps.
+      try {
+        const { runStalestProfilerBatch } = await import("./services/profilers/batch");
+        const r = await runStalestProfilerBatch(env, { limit: 25 });
+        console.log("nightly profiler-batch", JSON.stringify(r));
+      } catch (e) {
+        await logError(env, { err: e, step: "nightly profiler-batch" });
+        console.error("nightly profiler-batch failed", (e as Error).message);
+      }
       // Task #3 (this task): nightly OSINT batch + 90-day reverify sweep.
       // Free-plan cron slot cap (5/5 booked) means we piggyback the 0 4
       // slot. Both jobs are bounded so they fit inside a single tick.
