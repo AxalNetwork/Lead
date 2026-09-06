@@ -14,6 +14,7 @@
 
 import type { Env } from "../../types";
 import type { CompPanelCriteria } from "./types";
+import { entityHasSector, SECTOR_MATCHES_COMPANY_ENTITY_SQL } from "../../entities/sector";
 
 export function parseCriteria(raw: string | null): CompPanelCriteria {
   if (!raw) return {};
@@ -78,14 +79,18 @@ export async function screenPanel(
     }
     // Sector / business_model: match against facts on the entity.
     if (criteria.sector) {
-      const f = await env.DB.prepare(
-        `SELECT 1 FROM facts WHERE entity_id = ? AND predicate IN ('company.sector','firm.sector','sector')
-            AND lower(value_text) = lower(?) AND is_current = 1 LIMIT 1`,
-      ).bind(r.company_entity_id, criteria.sector).first();
-      if (!f) continue;
+      // A miss here `continue`s past the candidate, so reading the three
+      // singular predicates nothing writes did not return an unfiltered
+      // panel — it returned an EMPTY one, and an operator filtering by
+      // sector concluded there were no comparable companies.
+      if (!(await entityHasSector(env, r.company_entity_id, criteria.sector))) continue;
       reasons.push(`sector=${criteria.sector}`);
     }
     if (criteria.business_model) {
+      // Left as-is deliberately: `company.business_model` also has no writer,
+      // but unlike sector there is no alternative spelling anywhere in the
+      // schema to converge on. Widening it would be inventing a source. The
+      // criterion is operator-set, so it only bites when explicitly asked for.
       const f = await env.DB.prepare(
         `SELECT 1 FROM facts WHERE entity_id = ? AND predicate IN ('company.business_model','business_model')
             AND lower(value_text) = lower(?) AND is_current = 1 LIMIT 1`,
@@ -111,12 +116,11 @@ export async function screenPanel(
       `SELECT DISTINCT vm.company_entity_id, e.display_name
          FROM valuation_marks vm
          JOIN u_entities e ON e.id = vm.company_entity_id
-         JOIN facts f ON f.entity_id = vm.company_entity_id
-        WHERE f.predicate IN ('company.sector','firm.sector','sector')
-          AND lower(f.value_text) = lower(?) AND f.is_current = 1
+        WHERE ${SECTOR_MATCHES_COMPANY_ENTITY_SQL}
           AND vm.company_entity_id NOT IN (SELECT company_entity_id FROM comp_metrics WHERE ticker IS NOT NULL)
         LIMIT 500`,
-    ).bind(criteria.sector).all<{ company_entity_id: string; display_name: string }>();
+    ).bind(criteria.sector, criteria.sector, criteria.sector)
+      .all<{ company_entity_id: string; display_name: string }>();
     for (const r of (privRows.results ?? [])) {
       priv.push({
         company_entity_id: r.company_entity_id, company_name: r.display_name,

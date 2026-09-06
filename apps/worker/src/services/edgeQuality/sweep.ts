@@ -15,6 +15,7 @@ import { collectAllSignals } from "./signals";
 import { aggregateSignals } from "./aggregate";
 import { computeInfluence, type ScoredEdge } from "./influence";
 import { insertFact } from "../../entities/facts";
+import { firstOfJsonArray } from "../../entities/sector";
 import { logError } from "../../db/error_log";
 import { wrapUnknown } from "../../errors";
 
@@ -365,18 +366,6 @@ async function loadPrimarySectors(env: Env, ids: string[]): Promise<Map<string, 
   return out;
 }
 
-/** First non-empty string in a JSON array column, or null for anything else. */
-function firstOfJsonArray(raw: string | null): string | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return null;
-    for (const x of parsed) {
-      if (typeof x === "string" && x.trim()) return x.trim();
-    }
-  } catch { /* not JSON — nothing to take */ }
-  return null;
-}
 
 function round4(x: number): number {
   return Math.round(x * 10000) / 10000;
