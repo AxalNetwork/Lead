@@ -225,19 +225,48 @@ export async function runWeeklySnapshotSweep(env: Env, limit = 25): Promise<{
   // one current `firm.team_url` fact, pick the most recently observed
   // (then created) row so the crawl target is stable across runs.
   const rows = await env.DB.prepare(
-    `WITH picked AS (
+    `WITH candidates AS (
+       -- Preference 1: an explicit firm.team_url fact. Nothing in the worker
+       -- writes this predicate, so on its own the sweep picked zero firms
+       -- forever — and reported picked:0, which is also what "every firm is
+       -- up to date" looks like. Kept first because it is the right answer
+       -- when something does set it, e.g. an operator override.
        SELECT f.entity_id AS firm_entity_id, f.value_text AS team_url,
-              ROW_NUMBER() OVER (
-                PARTITION BY f.entity_id
-                ORDER BY f.observed_at DESC, f.created_at DESC, f.id ASC
-              ) AS rn
+              1 AS pref, f.observed_at AS ts_a, f.created_at AS ts_b, f.id AS tie
          FROM facts f
-         JOIN entity_roles r ON r.entity_id = f.entity_id
-                            AND r.role = 'investor_firm'
         WHERE f.predicate = 'firm.team_url'
           AND f.is_current = 1
           AND f.value_text IS NOT NULL
           AND f.value_text <> ''
+       UNION ALL
+       -- Preference 2: the page the firm's people were actually scraped from.
+       -- scraper/pipeline.ts stamps firm_people.source_url with the team page
+       -- it parsed, which is exactly the URL this sweep wants to re-fetch. It
+       -- is the only populated source of a firm team URL in the schema.
+       -- CAST matches how portfolioFromFirmSite.ts and roleInference.ts join
+       -- firms into entity_legacy_map: firms.id is INTEGER, legacy_id is TEXT.
+       SELECT m.entity_id AS firm_entity_id, fp.source_url AS team_url,
+              2 AS pref, fp.created_at AS ts_a, fp.created_at AS ts_b, CAST(fp.id AS TEXT) AS tie
+         FROM firm_people fp
+         JOIN entity_legacy_map m ON m.legacy_table = 'firms'
+                                 AND m.legacy_id = CAST(fp.firm_id AS TEXT)
+        WHERE fp.source_url IS NOT NULL
+          AND fp.source_url <> ''
+     ),
+     picked AS (
+       SELECT c.firm_entity_id, c.team_url,
+              ROW_NUMBER() OVER (
+                PARTITION BY c.firm_entity_id
+                ORDER BY c.pref ASC, c.ts_a DESC, c.ts_b DESC, c.tie ASC
+              ) AS rn
+         FROM candidates c
+         -- Widened from role = 'investor_firm', which only deals/investorResolver
+         -- assigns. Every firm that got its role from the dual-write carries
+         -- 'firm', so the old filter excluded the bulk of the table. This is
+         -- the same set the sibling detector (movements/spinout.ts) uses, and
+         -- the two reading the same graph differently was itself the bug.
+         JOIN entity_roles r ON r.entity_id = c.firm_entity_id
+                            AND r.role IN ('investor_firm','firm','fund','vc','gp','investor')
      ),
      dated AS (
        SELECT p.firm_entity_id, p.team_url,
