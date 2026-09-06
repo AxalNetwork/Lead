@@ -94,7 +94,8 @@ scrapers.get("/health", async (c) => {
     return {
       name: p.name,
       configured: p.isConfigured(c.env),
-      daily_cap_usd: cap,
+      is_free: p.isFree === true,
+      daily_cap_usd: p.isFree ? null : cap,
       spent_today_usd: Number(spent.toFixed(4)),
       calls_today: u?.calls ?? 0,
       blocked_today: u?.blocked_calls ?? 0,

@@ -54,8 +54,13 @@ async function runOneProvider(
     }
   }
 
+  // Free providers have no spend to cap, and checkBudget reads a cap of 0
+  // as "disabled" — which silently refused every call to the only two
+  // providers left after the paid ones were removed. See Provider.isFree.
   const cap = provider.dailyCapUsd(env);
-  const budget = await checkBudget(env.DB, provider.name, cap);
+  const budget = provider.isFree
+    ? { allowed: true, spent: 0 }
+    : await checkBudget(env.DB, provider.name, cap);
   if (!budget.allowed) {
     await recordBlock(env.DB, provider.name, cap === 0 ? "disabled" : "budget");
     return { result: { patch: {}, evidence_url: null, cost_usd: 0, ok: false, reason: "budget" }, cached: false };

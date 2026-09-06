@@ -12,7 +12,10 @@ enrichment.get("/providers", async (c) => {
     name: p.name,
     priority: p.priority,
     configured: p.isConfigured(c.env),
-    daily_cap_usd: p.dailyCapUsd(c.env),
+    // Free providers bypass the USD budget; their cap of 0 means "no spend
+    // to cap", not "disabled". Surface the flag so the console can say so.
+    is_free: p.isFree === true,
+    daily_cap_usd: p.isFree ? null : p.dailyCapUsd(c.env),
   }));
   const usage = await todayUsage(c.env.DB);
   return c.json({ providers: items, usage_today: usage });

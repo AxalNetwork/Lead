@@ -25,6 +25,7 @@ import { withEntityLock, ALLOWED_MERGE_FIELDS } from "../do/EntityLock";
 import { ensureRoleTaxonomySeeded } from "../prospects/seedRoles";
 import { rescoreEntity } from "../personas/rescore";
 import { listMatchesForEntityWithDetails } from "../personas/repo";
+import { loadOrgEntityOverlay, applyOrgOverlay } from "../services/org_entity_merge";
 
 function pickAllowed(table: "accounts" | "buyers", body: Record<string, unknown>): Record<string, unknown> {
   const allow = ALLOWED_MERGE_FIELDS[table];
@@ -111,8 +112,17 @@ accountsRoute.get("/", async (c) => {
 
 accountsRoute.get("/:id", async (c) => {
   const id = c.req.param("id");
-  const row = await getAccount(c.env, id);
-  if (!row) return c.json({ error: "not_found" }, 404);
+  const stored = await getAccount(c.env, id);
+  if (!stored) return c.json({ error: "not_found" }, 404);
+  // Same read-path gap as firms/companies: extracted description / HQ /
+  // industry / founded year land in `facts`, never in these columns.
+  // Overlaid HERE and not inside getAccount on purpose — that helper also
+  // backs scoring, aiSync and write-path existence checks, which must keep
+  // seeing the true stored row.
+  const row = applyOrgOverlay(
+    stored as unknown as Record<string, unknown>,
+    await loadOrgEntityOverlay(c.env, "accounts", id),
+  ) as unknown as typeof stored;
   const [buyers, signals, tech, history] = await Promise.all([
     listBuyers(c.env, id),
     listSignals(c.env, id, { limit: 200 }),
