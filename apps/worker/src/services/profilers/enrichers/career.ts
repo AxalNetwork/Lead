@@ -65,9 +65,18 @@ export const careerProfiler: Enricher = {
     const seen = new Set<string>();
     for (const f of facts) {
       const v = safeJsonParse<Record<string, unknown>>(f.value_json) ?? {};
+      // `employer` / `employer_entity_id` is the shape services/secEdgar/
+      // persist.ts writes for Form ADV control persons, Form D related
+      // persons and 10-K executives — SEC EDGAR being the only free live
+      // source of person.career facts. Reading only the profile.ts shape
+      // made every one of them invisible to this enricher, so none ever
+      // became a career_history row.
       const orgName = (v.organization_name as string)
+        ?? (v.employer as string)
         ?? (v.org as string) ?? (v.company as string) ?? (f.value_text ?? "");
       if (!orgName) continue;
+      const orgEntityId = (v.organization_entity_id as string)
+        ?? (v.employer_entity_id as string) ?? null;
       const startedAt = (v.started_at as string) ?? (v.start_date as string) ?? null;
       const sourceUrl = f.evidence_url || (v.source_url as string) || "";
       if (!sourceUrl) continue;
@@ -79,7 +88,7 @@ export const careerProfiler: Enricher = {
         input: {
           entityId,
           organizationName: String(orgName).slice(0, 200),
-          organizationEntityId: (v.organization_entity_id as string) ?? null,
+          organizationEntityId: orgEntityId,
           roleTitle: (v.role_title as string) ?? (v.title as string) ?? null,
           seniority: (v.seniority as string) ?? null,
           department: (v.department as string) ?? null,

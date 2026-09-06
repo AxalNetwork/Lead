@@ -491,9 +491,43 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 30c9362191318777b71647145decda48
         run: |
+          # Probe the D1 API directly before involving wrangler.
+          #
+          # Run 135 showed why this is necessary: wrangler printed its
+          # banner and exited 1 with no error body at all, while the four
+          # steps immediately before it created and listed R2 buckets,
+          # Queues, KV namespaces and Vectorize indexes with the same
+          # token. "Most likely a missing scope" is a guess; a raw API
+          # response is an answer. D1 is a separately-toggled permission,
+          # so broad account access elsewhere says nothing about it.
+          echo "--- D1 API reachability (raw, no wrangler) ---"
+          DECLARED_DB_ID=$(awk '/^\[\[d1_databases\]\]/{f=1;next} /^\[/{f=0} f && /^[[:space:]]*database_id[[:space:]]*=/' wrangler.toml \
+            | sed -E 's/.*"([^"]+)".*/\1/' | head -1)
+          RESP=$(curl -sS \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+          if [ "$(echo "$RESP" | jq -r '.success')" != "true" ]; then
+            echo "$RESP" | jq . || echo "$RESP"
+            echo "::error::The Cloudflare API refused to list D1 databases on account ${CLOUDFLARE_ACCOUNT_ID}. The error payload above is authoritative — code 10000 / 'Authentication error' means CLOUDFLARE_API_TOKEN is missing the D1 permission. Every other resource type in this job succeeded with the same token, so this is a D1-specific scope, not a dead token. Add 'Account -> D1 -> Edit' at https://dash.cloudflare.com/profile/api-tokens and re-run. See docs/cloudflare-operations-checklist.md section 5."
+            exit 1
+          fi
+          echo "live D1 databases:"
+          echo "$RESP" | jq -r '.result[]? | "  \(.name)\t\(.uuid)"'
+          if [ -n "$DECLARED_DB_ID" ] && ! echo "$RESP" | jq -e --arg id "$DECLARED_DB_ID" '.result[]? | select(.uuid == $id)' >/dev/null; then
+            echo "::error::apps/worker/wrangler.toml declares database_id ${DECLARED_DB_ID}, which does not exist on this account (see the live list above). A database deleted and recreated gets a new uuid; update wrangler.toml to match."
+            exit 1
+          fi
+          echo "  declared database_id ${DECLARED_DB_ID} resolves — the token can reach D1."
+
+          # Only now involve wrangler, capturing stderr so a silent exit
+          # is at least a silent exit with a recorded status.
           echo "--- pending migrations ---"
-          if ! npx --yes wrangler@3.99.0 d1 migrations list DB --remote; then
-            echo "::error::d1 migrations list failed. Most likely CLOUDFLARE_API_TOKEN lacks D1:Edit on account 30c9362191318777b71647145decda48, or the DB binding is not resolving from apps/worker/wrangler.toml. See docs/cloudflare-operations-checklist.md section 5 for the full scope list."
+          set +e
+          npx --yes wrangler@3.99.0 d1 migrations list DB --remote 2>&1 | tee /tmp/d1-list.log
+          LIST_RC=${PIPESTATUS[0]}
+          set -e
+          if [ "$LIST_RC" -ne 0 ]; then
+            echo "::error::wrangler d1 migrations list exited ${LIST_RC} even though the D1 API is reachable with this token (proved above). Full output is in the step log; if it is empty, the failure is inside wrangler 3.99.0 rather than in credentials or config."
             exit 1
           fi
           echo "--- applying ---"

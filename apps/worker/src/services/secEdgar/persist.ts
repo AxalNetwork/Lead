@@ -165,6 +165,11 @@ async function persistAdv(env: Env, h: FilingHeader, d: AdvPayload, source: stri
       },
       source_kind: "scrape",
       source,
+      // The filing page is the evidence for this career claim, and
+      // profilers/enrichers/career.ts drops any person.career fact that
+      // carries no URL — so without this the whole SEC career path
+      // terminated here and never reached career_history.
+      evidence_url: h.filing_url,
       confidence: 0.9,
     });
     facts++;
@@ -243,7 +248,7 @@ async function persistFormD(env: Env, h: FilingHeader, d: FormDPayload, source: 
       entity_id: personXref.entity_id,
       predicate: "person.career",
       value_json: { employer: d.issuer_name, employer_entity_id: xref.entity_id, title: rp.role, source: "sec_form_d" },
-      source_kind: "scrape", source, confidence: 0.85,
+      source_kind: "scrape", source, evidence_url: h.filing_url, confidence: 0.85,
     });
     facts++;
   }
@@ -564,7 +569,7 @@ async function persist10K(env: Env, h: FilingHeader, d: Form10KPayload, source: 
       entity_id: execXref.entity_id,
       predicate: "person.career",
       value_json: { employer: d.issuer_name, employer_entity_id: xref.entity_id, title: exec.title, total_compensation_usd: exec.total_compensation_usd, source: "sec_10k" },
-      source_kind: "scrape", source, confidence: 0.9,
+      source_kind: "scrape", source, evidence_url: h.filing_url, confidence: 0.9,
     });
     facts++;
     await insertFact(env, { ...ctx, predicate: "sec.10k.executive", value_json: { name: exec.name, title: exec.title, total_compensation_usd: exec.total_compensation_usd }, value_entity_id: execXref.entity_id });
