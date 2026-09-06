@@ -159,14 +159,21 @@ export const hookProfiler: Enricher = {
     let news: NewsRow[] = [];
     try {
       const r = await env.DB.prepare(
-        `SELECT title, url, published_at, summary
-           FROM news_articles
-          WHERE entity_id = ?
-            AND datetime(published_at) >= datetime('now','-90 days')
-          ORDER BY published_at DESC LIMIT 25`,
+        // The articles table is `news_items` and carries no entity_id —
+        // the entity link lives in news_entity_mentions. This read named a
+        // table that no migration creates and was wrapped in a catch, so it
+        // returned nothing and the Conversation Hooks panel stayed empty
+        // however much news had been ingested.
+        `SELECT ni.title AS title, ni.url AS url, ni.published_at AS published_at,
+                ni.summary AS summary
+           FROM news_entity_mentions nem
+           JOIN news_items ni ON ni.id = nem.news_item_id
+          WHERE nem.entity_id = ?
+            AND datetime(ni.published_at) >= datetime('now','-90 days')
+          ORDER BY ni.published_at DESC LIMIT 25`,
       ).bind(entityId).all<NewsRow>();
       news = r.results ?? [];
-    } catch { /* news_articles may not exist in lean test setup */ }
+    } catch { /* news tables may be absent in a lean test setup */ }
 
     for (const n of news) {
       const text = (n.title || "").slice(0, 250);

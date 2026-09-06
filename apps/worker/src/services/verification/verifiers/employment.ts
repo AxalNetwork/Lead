@@ -27,9 +27,19 @@ export const employmentVerifier: Verifier = {
     if (orgId) {
       try {
         const r = await env.DB.prepare(
-          `SELECT id, filing_url, reported_at FROM sec_form4_insiders
-            WHERE person_entity_id = ? AND issuer_entity_id = ?
-            ORDER BY reported_at DESC LIMIT 1`,
+          // `sec_form4_insiders` is created by no migration. Form 4 rows land
+          // in sec_insider_trades, which already carries resolved
+          // owner_entity_id / issuer_entity_id — so this is a rename plus two
+          // column mappings, not a missing feature. The table also holds
+          // 13D/13G rows, hence the form_type filter; the filing URL lives on
+          // sec_filings, joined by accession_no.
+          `SELECT t.id AS id, f.filing_url AS filing_url,
+                  t.transaction_date AS reported_at
+             FROM sec_insider_trades t
+             LEFT JOIN sec_filings f ON f.accession_no = t.accession_no
+            WHERE t.owner_entity_id = ? AND t.issuer_entity_id = ?
+              AND t.form_type = '4'
+            ORDER BY t.transaction_date DESC LIMIT 1`,
         ).bind(personId, orgId).first<{ id: string; filing_url: string | null; reported_at: string | null }>();
         if (r) {
           return {
@@ -69,12 +79,17 @@ export const employmentVerifier: Verifier = {
       }
     } catch { /* missing optional table */ }
 
-    // 3. Press-release corroboration via existing entity_mentions.
+    // 3. Press-release corroboration via news co-mentions.
     try {
       const r = await env.DB.prepare(
-        `SELECT m.url, m.published_at FROM entity_mentions m
-          WHERE m.entity_id = ? AND m.cooccurring_entity_id = ?
-          ORDER BY m.published_at DESC LIMIT 1`,
+        // See directorship.ts — `entity_mentions` never existed; co-occurrence
+        // is a self-join on news_entity_mentions.
+        `SELECT ni.url AS url, ni.published_at AS published_at
+           FROM news_entity_mentions m1
+           JOIN news_entity_mentions m2 ON m2.news_item_id = m1.news_item_id
+           JOIN news_items ni ON ni.id = m1.news_item_id
+          WHERE m1.entity_id = ? AND m2.entity_id = ?
+          ORDER BY ni.published_at DESC LIMIT 1`,
       ).bind(personId, orgId ?? "").first<{ url: string; published_at: string }>();
       if (r) {
         return {

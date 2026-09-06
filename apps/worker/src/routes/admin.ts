@@ -569,7 +569,7 @@ admin.get("/queue-health", async (c) => {
   const topFailures = await c.env.DB.prepare(
     `SELECT step, code, COUNT(*) AS n
        FROM error_log
-      WHERE created_at >= datetime(?, '-1 day')
+      WHERE occurred_at >= datetime(?, '-1 day')
       GROUP BY step, code
       ORDER BY n DESC LIMIT 10`,
   ).bind(now).all<{ step: string; code: string; n: number }>().catch(() => null);

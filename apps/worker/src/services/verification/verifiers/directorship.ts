@@ -100,10 +100,16 @@ export const directorshipVerifier: Verifier = {
     // 3. Press-release cooccurrence as soft signal.
     try {
       const r = await env.DB.prepare(
-        `SELECT url, published_at FROM entity_mentions
-          WHERE entity_id = ? AND cooccurring_entity_id = ?
-            AND lower(snippet) LIKE '%board%'
-          ORDER BY published_at DESC LIMIT 1`,
+        // `entity_mentions` is created by no migration. Co-occurrence lives
+        // in news_entity_mentions as a self-join on news_item_id, with the
+        // article's url on news_items and the quote in context_quote.
+        `SELECT ni.url AS url, ni.published_at AS published_at
+           FROM news_entity_mentions m1
+           JOIN news_entity_mentions m2 ON m2.news_item_id = m1.news_item_id
+           JOIN news_items ni ON ni.id = m1.news_item_id
+          WHERE m1.entity_id = ? AND m2.entity_id = ?
+            AND lower(COALESCE(m1.context_quote, '')) LIKE '%board%'
+          ORDER BY ni.published_at DESC LIMIT 1`,
       ).bind(personId, orgId ?? "").first<{ url: string; published_at: string }>();
       if (r) {
         return {

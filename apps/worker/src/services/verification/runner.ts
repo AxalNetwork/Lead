@@ -383,25 +383,45 @@ export async function pickReferenceGraphChanged(env: Env, limit = 200): Promise<
   //    person_verification_state — first-time references build.
   if (picks.length < limit) {
     const room = limit - picks.length;
-    try {
-      const d = await env.DB.prepare(
-        `SELECT DISTINCT entity_id FROM (
-           SELECT entity_id FROM publication_authors
-           UNION SELECT entity_id FROM conference_attendees
-           UNION SELECT entity_id FROM accelerator_batches
-           UNION SELECT entity_id FROM board_seats
-           UNION SELECT entity_id FROM career_history
-         ) g
-         WHERE entity_id NOT IN (SELECT entity_id FROM person_verification_state)
-         LIMIT ?`,
-      ).bind(room).all<{ entity_id: string }>();
-      for (const row of d.results ?? []) {
-        if (picks.length >= limit) break;
-        if (seen.has(row.entity_id)) continue;
-        picks.push(row.entity_id);
-        seen.add(row.entity_id);
-      }
-    } catch { /* optional tables */ }
+    // Queried one source at a time on purpose. This was a single UNION over
+    // five tables, and `publication_authors` and `accelerator_batches` are
+    // created by no migration — so the whole statement threw, the catch
+    // swallowed it, and the discovery pass never returned a single entity.
+    // Verification therefore never ran for anyone who had not already been
+    // verified. A UNION is only as available as its least-available branch;
+    // per-source queries let the sources that DO exist contribute.
+    //
+    // `conference_attendees` was a third name that never existed; the real
+    // table is conference_attendance.
+    // Written out rather than interpolated: a table name spliced into SQL is
+    // exactly what the repo's SQL gate forbids, and the literal form is also
+    // what makes these statements greppable by the schema-drift test.
+    const SOURCE_QUERIES = [
+      // publication_authors and accelerator_batches are created by no
+      // migration yet — kept so the pass starts working the day they land.
+      `SELECT DISTINCT entity_id FROM publication_authors
+        WHERE entity_id NOT IN (SELECT entity_id FROM person_verification_state) LIMIT ?`,
+      `SELECT DISTINCT entity_id FROM conference_attendance
+        WHERE entity_id NOT IN (SELECT entity_id FROM person_verification_state) LIMIT ?`,
+      `SELECT DISTINCT entity_id FROM accelerator_batches
+        WHERE entity_id NOT IN (SELECT entity_id FROM person_verification_state) LIMIT ?`,
+      `SELECT DISTINCT entity_id FROM board_seats
+        WHERE entity_id NOT IN (SELECT entity_id FROM person_verification_state) LIMIT ?`,
+      `SELECT DISTINCT entity_id FROM career_history
+        WHERE entity_id NOT IN (SELECT entity_id FROM person_verification_state) LIMIT ?`,
+    ];
+    for (const sql of SOURCE_QUERIES) {
+      if (picks.length >= limit) break;
+      try {
+        const d = await env.DB.prepare(sql).bind(room).all<{ entity_id: string }>();
+        for (const row of d.results ?? []) {
+          if (picks.length >= limit) break;
+          if (seen.has(row.entity_id)) continue;
+          picks.push(row.entity_id);
+          seen.add(row.entity_id);
+        }
+      } catch { /* this source's table is absent — try the next */ }
+    }
   }
   return picks;
 }

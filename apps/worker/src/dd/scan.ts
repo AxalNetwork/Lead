@@ -532,14 +532,18 @@ export async function loadEntityForScan(env: Env, entityId: number): Promise<Ent
   const out: EntityForScan = { id: ent.id, name: ent.name, kind: ent.kind };
   if (ent.ref_table === "leads" && ent.ref_id) {
     const lead = await env.DB.prepare(
-      `SELECT bio, linkedin_url, twitter_url, email, email_status, country_iso2 FROM leads WHERE id = ?`,
-    ).bind(ent.ref_id).first<{ bio: string | null; linkedin_url: string | null; twitter_url: string | null; email: string | null; email_status: string | null; country_iso2: string | null }>();
+      // leads has no email_status column — it has `verified` (0/1). This
+      // query had no .catch() either, so it threw rather than degrading and
+      // took the whole diligence scan of any lead-backed entity with it.
+      `SELECT bio, linkedin_url, twitter_url, email, verified, country_iso2 FROM leads WHERE id = ?`,
+    ).bind(ent.ref_id).first<{ bio: string | null; linkedin_url: string | null; twitter_url: string | null; email: string | null; verified: number | null; country_iso2: string | null }>()
+      .catch(() => null);
     if (lead) {
       out.bio = lead.bio;
       out.linkedin_url = lead.linkedin_url;
       out.twitter_url = lead.twitter_url;
       out.country = lead.country_iso2 ?? undefined;
-      out.email_verified = lead.email_status === "verified" || lead.email_status === "valid";
+      out.email_verified = lead.verified === 1;
     }
   } else if ((ent.ref_table === "firms" || ent.ref_table === "companies") && ent.ref_id) {
     const firm = await env.DB.prepare(

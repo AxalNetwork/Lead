@@ -22,6 +22,19 @@ ACCESS_TEAM_DOMAIN = "axalnetwork.cloudflareaccess.com"
 ACCESS_AUD = "f9cbce05165afb5af93e5929ff93dc4591aa18cd8234244327e78fd29fa849dd"
 ACCESS_APP_AUD = "3677234625cd7a8a9065c46ec41ab908bb7a24cfbc0c20169477305327cb3e79"
 
+# Typed per-profile-type extraction workflows (scraper/pipeline.ts:688).
+# Never set anywhere until now — not in this file, not in CI, not in any
+# .dev.vars — so `env.PROFILE_WORKFLOWS_ENABLED === "1"` was always false and
+# every registered profile workflow was skipped on every crawled page. That is
+# the layer that turns a team page or a partner bio into structured facts, so
+# without it a scrape stored the raw page and extracted nothing from it.
+#
+# Still narrowly gated after this: the page classifier must have judged the
+# page a profile / team_page / company_home, AND a registered profile type
+# must test positive at >= 0.5 confidence. Cost is attributed to the scrape
+# job that triggered it and bounded by AI_DAILY_NEURONS_CAP below.
+PROFILE_WORKFLOWS_ENABLED = "1"
+
 # Task #25: Cloudflare-native AI stack budget ceilings.
 AI_DAILY_NEURONS_CAP = "1000000"
 VECTORIZE_DAILY_QUERIES_CAP = "100000"

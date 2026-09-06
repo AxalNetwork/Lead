@@ -32,10 +32,14 @@ export const priorStartupVerifier: Verifier = {
     if (companyId) {
       try {
         const exit = await env.DB.prepare(
-          `SELECT event_type, evidence_url, occurred_at FROM deal_events
+          // deal_events stores the link as source_url and the date as
+           // announcement_date; evidence_url/occurred_at exist on neither.
+          `SELECT event_type, source_url AS evidence_url,
+                  announcement_date AS occurred_at
+             FROM deal_events
             WHERE company_entity_id = ?
               AND event_type IN ('acquisition','ipo','spac')
-            ORDER BY occurred_at DESC LIMIT 1`,
+            ORDER BY announcement_date DESC LIMIT 1`,
         ).bind(companyId).first<{ event_type: string; evidence_url: string | null; occurred_at: string }>();
         if (exit) {
           outcome = `exit:${exit.event_type}`;
@@ -44,9 +48,11 @@ export const priorStartupVerifier: Verifier = {
           snippet = `Deal event ${exit.event_type} on ${exit.occurred_at}.`;
         } else {
           const last = await env.DB.prepare(
-            `SELECT event_type, evidence_url, occurred_at FROM deal_events
+            `SELECT event_type, source_url AS evidence_url,
+                    announcement_date AS occurred_at
+               FROM deal_events
               WHERE company_entity_id = ?
-              ORDER BY occurred_at DESC LIMIT 1`,
+              ORDER BY announcement_date DESC LIMIT 1`,
           ).bind(companyId).first<{ event_type: string; evidence_url: string | null; occurred_at: string }>();
           if (last) {
             const ageMs = Date.now() - new Date(last.occurred_at).getTime();

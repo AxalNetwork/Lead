@@ -6,7 +6,7 @@
 //      company within ±18 months of founding)
 //   3. board peers (board_seats rows at the same org with overlapping tenure)
 //   4. co-authors on publications (publication_authors table)
-//   5. co-panelists at conferences (conference_attendees table)
+//   5. co-panelists at conferences (conference_attendance table)
 //   6. same-batch accelerator alumni (accelerator_batches table)
 //
 // All optional source tables are wrapped in try/catch so the builder
@@ -36,7 +36,7 @@ export async function computeReferenceGraphHash(env: Env, entityId: string): Pro
   await push("career", `SELECT organization_entity_id, organization_name, started_at, ended_at, role_title FROM career_history WHERE entity_id = ?`);
   await push("board",  `SELECT organization_entity_id, organization_name, started_at, ended_at FROM board_seats WHERE entity_id = ?`);
   await push("pubs",   `SELECT publication_id FROM publication_authors WHERE entity_id = ?`);
-  await push("conf",   `SELECT conference_id FROM conference_attendees WHERE entity_id = ?`);
+  await push("conf",   `SELECT conference_name, year FROM conference_attendance WHERE entity_id = ?`);
   await push("accel",  `SELECT accelerator, batch FROM accelerator_batches WHERE entity_id = ?`);
   return sha256Hex(parts.join("\n"));
 }
@@ -235,8 +235,10 @@ export async function buildReferenceCandidates(env: Env, subjectEntityId: string
   try {
     const r = await env.DB.prepare(
       `SELECT a2.entity_id AS pid, u.display_name AS pname, a1.conference_name AS conf, a1.year AS year
-         FROM conference_attendees a1
-         JOIN conference_attendees a2 ON a1.conference_id = a2.conference_id AND a2.entity_id != a1.entity_id
+         FROM conference_attendance a1
+         JOIN conference_attendance a2
+           ON a2.conference_name = a1.conference_name AND a2.year = a1.year
+          AND a2.entity_id != a1.entity_id
          LEFT JOIN u_entities u ON u.id = a2.entity_id
         WHERE a1.entity_id = ?
         LIMIT 100`,

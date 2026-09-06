@@ -76,7 +76,7 @@ test("signalCoMentions: emits observed_at and logScale value", async () => {
   assert.equal(r.observed_at, "2025-01-15");
 });
 
-test("signalCoMentions: missing entity_mentions table → null", async () => {
+test("signalCoMentions: missing news_entity_mentions table → null", async () => {
   const env = makeStubEnv(() => { throw new Error("no such table"); });
   assert.equal(await sig.signalCoMentions(env, E), null);
 });
@@ -146,18 +146,21 @@ test("signalLinkedInEndorsements: missing table → null", async () => {
 // ---------- signalJointPanels ----------
 
 test("signalJointPanels: null when no shared events", async () => {
-  const env = makeStubEnv(() => ({ n: 0, last_seen: null }));
+  const env = makeStubEnv(() => ({ n: 0, last_year: null }));
   assert.equal(await sig.signalJointPanels(env, E), null);
 });
 
 test("signalJointPanels: 3 joint panels emits observed_at", async () => {
-  const env = makeStubEnv(() => ({ n: 3, last_seen: "2024-09-10" }));
+  // conference_attendance records a `year`, not a date — there is no
+  // event_date column to read, so the signal reports the January of the
+  // latest shared year. Coarse but honest; the decay model only needs a date.
+  const env = makeStubEnv(() => ({ n: 3, last_year: 2024 }));
   const r = await sig.signalJointPanels(env, E);
   assert.ok(r && r.value > 0);
-  assert.equal(r.observed_at, "2024-09-10");
+  assert.equal(r.observed_at, "2024-01-01");
 });
 
-test("signalJointPanels: missing conference_attendees → null", async () => {
+test("signalJointPanels: missing conference_attendance → null", async () => {
   const env = makeStubEnv(() => { throw new Error("no such table"); });
   assert.equal(await sig.signalJointPanels(env, E), null);
 });

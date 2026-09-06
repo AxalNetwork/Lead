@@ -124,7 +124,10 @@ export async function buildCanonicalSummary(env: Env, entityId: string): Promise
 
   const lastNews = await safeFirst<{ t: string | null }>(
     env,
-    `SELECT MAX(published_at) AS t FROM news_entity_mentions WHERE entity_id = ?`,
+    `SELECT MAX(ni.published_at) AS t
+       FROM news_entity_mentions nem
+       JOIN news_items ni ON ni.id = nem.news_item_id
+      WHERE nem.entity_id = ?`,
     entityId,
   );
 
@@ -146,7 +149,7 @@ export async function buildCanonicalSummary(env: Env, entityId: string): Promise
   const sev = { low: 0, medium: 0, high: 0, critical: 0 };
   try {
     const rows = await env.DB
-      .prepare(`SELECT severity, COUNT(*) AS n FROM dd_findings WHERE entity_id = ? AND resolved_at IS NULL GROUP BY severity`)
+      .prepare(`SELECT severity, COUNT(*) AS n FROM dd_findings WHERE entity_id = ? AND reviewed_at IS NULL GROUP BY severity`)
       .bind(entityId)
       .all<{ severity: string; n: number }>();
     for (const r of rows.results ?? []) {
@@ -157,10 +160,14 @@ export async function buildCanonicalSummary(env: Env, entityId: string): Promise
     }
   } catch { /* table missing — leave zeros */ }
 
-  // Trust score lives on the profile classifier rollup (Task #3).
+  // trust_score is a monitored field (monitoring/diff.ts watches it), so it
+  // needs a real column. It was read as `influence_score` off a
+  // profile-axes table — no table in the schema has that column at all; the
+  // only influence_score belongs to `buyers`. entity_risk_scores is where a
+  // per-entity trust_score actually lives (migrations/215_dd.sql).
   const trust = await safeFirst<{ v: number | null }>(
     env,
-    `SELECT influence_score AS v FROM profile_axes WHERE entity_id = ?`,
+    `SELECT trust_score AS v FROM entity_risk_scores WHERE entity_id = ?`,
     entityId,
   );
 
