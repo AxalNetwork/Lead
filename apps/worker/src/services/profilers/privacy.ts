@@ -58,19 +58,37 @@ export async function computePrivacy(env: Env, entityId: string): Promise<Privac
     }
   } catch { /* facts may not exist in lean test setups */ }
 
-  // 3. Outstanding takedown / DNC for this entity. Best-effort table lookups.
+  // 3. Outstanding takedown / DNC for this entity.
+  //
+  // This asked two tables that no migration creates — `pii_audit_log` and
+  // `compliance_dnc` — and both reads sat in a bare catch, so the profiler
+  // has never once marked anyone do-not-contact. That is not a data-quality
+  // gap: it means people who asked not to be contacted were profiled anyway.
+  //
+  // The real list is `dnc_list` (migrations/070_compliance.sql), keyed by
+  // (kind, normalized value) rather than by entity — the same shape
+  // compliance/dnc.ts::checkAndScrubDnc uses on the import path. An entity's
+  // normalized identifiers live in channels.canonical, so the two join
+  // directly. This covers GDPR erasures as well: compliance/gdpr.ts records
+  // an erasure by inserting the subject's identifiers into dnc_list, which is
+  // what the old `takedown_in_audit` probe was reaching for.
   try {
     const r = await env.DB.prepare(
-      `SELECT 1 FROM pii_audit_log WHERE entity_id = ? AND action IN ('gdpr_delete','gdpr_export','takedown') LIMIT 1`,
-    ).bind(entityId).first<{ "1": number }>();
-    if (r) reasons.push("takedown_in_audit");
-  } catch { /* table may not exist */ }
-  try {
-    const r = await env.DB.prepare(
-      `SELECT 1 FROM compliance_dnc WHERE entity_id = ? LIMIT 1`,
+      `SELECT 1 FROM channels c
+         JOIN dnc_list d ON d.kind = c.kind AND d.value = c.canonical
+        WHERE c.entity_id = ? LIMIT 1`,
     ).bind(entityId).first<{ "1": number }>();
     if (r) reasons.push("dnc_listed");
-  } catch { /* table may not exist */ }
+  } catch { /* channels/dnc_list absent in a lean test setup */ }
+  try {
+    // channels carries its own is_dnc flag, set through upsertChannel. Nothing
+    // on the DNC write path sets it today, but it is a supported marker and a
+    // manually-flagged channel must still count.
+    const r = await env.DB.prepare(
+      `SELECT 1 FROM channels WHERE entity_id = ? AND is_dnc = 1 LIMIT 1`,
+    ).bind(entityId).first<{ "1": number }>();
+    if (r && !reasons.includes("dnc_listed")) reasons.push("dnc_listed");
+  } catch { /* channels absent in a lean test setup */ }
 
   // 4. Declared preference rows.
   try {

@@ -268,9 +268,9 @@ export async function methodCitations(env: Env, seedUrl: string): Promise<RawLin
   if (!u) return [];
   try {
     const r = await env.DB.prepare(
-      `SELECT body FROM news_items
-        WHERE body IS NOT NULL
-          AND body LIKE ?
+      `SELECT body_excerpt AS body FROM news_items
+        WHERE body_excerpt IS NOT NULL
+          AND body_excerpt LIKE ?
         ORDER BY fetched_at DESC LIMIT 100`,
     ).bind(`%${u.host}%`).all<{ body: string }>();
     const seen = new Set<string>();

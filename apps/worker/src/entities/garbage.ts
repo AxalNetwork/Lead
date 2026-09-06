@@ -372,7 +372,7 @@ export async function isStructurallyOrphan(
       `SELECT
          (SELECT COUNT(*) FROM facts            WHERE entity_id = ?1) AS facts,
          (SELECT COUNT(*) FROM rel_edges        WHERE src_entity_id = ?1 OR dst_entity_id = ?1) AS rels,
-         (SELECT COUNT(*) FROM entity_channels  WHERE entity_id = ?1) AS chans,
+         (SELECT COUNT(*) FROM channels  WHERE entity_id = ?1) AS chans,
          (SELECT (julianday('now') - julianday(created_at)) * 24 FROM u_entities WHERE id = ?1) AS age_hours`,
     ).bind(entityId).first<{ facts: number; rels: number; chans: number; age_hours: number | null }>();
     if (!row) return { orphan: false, reasons };
@@ -382,7 +382,7 @@ export async function isStructurallyOrphan(
       return { orphan: true, reasons };
     }
   } catch (e) {
-    // Optional source tables (entity_channels) may be missing in test
+    // Optional source tables (channels) may be missing in test
     // DBs — degrade to "not orphan" rather than throwing. Per the
     // Task #14 honest-degradation pattern.
     console.warn("isStructurallyOrphan probe failed", entityId, (e as Error).message);
@@ -522,7 +522,7 @@ export async function purgeEntity(env: Env, entityId: string, actorEmail: string
   const cascades = [
     `DELETE FROM facts WHERE entity_id = ?`,
     `DELETE FROM rel_edges WHERE src_entity_id = ? OR dst_entity_id = ?`,
-    `DELETE FROM entity_channels WHERE entity_id = ?`,
+    `DELETE FROM channels WHERE entity_id = ?`,
     `DELETE FROM entity_roles WHERE entity_id = ?`,
     `DELETE FROM entity_history WHERE entity_id = ?`,
     `DELETE FROM entity_legacy_map WHERE entity_id = ?`,

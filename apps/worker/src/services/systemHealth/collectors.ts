@@ -212,8 +212,8 @@ export async function collectQueues(env: Env): Promise<QueueCard[]> {
   // 3) crawl_frontier.
   const cf = await safeQuery(async () => {
     const r = await env.DB.prepare(
-      `SELECT COUNT(*) AS depth, MIN(created_at) AS oldest
-         FROM crawl_frontier WHERE status='pending'`,
+      `SELECT COUNT(*) AS depth, MIN(scheduled_at) AS oldest
+         FROM crawl_frontier WHERE attempts = 0`,
     ).first<{ depth: number | null; oldest: string | null }>();
     return r;
   }, null as { depth: number | null; oldest: string | null } | null);
@@ -228,7 +228,7 @@ export async function collectQueues(env: Env): Promise<QueueCard[]> {
   // 4) smart_frontier (queued only).
   const sf = await safeQuery(async () => {
     const r = await env.DB.prepare(
-      `SELECT COUNT(*) AS depth, MIN(created_at) AS oldest
+      `SELECT COUNT(*) AS depth, MIN(discovered_at) AS oldest
          FROM smart_frontier WHERE status='queued'`,
     ).first<{ depth: number | null; oldest: string | null }>();
     return r;
@@ -284,7 +284,7 @@ export async function collectD1(env: Env): Promise<D1Card> {
          SUM(CASE WHEN code='db_error' OR code='d1_error' OR code LIKE '%db%' THEN 1 ELSE 0 END) AS errors,
          SUM(CASE WHEN message LIKE '%TOO_MANY%' OR message LIKE '%throttl%' OR message LIKE '%rate%' THEN 1 ELSE 0 END) AS throttled
          FROM error_log
-        WHERE created_at >= datetime('now','-1 day')`,
+        WHERE occurred_at >= datetime('now','-1 day')`,
     ).first<{ errors: number | null; throttled: number | null }>();
     return r;
   }, null as { errors: number | null; throttled: number | null } | null);
@@ -485,11 +485,13 @@ export async function collectWorkerCards(env: Env): Promise<WorkerCard[]> {
 export async function collectRecentErrors(env: Env, limit = 100): Promise<ErrorSignature[]> {
   const rows = await safeQuery(async () => {
     const r = await env.DB.prepare(
+      // error_log's timestamp column is occurred_at. Aliased back to
+      // created_at so the row shape the consumers below read is unchanged.
       `SELECT code, kind, COALESCE(step, url, 'unknown') AS route,
-              message, created_at
+              message, occurred_at AS created_at
          FROM error_log
-        WHERE created_at >= datetime('now','-1 day')
-        ORDER BY created_at DESC
+        WHERE occurred_at >= datetime('now','-1 day')
+        ORDER BY occurred_at DESC
         LIMIT 1000`,
     ).all<{ code: string; kind: string; route: string; message: string; created_at: string }>();
     return r.results ?? [];
@@ -525,7 +527,7 @@ export async function collectErrorRatePerMin(env: Env): Promise<number> {
   const r = await safeQuery(async () => {
     const row = await env.DB.prepare(
       `SELECT COUNT(*) AS n FROM error_log
-        WHERE created_at >= datetime('now','-1 minute')`,
+        WHERE occurred_at >= datetime('now','-1 minute')`,
     ).first<{ n: number | null }>();
     return row;
   }, null as { n: number | null } | null);

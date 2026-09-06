@@ -231,7 +231,10 @@ async function buildProfileEnvelope(env: Env, id: string): Promise<{
     settled(getProfileAxes(env, id), tracker, "classification", null),
     settled(
       env.DB.prepare(
-        `SELECT risk_score, trust_score, risk_band, ai_summary, computed_at
+        // entity_risk_scores stamps updated_at; there is no computed_at.
+        // Aliased so the response shape stays the same.
+        `SELECT risk_score, trust_score, risk_band, ai_summary,
+                updated_at AS computed_at
            FROM entity_risk_scores WHERE entity_id = ?`,
       ).bind(id).first<Record<string, unknown>>(),
       tracker, "risk", null,

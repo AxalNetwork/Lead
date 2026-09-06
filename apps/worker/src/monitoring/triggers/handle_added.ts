@@ -10,7 +10,7 @@ export const evalHandleAdded: EvaluatorFn = async (ctx) => {
   try {
     const rows = await ctx.env.DB.prepare(
       `SELECT platform, handle FROM identity_handles WHERE entity_id = ?
-         ORDER BY added_at DESC LIMIT ?`,
+         ORDER BY created_at DESC LIMIT ?`,
     ).bind(ctx.entityId, newN - oldN).all<{ platform: string; handle: string }>();
     added = rows.results ?? [];
   } catch { /* ignore */ }

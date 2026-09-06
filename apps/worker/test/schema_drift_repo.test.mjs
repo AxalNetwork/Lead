@@ -1,79 +1,116 @@
-// Every table the worker queries must exist in the migrations.
+// Every SQL statement the worker runs must be valid against the real schema.
 //
-// A query naming a table no migration creates does not crash this codebase —
-// almost every one of them sits inside a catch that returns 0, [] or null, so
-// a permanent failure is indistinguishable from "healthy but empty". That is
-// how 23 of them accumulated unnoticed across 714 files, including four of the
-// eight edge-quality signals that feed Power Nodes, the entire news path
-// behind Conversation Hooks, and a UNION in the verification runner where two
-// absent tables meant the discovery pass never returned a single entity.
+// This does not pattern-match. It applies all 111 migrations into an
+// in-memory SQLite and calls prepare() on every static SQL literal in
+// apps/worker/src — which is exactly the validation D1 performs, so it
+// catches missing TABLES and missing COLUMNS with no false positives.
 //
-// This is the guard, not the cleanup. The renames are fixed; what remains is
-// listed below with the reason it remains. Anything NOT on that list fails
-// here, so the count can only go down.
+// It matters because nothing else catches them. Almost every one of these
+// queries sits inside a catch that returns 0, [] or null, so a permanent
+// failure is indistinguishable from "healthy but empty". That is how 54 of
+// them accumulated across 714 files — including seven of the eight
+// edge-quality signals that feed Power Nodes, the error-log readers on the
+// ops and health consoles (the instruments you would use to notice), the
+// frontier depth probes, and a diligence query with no catch at all that
+// simply threw.
+//
+// 23 are fixed. The rest are listed below with the reason each remains, so
+// the number can only go down: anything not on that list fails here.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Relations the migrations actually define. */
-function definedRelations() {
-  const dir = join(ROOT, "migrations");
-  const sql = readdirSync(dir).filter((f) => f.endsWith(".sql"))
-    .map((f) => readFileSync(join(dir, f), "utf8")).join("\n");
-  const names = new Set();
-  const re = /CREATE\s+(?:VIRTUAL\s+|TEMP\s+|TEMPORARY\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"[]?([A-Za-z_][A-Za-z0-9_]*)/gi;
-  let m;
-  while ((m = re.exec(sql))) names.add(m[1].toLowerCase());
-  return names;
-}
-
-/** Provided by SQLite itself, not by a migration. */
-const BUILTIN = new Set([
-  "sqlite_master", "sqlite_temp_master", "sqlite_sequence",
-  "pragma_table_info", "pragma_index_list", "pragma_foreign_key_list",
-  "json_each", "json_tree", "dual",
-]);
-
 /**
- * Tables queried by the worker that no migration creates.
+ * Statements that still reference something the schema does not define,
+ * keyed by "<file> :: <sqlite error>".
  *
- * Every entry needs a reason. These are NOT acceptable-by-default: each is a
- * feature that cannot work until either the migration lands or the caller
- * stops pretending the data exists. They are listed so that a NEW one is a
- * test failure rather than another silent zero.
+ * These are NOT acceptable-by-default. Each is a feature that cannot work
+ * until the migration lands or the caller stops pretending the data exists.
+ * They are enumerated so a NEW one is a test failure rather than another
+ * silent zero.
  */
-const KNOWN_ABSENT = new Map(Object.entries({
-  // --- CTE names this scanner cannot see, because the WITH clause arrives
-  // --- through string interpolation. Not defects.
-  wanted: "CTE built from an interpolated fragment in routes/influence.ts",
-  inv_leads: "CTE built from an interpolated `baseCte` in routes/investors.ts",
+const KNOWN_BAD = new Map(Object.entries({
+  // --- unbuilt features: no migration creates the table, and nothing
+  // --- populates it, so these reads can only ever return nothing.
+  "src/services/verification/references.ts :: no such table: publication_authors":
+    "no publication ingestion exists; the co_authored_with edge extractor is dead with it",
+  "src/services/verification/runner.ts :: no such table: publication_authors": "as above",
+  "src/services/verification/references.ts :: no such table: accelerator_batches":
+    "no accelerator ingestion exists",
+  "src/services/verification/runner.ts :: no such table: accelerator_batches": "as above",
+  "src/services/verification/verifiers/directorship.ts :: no such table: sec_director_filings":
+    "SEC director-filing extraction was never built",
+  "src/services/verification/verifiers/priorStartup.ts :: no such table: opencorporates_status":
+    "OpenCorporates status caching was never built",
+  "src/services/secEdgar/discovery.ts :: no such table: sec_fts_queue":
+    "the SEC full-text-search queue was never created, so that discovery path is inert",
+  "src/services/diligence/checks/ip.ts :: no such table: uspto_patents":
+    "no USPTO ingestion; the IP diligence check always scores 0",
+  "src/services/edgeQuality/signals.ts :: no such table: social_interactions":
+    "no Twitter interaction ingestion — tos-flags.json blocks it — so signalTwitterReplyRate can never fire",
+  "src/services/edgeQuality/signals.ts :: no such table: linkedin_endorsements":
+    "no LinkedIn ingestion — tos-flags.json blocks it — so signalLinkedInEndorsements can never fire",
+  "src/agent/tools.ts :: no such table: dd_scans":
+    "scan history table never created; the real ones are dd_scan_runs + entity_risk_scores",
+  "src/monitoring/summary.ts :: no such table: dd_entity_state":
+    "per-entity diligence state never created",
+  "src/routes/profile_slices_for_health.ts :: no such table: predictions":
+    "no predictions table; routes/profile.ts was repointed at intro_paths, this reader was not",
+  "src/services/mlOps/calibration.ts :: no such table: predictions": "as above",
+  "src/routes/profilers.ts :: no such table: pii_audit_log":
+    "the real audit table is pii_access_log, keyed by lead_id with no action column — a different model, not a rename",
+  "src/profile/influence.ts :: no such table: unified_links":
+    "legacy lead<->entity link table, superseded by entity_legacy_map",
+  "src/services/diligence/checks/corporate.ts :: no such table: cap_table_rows":
+    "reshaped into cap_table_holders + cap_table_snapshots; this reader still wants the flat shape",
 
-  // --- Features that are simply unbuilt. The reads are guarded, so they
-  // --- degrade to empty rather than erroring — which is precisely why nobody
-  // --- noticed they were never going to return anything.
-  predictions: "no predictions table exists; routes/profile.ts was repointed at intro_paths, these three readers were not",
-  publication_authors: "nothing ingests publications, so the co_authored_with edge extractor is permanently dead",
-  accelerator_batches: "no accelerator ingestion exists",
-  dd_scans: "the diligence scan history table was never created",
-  dd_entity_state: "diligence per-entity state was never created",
-  uspto_patents: "no USPTO ingestion exists; the IP diligence check always scores 0",
-  social_interactions: "no Twitter interaction ingestion (tos-flags.json blocks it); signalTwitterReplyRate can never fire",
-  linkedin_endorsements: "no LinkedIn ingestion (tos-flags.json blocks it); signalLinkedInEndorsements can never fire",
-  identity_posts: "no per-post social archive exists; the social_post monitoring trigger never fires",
-  compliance_dnc: "the do-not-contact list has no table; privacy.ts treats every entity as contactable",
-  sec_director_filings: "SEC director-filing extraction was never built",
-  opencorporates_status: "OpenCorporates company-status caching was never built",
-  sec_fts_queue: "the SEC full-text-search queue was never created",
-  unified_links: "legacy lead<->entity link table, superseded by entity_legacy_map",
-  entity_channels: "renamed to `channels`; this one reader in garbage.ts still says entity_channels",
-  cap_table_rows: "renamed/reshaped to cap_table_holders + cap_table_snapshots; corporate.ts still reads the old shape",
-  pii_audit_log: "privacy audit trail was never created; every write is wrapped in a catch",
+  // --- model mismatches: the data exists but under a different shape, so
+  // --- fixing these is a design decision rather than a rename.
+  "src/projects/pitch.ts :: no such column: from_kind":
+    "walks relationships as kind:id composites; the table stores numeric legacy ids in src/dst",
+  "src/monitoring/summary.ts :: no such column: investor_entity_id":
+    "investor_investments keys on investor_lead_id (legacy), not on a u_entities id",
+  "src/agent/tools.ts :: no such column: pm.intent_score":
+    "persona_matches scores fit only; there is no intent model",
+  "src/routes/influence.ts :: no such column: u.role_default":
+    "u_entities has no default-role column; roles live in entity_roles",
+  "src/routes/admin.ts :: no such column: l.role":
+    "leads stores persona_role, not role",
+  "src/routes/dossiers.ts :: no such column: post_money_usd":
+    "deal_events records valuation_usd + valuation_type instead",
+  "src/routes/predictions.ts :: no such column: f.name":
+    "funds has no name column",
+  "src/routes/profile_slices_for_health.ts :: no such column: axis":
+    "entity_profile_axes stores each axis as its own column, not as rows",
+  "src/routes/dashboards.ts :: no such column: page":
+    "dashboard_snapshots is CREATEd by three different migrations with three different shapes; IF NOT EXISTS means the oldest wins",
+  "src/routes/ops_system_health.ts :: no such column: updated_at":
+    "compute_nodes has no updated_at",
+  "src/services/diligence/checks/market.ts :: no such column: rel_kind":
+    "rel_edges names the column kind",
+  "src/services/verification/verifiers/employment.ts :: no such column: snapshot_url":
+    "firm_team_snapshots has no snapshot_url",
+  "src/routes/bulk.ts :: no such column: id":
+    "builds a statement against a caller-chosen table; not statically resolvable",
+  "src/routes/bulk.ts :: no such table: …":
+    "a documentation snippet in a template literal, not an executed statement",
 }));
+
+function realSchema() {
+  const db = new DatabaseSync(":memory:");
+  const dir = join(ROOT, "migrations");
+  let applied = 0;
+  for (const f of readdirSync(dir).filter((x) => x.endsWith(".sql")).sort()) {
+    try { db.exec(readFileSync(join(dir, f), "utf8")); applied++; } catch { /* trigger bodies */ }
+  }
+  return { db, applied };
+}
 
 function walk(dir, out = []) {
   for (const e of readdirSync(dir)) {
@@ -84,77 +121,84 @@ function walk(dir, out = []) {
   return out;
 }
 
-/** Relation names a SQL literal introduces itself (CTEs, temp tables). */
-function locallyDefined(sql) {
-  const local = new Set();
-  for (const m of sql.matchAll(/\bWITH\s+(?:RECURSIVE\s+)?([a-z_][a-z0-9_]*)\s*(?:\([^)]*\))?\s+AS\s*\(/gi)) local.add(m[1].toLowerCase());
-  for (const m of sql.matchAll(/\)\s*,\s*([a-z_][a-z0-9_]*)\s*(?:\([^)]*\))?\s+AS\s*\(/gi)) local.add(m[1].toLowerCase());
-  for (const m of sql.matchAll(/CREATE\s+(?:TEMP\s+|TEMPORARY\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)/gi)) local.add(m[1].toLowerCase());
-  return local;
-}
-
-const KEYWORDS = new Set(["select", "values", "set", "where", "from", "join", "on"]);
-
-test("every table the worker queries exists in the migrations", () => {
-  const relations = definedRelations();
-  assert.ok(relations.size > 200, `parsed only ${relations.size} relations — the parser is broken`);
-
-  const unknown = new Map();
+/** Every static (non-interpolated) SQL statement in the worker. */
+function staticStatements() {
+  const out = [];
   for (const file of walk(join(ROOT, "src"))) {
     const src = readFileSync(file, "utf8");
     for (const lit of src.matchAll(/`([^`]*)`/g)) {
       const sql = lit[1];
-      if (!/\b(SELECT|INSERT\s+INTO|UPDATE|DELETE\s+FROM)\b/i.test(sql)) continue;
-      const local = locallyDefined(sql);
-      for (const m of sql.matchAll(/\b(?:FROM|JOIN|INTO|UPDATE)\s+([a-z_][a-z0-9_]*)\b/gi)) {
-        const name = m[1].toLowerCase();
-        if (KEYWORDS.has(name) || relations.has(name) || BUILTIN.has(name) || local.has(name)) continue;
-        if (!unknown.has(name)) unknown.set(name, new Set());
-        unknown.get(name).add(relative(ROOT, file));
-      }
+      if (!/^\s*(SELECT|INSERT|UPDATE|DELETE|WITH)\b/i.test(sql.trim())) continue;
+      if (/\$\{/.test(sql)) continue;   // interpolated — cannot be checked statically
+      out.push({ file: relative(ROOT, file), sql });
     }
   }
+  return out;
+}
 
-  const surprises = [...unknown.keys()].filter((n) => !KNOWN_ABSENT.has(n)).sort();
+test("the migrations build a real schema", () => {
+  const { db, applied } = realSchema();
+  assert.ok(applied > 100, `only ${applied} migrations applied — the harness is broken`);
+  const n = db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table'").get().n;
+  assert.ok(n > 200, `only ${n} tables created — the harness is broken`);
+});
+
+test("every static SQL statement is valid against the real schema", () => {
+  const { db } = realSchema();
+  const statements = staticStatements();
+  assert.ok(statements.length > 1000, `only ${statements.length} statements found — the scanner is broken`);
+
+  const bad = [];
+  for (const { file, sql } of statements) {
+    try { db.prepare(sql); } catch (e) {
+      const msg = (e.message || "").replace(/ - should this be.*/, "");
+      if (!/no such column|no such table/i.test(msg)) continue;  // syntax-only: a fragment, not our business
+      const key = `${file} :: ${msg}`;
+      if (KNOWN_BAD.has(key)) continue;
+      bad.push(`${key}\n      ${sql.replace(/\s+/g, " ").trim().slice(0, 150)}`);
+    }
+  }
   assert.deepEqual(
-    surprises, [],
-    "these queries name tables no migration creates, and every one of them " +
-    "fails silently at runtime:\n" +
-    surprises.map((n) => `  ${n}\n    ${[...unknown.get(n)].join("\n    ")}`).join("\n") +
-    "\n\nEither create the table, repoint the query, or — if the feature is " +
-    "genuinely unbuilt — add it to KNOWN_ABSENT with the reason.",
+    [...new Set(bad)], [],
+    "these statements reference something the schema does not define. Every one of " +
+    "them fails silently at runtime:\n  " + [...new Set(bad)].join("\n  ") +
+    "\n\nFix the query, add the migration, or — if the feature is genuinely " +
+    "unbuilt — add it to KNOWN_BAD with the reason.",
   );
 });
 
-test("the known-absent list has not gone stale", () => {
-  // An entry that no longer appears means the table was created or the query
-  // repointed. Drop it, so the list keeps meaning what it says.
-  const relations = definedRelations();
-  const referenced = new Set();
-  for (const file of walk(join(ROOT, "src"))) {
-    const src = readFileSync(file, "utf8");
-    for (const lit of src.matchAll(/`([^`]*)`/g)) {
-      const sql = lit[1];
-      if (!/\b(SELECT|INSERT\s+INTO|UPDATE|DELETE\s+FROM)\b/i.test(sql)) continue;
-      for (const m of sql.matchAll(/\b(?:FROM|JOIN|INTO|UPDATE)\s+([a-z_][a-z0-9_]*)\b/gi)) {
-        referenced.add(m[1].toLowerCase());
-      }
+test("the known-bad list has not gone stale", () => {
+  // An entry that now prepares cleanly means it was fixed. Remove it, so the
+  // list keeps meaning what it says.
+  const { db } = realSchema();
+  const live = new Set();
+  for (const { file, sql } of staticStatements()) {
+    try { db.prepare(sql); } catch (e) {
+      const msg = (e.message || "").replace(/ - should this be.*/, "");
+      if (/no such column|no such table/i.test(msg)) live.add(`${file} :: ${msg}`);
     }
   }
-  const stale = [...KNOWN_ABSENT.keys()].filter((n) => !referenced.has(n) || relations.has(n));
-  assert.deepEqual(stale, [], `KNOWN_ABSENT entries that are no longer absent or no longer referenced: ${stale.join(", ")}`);
+  const stale = [...KNOWN_BAD.keys()].filter((k) => !live.has(k));
+  assert.deepEqual(stale, [], `KNOWN_BAD entries that now pass — delete them:\n  ${stale.join("\n  ")}`);
 });
 
-test("the tables the renames repointed to really exist", () => {
-  // Pins the six renames this change made, so a future edit cannot quietly
-  // reintroduce the old name.
-  const relations = definedRelations();
-  for (const t of ["news_items", "news_entity_mentions", "conference_attendance",
-                   "entity_profile_axes", "channels", "facts"]) {
-    assert.ok(relations.has(t), `${t} must exist — a rename points at it`);
-  }
-  for (const gone of ["news_articles", "entity_mentions", "conference_attendees",
-                      "profile_axes", "u_channels", "u_facts"]) {
-    assert.ok(!relations.has(gone), `${gone} should not exist; if it was added, revisit the renames`);
-  }
+test("the tables and columns the renames repointed to really exist", () => {
+  const { db } = realSchema();
+  const ok = (sql) => { db.prepare(sql); };
+  // One assertion per rename made while fixing this, so a later edit cannot
+  // quietly reintroduce the old name.
+  ok("SELECT id, title, url, published_at FROM news_items LIMIT 1");
+  ok("SELECT news_item_id, entity_id, detected_at FROM news_entity_mentions LIMIT 1");
+  ok("SELECT entity_id, conference_name, year, role FROM conference_attendance LIMIT 1");
+  ok("SELECT owner_entity_id, issuer_entity_id, form_type, transaction_date FROM sec_insider_trades LIMIT 1");
+  ok("SELECT kind, canonical, is_dnc FROM channels LIMIT 1");
+  ok("SELECT occurred_at, code, step FROM error_log LIMIT 1");
+  ok("SELECT scheduled_at, attempts FROM crawl_frontier LIMIT 1");
+  ok("SELECT discovered_at, status FROM smart_frontier LIMIT 1");
+  ok("SELECT trust_score FROM entity_risk_scores LIMIT 1");
+  ok("SELECT announcement_date, source_url FROM deal_events LIMIT 1");
+  ok("SELECT verified FROM leads LIMIT 1");
+  ok("SELECT body_excerpt FROM news_items LIMIT 1");
+  ok("SELECT created_at FROM identity_handles LIMIT 1");
+  ok("SELECT kind, value FROM dnc_list LIMIT 1");
 });

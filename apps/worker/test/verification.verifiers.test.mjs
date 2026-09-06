@@ -35,7 +35,7 @@ function makeEnv(overrides = {}) {
     if (/FROM deal_events.*IN \('acquisition','ipo','spac'\)/.test(s)) {
       return tables.deal_events.filter((r) => r.company_entity_id === args[0] && ["acquisition","ipo","spac"].includes(r.event_type));
     }
-    if (/FROM deal_events WHERE company_entity_id = \? ORDER BY occurred_at DESC LIMIT 1/.test(s)) {
+    if (/FROM deal_events WHERE company_entity_id = \? ORDER BY announcement_date DESC LIMIT 1/.test(s)) {
       return tables.deal_events.filter((r) => r.company_entity_id === args[0]).sort((a,b) => (b.occurred_at||"").localeCompare(a.occurred_at||""));
     }
     if (/FROM sec_form_d_rounds/.test(s)) {
@@ -97,7 +97,7 @@ test("employmentVerifier returns unverifiable with no source rows", async () => 
 
 test("priorStartupVerifier detects exit:acquired from deal_events", async () => {
   const env = makeEnv({ tables: { deal_events: [
-    { company_entity_id: "c1", event_type: "acquisition", evidence_url: "https://ex/a", occurred_at: "2022-01-01" },
+    { company_entity_id: "c1", event_type: "acquisition", source_url: "https://ex/a", evidence_url: "https://ex/a", announcement_date: "2022-01-01", occurred_at: "2022-01-01" },
   ] } });
   const r = await priorStartupVerifier.verify(env, "p", { predicate: "person.prior_startup", value_hash: "", summary: "", payload: { company_entity_id: "c1", claimed_outcome: "acquired" } });
   assert.equal(r.status, "confirmed");
@@ -106,7 +106,7 @@ test("priorStartupVerifier detects exit:acquired from deal_events", async () => 
 
 test("priorStartupVerifier marks claimed-acquired vs operating as contradicted", async () => {
   const env = makeEnv({ tables: { deal_events: [
-    { company_entity_id: "c1", event_type: "funding_round", evidence_url: "https://ex/f", occurred_at: new Date().toISOString().slice(0,10) },
+    { company_entity_id: "c1", event_type: "funding_round", source_url: "https://ex/f", evidence_url: "https://ex/f", announcement_date: new Date().toISOString().slice(0,10), occurred_at: new Date().toISOString().slice(0,10) },
   ] } });
   const r = await priorStartupVerifier.verify(env, "p", { predicate: "person.prior_startup", value_hash: "", summary: "", payload: { company_entity_id: "c1", claimed_outcome: "acquired" } });
   assert.equal(r.status, "contradicted");

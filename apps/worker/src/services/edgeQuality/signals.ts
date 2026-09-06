@@ -32,13 +32,16 @@ export async function signalCoInvestment(env: Env, e: EdgeIdentity): Promise<Raw
   return safeQuery(async () => {
     const cutoff = new Date(Date.now() - 5 * 365.25 * 24 * 3600 * 1000).toISOString().slice(0, 10);
     const r = await env.DB.prepare(
-      `SELECT COUNT(*) AS n, MAX(de.announced_date) AS last_date
+      // deal_events names the column announcement_date. With
+       // announced_date this whole query threw, so co_investment_5y — the
+       // strongest signal in the set for investor pairs — never fired either.
+      `SELECT COUNT(*) AS n, MAX(de.announcement_date) AS last_date
          FROM deal_participants dp1
          JOIN deal_participants dp2 ON dp2.deal_id = dp1.deal_id
          JOIN deal_events de ON de.id = dp1.deal_id
         WHERE dp1.investor_entity_id = ?
           AND dp2.investor_entity_id = ?
-          AND de.announced_date >= ?`,
+          AND de.announcement_date >= ?`,
     ).bind(e.src_entity_id, e.dst_entity_id, cutoff).first<{ n: number; last_date: string | null }>();
     if (!r || !r.n) return null;
     return { value: logScale(r.n, 10), observed_at: r.last_date ?? null };
