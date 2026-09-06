@@ -42,9 +42,12 @@ opsQualityRoute.get("/rollup", async (c) => {
     // Garbage entities soft-deleted today via data_quality_log.
     safeCount(
       c.env,
+      // data_quality_log's timestamp is `detected_at` (migrations/375:33).
+      // Querying created_at threw "no such column", safeCount swallowed it,
+      // and this counter read a healthy 0 no matter what the sweep did.
       `SELECT COUNT(*) AS n FROM data_quality_log
         WHERE issue = 'soft_deleted'
-          AND created_at >= datetime('now', '-1 day')`,
+          AND detected_at >= datetime('now', '-1 day')`,
       [], missing, "garbage_cleaned_today",
     ),
     // CSV imports that errored or need manual mapping.
@@ -57,8 +60,12 @@ opsQualityRoute.get("/rollup", async (c) => {
     // Operator-locked field overrides (Task #3 migration 376).
     safeCount(
       c.env,
+      // field_overrides has `locked` and `unlock_after` (migrations/376:31-32)
+      // and no `status` column at all — an override is in force while it is
+      // locked and not yet past its unlock time.
       `SELECT COUNT(*) AS n FROM field_overrides
-        WHERE locked = 1 AND status = 'active'`,
+        WHERE locked = 1
+          AND (unlock_after IS NULL OR unlock_after > datetime('now'))`,
       [], missing, "locked_overrides",
     ),
     // Contradicting facts: same (entity_id, predicate) with multiple
@@ -78,8 +85,12 @@ opsQualityRoute.get("/rollup", async (c) => {
     // verdict. Table name varies by migration; try the canonical one.
     safeCount(
       c.env,
-      `SELECT COUNT(*) AS n FROM cross_ref_candidates
-        WHERE status = 'pending'`,
+      // There is no `cross_ref_candidates` table in any migration. The
+      // dedupe queue is `dedupe_review` (migrations/050:20), and its own
+      // route treats a row as pending when it is open and not snoozed.
+      `SELECT COUNT(*) AS n FROM dedupe_review
+        WHERE status = 'open'
+          AND (skip_until IS NULL OR datetime(skip_until) <= datetime('now'))`,
       [], missing, "dedupe_backlog",
     ),
     // Anything soft-deleted (any reason) in the last 7 days.
@@ -134,12 +145,13 @@ opsQualityRoute.get("/recent-soft-deletes", async (c) => {
   const limit = Math.min(Math.max(Number(c.req.query("limit") ?? "25"), 1), 200);
   try {
     const rows = await c.env.DB.prepare(
-      `SELECT q.entity_id, q.reasons_json, q.source, q.actor_email, q.created_at,
+      `SELECT q.entity_id, q.reasons_json, q.source, q.actor_email,
+              q.detected_at AS created_at,
               u.display_name, u.kind, u.primary_domain
          FROM data_quality_log q
          LEFT JOIN u_entities u ON u.id = q.entity_id
         WHERE q.issue = 'soft_deleted'
-        ORDER BY q.created_at DESC
+        ORDER BY q.detected_at DESC
         LIMIT ?`,
     ).bind(limit).all<Record<string, unknown>>();
     const items = (rows.results ?? []).map((r) => {
