@@ -43,6 +43,13 @@ jobs:
       - name: "Gate: no bare console.error in new code"
         shell: bash
         run: |
+          # The pathspec needs :(glob) magic. Without it git treats `**/` as
+          # "at least one directory", so a plain 'apps/worker/src/**/*.ts'
+          # silently excludes every file sitting directly in src/ — which is
+          # index.ts (the Worker entrypoint), scheduled.ts (the cron
+          # entrypoint), errors.ts and types.ts. All three gates below were
+          # blind to those four files, and a bare console.error reached main
+          # in scheduled.ts through the hole.
           set -e
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             BASE="origin/${{ github.base_ref }}"
@@ -50,7 +57,7 @@ jobs:
           else
             BASE="HEAD~1"
           fi
-          CHANGED=$(git -C "$GITHUB_WORKSPACE" diff --name-only --diff-filter=AM "$BASE"...HEAD -- 'apps/worker/src/**/*.ts' || true)
+          CHANGED=$(git -C "$GITHUB_WORKSPACE" diff --name-only --diff-filter=AM "$BASE"...HEAD -- ':(glob)apps/worker/src/**/*.ts' || true)
           [ -z "$CHANGED" ] && { echo "no changed worker ts files"; exit 0; }
           echo "Scanning new lines in: $CHANGED"
           BAD=0
@@ -74,7 +81,7 @@ jobs:
           else
             BASE="HEAD~1"
           fi
-          CHANGED=$(git -C "$GITHUB_WORKSPACE" diff --name-only --diff-filter=AM "$BASE"...HEAD -- 'apps/worker/src/**/*.ts' || true)
+          CHANGED=$(git -C "$GITHUB_WORKSPACE" diff --name-only --diff-filter=AM "$BASE"...HEAD -- ':(glob)apps/worker/src/**/*.ts' || true)
           [ -z "$CHANGED" ] && exit 0
           BAD=0
           for f in $CHANGED; do
@@ -100,7 +107,7 @@ jobs:
           else
             BASE="HEAD~1"
           fi
-          CHANGED=$(git -C "$GITHUB_WORKSPACE" diff --name-only --diff-filter=AM "$BASE"...HEAD -- 'apps/worker/src/**/*.ts' || true)
+          CHANGED=$(git -C "$GITHUB_WORKSPACE" diff --name-only --diff-filter=AM "$BASE"...HEAD -- ':(glob)apps/worker/src/**/*.ts' || true)
           [ -z "$CHANGED" ] && exit 0
           BAD=0
           for f in $CHANGED; do

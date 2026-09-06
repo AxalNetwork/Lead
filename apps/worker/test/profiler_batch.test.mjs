@@ -33,14 +33,14 @@ import { DatabaseSync } from "node:sqlite";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..");
 
-const { careerProfiler } = await import("../test-dist/services/profilers/enrichers/career.js");
+const { careerProfiler, boardSeatProfiler } = await import("../test-dist/services/profilers/enrichers/career.js");
 const { signalSameFirmOrSchool, signalBoardOverlap } = await import(
   "../test-dist/services/edgeQuality/signals.js"
 );
 const { addCareerEntry, addBoardSeat, addEducation } = await import(
   "../test-dist/entities/profile.js"
 );
-const { pickStalestProfilerTargets, runStalestProfilerBatch } = await import(
+const { pickStalestProfilerTargets, runStalestProfilerBatch, MAX_PROFILER_BATCH } = await import(
   "../test-dist/services/profilers/batch.js"
 );
 
@@ -329,13 +329,18 @@ test("never-profiled entities sort ahead of recently-profiled ones", async () =>
     person(env, id, id);
     rawFact(env, id, "person.career", { employer: "X" }, `https://x.example/${id}`);
   }
-  const run = (entityId, when, status = "succeeded") =>
+  // Seeded in the ISO format every writer actually uses — new Date()
+  // .toISOString(). The earlier version of this test seeded with
+  // datetime('now', ?), SQLite's space-separated format, and so never
+  // exercised the comparison that production performs.
+  const run = (entityId, daysAgo, status = "succeeded") =>
     env._db.prepare(
       `INSERT INTO profiler_runs (id, entity_id, status, triggered_by, started_at)
-       VALUES (?, ?, ?, 'test', datetime('now', ?))`,
-    ).run(crypto.randomUUID(), entityId, status, when);
-  run("fresh", "-1 day");
-  run("old", "-40 days");
+       VALUES (?, ?, ?, 'test', ?)`,
+    ).run(crypto.randomUUID(), entityId, status,
+      new Date(Date.now() - daysAgo * 86400000).toISOString());
+  run("fresh", 1);
+  run("old", 40);
 
   const picked = await pickStalestProfilerTargets(env, 50);
   assert.deepEqual(picked, ["never", "old"], "fresh is inside the 7-day window and must be skipped");
@@ -347,8 +352,8 @@ test("a failed run does not count as profiled", async () => {
   rawFact(env, "p", "person.career", { employer: "X" }, "https://x.example");
   env._db.prepare(
     `INSERT INTO profiler_runs (id, entity_id, status, triggered_by, started_at)
-     VALUES (?, 'p', 'failed', 'test', datetime('now'))`,
-  ).run(crypto.randomUUID());
+     VALUES (?, 'p', 'failed', 'test', ?)`,
+  ).run(crypto.randomUUID(), new Date().toISOString());
   assert.deepEqual(await pickStalestProfilerTargets(env, 50), ["p"]);
 });
 
@@ -436,4 +441,179 @@ test("without a workflow binding the inline ceiling is far lower", async () => {
   const r = await runStalestProfilerBatch(env, { limit: 25 });
   assert.equal(r.mode, "inline");
   assert.ok(r.scanned <= 3, `inline mode must not scan a cron-sized batch, scanned ${r.scanned}`);
+});
+
+// =========================================================================
+// regressions found by auditing the first version of this driver
+// =========================================================================
+
+test("a run just past RESTALE_DAYS is seen as stale, in the ISO format writers use", async () => {
+  // started_at is written as "2026-08-30T06:16:21.111Z"; the cutoff is
+  // datetime('now','-7 days') -> "2026-08-30 06:16:21". Compared as raw
+  // strings, 'T' (0x54) sorts above ' ' (0x20), so a run only read as stale
+  // once its calendar DATE was strictly earlier than the cutoff's — the gate
+  // silently behaved as ~8 days rather than 7.
+  const env = makeEnv();
+  person(env, "p", "P");
+  rawFact(env, "p", "person.career", { employer: "X" }, "https://x.example");
+  env._db.prepare(
+    `INSERT INTO profiler_runs (id, entity_id, status, triggered_by, started_at)
+     VALUES (?, 'p', 'succeeded', 'test', ?)`,
+  ).run(crypto.randomUUID(), new Date(Date.now() - 7.5 * 86400000).toISOString());
+
+  assert.deepEqual(
+    await pickStalestProfilerTargets(env, 50), ["p"],
+    "7.5 days > RESTALE_DAYS=7, so this entity is due",
+  );
+});
+
+test("a run inside the window is still not stale", async () => {
+  const env = makeEnv();
+  person(env, "p", "P");
+  rawFact(env, "p", "person.career", { employer: "X" }, "https://x.example");
+  env._db.prepare(
+    `INSERT INTO profiler_runs (id, entity_id, status, triggered_by, started_at)
+     VALUES (?, 'p', 'succeeded', 'test', ?)`,
+  ).run(crypto.randomUUID(), new Date(Date.now() - 3 * 86400000).toISOString());
+  assert.deepEqual(await pickStalestProfilerTargets(env, 50), []);
+});
+
+test("rate-limited entities do not consume dispatch slots", async () => {
+  // The SQL gate counts only finished runs while the KV limiter stamps on
+  // dispatch, so an entity whose run was dispatched and then FAILED is
+  // SQL-eligible and KV-blocked for a week — and sorts to the front every
+  // night. Taking exactly `limit` candidates let one bad night fill every
+  // slot with entities that can only be skipped, stalling the driver for
+  // seven days while never-profiled people queued behind them.
+  const env = makeEnv();
+  const created = withWorkflow(env);
+  const blocked = ["b1", "b2", "b3"];
+  for (const id of blocked) {
+    person(env, id, id);
+    rawFact(env, id, "person.career", { employer: "X" }, `https://x.example/${id}`);
+    // Stamped as dispatched, but no finished run row -> still SQL-eligible.
+    await env.SESSIONS.put(`profiler:lastrun:${id}`,
+      JSON.stringify({ runId: "old", startedAt: new Date().toISOString() }));
+  }
+  person(env, "fresh_target", "Never profiled");
+  rawFact(env, "fresh_target", "person.career", { employer: "X" }, "https://x.example/f");
+
+  const r = await runStalestProfilerBatch(env, { limit: 1 });
+  assert.equal(r.rate_limited, 3, "all three blocked entities must be seen and skipped");
+  assert.equal(r.dispatched, 1, "the slot must go to the entity that can actually run");
+  assert.deepEqual(created.map((c) => c.entityId), ["fresh_target"]);
+});
+
+test("the batch stops at the limit rather than at the candidate list", async () => {
+  const env = makeEnv();
+  const created = withWorkflow(env);
+  for (const id of ["a", "b", "c", "d", "e", "f", "g", "h"]) {
+    person(env, id, id);
+    rawFact(env, id, "person.career", { employer: "X" }, `https://x.example/${id}`);
+  }
+  const r = await runStalestProfilerBatch(env, { limit: 2 });
+  assert.equal(r.dispatched, 2);
+  assert.equal(created.length, 2, "over-fetching candidates must not over-dispatch");
+  assert.equal(r.effective_limit, 2);
+});
+
+test("the caller's limit is clamped to what one invocation can pay for", async () => {
+  const env = makeEnv();
+  withWorkflow(env);
+  const r = await runStalestProfilerBatch(env, { limit: 5000 });
+  assert.equal(r.effective_limit, MAX_PROFILER_BATCH);
+  assert.ok(MAX_PROFILER_BATCH * (3 + 4) <= 700,
+    "worst-case binding calls must stay under the repo's 700 subrequest ceiling");
+});
+
+test("the caller's limit is honoured in inline mode too", async () => {
+  // It used to be discarded entirely without the workflow binding, so
+  // POST /api/admin/profiler-batch {"limit":500} processed 3 entities while
+  // the route echoed 500 back.
+  const env = makeEnv();
+  for (const id of ["a", "b", "c", "d", "e"]) {
+    person(env, id, id);
+    rawFact(env, id, "person.career", { employer: "X" }, `https://x.example/${id}`);
+  }
+  const r = await runStalestProfilerBatch(env, { limit: 1 });
+  assert.equal(r.mode, "inline");
+  assert.equal(r.effective_limit, 1);
+  assert.ok(r.scanned <= 3);
+});
+
+// ---- the board-seat chain ----------------------------------------------
+
+test("boardSeatProfiler promotes the bare-name-array payload", async () => {
+  // crawler/profileWorkflows/investor_person.ts writes `person.board_seats`
+  // as ["Acme Corp", "Beta Inc"]. Parsing that as an object left
+  // organization_name undefined, so every row was skipped and the whole
+  // board-seat chain produced nothing.
+  const env = makeEnv();
+  person(env, "p1", "Dana Reyes");
+  rawFact(env, "p1", "person.board_seats", ["Acme Corp", "Beta Inc"], "https://fund.example/team/dana");
+
+  const r = await boardSeatProfiler.run(env, "p1", {});
+  assert.equal(r.writes.length, 2);
+  assert.deepEqual(
+    r.writes.map((w) => w.input.organizationName).sort(),
+    ["Acme Corp", "Beta Inc"],
+  );
+  assert.equal(r.writes[0].kind, "board_seat");
+});
+
+test("boardSeatProfiler still reads the object payload", async () => {
+  const env = makeEnv();
+  person(env, "p1", "Dana Reyes");
+  rawFact(env, "p1", "person.board_seat", {
+    organization_name: "GreenCo", organization_entity_id: "org-green",
+    role: "director", started_at: "2021-01",
+  }, "https://example.com/board");
+  const r = await boardSeatProfiler.run(env, "p1", {});
+  assert.equal(r.writes.length, 1);
+  assert.equal(r.writes[0].input.organizationName, "GreenCo");
+  assert.equal(r.writes[0].input.organizationEntityId, "org-green");
+  assert.equal(r.writes[0].input.role, "director");
+});
+
+test("boardSeatProfiler ignores non-string array members and blank names", async () => {
+  const env = makeEnv();
+  person(env, "p1", "Dana Reyes");
+  rawFact(env, "p1", "person.board_seats", ["Acme Corp", "", 42, null, "  "], "https://x.example");
+  const r = await boardSeatProfiler.run(env, "p1", {});
+  assert.deepEqual(r.writes.map((w) => w.input.organizationName), ["Acme Corp"]);
+});
+
+test("signalBoardOverlap fires when only the org NAME is known", async () => {
+  // organization_entity_id is nullable and nothing upstream of the enricher
+  // resolves one, so joining on the id alone matched nothing even after the
+  // JSON paths were corrected.
+  const env = makeEnv();
+  person(env, "a", "Person A");
+  person(env, "b", "Person B");
+  for (const id of ["a", "b"]) {
+    await addBoardSeat(env, {
+      entityId: id, organizationName: "GreenCo",
+      organizationEntityId: null,
+      startedAt: "2020-01-01", endedAt: "2023-01-01",
+      sourceUrl: `https://example.com/${id}/board`, confidence: 0.9,
+    });
+  }
+  const sig = await signalBoardOverlap(env, { src_entity_id: "a", dst_entity_id: "b" });
+  assert.ok(sig, "a shared board known only by name must still produce a signal");
+  assert.ok(sig.value > 0);
+});
+
+test("signalBoardOverlap still separates different boards when ids are absent", async () => {
+  const env = makeEnv();
+  person(env, "a", "Person A");
+  person(env, "b", "Person B");
+  await addBoardSeat(env, {
+    entityId: "a", organizationName: "GreenCo", organizationEntityId: null,
+    startedAt: "2020-01-01", sourceUrl: "https://example.com/a", confidence: 0.9,
+  });
+  await addBoardSeat(env, {
+    entityId: "b", organizationName: "BlueCo", organizationEntityId: null,
+    startedAt: "2020-01-01", sourceUrl: "https://example.com/b", confidence: 0.9,
+  });
+  assert.equal(await signalBoardOverlap(env, { src_entity_id: "a", dst_entity_id: "b" }), null);
 });

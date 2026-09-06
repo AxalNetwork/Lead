@@ -27,12 +27,56 @@ import { checkRateLimit, clearLastRun, setLastRun } from "./rateLimit";
  *  cadence rather than fighting over it. */
 const RESTALE_DAYS = 7;
 
+/**
+ * How many candidates to consider per dispatch slot.
+ *
+ * The SQL gate and the KV limiter do not agree, deliberately: SQL counts only
+ * runs that finished ('succeeded','partial','privacy_skip'), while KV stamps
+ * on *dispatch*. An entity whose run was dispatched and then failed is
+ * therefore SQL-eligible and KV-blocked for a full week — and because it has
+ * no successful run it sorts to the very front of the ORDER BY every night.
+ * Taking exactly `limit` candidates let a single bad night (a Workflows quota,
+ * a bad deploy) fill every slot with entities that can only be skipped, and
+ * the driver would dispatch nothing for seven days while never-profiled people
+ * queued behind them. So over-fetch and stop counting at `limit` *dispatches*.
+ */
+const CANDIDATE_OVERFETCH = 3;
+
+/**
+ * Floor on candidates fetched, regardless of how small `limit` is.
+ *
+ * A multiplier alone is not enough: at limit=1 a 3x over-fetch returns three
+ * candidates, and if the three at the front of the queue are all blocked the
+ * batch still dispatches nothing. The blocked prefix is bounded by roughly
+ * one night's dispatches, so a fixed floor clears it at any limit. Keep it
+ * well under the subrequest ceiling — at small limits the cost is
+ * MIN_CANDIDATES reads plus 4 per dispatch, which is trivial; at limits above
+ * ~9 the multiplier dominates again and MAX_PROFILER_BATCH governs.
+ */
+const MIN_CANDIDATES = 25;
+
+/**
+ * Cloudflare counts D1/KV/Workflow binding calls cumulatively per invocation.
+ * This batch spends 1 KV read per candidate examined, plus 4 more per entity
+ * actually dispatched (KV write, D1 insert, Workflow create, D1 update), so
+ * the worst case is `limit * (CANDIDATE_OVERFETCH + 4)`. Keep that under the
+ * same 700 ceiling the crawl and import paths use — see
+ * scraper/subrequestBudget.ts. Exceeding it does not degrade: the invocation
+ * throws mid-loop, and because `clearLastRun` is itself a KV call it cannot
+ * roll back either, so every remaining entity keeps a 7-day stamp for a run
+ * that never happened.
+ */
+export const MAX_PROFILER_BATCH = Math.floor(700 / (CANDIDATE_OVERFETCH + 4)); // 100
+
 export interface ProfilerBatchResult {
+  /** Candidates actually examined (not the number fetched). */
   scanned: number;
   dispatched: number;
   rate_limited: number;
   errors: number;
   mode: "workflow" | "inline";
+  /** The limit after clamping — never larger than what the mode can afford. */
+  effective_limit: number;
   budget_skip?: string;
 }
 
@@ -47,6 +91,12 @@ export interface ProfilerBatchResult {
  * real entity a name fact on creation.
  */
 export async function pickStalestProfilerTargets(env: Env, limit: number): Promise<string[]> {
+  // `datetime(...)` around the MAX is load-bearing. Every writer stamps
+  // started_at with `new Date().toISOString()` — "2026-08-30T06:16:21.111Z" —
+  // while `datetime('now', ?)` yields "2026-08-30 06:16:21". Comparing those
+  // raw is a string compare, and 'T' (0x54) sorts above ' ' (0x20), so a run
+  // only reads as stale once its calendar date is strictly earlier than the
+  // cutoff's. The gate silently behaved as ~8 days rather than RESTALE_DAYS.
   const rows = await env.DB.prepare(
     `SELECT u.id,
             (SELECT MAX(r.started_at) FROM profiler_runs r
@@ -61,10 +111,10 @@ export async function pickStalestProfilerTargets(env: Env, limit: number): Promi
                 WHERE r2.entity_id = u.id
                   AND r2.status IN ('succeeded','partial','privacy_skip')
               ) IS NULL
-           OR (SELECT MAX(r2.started_at) FROM profiler_runs r2
+           OR datetime((SELECT MAX(r2.started_at) FROM profiler_runs r2
                 WHERE r2.entity_id = u.id
                   AND r2.status IN ('succeeded','partial','privacy_skip')
-              ) < datetime('now', ?)
+              )) < datetime('now', ?)
         )
       ORDER BY (last_run IS NULL) DESC, last_run ASC
       LIMIT ?`,
@@ -89,23 +139,31 @@ export async function runStalestProfilerBatch(
 ): Promise<ProfilerBatchResult> {
   const wf = env.WF_PROFILER_INDIVIDUAL;
   const hasWorkflow = Boolean(wf && typeof wf.create === "function");
-  // Inline runs cost wall-clock in a shared cron tick, so the fallback
-  // ceiling is much lower than the dispatch ceiling.
-  const limit = hasWorkflow ? (opts?.limit ?? 25) : (opts?.inlineLimit ?? 3);
   const mode: "workflow" | "inline" = hasWorkflow ? "workflow" : "inline";
+  // Inline runs await runProfiler synchronously — up to ~60 s of wall clock
+  // each — so the fallback ceiling is far lower than the dispatch ceiling.
+  // The caller's limit is honoured as an upper bound in BOTH modes: dropping
+  // it in inline mode meant `{"limit":500}` processed 3 entities while the
+  // route reported 500 back.
+  const ceiling = hasWorkflow ? MAX_PROFILER_BATCH : (opts?.inlineLimit ?? 3);
+  const limit = Math.max(1, Math.min(opts?.limit ?? (hasWorkflow ? 25 : 3), ceiling));
 
   // Enrichers call Workers AI through the shared daily neuron cap. Check
   // once up front rather than per entity — a batch that starts past the
   // cap has nothing useful to do.
   const budget = await assertBudget(env, "ai");
   if (!budget.ok) {
-    return { scanned: 0, dispatched: 0, rate_limited: 0, errors: 0, mode, budget_skip: budget.reason };
+    return { scanned: 0, dispatched: 0, rate_limited: 0, errors: 0, mode, effective_limit: limit, budget_skip: budget.reason };
   }
 
-  const ids = await pickStalestProfilerTargets(env, limit);
-  let dispatched = 0, rateLimited = 0, errors = 0;
+  const candidates = await pickStalestProfilerTargets(
+    env, Math.max(limit * CANDIDATE_OVERFETCH, MIN_CANDIDATES),
+  );
+  let scanned = 0, dispatched = 0, rateLimited = 0, errors = 0;
 
-  for (const entityId of ids) {
+  for (const entityId of candidates) {
+    if (dispatched >= limit) break;
+    scanned += 1;
     try {
       const rl = await checkRateLimit(env, entityId);
       if (!rl.allowed) { rateLimited += 1; continue; }
@@ -157,5 +215,5 @@ export async function runStalestProfilerBatch(
     }
   }
 
-  return { scanned: ids.length, dispatched, rate_limited: rateLimited, errors, mode };
+  return { scanned, dispatched, rate_limited: rateLimited, errors, mode, effective_limit: limit };
 }

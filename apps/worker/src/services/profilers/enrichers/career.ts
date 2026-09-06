@@ -109,9 +109,42 @@ export const careerProfiler: Enricher = {
 
 // =========================================================================
 // boardSeatProfiler — SEC EDGAR + Companies House surface board memberships.
-// Reads from `facts` predicate `person.board_seat` populated by OSINT /
-// scraper layer; no-ops when no signal exists.
+// Reads `person.board_seat*` facts; no-ops when no signal exists.
+//
+// Two payload shapes reach this enricher and only one used to be handled,
+// which left the whole board-seat chain dead:
+//
+//   { organization_name, role, started_at, … }   entities/profile.ts (mirror)
+//   ["Acme Corp", "Beta Inc"]                    crawler/profileWorkflows/
+//                                                investor_person.ts, which
+//                                                writes `person.board_seats`
+//                                                (plural) as a bare array of
+//                                                company names
+//
+// The predicate difference is not the problem — loadFactsByPredicates matches
+// on a LIKE prefix, so the plural was always selected. The array was: parsing
+// it as an object left organization_name undefined and every row was skipped,
+// so board_seats never got a row, `person.board_seat` facts were never
+// mirrored, and signalBoardOverlap had nothing to join on.
 // =========================================================================
+
+/** Board-seat payloads normalised to the object shape addBoardSeat wants. */
+function boardSeatEntries(valueJson: string | null): Record<string, unknown>[] {
+  const parsed = safeJsonParse<unknown>(valueJson);
+  if (!parsed) return [];
+  // The bare-array shape carries a name and nothing else — no role, no dates,
+  // no resolved org id. That is still enough for a board_seats row and for
+  // the overlap signal, which is why it is worth promoting rather than
+  // discarding.
+  if (Array.isArray(parsed)) {
+    return parsed
+      .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
+      .map((name) => ({ organization_name: name.trim() }));
+  }
+  if (typeof parsed === "object") return [parsed as Record<string, unknown>];
+  return [];
+}
+
 export const boardSeatProfiler: Enricher = {
   name: "boardSeatProfiler",
   category: "career",
@@ -123,28 +156,29 @@ export const boardSeatProfiler: Enricher = {
     const writes: StructuredWrite[] = [];
     const seen = new Set<string>();
     for (const f of facts) {
-      const v = safeJsonParse<Record<string, unknown>>(f.value_json) ?? {};
-      const orgName = (v.organization_name as string) ?? "";
-      if (!orgName) continue;
-      const startedAt = (v.started_at as string) ?? null;
-      const key = `${orgName}|${startedAt ?? ""}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const sourceUrl = f.evidence_url || (v.source_url as string) || "";
-      if (!sourceUrl) continue;
-      writes.push({
-        kind: "board_seat",
-        input: {
-          entityId, organizationName: orgName,
-          organizationEntityId: (v.organization_entity_id as string) ?? null,
-          role: (v.role as string) ?? null,
-          isIndependent: v.is_independent === true,
-          committee: (v.committee as string) ?? null,
-          startedAt, endedAt: (v.ended_at as string) ?? null,
-          sourceUrl,
-          confidence: 0.75,
-        },
-      });
+      for (const v of boardSeatEntries(f.value_json)) {
+        const orgName = (v.organization_name as string) ?? "";
+        if (!orgName) continue;
+        const startedAt = (v.started_at as string) ?? null;
+        const key = `${orgName}|${startedAt ?? ""}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const sourceUrl = f.evidence_url || (v.source_url as string) || "";
+        if (!sourceUrl) continue;
+        writes.push({
+          kind: "board_seat",
+          input: {
+            entityId, organizationName: orgName,
+            organizationEntityId: (v.organization_entity_id as string) ?? null,
+            role: (v.role as string) ?? null,
+            isIndependent: v.is_independent === true,
+            committee: (v.committee as string) ?? null,
+            startedAt, endedAt: (v.ended_at as string) ?? null,
+            sourceUrl,
+            confidence: 0.75,
+          },
+        });
+      }
     }
     return { writes, cost: { neurons: 0, fetches: 0, bytes: 0, wall_ms: Date.now() - t0, est_usd: 0 } };
   },
