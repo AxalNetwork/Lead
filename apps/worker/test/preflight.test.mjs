@@ -46,12 +46,17 @@ const job = (target, kind = "url", config) => ({
   jobId: "j1", kind, target, ...(config !== undefined ? { config } : {}),
 });
 
-// ---- 1. Proxy gate -----------------------------------------------------
-test("preflight: PROXY_URL unset on url-kind job → skip:proxy_not_configured", async () => {
+// ---- 1. Proxy is NOT a gate -------------------------------------------
+// Preflight used to skip every url-kind job when no commercial proxy
+// secret was set. That discarded tier 0 (plain fetch), tier 1 (Browser
+// Rendering) and tier 4 (Wayback) because tier 2 was unavailable, and it
+// did so before the job reached fetch_log, so the loss was invisible.
+// tier2Proxy already returns a blockResult instead of throwing when no
+// provider is configured (see fetcher_proxy.test.mjs), so the escalation
+// chain copes on its own.
+test("preflight: no proxy configured on url-kind job → run (tier 0 needs none)", async () => {
   const r = await preflight(env(), job("https://example.com/page"));
-  assert.equal(r.action, "skip");
-  assert.equal(r.skip_code, "proxy_not_configured");
-  assert.match(r.reason, /proxy_not_configured/);
+  assert.equal(r.action, "run");
 });
 
 test("preflight: PROXY_URL set + clean host → run", async () => {
@@ -69,10 +74,9 @@ test("preflight: only SMARTPROXY_URL set + clean host → run", async () => {
   assert.equal(r.action, "run");
 });
 
-test("preflight: no proxy provider at all on url-kind job → skip:proxy_not_configured", async () => {
+test("preflight: no proxy provider at all still runs — escalation degrades, the job does not", async () => {
   const r = await preflight(env(), job("https://example.com/page"));
-  assert.equal(r.action, "skip");
-  assert.equal(r.skip_code, "proxy_not_configured");
+  assert.equal(r.action, "run");
 });
 
 // ---- 2. ToS gate -------------------------------------------------------

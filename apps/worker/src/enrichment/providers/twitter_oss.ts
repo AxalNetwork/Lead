@@ -7,6 +7,7 @@ import { emptyResult, envFloat, type EnrichInput, type EnrichResult, type Provid
 export const twitter_oss: Provider = {
   name: "twitter_oss",
   priority: 38,
+  isFree: true,
   isConfigured: () => true,
   dailyCapUsd: (env) => envFloat(env.TWITTER_OSS_DAILY_USD, 0),
   async enrich(env: Env, input: EnrichInput): Promise<EnrichResult> {

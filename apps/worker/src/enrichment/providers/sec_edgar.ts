@@ -10,6 +10,7 @@ interface SecResp { hits?: { hits?: SecHit[] } }
 export const sec_edgar: Provider = {
   name: "sec_edgar",
   priority: 50,
+  isFree: true,
   isConfigured: () => true,
   dailyCapUsd: (env) => envFloat(env.SEC_EDGAR_DAILY_USD, 0),
   async enrich(env: Env, input: EnrichInput): Promise<EnrichResult> {

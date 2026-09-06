@@ -36,6 +36,11 @@ AI_OCR_MODEL = "@cf/unum/uform-gen2-qwen-500m"
 # FORBES_SIGNALS, WHOISXML) were removed when those providers were
 # ripped out. Only the in-house SEC EDGAR + Twitter OSS scrapers
 # remain on the enrichment ALL_PROVIDERS list.
+# Both remaining providers are free (Provider.isFree), so they bypass the
+# USD budget and these two values are inert — kept only so the ops surface
+# has something to read. Do NOT treat "0" here as a kill switch: it used to
+# be one, via checkBudget's cap===0 rule, and that silently refused every
+# enrichment call. Disable a free provider through isConfigured instead.
 SEC_EDGAR_DAILY_USD = "0"
 TWITTER_OSS_DAILY_USD = "0"
 ENRICHMENT_KV_TTL_DAYS = "14"

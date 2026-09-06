@@ -12,6 +12,7 @@
 
 import { Hono } from "hono";
 import type { Env, JobMessage } from "../types";
+import { loadOrgEntityOverlay, applyOrgOverlay } from "../services/org_entity_merge";
 
 export const companies = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
@@ -138,7 +139,10 @@ companies.get("/:id", async (c) => {
   if (!Number.isFinite(id)) return c.json({ error: "bad_id" }, 400);
   const r = await c.env.DB.prepare(`SELECT * FROM companies WHERE id = ?`).bind(id).first<CompanyRow>();
   if (!r) return c.json({ error: "not_found" }, 404);
-  return c.json(r);
+  // Same gap as firms: extracted description / HQ / founded year / sectors
+  // land in `facts`, never in these columns. Fill blanks only.
+  const overlay = await loadOrgEntityOverlay(c.env, "companies", id);
+  return c.json(applyOrgOverlay(r as unknown as Record<string, unknown>, overlay));
 });
 
 // ----------------------------------------------------------------- PROFILE

@@ -21,6 +21,18 @@ export interface Provider {
   priority: number;
   isConfigured(env: Env): boolean;
   dailyCapUsd(env: Env): number;
+  /**
+   * True when the provider uses a free public API and always reports
+   * `cost_usd: 0`. Free providers bypass the daily USD budget entirely.
+   *
+   * This exists because `checkBudget` treats a cap of 0 as "disabled" —
+   * a deliberate kill switch for metered providers. Once every paid
+   * provider was removed, the only two left were free, both defaulted to
+   * a cap of 0, and so every enrichment call was refused with
+   * reason:"budget". Capping spend that cannot happen is meaningless;
+   * disable a free provider through `isConfigured` instead.
+   */
+  isFree?: boolean;
   enrich(env: Env, input: EnrichInput): Promise<EnrichResult>;
 }
 

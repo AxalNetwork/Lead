@@ -455,11 +455,20 @@
     if (!paths.length) {
       html += '<p class="ads-muted" style="margin:0">No two-hop intro paths from your viewer entity.</p>';
     } else {
+      // Shape comes from services/profilers/synthesize.ts::ToDoBusinessWithThem:
+      //   { via_entity_id, via_display_name, hops[{src,dst,kind,strength,last_at}], total_strength }
+      // Every path terminates at the person whose dossier this is, so the
+      // connector (via_*) is the actionable name, not a "target".
       html += '<ol style="margin:0;padding-left:18px">' + paths.map(function (p) {
-        var via = Array.isArray(p.via) ? p.via.join(" → ") : (p.via || "");
-        var weight = p.weight != null ? " <span class='ads-muted' style='font-size:11px'>(weight " + esc(p.weight) + ")</span>" : "";
-        return "<li>" + esc(p.target_name || p.target || p.to || "—") +
-          (via ? " <span class='ads-muted'>via " + esc(via) + "</span>" : "") + weight + "</li>";
+        var who = p.via_display_name || p.via_entity_id || "—";
+        var hops = Array.isArray(p.hops) ? p.hops : [];
+        var chain = hops.map(function (h) { return h && h.kind ? String(h.kind).replace(/_/g, " ") : "?"; }).join(" → ");
+        var strength = typeof p.total_strength === "number"
+          ? " <span class='ads-muted' style='font-size:11px'>(strength " + esc(p.total_strength.toFixed(2)) + ")</span>"
+          : "";
+        return "<li style='margin-bottom:6px'>via <b>" + esc(who) + "</b>" + strength +
+          (chain ? "<div class='ads-muted' style='font-size:12px'>" + esc(chain) + "</div>" : "") +
+          "</li>";
       }).join("") + "</ol>";
     }
     html += '<div style="margin-top:14px"><a class="ads-btn ads-btn--ghost ads-btn--sm" href="/dashboard/lead/?id=' +
@@ -507,13 +516,34 @@
         esc(synth.conversation_starters_count || 0) + ' starters</div>';
     }
     if (tdb && typeof tdb === "object") {
+      // These keys must match services/profilers/synthesize.ts exactly.
+      // They previously did not: the pane asked for executive_summary /
+      // why_relevant / best_channel / risks, none of which the synthesizer
+      // has ever written, so five sections were computed, stored, and then
+      // silently dropped here.
+      //
+      // Two of the real fields are objects, and the renderer below skips
+      // objects on purpose (never leak raw JSON), so they are flattened to
+      // a sentence first.
+      var chan = tdb.preferred_channel;
+      var chanText = chan && chan.primary
+        ? chan.primary + (Array.isArray(chan.ranked) && chan.ranked.length > 1 ? " (then " + chan.ranked.slice(1).join(", ") + ")" : "") +
+          (chan.rationale ? " — " + chan.rationale : "")
+        : "";
+      var when = tdb.best_time_to_reach;
+      var whenText = when && when.peak_hour_utc != null
+        ? "Around " + String(when.peak_hour_utc).padStart(2, "0") + ":00 UTC" +
+          (when.rationale ? " — " + when.rationale : "")
+        : "";
+
       var sections = [
-        ["Executive summary", tdb.executive_summary || tdb.summary],
-        ["Why I should know them", tdb.why_relevant || tdb.why],
+        ["Meeting prep note", tdb.meeting_prep_notes && tdb.meeting_prep_notes.text],
+        ["What to offer", tdb.what_to_offer],
         ["Conversation starters", tdb.conversation_starters],
+        ["Best contact channel", chanText],
+        ["Best time to reach", whenText],
+        ["What to avoid", tdb.what_to_avoid],
         ["Gift ideas", tdb.gift_ideas],
-        ["Best contact channel", tdb.best_channel || tdb.best_contact_channel],
-        ["Risks / topics to avoid", tdb.risks || tdb.topics_to_avoid],
       ];
       sections.forEach(function (pair) {
         var label = pair[0], val = pair[1];

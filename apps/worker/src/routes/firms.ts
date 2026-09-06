@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Env } from "../types";
 import { backfillFirmsFromLeads } from "../scripts/backfill-firms-from-leads";
 import { parseFirmFilter, buildFirmWhere } from "./_firms_filter";
+import { loadOrgEntityOverlay, applyOrgOverlay } from "../services/org_entity_merge";
 
 export const firms = new Hono<{ Bindings: Env; Variables: { email: string } }>();
 
@@ -164,7 +165,15 @@ firms.get("/:id", async (c) => {
     .prepare("SELECT * FROM v_firm_portfolio WHERE firm_id = ? ORDER BY investment_year DESC, id DESC")
     .bind(id)
     .all();
-  return c.json({ ...firm, people: people.results ?? [], portfolio: portfolio.results ?? [] });
+
+  // The AI profile filler extracts thesis / contact_email / check sizes /
+  // AUM / HQ / sectors / stages / geo focus and writes them as `facts`, not
+  // into these columns — so a firm whose profile was filled successfully
+  // still rendered "—" on every one of them. Fill the blanks from the entity
+  // store; the legacy column always wins when populated.
+  const overlay = await loadOrgEntityOverlay(c.env, "firms", id);
+  const merged = applyOrgOverlay(firm as Record<string, unknown>, overlay);
+  return c.json({ ...merged, people: people.results ?? [], portfolio: portfolio.results ?? [] });
 });
 
 // --------- CREATE ---------
