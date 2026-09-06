@@ -471,12 +471,15 @@ export async function logDataQuality(
   reasons: string[],
   source: string,
   actorEmail?: string | null,
+  /** Stored in reasons_json instead of `reasons` when given. Used to park a
+   *  structured snapshot (see softDeleteEntity) rather than a reason list. */
+  payload?: unknown,
 ): Promise<void> {
   try {
     await env.DB.prepare(
       `INSERT INTO data_quality_log (entity_id, issue, reasons_json, source, actor_email)
        VALUES (?, ?, ?, ?, ?)`,
-    ).bind(entityId, issue, JSON.stringify(reasons), source, actorEmail ?? null).run();
+    ).bind(entityId, issue, JSON.stringify(payload ?? reasons), source, actorEmail ?? null).run();
   } catch (e) {
     console.warn("data_quality_log insert failed", entityId, (e as Error).message);
   }
@@ -497,6 +500,25 @@ export async function softDeleteEntity(
       WHERE id = ? AND status != 'soft_deleted'`,
   ).bind("garbage_detector_v1:" + reasons.join(","), entityId).run();
   try {
+    // Park the roles before deleting them. Without this the delete is a
+    // one-way door: restoreEntity flips status back to 'active' and nothing
+    // puts the roles back, so a restored entity returns with no roles at all
+    // and stays invisible on every role-filtered surface — the investor
+    // lists, the persona matchers, the founder screens. That makes
+    // "quarantine, then restore the false positives" a promise the code
+    // cannot keep, which is the whole point of soft delete over purge.
+    const roles = await env.DB.prepare(
+      `SELECT role, is_primary, source, confidence FROM entity_roles WHERE entity_id = ?`,
+    ).bind(entityId).all<{ role: string; is_primary: number; source: string | null; confidence: number }>();
+    // Parked unconditionally, including the empty case. If the park were
+    // written only when roles exist, an entity that was restored and later
+    // soft-deleted again with no roles would leave the first park as the
+    // newest one, and the second restore would replay roles the entity no
+    // longer had. One row per soft-delete keeps "newest park" and "newest
+    // soft-delete" the same event.
+    await logDataQuality(
+      env, entityId, "soft_deleted_roles", [], source, actorEmail, roles.results ?? [],
+    );
     await env.DB.prepare(`DELETE FROM entity_roles WHERE entity_id = ?`).bind(entityId).run();
   } catch (e) {
     console.warn("entity_roles delete during soft-delete failed", entityId, (e as Error).message);
@@ -512,7 +534,35 @@ export async function restoreEntity(env: Env, entityId: string, actorEmail: stri
             updated_at = datetime('now')
       WHERE id = ?`,
   ).bind(entityId).run();
-  await logDataQuality(env, entityId, "restored", [], "operator", actorEmail);
+
+  // Put back the roles the soft delete removed. Restoring status alone
+  // returned an entity with no roles, so it never reappeared on any
+  // role-filtered surface — the restore looked like it worked and did not.
+  let rolesRestored = 0;
+  try {
+    const parked = await env.DB.prepare(
+      `SELECT reasons_json FROM data_quality_log
+        WHERE entity_id = ? AND issue = 'soft_deleted_roles'
+        ORDER BY detected_at DESC, id DESC LIMIT 1`,
+    ).bind(entityId).first<{ reasons_json: string | null }>();
+    const rows = parked?.reasons_json ? (JSON.parse(parked.reasons_json) as Array<{
+      role: string; is_primary?: number; source?: string | null; confidence?: number;
+    }>) : [];
+    for (const r of Array.isArray(rows) ? rows : []) {
+      if (!r || typeof r.role !== "string" || !r.role) continue;
+      await env.DB.prepare(
+        `INSERT INTO entity_roles (entity_id, role, is_primary, source, confidence)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(entity_id, role) DO NOTHING`,
+      ).bind(entityId, r.role, r.is_primary ?? 0, r.source ?? "restore", r.confidence ?? 0.5).run();
+      rolesRestored += 1;
+    }
+  } catch (e) {
+    // A restore that cannot replay the roles is still better than none —
+    // but it must not look clean, so it is recorded rather than swallowed.
+    await logDataQuality(env, entityId, "restore_roles_failed", [(e as Error).message], "operator", actorEmail);
+  }
+  await logDataQuality(env, entityId, "restored", [`roles_restored:${rolesRestored}`], "operator", actorEmail);
 }
 
 export async function purgeEntity(env: Env, entityId: string, actorEmail: string): Promise<void> {
