@@ -127,6 +127,17 @@ api.use(
     allowHeaders: ["Content-Type", "Cf-Access-Jwt-Assertion", "Idempotency-Key"],
   }),
 );
+// The public allow-list covers the CHEAP liveness probe, and only that.
+// `/deep` shares the same router, so mounting the router publicly also
+// published a readiness sweep that runs 18 binding probes, three COUNT(*)
+// scans of error_log, and a live outbound fetchPage() with an 8 s budget
+// that walks every fetcher tier — including the metered Browser Rendering
+// tier when the cheaper tiers escalate. Unauthenticated, that is a cost
+// amplifier anyone can drive in a loop, and nothing about "health is
+// public" was ever meant to grant it. Guard the deep sweep specifically;
+// registering the middleware BEFORE the router is what makes it run first.
+api.use("/health/deep", accessGuard);
+api.use("/api/health/deep", accessGuard);
 api.route("/health", health);
 api.route("/api/health", health);
 api.route("/api/webhooks/campaigns", campaignsWebhook);

@@ -4,7 +4,8 @@
 //   window.ADS.Profile.mount({ rootId, entityId })  — embed mode
 //   window.ADS.Profile.mountStandalone()            — /dashboard/profile/
 //
-// Resolves entity via ?entity=<id> or ?table=&ref= (same convention as DD/News).
+// Resolves entity via ?entity=<id> (or ?id=<id>) or ?table=&ref= (same
+// convention as DD/News).
 
 (function () {
   if (window.ADS && window.ADS.Profile) return;
@@ -27,9 +28,19 @@
     sec_rel:    "Secular ↔ Religious",
   };
 
+  // `?id=` is accepted alongside `?entity=` because seven navigation entry
+  // points across six pages link here with `?id=` — ops-garbage-review.js,
+  // predictions.html (twice), watchlists.html, power-nodes.html,
+  // dossiers.html and ops-quality.html. Reading only `entity` made every one
+  // of those land on "No entity selected." Fixing the reader rather than the
+  // seven call sites also covers any future link written the same way.
   function qs() {
     var p = new URLSearchParams(window.location.search);
-    return { entity: p.get("entity"), table: p.get("table"), ref: p.get("ref") };
+    return {
+      entity: p.get("entity") || p.get("id"),
+      table: p.get("table"),
+      ref: p.get("ref"),
+    };
   }
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -399,7 +410,7 @@
     if (!entityId) {
       if (titleEl) titleEl.textContent = "Profile";
       var host = document.getElementById("ads-profile-root");
-      if (host) host.innerHTML = '<div class="ads-muted">No entity selected. Pass <code>?entity=</code> or <code>?table=&ref=</code>.</div>';
+      if (host) host.innerHTML = '<div class="ads-muted">No entity selected. Pass <code>?entity=</code>, <code>?id=</code> or <code>?table=&ref=</code>.</div>';
       return;
     }
     if (titleEl) titleEl.textContent = "Loading…";
