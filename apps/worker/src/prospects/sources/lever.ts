@@ -21,13 +21,16 @@ const mod: SourceModule = {
     const rows = await ctx.env.DB.prepare(
       `SELECT id, domain, meta_json, name FROM accounts WHERE meta_json LIKE '%lever_company%' LIMIT 100`,
     ).all<AccountRow>();
+    let seeded = 0, boardsFetched = 0;
     for (const r of rows.results ?? []) {
       let company = "";
       try { company = String((JSON.parse(r.meta_json ?? "{}") as Record<string, unknown>).lever_company ?? ""); } catch { /* skip */ }
       if (!company) continue;
+      seeded += 1;
       const url = `https://api.lever.co/v0/postings/${encodeURIComponent(company)}?mode=json`;
       const res = await compliantFetch(ctx.env, url, mod.slug, { accept: "application/json" });
       if (!res || !res.ok) continue;
+      boardsFetched += 1;
       let postings: Posting[] = [];
       try { postings = JSON.parse(res.body) as Posting[]; } catch { continue; }
       const r2_key = await archiveRaw(ctx.env, "lever", res.body, "json");
@@ -47,7 +50,16 @@ const mod: SourceModule = {
         });
       }
     }
-    return { events, cursor: newest > since ? String(newest) : ctx.cursor };
+    return {
+      events,
+      cursor: newest > since ? String(newest) : ctx.cursor,
+      // Without this the run records `0 events, ok` whether it scanned a
+      // hundred boards and found nothing new or found nothing to scan at
+      // all. `lever_company` is operator-seeded on accounts.meta_json and
+      // nothing sets it automatically, so seeded_accounts: 0 is the normal
+      // state today — and the state an operator has no other way to see.
+      meta: { seeded_accounts: seeded, boards_fetched: boardsFetched },
+    };
   },
 };
 

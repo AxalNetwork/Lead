@@ -38,13 +38,16 @@ const mod: SourceModule = {
       : await ctx.env.DB.prepare(
           `SELECT id, domain, meta_json, name FROM accounts WHERE meta_json LIKE '%smartrecruiters_company%' LIMIT 100`,
         ).all<AccountRow>();
+    let seeded = 0, boardsFetched = 0;
     for (const r of rows.results ?? []) {
       let slug = "";
       try { slug = String((JSON.parse(r.meta_json ?? "{}") as Record<string, unknown>).smartrecruiters_company ?? ""); } catch { /* skip */ }
       if (!slug) continue;
+      seeded += 1;
       const url = `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(slug)}/postings?limit=100`;
       const res = await compliantFetch(ctx.env, url, mod.slug, { accept: "application/json" });
       if (!res || !res.ok) continue;
+      boardsFetched += 1;
       let parsed: SrResp = {};
       try { parsed = JSON.parse(res.body) as SrResp; } catch { continue; }
       const r2_key = await archiveRaw(ctx.env, "smartrecruiters", res.body, "json");
@@ -69,7 +72,16 @@ const mod: SourceModule = {
         });
       }
     }
-    return { events, cursor: newest > since ? new Date(newest).toISOString() : ctx.cursor };
+    return {
+      events,
+      cursor: newest > since ? new Date(newest).toISOString() : ctx.cursor,
+      // Without this the run records `0 events, ok` whether it scanned a
+      // hundred boards and found nothing new or found nothing to scan at
+      // all. `smartrecruiters_company` is operator-seeded on accounts.meta_json and
+      // nothing sets it automatically, so seeded_accounts: 0 is the normal
+      // state today — and the state an operator has no other way to see.
+      meta: { seeded_accounts: seeded, boards_fetched: boardsFetched },
+    };
   },
 };
 

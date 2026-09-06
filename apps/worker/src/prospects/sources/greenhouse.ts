@@ -35,12 +35,15 @@ const mod: SourceModule = {
         LIMIT 100`,
     ).all<AccountRow>();
     let newest = since;
+    let seeded = 0, boardsFetched = 0;
     for (const r of rows.results ?? []) {
       let token = "";
       try { token = String((JSON.parse(r.meta_json ?? "{}") as Record<string, unknown>).greenhouse_board ?? ""); } catch { /* skip */ }
       if (!token) continue;
+      seeded += 1;
       const fetched = await fetchBoard(ctx.env, token);
       if (!fetched) continue;
+      boardsFetched += 1;
       const r2_key = await archiveRaw(ctx.env, "greenhouse", fetched.raw, "json");
       const fresh = fetched.jobs.filter((j) => Date.parse(j.updated_at) > since);
       // Cluster: >= 5 new postings inside this run = hiring_burst.
@@ -60,7 +63,16 @@ const mod: SourceModule = {
         });
       }
     }
-    return { events, cursor: newest > since ? new Date(newest).toISOString() : ctx.cursor };
+    return {
+      events,
+      cursor: newest > since ? new Date(newest).toISOString() : ctx.cursor,
+      // Without this the run records `0 events, ok` whether it scanned a
+      // hundred boards and found nothing new or found nothing to scan at
+      // all. `greenhouse_board` is operator-seeded on accounts.meta_json and
+      // nothing sets it automatically, so seeded_accounts: 0 is the normal
+      // state today — and the state an operator has no other way to see.
+      meta: { seeded_accounts: seeded, boards_fetched: boardsFetched },
+    };
   },
 };
 

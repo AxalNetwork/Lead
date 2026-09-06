@@ -51,10 +51,17 @@ export async function runSource(env: Env, mod: SourceModule, opts?: { force?: bo
   let drafts: SignalEventDraft[] = [];
   let nextCursor: string | null | undefined = cursor;
   let crawlError: string | undefined;
+  // CrawlResult.meta is documented as "per-source counters appended to
+  // crawler_runs.meta_json" and the column has existed since migration 161,
+  // but nothing ever read the field — every source's counters were dropped on
+  // the floor. That is what left a source with no work to do and a source that
+  // scanned everything and found nothing new both recorded as `0 events, ok`.
+  let crawlMeta: Record<string, unknown> | undefined;
   try {
     const r = await mod.crawl({ env, cursor, maxEvents: MAX_EVENTS_PER_RUN, accountId: opts?.accountId });
     drafts = (r.events ?? []).slice(0, MAX_EVENTS_PER_RUN);
     nextCursor = r.cursor === undefined ? cursor : r.cursor;
+    crawlMeta = r.meta;
   } catch (e) {
     crawlError = (e as Error).message;
   }
@@ -131,14 +138,21 @@ export async function runSource(env: Env, mod: SourceModule, opts?: { force?: bo
   if (nextCursor) await setCursor(env, mod.slug, nextCursor);
 
   const status: RunOutcome["status"] = crawlError ? "error" : (skipped > 0 && inserted === 0 ? "partial" : "ok");
-  await finalize(env, runId, status, { events: drafts.length, inserted, skipped, created, resolved, cursor: nextCursor ?? null, error: crawlError });
+  await finalize(env, runId, status, { events: drafts.length, inserted, skipped, created, resolved, cursor: nextCursor ?? null, error: crawlError, meta: crawlMeta });
 
   return { runId, source: mod.slug, status, events_emitted: drafts.length, signals_inserted: inserted, signals_skipped: skipped, accounts_created: created, accounts_resolved: resolved, error: crawlError };
 }
 
-async function finalize(env: Env, runId: string, status: string, m: { events: number; inserted: number; skipped: number; created: number; resolved: number; cursor: string | null; error?: string }): Promise<void> {
+async function finalize(env: Env, runId: string, status: string, m: { events: number; inserted: number; skipped: number; created: number; resolved: number; cursor: string | null; error?: string; meta?: Record<string, unknown> }): Promise<void> {
+  // Serialised defensively: a source is free to put anything in `meta`, and a
+  // value that cannot be stringified (a cycle, a BigInt) must not be the
+  // reason a run never records its outcome at all.
+  let metaJson: string | null = null;
+  if (m.meta && Object.keys(m.meta).length) {
+    try { metaJson = JSON.stringify(m.meta); } catch { metaJson = null; }
+  }
   await env.DB.prepare(
-    `UPDATE crawler_runs SET finished_at = ?, status = ?, events_emitted = ?, signals_inserted = ?, signals_skipped = ?, accounts_created = ?, accounts_resolved = ?, cursor = ?, error = ? WHERE id = ?`,
-  ).bind(new Date().toISOString(), status, m.events, m.inserted, m.skipped, m.created, m.resolved, m.cursor, m.error ?? null, runId)
+    `UPDATE crawler_runs SET finished_at = ?, status = ?, events_emitted = ?, signals_inserted = ?, signals_skipped = ?, accounts_created = ?, accounts_resolved = ?, cursor = ?, error = ?, meta_json = ? WHERE id = ?`,
+  ).bind(new Date().toISOString(), status, m.events, m.inserted, m.skipped, m.created, m.resolved, m.cursor, m.error ?? null, metaJson, runId)
     .run().catch((e) => console.warn("crawler_runs finalize failed", e.message));
 }
