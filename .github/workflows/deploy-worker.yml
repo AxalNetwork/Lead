@@ -576,7 +576,53 @@ jobs:
             echo "::error::apps/worker/wrangler.toml declares database_id ${DECLARED_DB_ID}, which does not exist on this account (see the live list above). A database deleted and recreated gets a new uuid; update wrangler.toml to match."
             exit 1
           fi
-          echo "  declared database_id ${DECLARED_DB_ID} resolves — the token can reach D1."
+          echo "  declared database_id ${DECLARED_DB_ID} resolves — the token can reach D1 (READ)."
+
+          # Read access is not the access that matters here.
+          #
+          # Run 137 proved the two easy hypotheses wrong: the account's D1
+          # databases list fine and the declared uuid resolves, yet
+          # `wrangler d1 migrations list` still exits 1 with 880 bytes of
+          # output containing nothing but npm deprecation notices, the
+          # wrangler.toml warnings and the version banner. No error at all.
+          #
+          # Listing databases is an account-level READ. `d1 migrations list`
+          # does more: it queries the database and CREATES the d1_migrations
+          # bookkeeping table when it is absent. A token holding D1:Read but
+          # not D1:Edit passes everything above and fails there — which is
+          # exactly the shape observed. So probe the query endpoint, which is
+          # the capability wrangler actually needs, and report what comes
+          # back. The statement is a read against sqlite_master: it tells us
+          # whether the token may query at all AND whether the table wrangler
+          # wants to create already exists, without mutating anything.
+          echo "--- D1 query capability + migrations bookkeeping ---"
+          Q_RC=0
+          QRESP=$(curl -sS --connect-timeout 10 --max-time 30 --retry 2 --retry-connrefused \
+            -X POST "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${DECLARED_DB_ID}/query" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data '{"sql":"SELECT name FROM sqlite_master WHERE type=\u0027table\u0027 AND name=\u0027d1_migrations\u0027"}') || Q_RC=$?
+          if [ "$Q_RC" -ne 0 ]; then
+            echo "::error::curl could not reach the D1 query endpoint (exit ${Q_RC}). Transport failure, not a permission problem."
+            exit 1
+          fi
+          if ! printf '%s' "$QRESP" | jq -e . >/dev/null 2>&1; then
+            echo "::error::The D1 query endpoint returned a non-JSON body (${#QRESP} bytes, below). An intermediary answered, not Cloudflare."
+            printf '%s\n' "$QRESP" | head -20
+            exit 1
+          fi
+          if [ "$(printf '%s' "$QRESP" | jq -r '.success')" != "true" ]; then
+            printf '%s\n' "$QRESP" | jq .
+            Q_CODE=$(printf '%s' "$QRESP" | jq -r '.errors[0].code // "none"')
+            Q_MSG=$(printf '%s' "$QRESP" | jq -r '.errors[0].message // "no message"')
+            echo "::error::The token can LIST D1 databases but cannot QUERY one (code ${Q_CODE}: ${Q_MSG}). That is the split that explains everything: listing is D1 Read, while 'wrangler d1 migrations list' queries the database and creates the d1_migrations table when absent, which needs D1 Edit. Grant 'Account -> D1 -> Edit' at https://dash.cloudflare.com/profile/api-tokens — Read alone is not enough. See docs/cloudflare-operations-checklist.md section 5."
+            exit 1
+          fi
+          if printf '%s' "$QRESP" | jq -e '.result[0].results | length > 0' >/dev/null 2>&1; then
+            echo "  d1_migrations table exists and the token can query it."
+          else
+            echo "  the token can query, but d1_migrations does NOT exist yet — wrangler will try to CREATE it, which needs D1 Edit rather than Read."
+          fi
 
           # Only now involve wrangler. Its output is captured so that a silent
           # exit is at least a silent exit whose transcript is quoted back in
