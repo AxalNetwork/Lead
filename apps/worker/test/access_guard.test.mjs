@@ -79,6 +79,30 @@ test("/health and /api/health are both public per spec", () => {
   assert.ok(apiHealthIdx < guardIdx, "/api/health must be mounted before accessGuard (public allow-list per task #2)");
 });
 
+// The allow-list covers the CHEAP liveness probe. `/deep` lives on the same
+// router, so mounting that router publicly also published a readiness sweep
+// that runs 18 binding probes, three COUNT(*) scans of error_log, and a live
+// outbound fetchPage() that walks every fetcher tier — the metered Browser
+// Rendering tier included. Unauthenticated that is a cost amplifier anyone
+// can drive in a loop. Verified against the repo's own Hono: the cheap
+// probes still answer 200 and both deep paths answer 401.
+test("the deep health sweep is NOT public, on either mount", () => {
+  const guardIdx = src.search(/api\.use\(\s*"\/api\/\*"\s*,\s*accessGuard\s*\)/);
+  for (const path of ["/health/deep", "/api/health/deep"]) {
+    const re = new RegExp(`api\\.use\\(\\s*"${path.replace(/\//g, "\\/")}"\\s*,\\s*accessGuard\\s*\\)`);
+    const idx = src.search(re);
+    assert.ok(idx > -1, `${path} has no accessGuard — the deep sweep is publicly callable`);
+    // Hono runs handlers in registration order and stops at the first that
+    // returns, so the guard only fires if it is registered before the router.
+    const routeIdx = src.search(
+      new RegExp(`api\\.route\\(\\s*"${path.replace(/\/deep$/, "").replace(/\//g, "\\/")}"`),
+    );
+    assert.ok(routeIdx > -1, `mount for ${path} not found`);
+    assert.ok(idx < routeIdx, `${path} guard must be registered before the health router`);
+    assert.ok(idx < guardIdx || guardIdx === -1, `${path} guard should sit with the public mounts`);
+  }
+});
+
 test("onError returns a sanitized envelope in production (no Error.stack, no raw internal message)", () => {
   // Source-level assertion: the production branch of onError must
   // build a `{ error: { code, message } }` envelope, never include

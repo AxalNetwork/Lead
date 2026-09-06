@@ -19,6 +19,7 @@
 // selection can be extended to prefer panels whose stage matches the
 // target's most recent funding round.
 import type { Env } from "../../types";
+import { entityPrimarySector } from "../../entities/sector";
 import type { ImpliedValuationRange } from "./types";
 
 function percentile(sorted: number[], p: number): number {
@@ -27,13 +28,11 @@ function percentile(sorted: number[], p: number): number {
   return sorted[idx];
 }
 
+// Delegates to entities/sector.ts. The three predicates this used to read
+// have no writer anywhere in the worker, so it returned null for every
+// company and the sector-matched panel fallback below never fired.
 async function getCompanySector(env: Env, entityId: string): Promise<string | null> {
-  const r = await env.DB.prepare(
-    `SELECT value_text FROM facts
-      WHERE entity_id = ? AND predicate IN ('company.sector','firm.sector','sector')
-        AND is_current = 1 LIMIT 1`,
-  ).bind(entityId).first<{ value_text: string }>();
-  return r?.value_text ?? null;
+  return entityPrimarySector(env, entityId);
 }
 
 async function pickPanelForCompany(env: Env, entityId: string): Promise<{ id: string; name: string; criteria_json: string } | null> {

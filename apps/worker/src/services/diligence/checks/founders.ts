@@ -10,10 +10,29 @@ async function getFoundersOf(env: import("../../../types").Env, companyEntityId:
   // founders mirrored as facts (founder.company_founded) or via career role 'founder'
   const out = new Set<string>();
   try {
+    // The name fallback is not belt-and-braces: it is the only branch that
+    // currently matches. The single writer of this predicate — the founder
+    // profile workflow (crawler/profileWorkflows/founder.ts) — stores the
+    // company as free text in value_text, because at extraction time it has a
+    // company NAME off a bio page and no resolved entity. Matching only on
+    // value_entity_id therefore returned nothing, every time, and the whole
+    // founder-diligence section quietly fell back to the career_history path.
+    // The value_entity_id branch is kept first because it is the correct
+    // shape and will match once an extractor resolves the company.
     const r = await env.DB.prepare(
-      `SELECT entity_id FROM facts
-        WHERE predicate = 'founder.company_founded' AND value_entity_id = ? AND is_current = 1`,
-    ).bind(companyEntityId).all<{ entity_id: string }>();
+      `SELECT f.entity_id FROM facts f
+        WHERE f.predicate = 'founder.company_founded'
+          AND f.is_current = 1
+          AND (
+                f.value_entity_id = ?
+             OR (f.value_entity_id IS NULL
+                 AND f.value_text IS NOT NULL
+                 AND TRIM(f.value_text) <> ''
+                 AND LOWER(TRIM(f.value_text)) = (
+                       SELECT LOWER(TRIM(u.display_name)) FROM u_entities u WHERE u.id = ?
+                     ))
+          )`,
+    ).bind(companyEntityId, companyEntityId).all<{ entity_id: string }>();
     for (const row of r.results ?? []) out.add(row.entity_id);
   } catch { /* table may differ */ }
   try {

@@ -41,10 +41,11 @@ permalink: /dashboard/crawlers/
           <th>Inserted</th>
           <th>Skipped</th>
           <th>Accts ↑</th>
+          <th>Notes</th>
           <th>Error</th>
         </tr>
       </thead>
-      <tbody><tr><td colspan="8">Loading…</td></tr></tbody>
+      <tbody><tr><td colspan="9">Loading…</td></tr></tbody>
     </table>
    </div>
   </div>
@@ -54,6 +55,20 @@ permalink: /dashboard/crawlers/
 (async function () {
   const tbody = document.querySelector("#ads-crawlers-table tbody");
   const runsBody = document.querySelector("#ads-crawler-runs tbody");
+  // crawler_runs.meta_json holds the per-source counters. Rendering them is
+  // the difference between "this source had nothing to scan" and "this source
+  // scanned everything and found nothing new" — both of which otherwise show
+  // as a run with 0 emitted and status ok. The seven ATS sources are seeded
+  // from accounts.meta_json keys that nothing sets automatically, so
+  // seeded_accounts=0 is the answer to "why is this always empty?".
+  function runNotes(metaJson) {
+    if (!metaJson) return "";
+    var m;
+    try { m = JSON.parse(metaJson); } catch (e) { return ""; }
+    if (!m || typeof m !== "object") return "";
+    return Object.keys(m).map(function (k) { return k + "=" + m[k]; }).join(" · ");
+  }
+
   function fmt(s) { return s ? new Date(s).toLocaleString() : "—"; }
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]; }); }
   async function refresh() {
@@ -87,11 +102,12 @@ permalink: /dashboard/crawlers/
           <td>${esc(x.signals_inserted)}</td>
           <td>${esc(x.signals_skipped)}</td>
           <td>+${esc(x.accounts_created)} / ${esc(x.accounts_resolved)}</td>
+          <td class="ads-muted" style="font-size:11px">${esc(runNotes(x.meta_json))}</td>
           <td>${esc(x.error || "")}</td>
         </tr>
       `).join("");
     } catch (e) {
-      runsBody.innerHTML = `<tr><td colspan="8">Failed to load: ${esc(e && e.message ? e.message : e)}</td></tr>`;
+      runsBody.innerHTML = `<tr><td colspan="9">Failed to load: ${esc(e && e.message ? e.message : e)}</td></tr>`;
     }
   }
   document.addEventListener("change", async (e) => {

@@ -72,6 +72,23 @@
     }).join("");
   }
 
+  // Where a lead's name should go.
+  //
+  // This used to be an unconditional /dashboard/people/?id=<l.id>. That page
+  // hands the value to /api/profilers/:entity_id/*, which is keyed on
+  // u_entities — and `l.id` is the legacy `leads` primary key, a different id
+  // space entirely. So the link never resolved: every name on the Leads page
+  // opened a person profile with every panel empty, which reads as "we have
+  // no data on this person" rather than "this link is wrong".
+  //
+  // The listing now carries `entity_id` when the lead has been mapped into
+  // u_entities. Rows that have not been mapped yet go to the lead detail
+  // page, which is keyed on exactly the id we have.
+  function nameHref(l) {
+    if (l.entity_id) return "/dashboard/people/?id=" + encodeURIComponent(l.entity_id);
+    return "/dashboard/lead/?id=" + encodeURIComponent(l.id);
+  }
+
   function render(items) {
     var tbody = document.getElementById("ads-leads-tbody");
     if (!items.length) {
@@ -81,7 +98,7 @@
     tbody.innerHTML = items.map(function (l) {
       return '<tr data-id="' + esc(l.id) + '">'
         + '<td style="padding:8px;vertical-align:middle"><input type="checkbox" class="ads-bulk-check" data-id="' + esc(l.id) + '"></td>'
-        + '<td style="padding:8px"><a href="/dashboard/people/?id=' + esc(l.id) + '">' + esc(l.name || "(no name)") + '</a>' + rolesBadges(l.roles) + '</td>'
+        + '<td style="padding:8px"><a href="' + esc(nameHref(l)) + '">' + esc(l.name || "(no name)") + '</a>' + rolesBadges(l.roles) + '</td>'
         + '<td style="padding:8px">' + esc(l.org || "—") + '</td>'
         + '<td style="padding:8px">' + esc(l.email || "—") + '</td>'
         + '<td style="padding:8px">' + esc(l.status || "—") + '</td>'

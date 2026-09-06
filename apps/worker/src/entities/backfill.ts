@@ -79,7 +79,7 @@ export async function backfillAccounts(env: Env, offset = 0, limit = BATCH): Pro
     `SELECT id, name, legal_name, website, domain, industry, industries_json,
             hq_country_iso2, hq_region, hq_city, funding_stage,
             linkedin_url, twitter_handle, github_org, crunchbase_url,
-            fit_score, intent_score
+            fit_score, intent_score, employees
        FROM accounts ORDER BY created_at LIMIT ? OFFSET ?`,
   ).bind(limit + 1, offset).all<Record<string, unknown>>();
   const rows = r.results ?? [];

@@ -53,13 +53,16 @@ const mod: SourceModule = {
       : await ctx.env.DB.prepare(
           `SELECT id, domain, meta_json, name FROM accounts WHERE meta_json LIKE '%personio_company%' LIMIT 100`,
         ).all<AccountRow>();
+    let seeded = 0, boardsFetched = 0;
     for (const r of rows.results ?? []) {
       let company = "";
       try { company = String((JSON.parse(r.meta_json ?? "{}") as Record<string, unknown>).personio_company ?? ""); } catch { /* skip */ }
       if (!company) continue;
+      seeded += 1;
       const url = `https://${encodeURIComponent(company)}.jobs.personio.de/xml`;
       const res = await compliantFetch(ctx.env, url, mod.slug, { accept: "application/xml" });
       if (!res || !res.ok) continue;
+      boardsFetched += 1;
       const r2_key = await archiveRaw(ctx.env, "personio", res.body, "xml");
       const positions = parsePositions(res.body);
       const fresh = positions.filter((p) => {
@@ -82,7 +85,16 @@ const mod: SourceModule = {
         });
       }
     }
-    return { events, cursor: newest > since ? new Date(newest).toISOString() : ctx.cursor };
+    return {
+      events,
+      cursor: newest > since ? new Date(newest).toISOString() : ctx.cursor,
+      // Without this the run records `0 events, ok` whether it scanned a
+      // hundred boards and found nothing new or found nothing to scan at
+      // all. `personio_company` is operator-seeded on accounts.meta_json and
+      // nothing sets it automatically, so seeded_accounts: 0 is the normal
+      // state today — and the state an operator has no other way to see.
+      meta: { seeded_accounts: seeded, boards_fetched: boardsFetched },
+    };
   },
 };
 

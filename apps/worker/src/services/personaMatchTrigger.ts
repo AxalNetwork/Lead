@@ -16,6 +16,9 @@ const RELEVANT_PREDICATES = new Set<string>([
   "person.location.country", "person.location.city",
   "location.country", "location.city",
   "employer", "person.employer",
+  // `employees` is the spelling that actually gets written; without it a
+  // fresh headcount fact never re-scored the entity it belongs to.
+  "employees",
   "org.headcount", "org.employees",
   "company.employees", "company.headcount",
   "org.sector", "sector",

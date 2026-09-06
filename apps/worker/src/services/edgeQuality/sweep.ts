@@ -15,6 +15,9 @@ import { collectAllSignals } from "./signals";
 import { aggregateSignals } from "./aggregate";
 import { computeInfluence, type ScoredEdge } from "./influence";
 import { insertFact } from "../../entities/facts";
+import { firstOfJsonArray } from "../../entities/sector";
+import { logError } from "../../db/error_log";
+import { wrapUnknown } from "../../errors";
 
 const EDGE_BATCH = 200;        // edges scored per loop iteration
 const EDGE_TICK_CAP = 5000;    // hard ceiling per nightly tick (Task #2 precedent)
@@ -298,10 +301,23 @@ async function rebuildEntityInfluence(env: Env): Promise<InfluenceResult> {
 }
 
 /**
- * Best-effort sector lookup. Reads the most recent fact with predicate
- * `entity.primary_sector` for each id; falls back to `firm.sector` for
- * firm entities and `company.sector` for company entities. Empty for
- * ids with no sector evidence.
+ * Best-effort sector lookup, driving the per-sector PageRank partition.
+ *
+ * This used to read only `entity.primary_sector`, `firm.sector` and
+ * `company.sector` from `facts`. No writer in the worker produces any of
+ * those three — the plural `firm.sectors` is what the profile workflows emit,
+ * `industry` is what the account dual-write emits, and both land as tags that
+ * the summary rebuild materialises into `entity_summary.sectors_csv`. So the
+ * map came back empty on every sweep, every node fell into the same unsectored
+ * bucket, and `sectors_ranked` was 0: per-sector PageRank and the per-sector
+ * power-node flags did nothing at all, silently, because an empty map is also
+ * what a genuinely unsectored graph produces.
+ *
+ * `entity_summary.sectors_csv` is now the primary source because it is the
+ * materialised one — already deduped, already slugged, one row per entity.
+ * The facts lookup stays as a fallback for entities whose summary has not been
+ * rebuilt yet, widened to the predicates that are actually written and reading
+ * `value_json` too, since the plural forms are stored as JSON arrays.
  */
 async function loadPrimarySectors(env: Env, ids: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
@@ -310,16 +326,38 @@ async function loadPrimarySectors(env: Env, ids: string[]): Promise<Map<string, 
     const slice = ids.slice(i, i + 100);
     try {
       const r = await env.DB.prepare(
-        `SELECT entity_id, value_text
+        `SELECT entity_id, sectors_csv
+           FROM entity_summary
+          WHERE sectors_csv IS NOT NULL AND sectors_csv <> ''
+            AND entity_id IN (${slice.map(() => "?").join(",")})`,
+      ).bind(...slice).all<{ entity_id: string; sectors_csv: string | null }>();
+      for (const row of r.results ?? []) {
+        const first = (row.sectors_csv ?? "").split(",").map((x) => x.trim()).find(Boolean);
+        if (first && !out.has(row.entity_id)) out.set(row.entity_id, first.toLowerCase());
+      }
+    } catch (e) {
+      await logError(env, {
+        err: wrapUnknown(e, "db_error", { chunk_start: i, chunk_size: slice.length }),
+        step: "edge_quality.primary_sector_summary",
+      });
+    }
+
+    const pending = slice.filter((id) => !out.has(id));
+    if (!pending.length) continue;
+    try {
+      const r = await env.DB.prepare(
+        `SELECT entity_id, value_text, value_json
            FROM facts
           WHERE is_current = 1
-            AND predicate IN ('entity.primary_sector','firm.sector','company.sector')
-            AND entity_id IN (${slice.map(() => "?").join(",")})`,
-      ).bind(...slice).all<{ entity_id: string; value_text: string | null }>();
+            AND predicate IN ('entity.primary_sector','firm.sector','company.sector',
+                              'firm.sectors','company.sectors','sector','industry',
+                              'firm.industry')
+            AND entity_id IN (${pending.map(() => "?").join(",")})`,
+      ).bind(...pending).all<{ entity_id: string; value_text: string | null; value_json: string | null }>();
       for (const row of r.results ?? []) {
-        if (row.value_text && !out.has(row.entity_id)) {
-          out.set(row.entity_id, row.value_text.toLowerCase());
-        }
+        if (out.has(row.entity_id)) continue;
+        const v = row.value_text?.trim() || firstOfJsonArray(row.value_json);
+        if (v) out.set(row.entity_id, v.toLowerCase());
       }
     } catch (e) {
       console.warn("primary sector lookup chunk failed", (e as Error).message);
@@ -327,6 +365,7 @@ async function loadPrimarySectors(env: Env, ids: string[]): Promise<Map<string, 
   }
   return out;
 }
+
 
 function round4(x: number): number {
   return Math.round(x * 10000) / 10000;

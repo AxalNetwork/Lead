@@ -81,7 +81,19 @@ leads.get("/", async (c) => {
     `SELECT ${RICH_COLUMNS},
             (SELECT json_group_array(r.role) FROM entity_legacy_map m
                JOIN entity_roles r ON r.entity_id = m.entity_id
-              WHERE m.legacy_table = 'leads' AND m.legacy_id = leads.id) AS roles_json
+              WHERE m.legacy_table = 'leads' AND m.legacy_id = leads.id) AS roles_json,
+            -- The unified id for this lead, when one exists. The Leads list
+            -- linked each name to /dashboard/people/?id=<leads.id>, but that
+            -- page feeds the value straight to /api/profilers/:entity_id/*,
+            -- which is keyed on u_entities. A legacy integer id never matches
+            -- a uuid, so every name on the page opened an empty profile. The
+            -- list already joins entity_legacy_map for the role badges, so
+            -- carrying the id costs one more correlated subquery and lets the
+            -- page link to a person page that resolves — or fall back to the
+            -- lead detail page for rows that have no entity yet.
+            (SELECT m.entity_id FROM entity_legacy_map m
+              WHERE m.legacy_table = 'leads' AND m.legacy_id = leads.id
+              LIMIT 1) AS entity_id
        FROM leads ${whereSql} ${orderSql} LIMIT ?`,
   ).bind(...binds, limit);
   const r = await stmt.all();

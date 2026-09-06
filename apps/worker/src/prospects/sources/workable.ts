@@ -37,13 +37,16 @@ const mod: SourceModule = {
       : await ctx.env.DB.prepare(
           `SELECT id, domain, meta_json, name FROM accounts WHERE meta_json LIKE '%workable_account%' LIMIT 100`,
         ).all<AccountRow>();
+    let seeded = 0, boardsFetched = 0;
     for (const r of rows.results ?? []) {
       let slug = "";
       try { slug = String((JSON.parse(r.meta_json ?? "{}") as Record<string, unknown>).workable_account ?? ""); } catch { /* skip */ }
       if (!slug) continue;
+      seeded += 1;
       const url = `https://apply.workable.com/api/v3/accounts/${encodeURIComponent(slug)}/jobs`;
       const res = await compliantFetch(ctx.env, url, mod.slug, { accept: "application/json" });
       if (!res || !res.ok) continue;
+      boardsFetched += 1;
       let parsed: WkResp = {};
       try { parsed = JSON.parse(res.body) as WkResp; } catch { continue; }
       const r2_key = await archiveRaw(ctx.env, "workable", res.body, "json");
@@ -68,7 +71,16 @@ const mod: SourceModule = {
         });
       }
     }
-    return { events, cursor: newest > since ? new Date(newest).toISOString() : ctx.cursor };
+    return {
+      events,
+      cursor: newest > since ? new Date(newest).toISOString() : ctx.cursor,
+      // Without this the run records `0 events, ok` whether it scanned a
+      // hundred boards and found nothing new or found nothing to scan at
+      // all. `workable_account` is operator-seeded on accounts.meta_json and
+      // nothing sets it automatically, so seeded_accounts: 0 is the normal
+      // state today — and the state an operator has no other way to see.
+      meta: { seeded_accounts: seeded, boards_fetched: boardsFetched },
+    };
   },
 };
 

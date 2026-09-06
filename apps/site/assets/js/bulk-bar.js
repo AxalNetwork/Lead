@@ -130,7 +130,6 @@
     var selection = new Map();      // id -> true
     var allMatchingMode = false;    // true after 2nd header click
     var currentSignature = cfg.getFilterSignature ? cfg.getFilterSignature() : "";
-    var headerCheck = document.getElementById("ads-bulk-header-check");
 
     // Rehydrate selection on init iff the persisted signature matches
     // the current filter signature. Drop otherwise.
@@ -211,15 +210,28 @@
       }
     }
 
-    if (headerCheck) {
-      var headerClicks = 0;
-      headerCheck.addEventListener("click", function () {
-        headerClicks += 1;
-        if (headerClicks === 1) { selectPage(headerCheck.checked); }
-        else { headerClicks = 0; selectAllMatching(); }
-        setTimeout(function () { headerClicks = 0; }, 2500);
-      });
-    }
+    // Delegated, not bound to the element. On the investors and companies
+    // pages the header checkbox is emitted inside the async row render, so it
+    // does not exist when init() runs and it is replaced wholesale on every
+    // non-append load. A direct listener resolved at init() caught neither
+    // case: "select page" and "select all matching" were dead on both pages,
+    // and the checkbox still ticked, so it looked like it had worked.
+    // (It did work on leads and accounts, whose header cell is static HTML —
+    // which is why the two pages behaved differently for the same code.)
+    var headerClicks = 0;
+    var headerResetTimer = null;
+    document.addEventListener("click", function (e) {
+      var hc = e.target && e.target.closest ? e.target.closest("#ads-bulk-header-check") : null;
+      if (!hc) return;
+      headerClicks += 1;
+      if (headerClicks === 1) { selectPage(hc.checked); }
+      else { headerClicks = 0; selectAllMatching(); }
+      // Cleared rather than stacked: the old code queued a fresh 2.5 s reset
+      // on every click, so an earlier timer could fire between the two clicks
+      // of a deliberate double-click and reset the counter mid-gesture.
+      if (headerResetTimer) clearTimeout(headerResetTimer);
+      headerResetTimer = setTimeout(function () { headerClicks = 0; }, 2500);
+    });
 
     // Rebind row checks after each list refresh — pages call this manually
     // (or use a MutationObserver as a fallback).

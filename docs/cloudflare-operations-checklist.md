@@ -174,6 +174,16 @@ Then, in an operator browser session (Access blocks curl):
 `GET https://api.aidatasignal.com/api/health/deep` probes every binding, and
 `/ops/system-health/` shows the latest health snapshot and open incidents.
 
+`/api/health/deep` requires that Access session by design. It runs 18 binding
+probes, three `COUNT(*)` scans of `error_log` and a live `fetchPage()` that can
+escalate to the metered Browser Rendering tier, so it is not something to point
+an uptime monitor at. Use the cheap public probe for that:
+
+```
+GET https://api.aidatasignal.com/health        # public, 200 + a D1 ping
+GET https://api.aidatasignal.com/api/health    # same handler, same cost
+```
+
 ## Known state (2026-09-04)
 
 The Cloudflare account connected to the Claude Code session that produced

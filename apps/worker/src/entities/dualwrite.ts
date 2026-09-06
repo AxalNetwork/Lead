@@ -100,6 +100,7 @@ interface AccountLikeInput {
   crunchbase_url?: string | null;
   fit_score?: number | null;
   intent_score?: number | null;
+  employees?: number | null;
 }
 
 interface BuyerLikeInput {
@@ -408,6 +409,13 @@ export async function syncAccountToEntity(env: Env, a: AccountLikeInput, source 
       { predicate: "funding_stage", value_text: a.funding_stage ?? null },
       { predicate: "fit_max_score", value_number: numOrNull(a.fit_score) },
       { predicate: "intent_score", value_number: numOrNull(a.intent_score) },
+      // `accounts.employees` was the one sizing column dualwrite dropped, so
+      // no account entity carried a headcount fact and persona matching
+      // scored every one of them "company size unknown". `employees` is the
+      // predicate the registry declares (entities/profile-predicates.ts) and
+      // the one secEdgar/persist.ts already writes, so this converges on the
+      // name that exists rather than adding a fourth spelling.
+      { predicate: "employees", value_number: numOrNull(a.employees) },
     ];
     await insertFactsBatch(env, entityId, patches, source, "scrape");
     await Promise.all([
