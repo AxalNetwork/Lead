@@ -7,7 +7,7 @@ function isoDay(d = new Date()): string { return d.toISOString().slice(0, 10); }
 /**
  * Nightly aggregator (cron 15 3 * * *). Writes one snapshot row per lead
  * touched in the last 24h, then aggregates source/pipeline KPIs from
- * fetch_log + jobs + provider_usage. Also rolls up dashboard_snapshots so
+ * fetch_log + jobs + provider_usage. Also rolls up analytics_daily_snapshots so
  * the home page has fast at-a-glance counts.
  */
 export async function runNightlyAggregator(env: Env): Promise<{
@@ -213,7 +213,11 @@ export async function runNightlyAggregator(env: Env): Promise<{
     )
     .run();
 
-  // ----- 4. dashboard_snapshots (today's roll-up) -------------------------
+  // ----- 4. analytics_daily_snapshots (today's roll-up) -------------------
+  // Named dashboard_snapshots until migration 357 claimed that name for
+  // user-saved dashboard views. The two schemas are mutually exclusive, so
+  // whichever migration lost the race left the other writer throwing every
+  // night into a bare catch.
   const tot = await env.DB.prepare("SELECT COUNT(*) AS c FROM leads WHERE merged_into IS NULL").first<{ c: number }>();
   const ver = await env.DB.prepare("SELECT COUNT(*) AS c FROM leads WHERE merged_into IS NULL AND verified=1").first<{ c: number }>();
   const app = await env.DB.prepare("SELECT COUNT(*) AS c FROM leads WHERE merged_into IS NULL AND status='approved'").first<{ c: number }>();
@@ -224,7 +228,7 @@ export async function runNightlyAggregator(env: Env): Promise<{
     .bind(`${day}T00:00:00.000Z`).first<{ c: number }>();
   await env.DB
     .prepare(
-      `INSERT INTO dashboard_snapshots
+      `INSERT INTO analytics_daily_snapshots
          (id, snapshot_date, total_leads, verified_leads, approved_leads,
           pending_leads, active_jobs, exports_count, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,

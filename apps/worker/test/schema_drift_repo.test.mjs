@@ -88,8 +88,6 @@ const KNOWN_BAD = new Map(Object.entries({
     "funds has no name column",
   "src/routes/profile_slices_for_health.ts :: no such column: axis":
     "entity_profile_axes stores each axis as its own column, not as rows",
-  "src/routes/dashboards.ts :: no such column: page":
-    "dashboard_snapshots is CREATEd by three different migrations with three different shapes; IF NOT EXISTS means the oldest wins",
   "src/routes/ops_system_health.ts :: no such column: updated_at":
     "compute_nodes has no updated_at",
   "src/services/diligence/checks/market.ts :: no such column: rel_kind":
