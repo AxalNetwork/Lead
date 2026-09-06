@@ -61,6 +61,52 @@ const PIPE_TITLE_RE = /\s\|\s\S/;
 // Pure emoji / icon names (no alphanumerics at all).
 const NO_ALNUM_RE = /^[^\p{L}\p{N}]+$/u;
 
+// Listicle / directory page titles captured as entity names.
+//
+// This is the gap that let ~128 non-firms into the firms table: a crawler
+// ingested aggregator pages ("VC Firms By Stage" on failory.com) and made
+// one entity per outbound link, taking the page title as the name. The
+// existing rules could not catch it — such a title has no pipe fragment, no
+// press leader, is well under 80 characters and is not a known nav string.
+//
+// Deliberately narrow, because a single matched reason marks an entity
+// garbage. Each pattern is a phrase a real firm name essentially never
+// contains: "Top Tier Capital Partners" and "Stage Fund" are real firms, so
+// a bare leading "top" or the word "stage" alone must NOT match.
+const LISTICLE_RES: RegExp[] = [
+  // "VC Firms By Stage", "Investors by sector", "Funds per geography"
+  /\b(?:by|per)\s+(?:stage|sector|industry|geograph|countr|region|check\s*size|vertical)/i,
+  // "Top 50 VC Firms", "Best 10 Seed Funds" — the number is what makes this
+  // safe; a leading "Top"/"Best" alone is a legitimate name fragment.
+  /^(?:the\s+)?(?:top|best|leading)\s+\d+\b/i,
+  // "List of European VCs", "Directory of angel investors"
+  /\b(?:list|directory|database|roundup|ranking)\s+of\s+/i,
+  // "The Ultimate Guide to Seed Funds", "Complete List of ..."
+  /^(?:the\s+)?(?:complete|ultimate|definitive)\s+(?:list|guide|directory|database)\b/i,
+];
+
+// Minimum length before a name that is identical to its own domain slug is
+// treated as URL-derived rather than a genuine single-word brand.
+// "Stripe" / "Coatue" / "Atomico" are real names that equal their domain;
+// "Firstmarkcap" (firstmarkcap.com) and "Forerunnerventures" are slugs that
+// were title-cased because no real name was ever extracted.
+const SLUG_NAME_MIN_LEN = 12;
+
+/**
+ * True when the display name is just the registrable domain label with the
+ * first letter capitalised — i.e. the crawler never found a name and fell
+ * back to the URL. Length-gated so short single-word brands are untouched.
+ */
+function looksDomainDerived(name: string, domain: string | null | undefined): boolean {
+  if (!domain) return false;
+  const label = domain.toLowerCase().replace(/^www\./, "").split(".")[0] ?? "";
+  if (label.length < SLUG_NAME_MIN_LEN) return false;
+  const n = name.trim().toLowerCase();
+  // A genuine name carries separators the slug cannot ("First Mark Capital").
+  if (/[\s.\-_]/.test(n)) return false;
+  return n === label;
+}
+
 // ---------------------------------------------------------------------------
 // Task #6: person-name disambiguation. Classifies a name that was recorded
 // as a `person` into one of: a real person, an organization scraped as a
@@ -273,6 +319,13 @@ export function isGarbage(input: GarbageInput): GarbageVerdict {
 
   // Rule 6: known UI / nav string (case-insensitive exact match).
   if (KNOWN_UI_STRINGS.has(raw.toLowerCase())) reasons.push("known_ui_string");
+
+  // Rule 6c: listicle / directory page title captured as an entity name.
+  if (LISTICLE_RES.some((re) => re.test(raw))) reasons.push("listicle_page_title");
+
+  // Rule 6d: name is just the domain slug — the crawler never extracted a
+  // real name and fell back to the URL.
+  if (looksDomainDerived(raw, input.primary_domain)) reasons.push("domain_slug_name");
 
   // Rule 6b (Task #6 Section A/F): literal HTML entity in name
   // (e.g. "Founder &amp; Partner", "Acme &#38; Co"). These are parser

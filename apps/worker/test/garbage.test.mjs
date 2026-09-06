@@ -299,3 +299,112 @@ test("runCleanupSweep: org-named person WITH email is flagged for review, not fl
   assert.equal(r.needs_review, 1, "flagged for operator review instead");
   assert.ok(calls.log.some((l) => l.binds[1] === "needs_review"), "needs_review audit row written");
 });
+
+// ---------- listicle titles and domain-slug names -----------------------
+//
+// The gap that let ~128 non-firms into the firms table. A crawler ingested
+// aggregator pages and made one entity per outbound link, taking the page
+// title as the name and the domain slug for the rest. None of the earlier
+// rules could catch it: such titles have no pipe fragment, no press leader,
+// are well under 80 characters and are not known nav strings.
+//
+// A single matched reason marks an entity garbage and the sweep soft-deletes
+// it, so the false-positive control below matters more than the positives.
+
+test("isGarbage: listicle / directory page titles flagged", () => {
+  const titles = [
+    "VC Firms By Stage",              // the actual polluting row
+    "Investors by sector",
+    "Seed Funds by geography",
+    "Top 50 VC Firms",
+    "The Best 10 Seed Funds",
+    "List of European VCs",
+    "Directory of angel investors",
+    "The Ultimate Guide to Seed Funds",
+    "Complete List of Climate Funds",
+  ];
+  for (const t of titles) {
+    const v = isGarbage({ kind: "org", display_name: t });
+    assert.equal(v.is_garbage, true, `"${t}" should be flagged`);
+    assert.ok(v.reasons.includes("listicle_page_title"), `"${t}" reason: ${v.reasons}`);
+  }
+});
+
+test("isGarbage: real firm names are NOT mistaken for listicles", () => {
+  // Every one of these is a real venture firm, and several are deliberately
+  // adversarial against the patterns: a leading "Top", the bare word
+  // "Stage", "Index", a plural, a number.
+  const real = [
+    "Top Tier Capital Partners",
+    "Stage Fund",
+    "Stage 2 Capital",
+    "Index Ventures",
+    "Founders Fund",
+    "First Round Capital",
+    "Seven Seven Six",
+    "500 Global",
+    "Two Sigma Ventures",
+    "8VC",
+    "Sequoia Capital",
+    "Andreessen Horowitz",
+    "Bessemer Venture Partners",
+    "Lightspeed Venture Partners",
+    "New Enterprise Associates",
+    "Union Square Ventures",
+    "General Catalyst",
+    "Insight Partners",
+    "Northzone",
+    "Speedinvest",
+  ];
+  for (const name of real) {
+    const v = isGarbage({ kind: "org", display_name: name });
+    assert.ok(
+      !v.reasons.includes("listicle_page_title"),
+      `real firm "${name}" was flagged as a listicle: ${v.reasons}`,
+    );
+  }
+});
+
+test("isGarbage: a name that is only its own domain slug is flagged", () => {
+  const cases = [
+    ["Firstmarkcap", "firstmarkcap.com"],
+    ["Forerunnerventures", "forerunnerventures.com"],
+    ["Collaborativefund", "collaborativefund.com"],
+    ["Digitalundivided", "digitalundivided.com"],
+    ["Foundersfirstcapitalpartners", "foundersfirstcapitalpartners.com"],
+  ];
+  for (const [name, domain] of cases) {
+    const v = isGarbage({ kind: "org", display_name: name, primary_domain: domain });
+    assert.ok(v.reasons.includes("domain_slug_name"),
+      `"${name}" @ ${domain} should read as URL-derived: ${v.reasons}`);
+  }
+});
+
+test("isGarbage: short single-word brands that equal their domain are safe", () => {
+  // The length gate exists for exactly these — a real brand whose name IS
+  // its domain must survive.
+  for (const [name, domain] of [
+    ["Stripe", "stripe.com"],
+    ["Coatue", "coatue.com"],
+    ["Atomico", "atomico.com"],
+    ["Floodgate", "floodgate.com"],
+    ["Greylock", "greylock.com"],
+    ["Balderton", "balderton.com"],
+    ["Speedinvest", "speedinvest.com"],
+  ]) {
+    const v = isGarbage({ kind: "org", display_name: name, primary_domain: domain });
+    assert.ok(!v.reasons.includes("domain_slug_name"),
+      `brand "${name}" was mistaken for a slug: ${v.reasons}`);
+  }
+});
+
+test("isGarbage: a properly extracted name is safe even on a matching domain", () => {
+  // "FirstMark Capital" at firstmarkcap.com carries separators the slug
+  // cannot, which is the whole tell.
+  const v = isGarbage({
+    kind: "org",
+    display_name: "FirstMark Capital",
+    primary_domain: "firstmarkcap.com",
+  });
+  assert.ok(!v.reasons.includes("domain_slug_name"), `reasons: ${v.reasons}`);
+});
