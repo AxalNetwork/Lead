@@ -11,6 +11,11 @@
 # WORKING TREE rather than against HEAD, so it catches problems before you
 # commit, not after. Once committed the two are the same set.
 #
+# The pathspec carries :(glob) magic for a reason. Plain 'src/**/*.ts' makes
+# git require at least one intermediate directory, so it silently skips
+# index.ts, scheduled.ts, errors.ts and types.ts — the two entrypoints among
+# them. Keep this identical to the pathspec in .github/workflows/check.yml.
+#
 #   npm run gates            # against origin/main
 #   npm run gates -- origin/release
 #
@@ -25,7 +30,7 @@ if ! git rev-parse --verify --quiet "$BASE" >/dev/null; then
 fi
 
 MB=$(git merge-base "$BASE" HEAD)
-CHANGED=$(git diff --name-only --diff-filter=AM "$MB" -- 'apps/worker/src/**/*.ts' || true)
+CHANGED=$(git diff --name-only --diff-filter=AM "$MB" -- ':(glob)apps/worker/src/**/*.ts' || true)
 if [ -z "$CHANGED" ]; then
   echo "gates: no added/modified worker TypeScript files versus $BASE — nothing to check."
   exit 0

@@ -699,10 +699,24 @@ admin.post("/garbage-sweep", async (c) => {
 // poll GET /api/profilers/:entity_id/status for per-entity progress.
 admin.post("/profiler-batch", async (c) => {
   const body = (await c.req.json().catch(() => null)) as { limit?: number } | null;
-  const limit = typeof body?.limit === "number" ? Math.min(Math.max(body.limit, 1), 500) : 100;
-  const { runStalestProfilerBatch } = await import("../services/profilers/batch.js");
+  const { runStalestProfilerBatch, MAX_PROFILER_BATCH } = await import("../services/profilers/batch.js");
+  // Clamped to what one invocation can actually pay for. Each dispatched
+  // entity costs 5 binding calls and Cloudflare counts those cumulatively
+  // per invocation, so an unclamped limit does not run slowly — it throws
+  // "Too many subrequests" partway through, and the recovery path
+  // (clearLastRun) is itself a KV call, so every entity the loop had already
+  // stamped stays locked out of the profiler for 7 days without a run.
+  const requested = typeof body?.limit === "number" ? Math.max(1, Math.floor(body.limit)) : MAX_PROFILER_BATCH;
+  const limit = Math.min(requested, MAX_PROFILER_BATCH);
   const result = await runStalestProfilerBatch(c.env, { limit });
-  return c.json({ ok: true, requested_limit: limit, ...result });
+  return c.json({
+    ok: true,
+    requested_limit: requested,
+    // `effective_limit` comes back from the batch itself and is the number
+    // that actually governed the pass — it differs again in inline mode.
+    ...result,
+    clamped: requested !== result.effective_limit,
+  });
 });
 
 // Section B: CSV column-mapping bug. Re-derives `display_name` from

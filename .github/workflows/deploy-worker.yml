@@ -493,41 +493,105 @@ jobs:
         run: |
           # Probe the D1 API directly before involving wrangler.
           #
-          # Run 135 showed why this is necessary: wrangler printed its
-          # banner and exited 1 with no error body at all, while the four
-          # steps immediately before it created and listed R2 buckets,
-          # Queues, KV namespaces and Vectorize indexes with the same
-          # token. "Most likely a missing scope" is a guess; a raw API
-          # response is an answer. D1 is a separately-toggled permission,
-          # so broad account access elsewhere says nothing about it.
+          # Run 135 showed why: wrangler printed its banner and exited 1 with
+          # no error body at all, while the four steps before it created and
+          # listed R2 buckets, Queues, KV namespaces and Vectorize indexes
+          # with the same token. "Most likely a missing scope" is a guess; a
+          # raw API response is an answer. D1 is a separately-toggled
+          # permission, so broad account access elsewhere says nothing about
+          # it.
+          #
+          # Every branch below has to distinguish itself, because a probe that
+          # reports one confident verdict for several different causes is the
+          # same failure it was written to replace.
           echo "--- D1 API reachability (raw, no wrangler) ---"
-          DECLARED_DB_ID=$(awk '/^\[\[d1_databases\]\]/{f=1;next} /^\[/{f=0} f && /^[[:space:]]*database_id[[:space:]]*=/' wrangler.toml \
-            | sed -E 's/.*"([^"]+)".*/\1/' | head -1)
-          RESP=$(curl -sS \
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database" \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
-          if [ "$(echo "$RESP" | jq -r '.success')" != "true" ]; then
-            echo "$RESP" | jq . || echo "$RESP"
-            echo "::error::The Cloudflare API refused to list D1 databases on account ${CLOUDFLARE_ACCOUNT_ID}. The error payload above is authoritative — code 10000 / 'Authentication error' means CLOUDFLARE_API_TOKEN is missing the D1 permission. Every other resource type in this job succeeded with the same token, so this is a D1-specific scope, not a dead token. Add 'Account -> D1 -> Edit' at https://dash.cloudflare.com/profile/api-tokens and re-run. See docs/cloudflare-operations-checklist.md section 5."
+
+          # Extract inside awk: a greedy `sed 's/.*"([^"]+)".*/\1/'` captures
+          # the LAST quoted token on the line, so a trailing comment such as
+          # `database_id = "ecd..." # rotated from "old"` yields the wrong id
+          # and aborts the deploy with a misleading message. TOML literal
+          # strings use single quotes, which that sed does not match at all.
+          DECLARED_DB_ID=$(awk '
+            /^\[\[d1_databases\]\]/ { f = 1; next }
+            /^\[/ { f = 0 }
+            f && /^[[:space:]]*database_id[[:space:]]*=/ {
+              if (match($0, /=[[:space:]]*["\047][^"\047]+["\047]/)) {
+                v = substr($0, RSTART, RLENGTH)
+                sub(/^=[[:space:]]*["\047]/, "", v)
+                sub(/["\047]$/, "", v)
+                print v
+                exit
+              }
+            }' wrangler.toml)
+
+          # An empty extraction used to skip the comparison entirely and then
+          # print a success line with an empty interpolation — the log
+          # asserted a check that never ran. Treat it as fatal.
+          if [ -z "$DECLARED_DB_ID" ]; then
+            echo "::error::Could not extract database_id from apps/worker/wrangler.toml. The [[d1_databases]] block moved, was indented, or changed shape (an [env.*] table, a renamed key). Fix the extraction before trusting this check."
             exit 1
           fi
+
+          # `RESP=$(curl ...)` as a bare assignment is fatal under `bash -e`,
+          # which is what GitHub uses: a DNS failure, TLS error, reset
+          # connection or proxy 5xx kills the step at curl's exit code before
+          # any ::error:: below can run, and the log shows only "Process
+          # completed with exit code 6". Capture the status instead. The
+          # timeouts matter too — without them a hung connection stalls the
+          # job until the 6h runner limit.
+          CURL_RC=0
+          RESP=$(curl -sS --connect-timeout 10 --max-time 30 --retry 2 --retry-connrefused \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}") || CURL_RC=$?
+          if [ "$CURL_RC" -ne 0 ]; then
+            echo "::error::curl could not reach the Cloudflare D1 API (exit ${CURL_RC}). This is a transport failure — DNS, TLS, timeout or a refused connection — NOT a token-scope problem. Re-run before changing any credential."
+            exit 1
+          fi
+
+          # An empty or non-JSON body is an intermediary answering, not
+          # Cloudflare. It must not be reported as a missing D1 permission:
+          # the cost of that misdiagnosis is a production token rotation
+          # chasing a scope that was never the issue.
+          if ! printf '%s' "$RESP" | jq -e . >/dev/null 2>&1; then
+            echo "::error::The D1 API returned a body that is not JSON (${#RESP} bytes, shown below). Something between this runner and Cloudflare answered. Not a token-scope problem."
+            printf '%s\n' "$RESP" | head -20
+            exit 1
+          fi
+
+          if [ "$(printf '%s' "$RESP" | jq -r '.success')" != "true" ]; then
+            printf '%s\n' "$RESP" | jq .
+            CF_CODE=$(printf '%s' "$RESP" | jq -r '.errors[0].code // "none"')
+            CF_MSG=$(printf '%s' "$RESP" | jq -r '.errors[0].message // "no message"')
+            if [ "$CF_CODE" = "10000" ]; then
+              echo "::error::Cloudflare refused to list D1 databases on account ${CLOUDFLARE_ACCOUNT_ID}: code 10000 (${CF_MSG}). That is an authentication/authorization failure, and since every other resource type in this job succeeded with the same token, it is D1 specifically. Add 'Account -> D1 -> Edit' at https://dash.cloudflare.com/profile/api-tokens and re-run. See docs/cloudflare-operations-checklist.md section 5."
+            else
+              echo "::error::Cloudflare refused to list D1 databases on account ${CLOUDFLARE_ACCOUNT_ID}: code ${CF_CODE} (${CF_MSG}). The payload above is authoritative — diagnose from that code, not from an assumed missing scope."
+            fi
+            exit 1
+          fi
+
           echo "live D1 databases:"
-          echo "$RESP" | jq -r '.result[]? | "  \(.name)\t\(.uuid)"'
-          if [ -n "$DECLARED_DB_ID" ] && ! echo "$RESP" | jq -e --arg id "$DECLARED_DB_ID" '.result[]? | select(.uuid == $id)' >/dev/null; then
+          printf '%s\n' "$RESP" | jq -r '.result[]? | "  \(.name)\t\(.uuid)"'
+          if ! printf '%s' "$RESP" | jq -e --arg id "$DECLARED_DB_ID" '.result[]? | select(.uuid == $id)' >/dev/null; then
             echo "::error::apps/worker/wrangler.toml declares database_id ${DECLARED_DB_ID}, which does not exist on this account (see the live list above). A database deleted and recreated gets a new uuid; update wrangler.toml to match."
             exit 1
           fi
           echo "  declared database_id ${DECLARED_DB_ID} resolves — the token can reach D1."
 
-          # Only now involve wrangler, capturing stderr so a silent exit
-          # is at least a silent exit with a recorded status.
+          # Only now involve wrangler. Its output is captured so that a silent
+          # exit is at least a silent exit whose transcript is quoted back in
+          # the failure, rather than something the reader has to scroll for.
           echo "--- pending migrations ---"
+          D1_LOG="${RUNNER_TEMP:-/tmp}/d1-list.log"
           set +e
-          npx --yes wrangler@3.99.0 d1 migrations list DB --remote 2>&1 | tee /tmp/d1-list.log
+          npx --yes wrangler@3.99.0 d1 migrations list DB --remote 2>&1 | tee "$D1_LOG"
           LIST_RC=${PIPESTATUS[0]}
           set -e
           if [ "$LIST_RC" -ne 0 ]; then
-            echo "::error::wrangler d1 migrations list exited ${LIST_RC} even though the D1 API is reachable with this token (proved above). Full output is in the step log; if it is empty, the failure is inside wrangler 3.99.0 rather than in credentials or config."
+            echo "::group::wrangler output ($(wc -c < "$D1_LOG" | tr -d ' ') bytes)"
+            cat "$D1_LOG"
+            echo "::endgroup::"
+            echo "::error::wrangler d1 migrations list exited ${LIST_RC}, even though the D1 API is reachable with this token and the declared database_id resolves (both proved above). The failure is inside wrangler 3.99.0 or its config handling, not in credentials — if the captured output above is empty, that is itself the finding."
             exit 1
           fi
           echo "--- applying ---"

@@ -68,22 +68,32 @@ export async function signalCoMentions(env: Env, e: EdgeIdentity): Promise<RawSi
  * This read used to ask for `company_entity_id` / `start_date` / `end_date`,
  * which no writer has ever produced, so the join never matched and the
  * signal returned a silent null on every edge.
+ *
+ * Matching those names was necessary but not sufficient. `addBoardSeat`
+ * requires `organization_name` and always mirrors it, but
+ * `organization_entity_id` is nullable and no producer upstream of the
+ * board-seat enricher resolves one — so joining on the id alone still
+ * matched nothing. The join prefers the resolved id and falls back to the
+ * name, the same shape the school half of signalSameFirmOrSchool already
+ * uses (it joins on `institution`, a name, for exactly this reason).
  */
 export async function signalBoardOverlap(env: Env, e: EdgeIdentity): Promise<RawSignal | null> {
   return safeQuery(async () => {
     const r = await env.DB.prepare(
       `SELECT
-         json_extract(f1.value_json, '$.organization_entity_id') AS co1,
          json_extract(f1.value_json, '$.started_at') AS s1,
          json_extract(f1.value_json, '$.ended_at') AS e1,
          json_extract(f2.value_json, '$.started_at') AS s2,
          json_extract(f2.value_json, '$.ended_at') AS e2
        FROM facts f1
-       JOIN facts f2 ON json_extract(f2.value_json, '$.organization_entity_id')
-                      = json_extract(f1.value_json, '$.organization_entity_id')
+       JOIN facts f2 ON COALESCE(json_extract(f2.value_json, '$.organization_entity_id'),
+                                 json_extract(f2.value_json, '$.organization_name'))
+                      = COALESCE(json_extract(f1.value_json, '$.organization_entity_id'),
+                                 json_extract(f1.value_json, '$.organization_name'))
       WHERE f1.entity_id = ? AND f2.entity_id = ?
         AND f1.predicate = 'person.board_seat' AND f2.predicate = 'person.board_seat'
-        AND json_extract(f1.value_json, '$.organization_entity_id') IS NOT NULL
+        AND COALESCE(json_extract(f1.value_json, '$.organization_entity_id'),
+                     json_extract(f1.value_json, '$.organization_name')) IS NOT NULL
         AND f1.is_current = 1 AND f2.is_current = 1`,
     ).bind(e.src_entity_id, e.dst_entity_id).all<{ s1: string | null; e1: string | null; s2: string | null; e2: string | null }>();
     const rows = r.results ?? [];

@@ -979,8 +979,12 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         const r = await runStalestProfilerBatch(env, { limit: 25 });
         console.log("nightly profiler-batch", JSON.stringify(r));
       } catch (e) {
+        // No console.error here: the logError above is the durable record,
+        // and this file is the one the gate could not see (see the pathspec
+        // note in .github/workflows/check.yml). The 70 other console.error
+        // calls in this file predate the fix and are grandfathered by the
+        // gate's added-lines-only scan; new ones are not.
         await logError(env, { err: e, step: "nightly profiler-batch" });
-        console.error("nightly profiler-batch failed", (e as Error).message);
       }
       // Task #3 (this task): nightly OSINT batch + 90-day reverify sweep.
       // Free-plan cron slot cap (5/5 booked) means we piggyback the 0 4
