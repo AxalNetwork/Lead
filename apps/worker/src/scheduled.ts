@@ -115,6 +115,31 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         await logError(env, { err: e, step: "hourly smart_frontier drain" });
         console.error("hourly smart_frontier drain failed", (e as Error).message);
       }
+      // ...and then actually crawl what is on the frontier.
+      //
+      // Nothing did. `crawl_frontier` has three producers — the seed sweep,
+      // the drain above, and SEC discovery, whose comment a few lines down
+      // says "the engine fetches them" — but the only caller of
+      // runCrawlFrontier outside a manual route was WF_CRAWL_FRONTIER, and
+      // that Workflow was dispatched from exactly one place: an operator
+      // POSTing to /api/discovery with a run_id. So every URL discovery
+      // staged sat in the queue permanently and was never fetched.
+      //
+      // Dispatched as a Workflow when the binding exists so the fetching
+      // does not spend this tick's wall clock, matching how every other
+      // batch in this file is driven; inline at a small limit otherwise.
+      try {
+        if (env.WF_CRAWL_FRONTIER) {
+          await env.WF_CRAWL_FRONTIER.create({ params: { limit: 50 } });
+          console.log("hourly crawl_frontier workflow dispatched");
+        } else {
+          const { runCrawlFrontier } = await import("./discovery/runDiscovery");
+          const r = await runCrawlFrontier(env, { limit: 10 });
+          if (r.scanned > 0) console.log("hourly crawl_frontier inline", JSON.stringify(r));
+        }
+      } catch (e) {
+        await logError(env, { err: e, step: "hourly crawl_frontier drain" });
+      }
       // Task #1: SEC EDGAR discovery tick. RSS hourly + daily-index pass
       // at 02:00 UTC. Both channels stage filings into the crawl
       // frontier; the engine fetches them and the secEdgar adapter +
