@@ -18,6 +18,8 @@
 
 import type { Env } from "../../types";
 import { assertBudget } from "../../ai/budget";
+import { logError } from "../../db/error_log";
+import { wrapUnknown } from "../../errors";
 import { checkRateLimit, clearLastRun, setLastRun } from "./rateLimit";
 
 /** Days a successful run keeps an entity out of the batch. Matches the
@@ -120,7 +122,11 @@ export async function runStalestProfilerBatch(
            VALUES (?, ?, 'queued', 'cron:nightly', 0, ?)
          ON CONFLICT(id) DO NOTHING`,
       ).bind(runId, entityId, queuedAt).run()
-        .catch((e) => console.warn("profiler batch: queued-header insert failed", (e as Error).message));
+        .catch((e) => logError(env, {
+          err: wrapUnknown(e, "db_error", { entity_id: entityId, run_id: runId }),
+          step: "profiler_batch.queued_header",
+          job_id: runId,
+        }));
 
       try {
         if (hasWorkflow) {
@@ -141,7 +147,13 @@ export async function runStalestProfilerBatch(
       }
     } catch (e) {
       errors += 1;
-      console.warn("profiler batch: entity failed", entityId, (e as Error).message);
+      // The entity id rides in the AppError context rather than in `step`:
+      // error clustering groups on `step`, so a per-entity value there would
+      // fragment every batch failure into its own singleton cluster.
+      await logError(env, {
+        err: wrapUnknown(e, "internal_error", { entity_id: entityId }),
+        step: "profiler_batch.entity",
+      });
     }
   }
 
