@@ -65,8 +65,19 @@ async function loadEmployerFacts(env: Env, employerId: string): Promise<{
   const sum = await env.DB.prepare(
     `SELECT display_name, country_iso2, sectors_csv, stages_csv FROM entity_summary WHERE entity_id = ?`,
   ).bind(employerId).first<{ display_name: string | null; country_iso2: string | null; sectors_csv: string | null; stages_csv: string | null }>();
+  // `employees` is first because it is the only one of these that anything
+  // writes: it is the predicate the registry declares
+  // (entities/profile-predicates.ts) and the one secEdgar/persist.ts and the
+  // account dual-write emit. The four `org.*` / `company.*` spellings below
+  // were the entire list, and no writer has ever produced one — so
+  // `employees` came back null for every entity and scoreCompanySize
+  // returned its "company size unknown" zero every time. With a weight of
+  // 0.10 that put a hard ceiling of 0.90 on every persona match, and made
+  // "company size unknown" a permanent line in the rationale the dashboard
+  // shows to explain why someone matched. The unused spellings are kept so a
+  // future writer picking one still resolves.
   const hc = await env.DB.prepare(
-    `SELECT value_number FROM facts WHERE entity_id = ? AND is_current = 1 AND predicate IN ('org.headcount','org.employees','company.employees','company.headcount') AND value_number IS NOT NULL ORDER BY observed_at DESC LIMIT 1`,
+    `SELECT value_number FROM facts WHERE entity_id = ? AND is_current = 1 AND predicate IN ('employees','org.headcount','org.employees','company.employees','company.headcount') AND value_number IS NOT NULL ORDER BY observed_at DESC LIMIT 1`,
   ).bind(employerId).first<{ value_number: number | null }>();
   if (!sum && !hc) return null;
   return {
