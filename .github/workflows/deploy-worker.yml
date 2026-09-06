@@ -473,11 +473,31 @@ jobs:
       # when migrations shipped in the repo but were never applied.
       # `set -e` (default) + the action's non-zero exit on failed
       # migrations halts the workflow before `wrangler deploy` runs.
+      #
+      # Run 134 (the PR #34 merge, 2026-09-06) failed this step with
+      # `Process completed with exit code 1` and NO error body whatsoever —
+      # wrangler printed its banner, the config warnings, and then simply
+      # exited. There was nothing to diagnose from the log.
+      #
+      # `migrations list` is run first because it prints the pending set and
+      # surfaces API errors with an actual message, so a failure here says
+      # which of the two likely causes it is: the API token missing
+      # D1:Edit, or the DB binding not resolving. Note the failure moved
+      # from the deploy step (routes, zone scope) to this one between runs
+      # 133 and 134 with no migration or workflow change in between, which
+      # is what a token rotation looks like from the outside.
       - name: Apply D1 migrations (remote)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: 30c9362191318777b71647145decda48
-        run: npx --yes wrangler@3.99.0 d1 migrations apply DB --remote
+        run: |
+          echo "--- pending migrations ---"
+          if ! npx --yes wrangler@3.99.0 d1 migrations list DB --remote; then
+            echo "::error::d1 migrations list failed. Most likely CLOUDFLARE_API_TOKEN lacks D1:Edit on account 30c9362191318777b71647145decda48, or the DB binding is not resolving from apps/worker/wrangler.toml. See docs/cloudflare-operations-checklist.md section 5 for the full scope list."
+            exit 1
+          fi
+          echo "--- applying ---"
+          npx --yes wrangler@3.99.0 d1 migrations apply DB --remote
 
       - name: Deploy via wrangler
         uses: cloudflare/wrangler-action@v3

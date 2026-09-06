@@ -348,14 +348,18 @@ admin.post("/repair-pipeline", async (c) => {
 
     // (3) Re-enqueue summary rebuilds for any entity whose latest fact /
     // membership / fund-investment activity is newer than its
-    // entity_summary.updated_at. Bounded to 500/run so a single call is
+    // entity_summary.rebuilt_at. Bounded to 500/run so a single call is
     // predictable.
+    //
+    // The column is `rebuilt_at` (migrations/207:27) — this read
+    // `s.updated_at`, which does not exist, so the repair pipeline never
+    // enqueued a single stale summary.
     const stale = await c.env.DB.prepare(
       `SELECT e.id
          FROM u_entities e
          LEFT JOIN entity_summary s ON s.entity_id = e.id
         WHERE e.status = 'active'
-          AND (s.updated_at IS NULL OR s.updated_at < e.updated_at)
+          AND (s.rebuilt_at IS NULL OR s.rebuilt_at < e.updated_at)
         LIMIT 500`,
     ).all<{ id: string }>();
     for (const row of stale.results ?? []) {
@@ -602,10 +606,12 @@ admin.get("/queue-health", async (c) => {
 
   // Summary-rebuild lag: entities whose entity_summary is stale.
   const rebuildLag = await c.env.DB.prepare(
+    // entity_summary's timestamp is `rebuilt_at` (migrations/207:27); there
+    // is no `updated_at`, so this counted 0 stale summaries forever.
     `SELECT COUNT(*) AS n FROM u_entities e
         LEFT JOIN entity_summary s ON s.entity_id = e.id
        WHERE e.status = 'active'
-         AND (s.updated_at IS NULL OR s.updated_at < e.updated_at)`,
+         AND (s.rebuilt_at IS NULL OR s.rebuilt_at < e.updated_at)`,
   ).first<{ n: number }>().catch(() => null);
 
   const lastRepair = await c.env.DB.prepare(

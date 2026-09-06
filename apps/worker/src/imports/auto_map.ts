@@ -12,6 +12,63 @@ export type Entity = "firms" | "leads" | "firm_metrics";
 export interface MappedField { entity: Entity; field: string }
 export interface MappedFieldWithConfidence extends MappedField { confidence: number }
 
+// ---------------------------------------------------------------------------
+// Cross-entity reconciliation.
+//
+// The alias dictionary is entity-aware but the row projection was not: it
+// read `m.field` and ignored `m.entity` entirely, so on a tab whose intent
+// is `leads` a header mapped to `firms.name` wrote straight into
+// `leads.name`. Combined with first-write-wins registration — `firms.name`
+// claims "company", "organization", "org" and "firm" before `leads.org` is
+// ever registered — a plain "Company" column landed in the person's name at
+// confidence 1.00.
+//
+// A foreign mapping is usually still meaningful, just about a different
+// entity: on a person row, the firm's name IS that person's employer. So
+// remap where the correspondence is unambiguous, and drop otherwise. Never
+// write a foreign entity's field through unchanged.
+const CROSS_ENTITY_REMAP: Record<string, Record<string, string>> = {
+  // Tab writes people; the mapping describes their employer.
+  leads: {
+    "firms.name": "org",
+    "firms.legal_name": "org",
+    "firms.contact_email": "email",
+    "firms.linkedin_url": "linkedin_url",
+    "firms.website": "personal_url",
+    "firms.hq_city": "city",
+    "firms.hq_region": "region",
+    "firms.hq_country_iso2": "country_iso2",
+  },
+  // Tab writes organisations; the mapping describes a contact at one.
+  firms: {
+    "leads.org": "name",
+    "leads.email": "contact_email",
+    "leads.linkedin_url": "linkedin_url",
+    "leads.city": "hq_city",
+    "leads.region": "hq_region",
+    "leads.country_iso2": "hq_country_iso2",
+  },
+};
+
+/**
+ * Reconcile one header mapping against the entity the tab actually writes.
+ *
+ * Returns the mapping unchanged when the entities agree, a remapped field
+ * when the correspondence is unambiguous, or null when the mapping belongs
+ * to another entity and has no equivalent — in which case the cell is
+ * dropped rather than written into the wrong column.
+ *
+ * Metric intents are passed through untouched: those tabs legitimately mix
+ * `firms.*` (to resolve which firm the row is about) with `firm_metrics.*`.
+ */
+export function reconcileToIntent(m: MappedField, intent: string): MappedField | null {
+  if (intent !== "leads" && intent !== "firms") return m;
+  const target: Entity = intent === "leads" ? "leads" : "firms";
+  if (m.entity === target) return m;
+  const remapped = CROSS_ENTITY_REMAP[intent]?.[`${m.entity}.${m.field}`];
+  return remapped ? { entity: target, field: remapped } : null;
+}
+
 // ~300-entry alias dictionary. Keys are normalized (lower, ascii, single
 // space). Each maps to {entity, field}. This is the fast first-pass lookup;
 // patterns below catch the rest.
@@ -161,6 +218,14 @@ const ALIAS_DICT: Record<string, MappedField> = (() => {
   reg("leads", "name",
     "person name", "full name", "contact name", "first name last name",
     "lead name", "individual", "person");
+  // Split-name exports (LinkedIn "Connections.csv" above all) are common
+  // enough to name explicitly. These are pseudo-fields: `leads` has no
+  // first_name/last_name column, so tryInsertLead composes them into `name`
+  // when no full name was mapped. Registering them here is also what keeps
+  // "First Name" away from the fuzzy tier, where it used to land on
+  // "firm name" at edit distance 2 and be written as a firm.
+  reg("leads", "first_name", "first name", "firstname", "given name", "forename");
+  reg("leads", "last_name", "last name", "lastname", "surname", "family name");
   reg("leads", "email",
     "email", "e mail", "contact email (person)", "personal email",
     "work email", "primary email");
@@ -267,7 +332,15 @@ export function autoMapHeader(rawHeader: string, sample: string[] = []): MappedF
   for (const [k, v] of Object.entries(ALIAS_DICT)) {
     if (Math.abs(k.length - norm.length) > 4) continue; // cheap prune
     const d = levenshtein(norm, k);
-    const tol = Math.max(2, Math.ceil(k.length * 0.25));
+    // Short aliases need a near-exact match. The old blanket
+    // `max(2, 25%)` let "first name" match "firm name" (distance 2,
+    // tolerance 3) and mapped a person's given name onto firms.name at
+    // confidence 0.59 — silently, on every row of the file. Two edits is a
+    // large fraction of a nine-character alias, and distinct headers sit
+    // that close together all the time. Recall costs little here: the
+    // operator confirms the column map before the import runs, so a missed
+    // mapping is visible and fixable, while a confident wrong one is not.
+    const tol = k.length <= 12 ? 1 : Math.max(2, Math.ceil(k.length * 0.25));
     if (d <= tol && (!bestFuzz || d < bestFuzz.d)) bestFuzz = { d, entry: v };
   }
   if (bestFuzz) {

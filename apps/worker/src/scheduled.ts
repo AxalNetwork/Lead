@@ -690,6 +690,51 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
         console.error("nightly delaware coi sweep failed", (e as Error).message);
       }
 
+
+
+      // Task #18: nightly term-benchmarks rebuild. Re-buckets every
+      // current preferred_series row by (stage, sector, year) and
+      // upserts term_benchmarks. Cheap (single SELECT + N upserts);
+      // piggybacks the consolidated nightly slot. Per the Task #4
+      // operational note Free plan caps crons at 5/5.
+      try {
+        const { rebuildTermBenchmarks } = await import("./services/termSheets/benchmarks");
+        const r = await rebuildTermBenchmarks(env);
+        console.log("term benchmarks rebuild done", JSON.stringify(r));
+      } catch (e) {
+        await logError(env, { err: e, step: "nightly term-benchmarks rebuild" });
+        console.error("nightly term-benchmarks rebuild failed", (e as Error).message);
+      }
+
+      // Task #4 (Relationship Inference Worker): nightly relationship
+      // inference. Two phases:
+      //  1) drainInferQueue — per-entity orchestrator passes for any
+      //     entities that landed in relationship_infer_queue since the
+      //     previous tick (debounced from createEntity / insertFact).
+      //  2) full pass — runAllExtractors with no entity scope so any
+      //     newly-arrived source rows that didn't fire the per-entity
+      //     hook (bulk imports, backfills) still get edges emitted.
+      // Piggybacks the consolidated nightly slot (Free plan caps crons
+      // at 5/5 — same constraint as Task #4 angel sweep, Task #14
+      // verification, Task #18 benchmarks, Task #2 fund returns,
+      // Task #3 edge quality, Task #4 intro retrain, Task #5 reputation).
+      // Runs BEFORE the Task #3 edge-quality sweep so freshly-emitted
+      // edges get scored in the same tick. That ordering is load-bearing
+      // and was not actually held: the edge-quality sweep used to sit ~50
+      // lines earlier in this chain, so every edge minted here waited a
+      // full night to be scored, another to be PageRanked, and Power Nodes
+      // trailed the graph by two days. Keep these three blocks adjacent
+      // and in this order.
+      try {
+        const { drainInferQueue, runAllExtractors } = await import("./services/relationships/orchestrator");
+        const drained = await drainInferQueue(env, 200);
+        const full = await runAllExtractors(env, {});
+        console.log("relationship inference done", JSON.stringify({ drained, full_total_edges: full.total_edges, duration_ms: full.duration_ms }));
+      } catch (e) {
+        await logError(env, { err: e, step: "nightly relationship inference" });
+        console.error("nightly relationship inference failed", (e as Error).message);
+      }
+
       // Task #3: Edge-Quality Scoring + Power-Node Detection.
       // Re-scores every rel_edges row from the 8 public signals
       // (capped at 5000 edges/tick) and rebuilds entity_influence
@@ -719,44 +764,6 @@ export async function scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionC
       } catch (e) {
         await logError(env, { err: e, step: "nightly intro retrain" });
         console.error("nightly intro retrain failed", (e as Error).message);
-      }
-
-      // Task #18: nightly term-benchmarks rebuild. Re-buckets every
-      // current preferred_series row by (stage, sector, year) and
-      // upserts term_benchmarks. Cheap (single SELECT + N upserts);
-      // piggybacks the consolidated nightly slot. Per the Task #4
-      // operational note Free plan caps crons at 5/5.
-      try {
-        const { rebuildTermBenchmarks } = await import("./services/termSheets/benchmarks");
-        const r = await rebuildTermBenchmarks(env);
-        console.log("term benchmarks rebuild done", JSON.stringify(r));
-      } catch (e) {
-        await logError(env, { err: e, step: "nightly term-benchmarks rebuild" });
-        console.error("nightly term-benchmarks rebuild failed", (e as Error).message);
-      }
-
-      // Task #4 (Relationship Inference Worker): nightly relationship
-      // inference. Two phases:
-      //  1) drainInferQueue — per-entity orchestrator passes for any
-      //     entities that landed in relationship_infer_queue since the
-      //     previous tick (debounced from createEntity / insertFact).
-      //  2) full pass — runAllExtractors with no entity scope so any
-      //     newly-arrived source rows that didn't fire the per-entity
-      //     hook (bulk imports, backfills) still get edges emitted.
-      // Piggybacks the consolidated nightly slot (Free plan caps crons
-      // at 5/5 — same constraint as Task #4 angel sweep, Task #14
-      // verification, Task #18 benchmarks, Task #2 fund returns,
-      // Task #3 edge quality, Task #4 intro retrain, Task #5 reputation).
-      // Runs BEFORE the Task #3 edge-quality sweep so freshly-emitted
-      // edges get scored in the same tick.
-      try {
-        const { drainInferQueue, runAllExtractors } = await import("./services/relationships/orchestrator");
-        const drained = await drainInferQueue(env, 200);
-        const full = await runAllExtractors(env, {});
-        console.log("relationship inference done", JSON.stringify({ drained, full_total_edges: full.total_edges, duration_ms: full.duration_ms }));
-      } catch (e) {
-        await logError(env, { err: e, step: "nightly relationship inference" });
-        console.error("nightly relationship inference failed", (e as Error).message);
       }
 
       // Task #5: nightly investor-reputation recompute. Bounded at

@@ -238,9 +238,19 @@ async function buildProfileEnvelope(env: Env, id: string): Promise<{
     ),
     settled(
       env.DB.prepare(
-        `SELECT metric, probability, horizon, generated_at
-           FROM predictions WHERE entity_id = ?
-           ORDER BY generated_at DESC LIMIT 20`,
+        // There is no `predictions` table in any migration, so this slice
+        // reported itself permanently missing. The real per-entity
+        // prediction is the intro-routing score (migrations/369:29):
+        // predicted_conversion_pct is already a probability in [0,1], and
+        // is NULL while the model is uncalibrated — those rows are skipped
+        // rather than shown as a confident zero.
+        `SELECT 'intro_conversion' AS metric,
+                predicted_conversion_pct AS probability,
+                ranking_mode AS horizon,
+                created_at AS generated_at
+           FROM intro_paths
+          WHERE target_entity_id = ? AND predicted_conversion_pct IS NOT NULL
+          ORDER BY created_at DESC LIMIT 20`,
       ).bind(id).all().then((r) => r.results ?? []),
       tracker, "predictions", [] as Array<Record<string, unknown>>,
     ),

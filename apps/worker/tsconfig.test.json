@@ -261,6 +261,7 @@
     "src/middleware/pagination.ts",
     "src/enrichment/budget.ts",
     "src/enrichment/providers/index.ts",
-    "src/services/org_entity_merge.ts"
+    "src/services/org_entity_merge.ts",
+    "src/imports/auto_map.ts"
   ]
 }

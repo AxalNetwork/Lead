@@ -37,6 +37,7 @@ import {
   parseCountryIso2, parseCountryIso2List, parseUrl, parseBool, isEmptyCell,
 } from "./coercers";
 import type { TabIntent } from "./tab_intent";
+import { reconcileToIntent } from "./auto_map";
 import { looksLikeTypeString } from "../services/csv/headerDetector";
 
 const BATCH_SIZE = 200;
@@ -274,7 +275,7 @@ export async function processImportFile(env: Env, importId: string, opts: { jobI
           }
           const raw = t.rows[off];
           if (intent === "firms") {
-            const projected = projectAndCoerceRow(raw, columnMap, env);
+            const projected = projectAndCoerceRow(raw, columnMap, env, intent);
             // Force kind=gov_fund when the tab subkind says so.
             if (subkind === "gov_fund" && !projected.fields.kind) projected.fields.kind = "gov_fund";
             const r = await tryUpsertFirm(env, await projected.awaited(), sourceUrl, importedFrom);
@@ -284,7 +285,7 @@ export async function processImportFile(env: Env, importId: string, opts: { jobI
             else if (r.action === "error") { sum.rows_skipped++; sum.errors.push(`firm:${(projected.fields.name ?? "?").slice(0, 40)}`); }
             if (r.firmId != null) { firmIdsTouched.add(r.firmId); if (fallbackFirmId == null) fallbackFirmId = r.firmId; }
           } else if (intent === "leads") {
-            const projected = projectAndCoerceRow(raw, columnMap, env);
+            const projected = projectAndCoerceRow(raw, columnMap, env, intent);
             const fields = (await projected.awaited()).fields;
             const r = await tryInsertLead(env, fields, importId, importedFrom, sourceUrl, insertBuffer);
             if (r === "created") { acc.leadsC++; acc.imported++; sum.rows_imported++; }
@@ -297,7 +298,7 @@ export async function processImportFile(env: Env, importId: string, opts: { jobI
             // `firms.name`/`firms.domain` columns, else firmIdsTouched, else
             // synthesize from filename. Pass coerced numerics so $1.2M lands as
             // 1200000 — not 1.2 — in firm_metrics.value_num.
-            const projected = await (projectAndCoerceRow(raw, columnMap, env)).awaited();
+            const projected = await (projectAndCoerceRow(raw, columnMap, env, intent)).awaited();
             const { firmId, created } = await resolveFirmIdForMetric(
               env, projected.fields, firmIdsTouched, fallbackFirmId, row.filename, sourceUrl, importedFrom);
             if (created) acc.firmsC++;
@@ -563,6 +564,7 @@ function projectAndCoerceRow(
   raw: Record<string, string>,
   map: Record<string, MappedField | null>,
   env: Env,
+  intent: TabIntent,
 ): { fields: Record<string, string>; awaited: () => Promise<CoercedRow> } {
   const fields: Record<string, string> = {};
   const numeric: Record<string, number> = {};
@@ -571,7 +573,15 @@ function projectAndCoerceRow(
   const moneyJobs: Array<{ key: string; raw: string; isMin: boolean; isMax: boolean }> = [];
   for (const [header, value] of Object.entries(raw)) {
     if (isEmptyCell(value)) continue;
-    const m = map[header];
+    const raw_m = map[header];
+    if (!raw_m) continue;
+    // Honour the entity half of the mapping. Without this a header mapped
+    // to firms.name wrote into leads.name on a people tab, which is how a
+    // "Company" column became the person's name on every row of a LinkedIn
+    // export. reconcileToIntent remaps where the correspondence is
+    // unambiguous (a firm's name is the person's employer) and drops
+    // otherwise.
+    const m = reconcileToIntent(raw_m, intent);
     if (!m) continue;
     const f = m.field;
     const v = value.trim();
@@ -737,22 +747,40 @@ async function tryInsertLead(
   insertBuffer: D1PreparedStatement[],
 ): Promise<"created" | "merged" | "needs_review" | "skip" | "error"> {
   const email = (fields.email ?? "").trim().toLowerCase() || null;
-  const name = (fields.name ?? "").trim() || null;
+  // Split-name exports map to the first_name/last_name pseudo-fields; leads
+  // has no such columns, so compose them here. A mapped full name wins.
+  const first = (fields.first_name ?? "").trim();
+  const last = (fields.last_name ?? "").trim();
+  const name = ((fields.name ?? "").trim() || [first, last].filter(Boolean).join(" ").trim()) || null;
   if (!email && !name) return "skip";
   // Task #5: reject type-string names (see same guard in tryUpsertFirm).
   if (name && looksLikeTypeString(name)) return "skip";
+  // A connections export's "URL" column is the person's own profile, but a
+  // header alone cannot be told apart from a company website — so decide by
+  // value. This matters beyond tidiness: linkedin_url feeds
+  // canonical_linkedin_key, one of the few dedupe keys such a file supplies,
+  // and routing it to personal_url dropped it entirely (personal_url was
+  // hardcoded null on `incoming`).
+  //
+  // Resolved BEFORE the scrub, never after: a rescued URL must be subject to
+  // the do-not-contact check like any other channel.
+  const personalUrl = (fields.personal_url ?? fields.website ?? "").trim() || null;
+  const linkedinFromUrl = personalUrl && /linkedin\.com\/in\//i.test(personalUrl) ? personalUrl : null;
+
   const dnc = await checkAndScrubDnc(env, {
     email,
     phone: (fields.phone ?? "").trim() || null,
-    linkedin_url: (fields.linkedin_url ?? "").trim() || null,
+    linkedin_url: ((fields.linkedin_url ?? "").trim() || linkedinFromUrl) || null,
     twitter_url: (fields.twitter_url ?? "").trim() || null,
     github_url: null,
     source_domain: "upload",
   });
   const incoming = {
     email: dnc.cleaned.email, phone: dnc.cleaned.phone,
-    linkedin_url: dnc.cleaned.linkedin_url, twitter_url: dnc.cleaned.twitter_url,
-    github_url: dnc.cleaned.github_url, personal_url: null,
+    linkedin_url: dnc.cleaned.linkedin_url,
+    twitter_url: dnc.cleaned.twitter_url,
+    github_url: dnc.cleaned.github_url,
+    personal_url: linkedinFromUrl ? null : personalUrl,
     name, org: (fields.org ?? "").trim() || null, title: (fields.title ?? "").trim() || null,
     category: null, city: null, source_url: sourceUrl, provider: importedFrom,
   };
