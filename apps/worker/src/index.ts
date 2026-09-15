@@ -93,6 +93,7 @@ export { OSINTResolveEntityWorkflow, OSINTBatchWorkflow, OSINTReverifyWorkflow }
 export { RefreshSavedResearchWorkflow } from "./agent/workflow";
 import { piiAuditOnLeadGet } from "./middleware/pii_audit";
 import { accessGuard, adminOnly } from "./middleware/access";
+import { crossSiteGuard, ALLOWED_ORIGINS } from "./middleware/origin";
 import { requestId } from "./middleware/request_id";
 import { unwrapSimpleRequest } from "./middleware/simple_request";
 import { boundedPagination } from "./middleware/pagination";
@@ -112,16 +113,11 @@ api.use("*", requestId);
 api.use(
   "*",
   cors({
-    origin: (origin) => {
-      const allowed = new Set([
-        "https://aidatasignal.com",
-        "https://www.aidatasignal.com",
-        // README/Replit deployment target for the dashboard (DNS pending).
-        "https://app.aidatasignal.com",
-      ]);
-      if (origin && allowed.has(origin)) return origin;
-      return null;
-    },
+    // ALLOWED_ORIGINS is shared with crossSiteGuard rather than duplicated
+    // here. Two copies is the one realistic way that guard locks the
+    // dashboard out of its own API: CORS would permit an origin the guard
+    // then refuses, and every write would 403 until someone reverted it.
+    origin: (origin) => (origin && ALLOWED_ORIGINS.has(origin) ? origin : null),
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type", "Cf-Access-Jwt-Assertion", "Idempotency-Key"],
@@ -147,6 +143,17 @@ api.route("/api/webhooks/campaigns", campaignsWebhook);
 // reach /api/compute/* without an Access cookie.
 api.route("/api/compute", computeRunnerRoute);
 api.use("/api/*", accessGuard);
+// accessGuard accepts the CF_Authorization cookie on its own, so an ambient
+// cookie authenticates a write — the shape CSRF exploits. CORS does not stop
+// it: it governs whether the attacker can READ the response, and no preflight
+// fires for a form POST, which 84 of this API's mutating handlers accept
+// because they parse no body at all and act on the path alone.
+//
+// Mounted HERE, immediately after accessGuard, on purpose. It covers exactly
+// the Access-authenticated surface and leaves alone the two routers mounted
+// above it, which authenticate differently and are called by non-browsers:
+// /api/webhooks/campaigns and /api/compute (per-node HMAC envelope).
+api.use("/api/*", crossSiteGuard);
 // Reject negative / non-numeric limit+offset once, for every list route
 // (SQLite treats a negative LIMIT as unbounded; NaN binds as NULL → 500).
 api.use("/api/*", boundedPagination);
