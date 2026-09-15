@@ -263,6 +263,7 @@
     "src/enrichment/providers/index.ts",
     "src/services/org_entity_merge.ts",
     "src/imports/auto_map.ts",
-    "src/services/profilers/batch.ts"
+    "src/services/profilers/batch.ts",
+    "src/middleware/origin.ts"
   ]
 }
