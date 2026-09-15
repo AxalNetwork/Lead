@@ -1,1 +1,5 @@
-test-dist/
+# Compiled test output. The glob is deliberate: this rule was exactly
+# `test-dist/`, and a scratch out-dir named `test-dist-q` was committed
+# through the gap by a `git add -A` — 79 generated files that GitHub's
+# default-setup CodeQL then scanned and filed findings against.
+test-dist*/
